@@ -205,8 +205,16 @@ export class DockerService {
    *   - otherwise                 → fetch + `merge --ff-only @{u}`
    *
    * Returns the ref it synced to and the commit it will build from, for logging.
+   *
+   * `commit` is the short sha (human-facing, used in log lines). `commitFull`
+   * is the same commit unabbreviated — it is stamped into the image via the
+   * HERMES_GIT_SHA build-arg (see restart()) so a RUNNING container can be
+   * asked what code it was built from. A short sha is not enough there:
+   * provenance is compared against `git rev-parse HEAD` in the build source and
+   * counted with `rev-list`, and an abbreviation can become ambiguous as the
+   * repo grows.
    */
-  syncBuildSource(sourceDir: string): { branch: string; commit: string; upstream: string } {
+  syncBuildSource(sourceDir: string): { branch: string; commit: string; commitFull: string; upstream: string } {
     const git = (args: string[]) =>
       execFileSync('git', ['-C', sourceDir, ...args], { stdio: 'pipe', timeout: 120000 })
         .toString()
@@ -259,8 +267,9 @@ export class DockerService {
       )
     }
 
+    const commitFull = git(['rev-parse', 'HEAD'])
     const commit = git(['rev-parse', '--short', 'HEAD'])
-    return { branch, commit, upstream }
+    return { branch, commit, commitFull, upstream }
   }
 
   restart(composeFile: string, service: string, mode: RestartMode, projectName?: string, buildSource?: string | null): void {
@@ -268,8 +277,20 @@ export class DockerService {
 
     // For modes that run `--build`, sync the local source to the code it's
     // supposed to build FIRST. Throws (fail loud) rather than shipping stale.
+    //
+    // PROVENANCE (drift visibility): the resolved commit is also passed through
+    // to the build as HERMES_GIT_SHA. hermes-agent-mt's Dockerfile already
+    // declares `ARG HERMES_GIT_SHA` and writes it to /opt/hermes/.hermes_build_sha,
+    // but nothing here ever supplied the arg — so the file did not exist in ANY
+    // running container and no running agent could say what code it was built
+    // from. That is why 11 agents ran four-day-old code carrying the
+    // tool-result-deletion bug for days with nothing anywhere saying "behind".
+    // Without this arg lib/services/drift.ts can only ever report
+    // `unknown-no-provenance`.
+    const buildArgs: string[] = []
     if ((mode === 'rebuild' || mode === 'purge') && buildSource) {
       const synced = this.syncBuildSource(buildSource)
+      buildArgs.push('--build-arg', `HERMES_GIT_SHA=${synced.commitFull}`)
       // eslint-disable-next-line no-console
       console.log(
         `[rebuild] ${service}: building ${buildSource} @ ${synced.branch} ${synced.commit} (synced to ${synced.upstream})`,
@@ -330,7 +351,7 @@ export class DockerService {
         // keeps running during the build and the stop→up window stays small.
         // Fire-and-forget: Docker builds can exceed any reasonable timeout.
         chainDetached([
-          ['compose', ...projArgs, '-f', composeFile, 'build', service],
+          ['compose', ...projArgs, '-f', composeFile, 'build', ...buildArgs, service],
           stopArgs,
           upArgs,
         ])
@@ -340,7 +361,7 @@ export class DockerService {
         // Same as rebuild but --no-cache. Build → stop → up, each chained on
         // the previous step's clean exit.
         chainDetached([
-          ['compose', ...projArgs, '-f', composeFile, 'build', '--no-cache', service],
+          ['compose', ...projArgs, '-f', composeFile, 'build', '--no-cache', ...buildArgs, service],
           stopArgs,
           upArgs,
         ])
@@ -463,6 +484,34 @@ export class DockerService {
       maxBuffer: 4 * 1024 * 1024,
     })
     return stdout.toString()
+  }
+
+  /**
+   * Filesystem changes made to a running container's writable layer since its
+   * image was built (`docker diff`), as raw `<A|C|D> <path>` lines.
+   *
+   * Used by drift detection to spot a HOT-PATCHED container: someone
+   * `docker cp`-ing a fixed file into a running agent makes it behave correctly
+   * right up until the next `--force-recreate`, which silently reverts it. This
+   * really happened here. A container with modified code under /opt/hermes has
+   * no trustworthy provenance — the baked-in build SHA no longer describes what
+   * it is actually running.
+   *
+   * ASYNC for the same reason as execInContainer: `docker diff` walks the
+   * container's layer and must not block the single pm2 fork's event loop when
+   * the whole fleet is swept. Returns [] on any failure (container gone,
+   * daemon down) — callers treat "can't tell" as unknown, never as clean.
+   */
+  async diffContainer(container: string, timeoutMs = 15000): Promise<string[]> {
+    try {
+      const { stdout } = await execFileAsync('docker', ['diff', container], {
+        timeout: timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+      return stdout.toString().split('\n').filter((l) => l.trim() !== '')
+    } catch {
+      return []
+    }
   }
 
   getLogs(composeFile: string, service: string, lines: number = 50): string {

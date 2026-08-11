@@ -2,9 +2,10 @@ import Link from 'next/link'
 import type { Harness } from '@/lib/types'
 import { StatusDot } from '@/components/shared/status-dot'
 import { TierBadge } from '@/components/shared/tier-badge'
+import { DriftChip, type DriftSummary } from '@/components/shared/drift-chip'
 import { MessageSquare } from 'lucide-react'
 
-export function HarnessCard({ harness }: { harness: Harness }) {
+export function HarnessCard({ harness, drift }: { harness: Harness; drift?: DriftSummary | null }) {
   return (
     <Link
       href={`/harnesses/${harness.id}`}
@@ -15,6 +16,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         <div className="flex items-center gap-2">
           <span className="font-medium text-sm truncate">{harness.name}</span>
           <TierBadge tier={harness.tier} />
+          {/* Code drift, rendered only once the fleet drift call has answered —
+              an absent answer must not read as "up to date". */}
+          {drift !== undefined && <DriftChip drift={drift} />}
         </div>
         <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">

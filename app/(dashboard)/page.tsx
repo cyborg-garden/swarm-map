@@ -2,6 +2,7 @@
 
 import { useApi } from '@/lib/hooks/use-api'
 import { HarnessCard } from '@/components/harness/harness-card'
+import { DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
 import { TIER_COLORS, TIER_ORDER } from '@/lib/constants'
 import type { Harness, AuditEntry } from '@/lib/types'
 
@@ -49,6 +50,10 @@ function relativeTime(ts: number): string {
 export default function DashboardPage() {
   const { data: harnesses, loading: hLoading } = useApi<Harness[]>('/api/harnesses', 5000)
   const { data: audit, loading: aLoading } = useApi<AuditEntry[]>('/api/audit', 5000)
+  // Code drift — a standing condition (nothing on this host rebuilds itself),
+  // so a slow poll is plenty and the banner stays up until someone acts.
+  const { data: drift } = useApi<{ checkedAt: number; agents: DriftSummary[] }>('/api/fleet/drift', 60000)
+  const driftById = new Map((drift?.agents ?? []).map((a) => [a.harnessId, a]))
 
   const running = harnesses?.filter((h) => h.status === 'running').length ?? 0
   // null cost/invocations = unknown (migrated harness awaiting its first
@@ -61,6 +66,8 @@ export default function DashboardPage() {
   return (
     <div>
       <h2 className="text-2xl font-semibold mb-6">Dashboard</h2>
+
+      <DriftBanner agents={drift?.agents} />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -96,7 +103,9 @@ export default function DashboardPage() {
           )}
           <div className="space-y-1">
             {hLoading && <p className="text-sm text-muted-foreground">Loading harnesses...</p>}
-            {harnesses?.map((h) => <HarnessCard key={h.id} harness={h} />)}
+            {harnesses?.map((h) => (
+              <HarnessCard key={h.id} harness={h} drift={drift ? driftById.get(h.id) ?? null : undefined} />
+            ))}
           </div>
         </div>
 

@@ -208,6 +208,7 @@ describe('DockerService', () => {
           return Buffer.from('Updating')
         }
         if (a.includes('rev-parse --short HEAD')) return Buffer.from('abc1234')
+        if (a.includes('rev-parse HEAD')) return Buffer.from('a'.repeat(40))
         return Buffer.from('')
       })
     }
@@ -261,6 +262,98 @@ describe('DockerService', () => {
       const calls = mockExecFileSync.mock.calls.map(joined)
       expect(calls.some((c) => c.includes('git -C'))).toBe(false)
       expect(mockSpawn).toHaveBeenCalled()
+    })
+  })
+
+  describe('rebuild stamps build provenance into the image (HERMES_GIT_SHA)', () => {
+    // Without this arg the Dockerfile's `ARG HERMES_GIT_SHA` stays empty and
+    // /opt/hermes/.hermes_build_sha is never written — which is why, on
+    // 2026-08-10, no running container could say what code it was built from
+    // and 11 agents ran four-day-old buggy code invisibly.
+    const FULL = 'a'.repeat(40)
+
+    function stubGit() {
+      mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+        const a = args.join(' ')
+        if (a.includes('rev-parse --is-inside-work-tree')) return Buffer.from('true')
+        if (a.includes('status --porcelain')) return Buffer.from('')
+        if (a.includes('rev-parse --abbrev-ref HEAD')) return Buffer.from('main')
+        if (a.includes('symbolic-full-name @{u}')) return Buffer.from('origin/main')
+        if (a.includes('rev-parse --short HEAD')) return Buffer.from(FULL.slice(0, 7))
+        if (a.includes('rev-parse HEAD')) return Buffer.from(FULL)
+        return Buffer.from('')
+      })
+    }
+
+    /** Extract `--build-arg <value>` pairs from a spawned argv. */
+    const buildArgOf = (argv: string[], key: string): string | undefined => {
+      for (let i = 0; i < argv.length - 1; i++) {
+        if (argv[i] === '--build-arg' && argv[i + 1].startsWith(key + '=')) {
+          return argv[i + 1].slice(key.length + 1)
+        }
+      }
+      return undefined
+    }
+
+    it('passes the FULL sha (not the abbreviation) on the rebuild build step', () => {
+      stubGit()
+      docker.restart('/c.yml', 'audrey', 'rebuild', undefined, '/src/hermes')
+      const argv = mockSpawn.mock.calls[0][1] as string[]
+      expect(buildArgOf(argv, 'HERMES_GIT_SHA')).toBe(FULL)
+      // A short sha can become ambiguous as the repo grows, and drift.ts
+      // compares it against `git rev-parse HEAD`.
+      expect(buildArgOf(argv, 'HERMES_GIT_SHA')).toHaveLength(40)
+    })
+
+    it('passes it on the purge build step too, alongside --no-cache', () => {
+      stubGit()
+      docker.restart('/c.yml', 'audrey', 'purge', undefined, '/src/hermes')
+      const argv = mockSpawn.mock.calls[0][1] as string[]
+      expect(argv).toContain('--no-cache')
+      expect(buildArgOf(argv, 'HERMES_GIT_SHA')).toBe(FULL)
+    })
+
+    it('keeps the build-arg before the service name so compose parses it as a flag', () => {
+      stubGit()
+      docker.restart('/c.yml', 'audrey', 'rebuild', undefined, '/src/hermes')
+      const argv = mockSpawn.mock.calls[0][1] as string[]
+      expect(argv.indexOf('--build-arg')).toBeLessThan(argv.lastIndexOf('audrey'))
+      expect(argv[argv.length - 1]).toBe('audrey')
+    })
+
+    it('omits the build-arg entirely when there is no build source to read a sha from', () => {
+      // Better no provenance than a fabricated/empty sha baked into the image.
+      docker.restart('/c.yml', 'audrey', 'rebuild')
+      const argv = mockSpawn.mock.calls[0][1] as string[]
+      expect(argv).not.toContain('--build-arg')
+    })
+
+    it('does not put a build-arg on the stop/up steps', () => {
+      stubGit()
+      docker.restart('/c.yml', 'audrey', 'rebuild', undefined, '/src/hermes')
+      fireExit(0, 0)
+      fireExit(1, 0)
+      expect(mockSpawn.mock.calls[1][1]).not.toContain('--build-arg')
+      expect(mockSpawn.mock.calls[2][1]).not.toContain('--build-arg')
+    })
+  })
+
+  describe('diffContainer', () => {
+    it('returns docker diff lines via an argv array (no shell)', async () => {
+      mockExecFileAsync.mockResolvedValueOnce({
+        stdout: 'C /opt\nA /opt/iris\nC /opt/hermes/agent/tools.py\n',
+        stderr: '',
+      })
+      const lines = await docker.diffContainer('hermes-iris')
+      expect(lines).toEqual(['C /opt', 'A /opt/iris', 'C /opt/hermes/agent/tools.py'])
+      const [file, argv] = mockExecFileAsync.mock.calls[0]
+      expect(file).toBe('docker')
+      expect(argv).toEqual(['diff', 'hermes-iris'])
+    })
+
+    it('returns [] when docker fails rather than throwing into the sweep', async () => {
+      mockExecFileAsync.mockRejectedValueOnce(new Error('no such container'))
+      await expect(docker.diffContainer('gone')).resolves.toEqual([])
     })
   })
 
