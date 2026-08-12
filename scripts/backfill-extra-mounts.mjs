@@ -188,6 +188,48 @@ function parseArgs(argv) {
 // confidently it REPORTS rather than guesses at.
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip a YAML end-of-line comment from a line that carries no quoted scalar.
+ * In YAML a '#' only opens a comment when it follows whitespace (or starts the
+ * line); `/opt/a#b` is a literal path. Used for KEY lines only — list items go
+ * through readMountScalar(), which has to honour quoting.
+ */
+function stripYamlComment(line) {
+  return line.replace(/\s+#.*$/, '').trimEnd()
+}
+
+/**
+ * Read one `volumes:` list item the way YAML reads it.
+ *
+ * An unquoted scalar ENDS at a ' #' comment. Splitting the raw line instead
+ * folds the comment into containerPath, and nothing downstream catches it:
+ * validateMount() only rejects newlines, non-absolute paths and ':', while
+ * GENERATED_TARGETS is an exact-match Set. So
+ *
+ *     - /home/u/.hermes-x:/opt/data   # agent state, do not move
+ *
+ * parses as containerPath '/opt/data   # agent state, do not move', stops
+ * looking generator-owned, and gets copied into extraMounts — rendering a
+ * DUPLICATE /opt/data target on the next regeneration, which docker refuses.
+ * That is precisely the breakage this script exists to prevent, so the reader
+ * has to strip the comment before splitting rather than after.
+ *
+ * Inside quotes a '#' is literal, so quoting is honoured first. Returns null
+ * when the quoting is malformed — a REFUSAL upstream, never a silent guess.
+ */
+function readMountScalar(item) {
+  const q = item[0]
+  if (q === '#') return ''                          // `- # note` — a null item
+  if (q === '"' || q === "'") {
+    const end = item.indexOf(q, 1)
+    if (end < 0) return null                        // unterminated quote
+    const rest = stripYamlComment(item.slice(end + 1)).trim()
+    if (rest !== '') return null                    // junk after the closing quote
+    return item.slice(1, end)
+  }
+  return stripYamlComment(item).trim()
+}
+
 function parseComposeVolumes(text) {
   const lines = text.split('\n')
   // serviceName -> { specs: string[], anomalies: string[] }
@@ -217,18 +259,29 @@ function parseComposeVolumes(text) {
     if (section !== 'services') continue
 
     if (indent === 2) {
-      const m = /^([A-Za-z0-9_.-]+):\s*$/.exec(line)
-      if (m) { service = m[1]; inVolumes = false; entry(service) }
+      const m = /^([A-Za-z0-9_.-]+):\s*$/.exec(stripYamlComment(line))
+      // An unmatched key at service depth must CLEAR the current service, not
+      // inherit it: leaving `service` pointing at the previous one attributes
+      // this service's volumes to that agent, and recording another container's
+      // mounts is the one mistake this script must never make. Cleared, the
+      // agent simply fails to resolve and buildPlan refuses out loud.
+      service = m ? m[1] : null
+      inVolumes = false
+      if (m) entry(service)
       continue
     }
     if (!service) continue
 
-    if (indent === 4 && line === 'volumes:') { inVolumes = true; volIndent = indent; continue }
+    if (indent === 4 && stripYamlComment(line) === 'volumes:') { inVolumes = true; volIndent = indent; continue }
     if (!inVolumes) continue
     if (indent <= volIndent) { inVolumes = false; continue }
 
     if (line.startsWith('- ')) {
-      const item = line.slice(2).trim().replace(/^["']|["']$/g, '')
+      const item = readMountScalar(line.slice(2).trim())
+      if (item === null || item === '') {
+        entry(service).anomalies.push(`mount item this reader cannot quote-parse: '${line}'`)
+        continue
+      }
       // Long syntax opens with a mapping key (`- type: bind`).
       if (/^[A-Za-z_][A-Za-z0-9_]*:\s/.test(item)) entry(service).anomalies.push(`long-syntax mount starting '${item}'`)
       else entry(service).specs.push(item)
@@ -584,4 +637,4 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new 
   main()
 }
 
-export { buildPlan, applyPlan, parseComposeVolumes, splitMountSpec, classify, harnessIdForAgent, validateMount, GENERATED_TARGETS }
+export { buildPlan, applyPlan, parseComposeVolumes, readMountScalar, splitMountSpec, classify, harnessIdForAgent, validateMount, GENERATED_TARGETS }
