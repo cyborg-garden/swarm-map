@@ -17,7 +17,9 @@ import os from 'node:os'
 import path from 'node:path'
 import type { ExtraMount } from '@/lib/types'
 import { generateStandaloneCompose } from '@/lib/services/harness-compose'
-import { buildPlan as buildPlanUntyped, applyPlan, splitMountSpec } from '../backfill-extra-mounts.mjs'
+import { buildPlan as buildPlanUntyped, applyPlan, readMountScalar as readMountScalarUntyped, splitMountSpec } from '../backfill-extra-mounts.mjs'
+
+const readMountScalar = readMountScalarUntyped as (item: string) => string | null
 
 type Addition = ExtraMount & { mode: 'ro' | 'rw'; _modeImplicit?: boolean }
 type AgentRecord = {
@@ -179,6 +181,129 @@ volumes:
     expect(plan.refusals).toEqual([])
     expect(plan.agents[0].service).toBe('hermes-x')
     expect(plan.agents[0].additions.map((m: Addition) => m.containerPath)).toEqual(['/opt/google-multiplayer-mcp'])
+  })
+})
+
+describe('YAML comments in the volumes: block', () => {
+  // These compose files are hand-edited by definition — that is the premise of
+  // the whole script — and a hand-editor annotates. Before readMountScalar(),
+  // the comment was split into containerPath, which is not cosmetic: it
+  // defeated the GENERATED_TARGETS exact-match guard.
+
+  it('does NOT fold an end-of-line comment into containerPath', () => {
+    const compose = `services:
+  hermes-x:
+    container_name: hermes-x
+    volumes:
+      - /data/x:/opt/data
+      - /src/google-mcp:/opt/google-multiplayer-mcp:ro
+      - /data/x/google-tokens:/opt/google/tokens   # OAuth refresh writes here
+    command: gateway
+`
+    writeHome({ x: compose }, [{ id: 'h_x', name: 'x' }])
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.refusals).toEqual([])
+    const tokens = plan.agents[0].additions.find(
+      (m: Addition) => m.containerPath === '/opt/google/tokens')
+    expect(tokens).toBeDefined()
+    expect(tokens!.mode).toBe('rw')
+    // The failure mode: '/opt/google/tokens   # OAuth refresh writes here'
+    expect(plan.agents[0].additions.map((m: Addition) => m.containerPath))
+      .toEqual(['/opt/google-multiplayer-mcp', '/opt/google/tokens'])
+  })
+
+  it('still recognises /opt/data as generator-owned when it carries a comment', () => {
+    // The dangerous one. A commented /opt/data used to classify as 'extra' and
+    // get copied into extraMounts, so the next regeneration rendered /opt/data
+    // TWICE and docker refused the compose outright — the exact breakage this
+    // script exists to prevent.
+    const compose = `services:
+  hermes-x:
+    container_name: hermes-x
+    volumes:
+      - /data/x:/opt/data   # agent state, do not move
+      - /src/google-mcp:/opt/google-multiplayer-mcp:ro
+    command: gateway
+`
+    writeHome({ x: compose }, [{ id: 'h_x', name: 'x' }])
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.refusals).toEqual([])
+    expect(plan.agents[0].additions.some(
+      (m: Addition) => m.containerPath.startsWith('/opt/data'))).toBe(false)
+    expect(plan.agents[0].additions.map((m: Addition) => m.containerPath))
+      .toEqual(['/opt/google-multiplayer-mcp'])
+  })
+
+  it('does not silently skip a volumes: key that carries a comment', () => {
+    // `volumes:` failing to match meant inVolumes stayed false and EVERY mount
+    // in the block was dropped without a word — zero additions, exit 0, and a
+    // human concluding there was nothing to back up.
+    const compose = `services:
+  hermes-x:
+    container_name: hermes-x
+    volumes:   # hand-maintained, see runbook
+      - /data/x:/opt/data
+      - /src/google-mcp:/opt/google-multiplayer-mcp:ro
+    command: gateway
+`
+    writeHome({ x: compose }, [{ id: 'h_x', name: 'x' }])
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.refusals).toEqual([])
+    expect(plan.agents[0].additions.map((m: Addition) => m.containerPath))
+      .toEqual(['/opt/google-multiplayer-mcp'])
+  })
+
+  it('never attributes one service\'s mounts to another when a service key is unreadable', () => {
+    // An unmatched key at service depth used to leave `service` pointing at the
+    // PREVIOUS service, so hermes-y's mounts were recorded onto hermes-x.
+    // Refusing out loud is the only acceptable outcome.
+    const compose = `services:
+  hermes-x:
+    container_name: hermes-x
+    volumes:
+      - /data/x:/opt/data
+  "hermes y":
+    container_name: hermes-y
+    volumes:
+      - /src/secret:/opt/secret:ro
+`
+    writeHome({ x: compose }, [{ id: 'h_x', name: 'x' }])
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.agents[0].additions.map((m: Addition) => m.containerPath))
+      .toEqual([])
+    expect(JSON.stringify(plan)).not.toContain('/opt/secret')
+    // Not attributing the mount is only half of it. hermes-x resolves cleanly
+    // here, so without a file-level anomaly buildPlan would return zero
+    // refusals and exit 0 for a compose file that visibly had a second service
+    // full of mounts — "nothing to back up" as a silent lie. Assert the refusal
+    // the comment above promises, so the promise cannot rot away again.
+    expect(plan.refusals.join('\n')).toMatch(/unreadable service key at service depth/)
+    expect(plan.refusals.join('\n')).toContain('hermes y')
+  })
+
+  it('treats a quoted mount as literal and refuses malformed quoting', () => {
+    expect(readMountScalar('/a:/b # c')).toBe('/a:/b')
+    expect(readMountScalar('"/a:/b # c"')).toBe('/a:/b # c')   // quoted: literal
+    expect(readMountScalar("'/a:/b'")).toBe('/a:/b')
+    expect(readMountScalar('"/a:/b" # trailing')).toBe('/a:/b')
+    expect(readMountScalar('/a#1:/b')).toBe('/a#1:/b')         // no space: literal
+    expect(readMountScalar('"/a:/b')).toBeNull()               // unterminated
+    expect(readMountScalar('"/a":/b')).toBeNull()              // junk after quote
+    expect(readMountScalar('# just a note')).toBe('')          // null list item
+  })
+
+  it('refuses, rather than skips, a list item it cannot quote-parse', () => {
+    const compose = `services:
+  hermes-x:
+    container_name: hermes-x
+    volumes:
+      - /data/x:/opt/data
+      - "/src/google-mcp:/opt/google-multiplayer-mcp
+    command: gateway
+`
+    writeHome({ x: compose }, [{ id: 'h_x', name: 'x' }])
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.refusals.join('\n')).toMatch(/cannot quote-parse/)
   })
 })
 

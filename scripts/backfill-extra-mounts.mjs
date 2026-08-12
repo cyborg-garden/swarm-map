@@ -188,6 +188,48 @@ function parseArgs(argv) {
 // confidently it REPORTS rather than guesses at.
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip a YAML end-of-line comment from a line that carries no quoted scalar.
+ * In YAML a '#' only opens a comment when it follows whitespace (or starts the
+ * line); `/opt/a#b` is a literal path. Used for KEY lines only — list items go
+ * through readMountScalar(), which has to honour quoting.
+ */
+function stripYamlComment(line) {
+  return line.replace(/\s+#.*$/, '').trimEnd()
+}
+
+/**
+ * Read one `volumes:` list item the way YAML reads it.
+ *
+ * An unquoted scalar ENDS at a ' #' comment. Splitting the raw line instead
+ * folds the comment into containerPath, and nothing downstream catches it:
+ * validateMount() only rejects newlines, non-absolute paths and ':', while
+ * GENERATED_TARGETS is an exact-match Set. So
+ *
+ *     - /home/u/.hermes-x:/opt/data   # agent state, do not move
+ *
+ * parses as containerPath '/opt/data   # agent state, do not move', stops
+ * looking generator-owned, and gets copied into extraMounts — rendering a
+ * DUPLICATE /opt/data target on the next regeneration, which docker refuses.
+ * That is precisely the breakage this script exists to prevent, so the reader
+ * has to strip the comment before splitting rather than after.
+ *
+ * Inside quotes a '#' is literal, so quoting is honoured first. Returns null
+ * when the quoting is malformed — a REFUSAL upstream, never a silent guess.
+ */
+function readMountScalar(item) {
+  const q = item[0]
+  if (q === '#') return ''                          // `- # note` — a null item
+  if (q === '"' || q === "'") {
+    const end = item.indexOf(q, 1)
+    if (end < 0) return null                        // unterminated quote
+    const rest = stripYamlComment(item.slice(end + 1)).trim()
+    if (rest !== '') return null                    // junk after the closing quote
+    return item.slice(1, end)
+  }
+  return stripYamlComment(item).trim()
+}
+
 function parseComposeVolumes(text) {
   const lines = text.split('\n')
   // serviceName -> { specs: string[], anomalies: string[] }
@@ -196,6 +238,11 @@ function parseComposeVolumes(text) {
   // REFUSALS, never skips: a mount the reader quietly ignores is a mount that
   // stays unrecorded, which is the exact failure this script exists to end.
   const services = new Map()
+  // File-level anomalies: things wrong with the compose file that belong to no
+  // single service, so they cannot be hung off a services entry. Carried as a
+  // property rather than a Map key so `[...services.keys()]` stays a clean list
+  // of service names for the candidate search in buildPlan().
+  services.fileAnomalies = []
   const entry = (s) => { if (!services.has(s)) services.set(s, { specs: [], anomalies: [] }); return services.get(s) }
   let section = null         // 'services' | 'volumes' | 'networks' | other
   let service = null
@@ -217,18 +264,38 @@ function parseComposeVolumes(text) {
     if (section !== 'services') continue
 
     if (indent === 2) {
-      const m = /^([A-Za-z0-9_.-]+):\s*$/.exec(line)
-      if (m) { service = m[1]; inVolumes = false; entry(service) }
+      const m = /^([A-Za-z0-9_.-]+):\s*$/.exec(stripYamlComment(line))
+      // An unmatched key at service depth must CLEAR the current service, not
+      // inherit it: leaving `service` pointing at the previous one attributes
+      // this service's volumes to that agent, and recording another container's
+      // mounts is the one mistake this script must never make.
+      //
+      // Clearing alone is NOT enough, and saying otherwise would be the same
+      // class of silence this script exists to end. With `service` null, every
+      // volume under that key is dropped by the `if (!service) continue` below
+      // — and if the AGENT's own service key parsed fine, buildPlan() resolves
+      // it happily and never learns a whole service went unread. The operator
+      // gets "nothing to back up" and exit 0 for a file that plainly had
+      // mounts in it. So record it as a file-level anomaly, which buildPlan()
+      // turns into a refusal.
+      service = m ? m[1] : null
+      inVolumes = false
+      if (m) entry(service)
+      else services.fileAnomalies.push(`unreadable service key at service depth: '${line}'`)
       continue
     }
     if (!service) continue
 
-    if (indent === 4 && line === 'volumes:') { inVolumes = true; volIndent = indent; continue }
+    if (indent === 4 && stripYamlComment(line) === 'volumes:') { inVolumes = true; volIndent = indent; continue }
     if (!inVolumes) continue
     if (indent <= volIndent) { inVolumes = false; continue }
 
     if (line.startsWith('- ')) {
-      const item = line.slice(2).trim().replace(/^["']|["']$/g, '')
+      const item = readMountScalar(line.slice(2).trim())
+      if (item === null || item === '') {
+        entry(service).anomalies.push(`mount item this reader cannot quote-parse: '${line}'`)
+        continue
+      }
       // Long syntax opens with a mapping key (`- type: bind`).
       if (/^[A-Za-z_][A-Za-z0-9_]*:\s/.test(item)) entry(service).anomalies.push(`long-syntax mount starting '${item}'`)
       else entry(service).specs.push(item)
@@ -316,6 +383,15 @@ function buildPlan(opts) {
     // else `hermes-<agent>`, else the sole non-scaffolding service. Ambiguity is
     // reported, never guessed: picking the wrong service would record another
     // container's mounts onto this agent.
+    // A file-level anomaly is a refusal for this agent no matter which service
+    // it sat under: the reader cannot show that the unread lines held no mount,
+    // and an unrecorded mount is exactly what this script exists to prevent.
+    // Raised BEFORE the service search so it is reported even when the agent's
+    // own service resolves cleanly.
+    for (const a of services.fileAnomalies) {
+      plan.refusals.push(`${agent}: ${a} in ${composePath} — this reader will not guess at it; fix the compose file by hand`)
+    }
+
     const candidates = [...services.keys()].filter((s) => !IGNORED_SERVICE_RE.test(s))
     let svc = entry?.serviceName && services.has(entry.serviceName) ? entry.serviceName
       : services.has(`hermes-${agent}`) ? `hermes-${agent}`
@@ -584,4 +660,4 @@ if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new 
   main()
 }
 
-export { buildPlan, applyPlan, parseComposeVolumes, splitMountSpec, classify, harnessIdForAgent, validateMount, GENERATED_TARGETS }
+export { buildPlan, applyPlan, parseComposeVolumes, readMountScalar, splitMountSpec, classify, harnessIdForAgent, validateMount, GENERATED_TARGETS }
