@@ -272,6 +272,13 @@ describe('YAML comments in the volumes: block', () => {
     expect(plan.agents[0].additions.map((m: Addition) => m.containerPath))
       .toEqual([])
     expect(JSON.stringify(plan)).not.toContain('/opt/secret')
+    // Not attributing the mount is only half of it. hermes-x resolves cleanly
+    // here, so without a file-level anomaly buildPlan would return zero
+    // refusals and exit 0 for a compose file that visibly had a second service
+    // full of mounts — "nothing to back up" as a silent lie. Assert the refusal
+    // the comment above promises, so the promise cannot rot away again.
+    expect(plan.refusals.join('\n')).toMatch(/unreadable service key at service depth/)
+    expect(plan.refusals.join('\n')).toContain('hermes y')
   })
 
   it('treats a quoted mount as literal and refuses malformed quoting', () => {
