@@ -4,11 +4,17 @@ import { useApi } from '@/lib/hooks/use-api'
 import { StatusDot } from '@/components/shared/status-dot'
 import { TierBadge } from '@/components/shared/tier-badge'
 import { DbHealthBadge, type DbIntegritySummary, type DbWriteFailureSummary } from '@/components/shared/db-health-badge'
+import { DriftChip, DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
 import { Button } from '@/components/ui/button'
 import type { Harness } from '@/lib/types'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+
+type FleetDrift = {
+  checkedAt: number
+  agents: DriftSummary[]
+}
 
 type FleetDbHealth = {
   harnesses: Array<{
@@ -28,6 +34,11 @@ export default function HarnessesPage() {
   // slower poll is plenty.
   const { data: dbHealth } = useApi<FleetDbHealth>('/api/integrity', 30000)
   const dbHealthById = new Map((dbHealth?.harnesses ?? []).map((h) => [h.harnessId, h]))
+  // Code drift — "is this agent running old code?". Nothing here pulls or
+  // rebuilds, so this is a standing condition, not a transient: poll slowly and
+  // keep it visible until a human rebuilds.
+  const { data: drift } = useApi<FleetDrift>('/api/fleet/drift', 60000)
+  const driftById = new Map((drift?.agents ?? []).map((a) => [a.harnessId, a]))
 
   const harnesses =
     containerHarnesses || lettaHarnesses
@@ -171,6 +182,8 @@ export default function HarnessesPage() {
         </div>
       </div>
 
+      <DriftBanner agents={drift?.agents} />
+
       {loading && <p className="text-muted-foreground">Loading...</p>}
 
       {!loading && harnesses && (
@@ -203,6 +216,7 @@ export default function HarnessesPage() {
                           writeFailures={dbHealthById.get(h.id)?.writeFailures}
                         />
                       )}
+                      {!isLetta(h) && drift && <DriftChip drift={driftById.get(h.id)} />}
                     </Link>
                   </td>
                   <td className="px-4 py-3">
