@@ -1,5 +1,5 @@
 {
-  "_comment": "GENERATED from NimbleCoOrg/artefact-registry (artefacts.json -> bin/sync.mjs) — do not hand-edit; add or wire use-case templates in the registry. Each artifact source is a PINNED git ref, trust-gate-scanned before install (see hermes-swarm-map lib/services/usecase-templates.ts). Private repos require ARTIFACT_GIT_TOKEN on the HSM host.",
+  "_comment": "GENERATED from cyborg-garden/artefact-registry (artefacts.json -> bin/sync.mjs) — do not hand-edit; add or wire use-case templates in the registry. Each artifact source is a PINNED git ref, trust-gate-scanned before install (see swarm-map lib/services/usecase-templates.ts). Private repos require ARTIFACT_GIT_TOKEN on the HSM host.",
   "templates": [
     {
       "id": "matilde",
@@ -16,17 +16,17 @@
         {
           "type": "skills",
           "name": "matilde-methodology",
-          "source": "git:NimbleCoOrg/Matilde#v0.4.1:hermes-skill"
+          "source": "git:cyborg-garden/Matilde#v0.4.1:hermes-skill"
         },
         {
           "type": "plugins",
           "name": "matilde",
-          "source": "git:NimbleCoOrg/Matilde#v0.4.1:matilde_plugin",
+          "source": "git:cyborg-garden/Matilde#v0.4.1:matilde_plugin",
           "enabled": true
         }
       ],
       "soul": {
-        "source": "git:NimbleCoOrg/Matilde#v0.4.1:docker",
+        "source": "git:cyborg-garden/Matilde#v0.4.1:docker",
         "file": "SOUL.Matilde.md"
       }
     },
@@ -42,17 +42,17 @@
         {
           "type": "skills",
           "name": "agentic-startup-generalist-methodology",
-          "source": "git:NimbleCoOrg/agentic-startup-generalist#v0.2.0:hermes-skill"
+          "source": "git:cyborg-garden/agentic-startup-generalist#v0.1.0:hermes-skill"
         },
         {
           "type": "plugins",
           "name": "agentic-startup-generalist",
-          "source": "git:NimbleCoOrg/agentic-startup-generalist#v0.2.0:hermes-plugin",
+          "source": "git:cyborg-garden/agentic-startup-generalist#v0.1.0:hermes-plugin",
           "enabled": true
         }
       ],
       "soul": {
-        "source": "git:NimbleCoOrg/agentic-startup-generalist#v0.2.0:docker",
+        "source": "git:cyborg-garden/agentic-startup-generalist#v0.1.0:docker",
         "file": "SOUL.template.md"
       }
     }
