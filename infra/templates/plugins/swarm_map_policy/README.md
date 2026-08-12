@@ -1,6 +1,6 @@
 # Swarm Map Policy Plugin
 
-Integrates Hermes with [Swarm Map](https://github.com/NimbleCoOrg/swarm-map) for multi-tenant group access control.
+Integrates Hermes with [Swarm Map](https://github.com/cyborg-garden/swarm-map) for multi-tenant group access control.
 
 ## Configuration
 

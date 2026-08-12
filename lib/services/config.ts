@@ -67,7 +67,7 @@ const DEFAULT_SETTINGS: Settings = {
   dataDir: '~/.hermes-swarm-map',
   theme: 'light',
   composeFiles: [],
-  defaultImage: 'ghcr.io/nimblecoorg/hermes-agent-mt:latest',
+  defaultImage: 'ghcr.io/cyborg-garden/hermes-agent-mt:latest',
   // Pull the published image by default — a fresh install has no local hermes
   // source checkout to build from. Local build is an opt-in dev toggle (Settings).
   useLocalBuild: false,

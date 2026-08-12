@@ -4,7 +4,7 @@
 
 A commons, public goods project of [NimbleCo](https://www.nimbleco.ai/). 
 
-**Multiplayer admin and orchestrator platform for heterogeneous agent runtimes.** One dashboard for two shapes of agent: [Hermes](https://github.com/NimbleCoOrg/hermes-agent-mt) agents, where each agent is its own container, and [Letta](https://github.com/letta-ai/letta) agents, where memory-first agents live as rows on one shared server. Multi-tenant security, model cascades, and platform connections come from the same control plane either way.
+**Multiplayer admin and orchestrator platform for heterogeneous agent runtimes.** One dashboard for two shapes of agent: [Hermes](https://github.com/cyborg-garden/hermes-agent-mt) agents, where each agent is its own container, and [Letta](https://github.com/letta-ai/letta) agents, where memory-first agents live as rows on one shared server. Multi-tenant security, model cascades, and platform connections come from the same control plane either way.
 
 *First of its kind, a point and click GUI for not just managing agent runtimes, but also who can do what and where. Solves the multi-tenant agent problem. View the godhead of complexity without derealizing. Share compute.*
 
@@ -75,7 +75,7 @@ Full detail, including the route inventory that backs these claims: [docs/runtim
 ## Quick Start
 
 ```bash
-git clone https://github.com/NimbleCoOrg/swarm-map.git
+git clone https://github.com/cyborg-garden/swarm-map.git
 cd swarm-map
 pnpm install
 pnpm seed         # first run: writes settings + tier config
@@ -90,7 +90,7 @@ On first launch, the setup wizard detects your Hermes compose directories automa
 
 - **Node.js 18+**
 - **Docker** running locally (used for container management)
-- For the Hermes runtime: **Hermes Agent** instances — Swarm Map deploys the multi-tenant fork [NimbleCoOrg/hermes-agent-mt](https://github.com/NimbleCoOrg/hermes-agent-mt), a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+- For the Hermes runtime: **Hermes Agent** instances — Swarm Map deploys the multi-tenant fork [cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt), a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 - For the Letta runtime: a **Letta server** — the wizard brings one up for you via `docker/letta-compose.yml`
 
 ---

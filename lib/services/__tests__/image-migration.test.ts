@@ -13,30 +13,67 @@ vi.mock('@/lib/services', () => ({
 
 import { normalizeImageRef, migrateLegacyImageRefs } from '@/lib/services/image-migration'
 
-const LEGACY = 'ghcr.io/nimblecoai/hermes-agent-mt'
-const CURRENT = 'ghcr.io/nimblecoorg/hermes-agent-mt'
+// The rename chain, oldest first. ORIGINAL and MID are both DEAD GHCR
+// namespaces (packages do not follow repo transfers); only CURRENT receives
+// builds.
+const ORIGINAL = 'ghcr.io/nimblecoai/hermes-agent-mt'
+const MID = 'ghcr.io/nimblecoorg/hermes-agent-mt'
+const CURRENT = 'ghcr.io/cyborg-garden/hermes-agent-mt'
+
+// Retained for the migrateLegacyImageRefs suite below, which exercises the
+// worst case: an install that never upgraded, still pinned at ORIGINAL.
+const LEGACY = ORIGINAL
 
 describe('normalizeImageRef', () => {
-  it('migrates the bare legacy repo path', () => {
-    expect(normalizeImageRef(LEGACY)).toBe(CURRENT)
+  describe('one hop (nimblecoorg → cyborg-garden)', () => {
+    it('migrates the bare repo path', () => {
+      expect(normalizeImageRef(MID)).toBe(CURRENT)
+    })
+
+    it('preserves tags', () => {
+      expect(normalizeImageRef(`${MID}:latest`)).toBe(`${CURRENT}:latest`)
+      expect(normalizeImageRef(`${MID}:2026-08-06`)).toBe(`${CURRENT}:2026-08-06`)
+    })
+
+    it('preserves digests', () => {
+      expect(normalizeImageRef(`${MID}@sha256:abc123`)).toBe(`${CURRENT}@sha256:abc123`)
+    })
   })
 
-  it('preserves tags', () => {
-    expect(normalizeImageRef(`${LEGACY}:latest`)).toBe(`${CURRENT}:latest`)
-    expect(normalizeImageRef(`${LEGACY}:2026-07-21`)).toBe(`${CURRENT}:2026-07-21`)
-  })
+  describe('two hops (nimblecoai → nimblecoorg → cyborg-garden)', () => {
+    // The regression this guards: a single-lookup map would move an ORIGINAL
+    // ref to MID and stop, which is still a dead namespace. It looks like a
+    // successful migration and the fleet stays frozen.
+    it('walks the whole chain for the bare repo path', () => {
+      expect(normalizeImageRef(ORIGINAL)).toBe(CURRENT)
+      expect(normalizeImageRef(ORIGINAL)).not.toBe(MID)
+    })
 
-  it('preserves digests', () => {
-    expect(normalizeImageRef(`${LEGACY}@sha256:abc123`)).toBe(`${CURRENT}@sha256:abc123`)
+    it('preserves tags across both hops', () => {
+      expect(normalizeImageRef(`${ORIGINAL}:latest`)).toBe(`${CURRENT}:latest`)
+      expect(normalizeImageRef(`${ORIGINAL}:2026-07-21`)).toBe(`${CURRENT}:2026-07-21`)
+    })
+
+    it('preserves digests across both hops', () => {
+      expect(normalizeImageRef(`${ORIGINAL}@sha256:abc123`)).toBe(`${CURRENT}@sha256:abc123`)
+    })
+
+    it('is a fixed point — re-normalizing changes nothing', () => {
+      const once = normalizeImageRef(`${ORIGINAL}:latest`)
+      expect(normalizeImageRef(once)).toBe(once)
+    })
   })
 
   it('leaves current refs alone', () => {
     expect(normalizeImageRef(`${CURRENT}:latest`)).toBe(`${CURRENT}:latest`)
+    expect(normalizeImageRef(CURRENT)).toBe(CURRENT)
   })
 
   it('does not match prefixes of longer repo names or substrings', () => {
-    expect(normalizeImageRef(`${LEGACY}-fork:latest`)).toBe(`${LEGACY}-fork:latest`)
-    expect(normalizeImageRef(`example.com/${LEGACY}:latest`)).toBe(`example.com/${LEGACY}:latest`)
+    for (const dead of [ORIGINAL, MID]) {
+      expect(normalizeImageRef(`${dead}-fork:latest`)).toBe(`${dead}-fork:latest`)
+      expect(normalizeImageRef(`example.com/${dead}:latest`)).toBe(`example.com/${dead}:latest`)
+    }
   })
 
   it('leaves unrelated images alone', () => {
@@ -82,18 +119,27 @@ describe('migrateLegacyImageRefs', () => {
   }
 
   it('rewrites legacy defaultImage in settings and legacy compose files', () => {
+    // settings pinned at the ORIGINAL namespace — the two-hop case, end to end
+    // through the real file layer.
     getSettings.mockReturnValue({ dataDir: tmp, defaultImage: `${LEGACY}:latest` })
-    const legacyPath = writeCompose('chur-bot', `${LEGACY}:latest`)
+    const originalPath = writeCompose('chur-bot', `${ORIGINAL}:latest`)
+    const midPath = writeCompose('mid-agent', `${MID}:latest`)
     const currentPath = writeCompose('pmf', `${CURRENT}:latest`)
 
     const result = migrateLegacyImageRefs()
 
     expect(updateSettings).toHaveBeenCalledWith({ defaultImage: `${CURRENT}:latest` })
     expect(result.settingsChanged).toBe(true)
-    expect(result.composeMigrated).toEqual([legacyPath])
+    // both dead namespaces heal in a single pass; order is readdir-dependent
+    expect(result.composeMigrated.sort()).toEqual([originalPath, midPath].sort())
     expect(result.composeFailed).toEqual([])
-    expect(fs.readFileSync(legacyPath, 'utf-8')).toContain(`image: ${CURRENT}:latest`)
-    expect(fs.readFileSync(legacyPath, 'utf-8')).not.toContain('nimblecoai')
+
+    for (const p of [originalPath, midPath]) {
+      const content = fs.readFileSync(p, 'utf-8')
+      expect(content).toContain(`image: ${CURRENT}:latest`)
+      expect(content).not.toContain('nimblecoai')
+      expect(content).not.toContain('nimblecoorg')
+    }
     // untouched file stays byte-identical
     expect(fs.readFileSync(currentPath, 'utf-8')).toBe(composeFixture('pmf', `${CURRENT}:latest`))
   })

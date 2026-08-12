@@ -11,7 +11,7 @@ Deploy your first AI agent in under 5 minutes.
 ## Install
 
 ```bash
-git clone https://github.com/NimbleCoOrg/swarm-map.git
+git clone https://github.com/cyborg-garden/swarm-map.git
 cd swarm-map
 npm install
 npm run seed    # first run only
@@ -72,7 +72,7 @@ Optional: Add GitHub token (for code tools) or Brave Search key (for web search)
 <!-- screenshot: wizard-step-5-deploy -->
 
 Review your settings and hit Deploy. HSM will:
-1. Pull the `ghcr.io/nimblecoorg/hermes-agent-mt:latest` Docker image
+1. Pull the `ghcr.io/cyborg-garden/hermes-agent-mt:latest` Docker image
 2. Scaffold `~/.hermes-{name}/` with config, persona, and plugins
 3. Generate a hardened `docker-compose.yml`
 4. Start the container

@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext } from '../harness-compose'
 
-const REF = 'ghcr.io/nimblecoorg/hermes-agent-mt:2026-06-12'
+const REF = 'ghcr.io/cyborg-garden/hermes-agent-mt:2026-06-12'
 // Explicit camofox override fixture. Deliberately fake — these tests exercise
 // setComposeImage leaving sidecar images untouched, not image validity. The
 // real default lives in DEFAULT_CAMOFOX_IMAGE (see harness-compose.test.ts).
