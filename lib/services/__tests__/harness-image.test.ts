@@ -37,9 +37,9 @@ afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 describe('setAgentImage', () => {
   it('rewrites the compose to the pinned image and recreates', async () => {
-    const res = await svc.setAgentImage('h_a', 'ghcr.io/nimblecoorg/hermes-agent-mt:2026-06-12', fakeRegistry)
+    const res = await svc.setAgentImage('h_a', 'ghcr.io/cyborg-garden/hermes-agent-mt:2026-06-12', fakeRegistry)
     expect(res.ok).toBe(true)
-    expect(readComposeImage(fs.readFileSync(composeFile, 'utf-8'))).toBe('ghcr.io/nimblecoorg/hermes-agent-mt:2026-06-12')
+    expect(readComposeImage(fs.readFileSync(composeFile, 'utf-8'))).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:2026-06-12')
     // docker.restart(composeFile, service, mode, projectName?, buildSource?) —
     // pinning an image recreates with no build source (nothing to build).
     expect(docker.restart).toHaveBeenCalledWith(composeFile, 'hermes-a', 'recreate', undefined, undefined)
@@ -60,8 +60,8 @@ describe('currentImage / imageStatus', () => {
     const status = await svc.imageStatus('h_a', fakeRegistry)
     expect(status.current).toBe('local-build')
     expect(status.updateAvailable).toBe(true) // local-build + a latest digest exists
-    await svc.setAgentImage('h_a', 'ghcr.io/nimblecoorg/hermes-agent-mt:2026-06-12', fakeRegistry)
-    expect(svc.currentImage('h_a')).toBe('ghcr.io/nimblecoorg/hermes-agent-mt:2026-06-12')
+    await svc.setAgentImage('h_a', 'ghcr.io/cyborg-garden/hermes-agent-mt:2026-06-12', fakeRegistry)
+    expect(svc.currentImage('h_a')).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:2026-06-12')
   })
 })
 

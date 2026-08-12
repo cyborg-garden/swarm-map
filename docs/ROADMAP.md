@@ -41,7 +41,7 @@ HSM is the management plane for multi-tenant Hermes. It configures, deploys, mon
 - [x] **Compose bugs** — volume mount is `/opt/data`, `command: gateway` present in generateStandaloneCompose().
 - [x] **Settings round-trip integrity** — wildcard `*` explicitly tracked and preserved. `parseCommaList()` + `buildSettingsEnvValue()` prevent silent data loss.
 - [x] **Async restart** — `spawn()` with detached mode + `restart-tracker.ts` (5-min TTL, 409 on concurrent restarts). No spawnSync.
-- [x] **Configurable default image** — defaults to `ghcr.io/nimblecoorg/hermes-agent-mt:latest`, configurable via settings.
+- [x] **Configurable default image** — defaults to `ghcr.io/cyborg-garden/hermes-agent-mt:latest`, configurable via settings.
 
 ### Shipped to V2
 

@@ -84,7 +84,7 @@ describe('Local build compose generation', () => {
     expect(fs.existsSync(composeFile)).toBe(true)
     const content = fs.readFileSync(composeFile, 'utf-8')
 
-    expect(content).toContain('image: ghcr.io/nimblecoorg/hermes-agent-mt:latest')
+    expect(content).toContain('image: ghcr.io/cyborg-garden/hermes-agent-mt:latest')
     expect(content).not.toContain('build:')
   })
 
@@ -102,7 +102,7 @@ describe('Local build compose generation', () => {
     const content = fs.readFileSync(composeFile, 'utf-8')
 
     // No Dockerfile found, should fall back to image
-    expect(content).toContain('image: ghcr.io/nimblecoorg/hermes-agent-mt:latest')
+    expect(content).toContain('image: ghcr.io/cyborg-garden/hermes-agent-mt:latest')
     expect(content).not.toContain('build:')
 
     fs.rmSync(emptyDir, { recursive: true, force: true })

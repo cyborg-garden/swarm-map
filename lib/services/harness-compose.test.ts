@@ -25,7 +25,7 @@ describe('generateStandaloneCompose', () => {
 
     it('uses default image when no options provided', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir)
-      expect(result).toContain('image: ghcr.io/nimblecoorg/hermes-agent-mt:latest')
+      expect(result).toContain('image: ghcr.io/cyborg-garden/hermes-agent-mt:latest')
     })
 
     it('uses custom image from imageOrBuild', () => {
@@ -46,9 +46,9 @@ describe('generateStandaloneCompose', () => {
 
     it('falls back to defaultImage when imageOrBuild not set', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, {
-        defaultImage: 'ghcr.io/nimblecoorg/hermes-agent-mt:v1.0',
+        defaultImage: 'ghcr.io/cyborg-garden/hermes-agent-mt:v1.0',
       })
-      expect(result).toContain('image: ghcr.io/nimblecoorg/hermes-agent-mt:v1.0')
+      expect(result).toContain('image: ghcr.io/cyborg-garden/hermes-agent-mt:v1.0')
     })
 
     it('includes security hardening', () => {

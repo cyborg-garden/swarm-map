@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     // rejecting a deploy left a half-created agent dir containing the resolved
     // plaintext LLM key AND permanently 409'd every retry of that name.
     //
-    // Probe both checkout names: the repo is NimbleCoOrg/google-multiplayer-mcp
+    // Probe both checkout names: the repo is cyborg-garden/google-multiplayer-mcp
     // but it is commonly cloned as `google-mcp`. Only checking the long name
     // meant googleMcpDir silently became undefined — the operator ticked Google
     // in the wizard and got no Google, with nothing reported anywhere.
@@ -241,7 +241,7 @@ export async function POST(request: Request) {
       }
     } else {
       // Try pulling from Docker Hub first; if that fails (auth, network), check for local builds
-      let hermesImage = settings.defaultImage || 'ghcr.io/nimblecoorg/hermes-agent-mt:latest'
+      let hermesImage = settings.defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest'
       const pullResult = services.docker.pullImage(hermesImage)
       if (!pullResult.ok) {
         // Fallback: look for locally-built hermes images (from hermes-swarm build)

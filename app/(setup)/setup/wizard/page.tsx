@@ -906,7 +906,7 @@ export default function WizardPage() {
                   <p className="text-xs text-muted-foreground">
                     Google Workspace integration uses OAuth for authentication. After deployment,
                     visit the agent&apos;s OAuth callback URL to complete setup.
-                    See <a href="https://github.com/NimbleCoOrg/google-multiplayer-mcp" target="_blank" rel="noopener" className="underline">NimbleCoOrg/google-multiplayer-mcp</a> for setup.
+                    See <a href="https://github.com/cyborg-garden/google-multiplayer-mcp" target="_blank" rel="noopener" className="underline">cyborg-garden/google-multiplayer-mcp</a> for setup.
                   </p>
                 </div>
               )}
@@ -1242,7 +1242,7 @@ export default function WizardPage() {
               {isLetta ? (
                 <>This will ensure the Letta server is running (<span className="font-mono">docker/letta-compose.yml</span>) and create the agent <span className="font-mono">{slug}</span> on it via the REST API.</>
               ) : (
-                <>This will pull <span className="font-mono">ghcr.io/nimblecoorg/hermes-agent-mt:latest</span>, scaffold{' '}
+                <>This will pull <span className="font-mono">ghcr.io/cyborg-garden/hermes-agent-mt:latest</span>, scaffold{' '}
                 <span className="font-mono">~/.hermes-{slug}/</span>, and start the container.</>
               )}
             </p>

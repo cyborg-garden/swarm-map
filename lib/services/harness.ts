@@ -20,7 +20,7 @@ import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import type { ContainerRuntimeAdapter } from './runtime-adapter'
 
-const DEFAULT_IMAGE_REPO = 'nimblecoorg/hermes-agent-mt'
+const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
 import { PLATFORM_ENV_KEYS as SURFACE_STRIP_BY_PLATFORM, MENTION_GATING_VARS } from '@/lib/surfaces/derive'
 
@@ -1674,7 +1674,7 @@ export class HarnessService {
             image = readComposeImage(fs.readFileSync(source.composeFile, 'utf-8'))
           }
         } catch {}
-        image = image ?? this.config?.getSettings()?.defaultImage ?? 'ghcr.io/nimblecoorg/hermes-agent-mt:latest'
+        image = image ?? this.config?.getSettings()?.defaultImage ?? 'ghcr.io/cyborg-garden/hermes-agent-mt:latest'
         const script = [
           `for db in ${MIGRATED_DB_FILES.join(' ')}; do`,
           '  for suf in "" -wal -shm; do',

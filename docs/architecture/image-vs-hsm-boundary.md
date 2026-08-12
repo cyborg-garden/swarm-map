@@ -1,6 +1,6 @@
 # Image vs HSM Boundary
 
-Decision framework for contributors: when you build a new feature or fix, this doc tells you where it belongs — the **Docker image** (hermes-agent), **HSM's baseline scaffolding** (hermes-swarm-map), or its **own artefact repo** (git-sourced, indexed in [NimbleCoOrg/artefact-registry](https://github.com/NimbleCoOrg/artefact-registry)).
+Decision framework for contributors: when you build a new feature or fix, this doc tells you where it belongs — the **Docker image** (hermes-agent), **HSM's baseline scaffolding** (hermes-swarm-map), or its **own artefact repo** (git-sourced, indexed in [cyborg-garden/artefact-registry](https://github.com/cyborg-garden/artefact-registry)).
 
 ## The Layers
 
@@ -25,7 +25,7 @@ Per-deployment config, plugins, hooks, and skills installed into `/opt/data/` at
 
 A self-contained capability — a plugin + paired skill that does one job — living in **its own repo**, fetched by pinned `git:<org>/<repo>#<tag>[:<subdir>]`, trust-gate-scanned, and installed **opt-in** (per use-case template or per-harness attach). It is *not* baked into the image and *not* a baseline template enabled for every agent.
 
-- Distributed via the commons pipeline, not vendored into HSM. Indexed in [NimbleCoOrg/artefact-registry](https://github.com/NimbleCoOrg/artefact-registry) (`type` + `ring` + pinned `hsm.template` git-source).
+- Distributed via the commons pipeline, not vendored into HSM. Indexed in [cyborg-garden/artefact-registry](https://github.com/cyborg-garden/artefact-registry) (`type` + `ring` + pinned `hsm.template` git-source).
 - Its config travels *with it* as declared `requires_env` — it must not add a typed field to HSM's core `Settings` type.
 - Examples today: `Matilde` (use-case template), `hermes-browser-login`, `osint-engine`. See [use-case packages](../patterns/use-case-packages.md) and [git-sourced artifacts](../runbooks/git-sourced-artifacts.md).
 
@@ -81,7 +81,7 @@ The framework above answers image-vs-HSM. But "→ HSM" hides a second decision,
 
 ### B. Else — is it a self-contained capability? (a plugin/skill that does a job)
 
-**→ its own artefact repo**, through the commons pipeline: own repo + paired skill + `plugin.yaml` with `declared_capabilities`, pinned `git:<org>/<repo>#<tag>`, install-time trust gate, indexed in the [artefact-registry](https://github.com/NimbleCoOrg/artefact-registry). **Not** a `local:` baseline plugin, **not** `enabled: true` for every agent.
+**→ its own artefact repo**, through the commons pipeline: own repo + paired skill + `plugin.yaml` with `declared_capabilities`, pinned `git:<org>/<repo>#<tag>`, install-time trust gate, indexed in the [artefact-registry](https://github.com/cyborg-garden/artefact-registry). **Not** a `local:` baseline plugin, **not** `enabled: true` for every agent.
 
 **The coupling smell (the diagnostic):** if shipping a capability forces a typed field onto the core `Settings` type or a branch in the settings/`.env` route, it's in the wrong layer. An artefact's config travels with it as declared `requires_env`, set through the generic attach mechanism — never a per-feature code path in the security-sensitive route.
 
@@ -187,4 +187,4 @@ NimbleCoAI/hermes-agent is a fork of NousResearch/hermes-agent. Every feature th
 → Both — a two-layer trust gate. HSM does the **early pre-install screen**: it fetches the artifact at a pinned tag and scans its content for prompt-injection / promptware *before* copying it into the agent, refusing to install on a finding (`lib/services/artifacts-manifest.ts` `installArtifacts` + `artifact-gate.ts`). The **image** does the **authoritative runtime enforcement** that can't be skipped: a plugin's declared tool capabilities are enforced at dispatch, and plugin-provided skill bodies are injection-scanned at load (`tools/threat_patterns.py`). Per Decision #1 the enforcement is a security boundary → image; HSM's scan is a faster early gate, not a substitute. The HSM-side TS scanner is a port of the image's pattern library — **keep them in sync** when patterns change. See `../specs/2026-06-03-artifact-commons-design.md` (Phase 2 trust gate).
 
 **"I built a plugin that does OSINT lookups / academic-citation checks / a domain skill — where does it live?"**
-→ Its **own artefact repo** (Refinement B), not an HSM baseline. It's a self-contained capability with no secret-custody role, so it gets its own repo + paired skill + pinned `git:` source, is indexed in the [artefact-registry](https://github.com/NimbleCoOrg/artefact-registry), and installs opt-in via a use-case template or per-harness attach. Baking it into `infra/templates/` (enabled for everyone) would be the wrong layer. Examples: `osint-engine`, `Matilde`, `hermes-browser-login`.
+→ Its **own artefact repo** (Refinement B), not an HSM baseline. It's a self-contained capability with no secret-custody role, so it gets its own repo + paired skill + pinned `git:` source, is indexed in the [artefact-registry](https://github.com/cyborg-garden/artefact-registry), and installs opt-in via a use-case template or per-harness attach. Baking it into `infra/templates/` (enabled for everyone) would be the wrong layer. Examples: `osint-engine`, `Matilde`, `hermes-browser-login`.

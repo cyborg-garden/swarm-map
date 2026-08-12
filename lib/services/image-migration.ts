@@ -2,17 +2,17 @@
  * One-time healing of legacy agent-image refs (stale-`:latest` incident,
  * 2026-08-06).
  *
- * The hermes-agent-mt repo was transferred NimbleCoAI → NimbleCoOrg around
- * 2026-07-21. GHCR packages do NOT follow repo transfers, so the old package
- * (`ghcr.io/nimblecoai/hermes-agent-mt`) froze at its last pre-transfer build
- * while every post-transfer CI publish landed — successfully — on the new
- * path (`ghcr.io/nimblecoorg/hermes-agent-mt`) that no existing install was
- * pulling. Result: fleets silently ran a 2026-07-21 image forever while CI
+ * The hermes-agent-mt repo has now been transferred twice:
+ * NimbleCoAI → NimbleCoOrg (around 2026-07-21) and NimbleCoOrg →
+ * cyborg-garden (2026-08-13). GHCR packages do NOT follow repo transfers, so
+ * each old package froze at its last pre-transfer build while every later CI
+ * publish landed — successfully — on the new path that no existing install was
+ * pulling. Result: fleets silently ran a stale image forever while CI
  * reported green.
  *
  * New installs are fine (seed.ts and all compose generation already default
- * to the nimblecoorg path). What this module heals is EXISTING installs,
- * which pin the dead path in two persisted places:
+ * to the cyborg-garden path). What this module heals is EXISTING installs,
+ * which pin a dead path in two persisted places:
  *   1. `settings.json` → `defaultImage`
  *   2. each generated `<dataDir>/compose/<agent>/docker-compose.yml`
  *
@@ -28,18 +28,29 @@ import os from 'os'
 import { services } from '@/lib/services'
 import { readComposeImage, setComposeImage } from './harness-compose'
 
-/** Dead repo path → live repo path. Tag/digest suffixes are preserved. */
+/**
+ * Rename CHAIN, one entry per repo transfer, oldest hop first. This is
+ * deliberately not flattened: each entry records a real transfer, and the next
+ * rename is added as one more hop rather than by rewriting history.
+ *
+ * Because it is a chain, it MUST be applied transitively — see
+ * `normalizeImageRef`. An install that never upgraded is still pinned at the
+ * oldest namespace, and a single lookup would move it one hop to another dead
+ * path, which looks like a successful migration and fixes nothing.
+ *
+ * Tag/digest suffixes are preserved at every hop.
+ */
 const LEGACY_IMAGE_REPOS: Record<string, string> = {
   'ghcr.io/nimblecoai/hermes-agent-mt': 'ghcr.io/nimblecoorg/hermes-agent-mt',
+  'ghcr.io/nimblecoorg/hermes-agent-mt': 'ghcr.io/cyborg-garden/hermes-agent-mt',
 }
 
 /**
- * Rewrite a legacy image ref to its live equivalent, preserving any `:tag`
- * or `@sha256:…` suffix. Returns the ref unchanged when it isn't legacy.
- * Only exact repo-path matches migrate — `nimblecoai/hermes-agent-mt-foo`
- * or a ref that merely contains the string as a substring is left alone.
+ * Apply a single hop of the rename chain. Only exact repo-path matches
+ * migrate — `nimblecoai/hermes-agent-mt-foo` or a ref that merely contains
+ * the string as a substring is left alone.
  */
-export function normalizeImageRef(ref: string): string {
+function migrateOneHop(ref: string): string {
   for (const [legacy, current] of Object.entries(LEGACY_IMAGE_REPOS)) {
     if (ref === legacy) return current
     if (ref.startsWith(legacy + ':') || ref.startsWith(legacy + '@')) {
@@ -47,6 +58,30 @@ export function normalizeImageRef(ref: string): string {
     }
   }
   return ref
+}
+
+/**
+ * Rewrite a legacy image ref to its live equivalent, preserving any `:tag`
+ * or `@sha256:…` suffix. Returns the ref unchanged when it isn't legacy.
+ *
+ * Walks the rename chain to its end, so a ref pinned at the ORIGINAL
+ * namespace lands on the current one in a single call
+ * (`nimblecoai` → `nimblecoorg` → `cyborg-garden`), not one hop short.
+ *
+ * The walk is bounded by the number of entries in the map — a chain can be at
+ * most that long — so a malformed map containing a cycle can never spin
+ * forever. It also stops early at the first fixed point, which is the common
+ * case (an already-current ref costs one pass).
+ */
+export function normalizeImageRef(ref: string): string {
+  const maxHops = Object.keys(LEGACY_IMAGE_REPOS).length
+  let current = ref
+  for (let hop = 0; hop < maxHops; hop++) {
+    const next = migrateOneHop(current)
+    if (next === current) break // reached the live path
+    current = next
+  }
+  return current
 }
 
 export type ImageMigrationResult = {
@@ -113,8 +148,8 @@ export function migrateLegacyImageRefs(): ImageMigrationResult {
 
   if (result.composeMigrated.length) {
     console.log(
-      `[image-migration] migrated ${result.composeMigrated.length} compose file(s) off the dead ` +
-      'ghcr.io/nimblecoai path — agents pick up the live image on their next recreate',
+      `[image-migration] migrated ${result.composeMigrated.length} compose file(s) off a dead ` +
+      'GHCR namespace — agents pick up the live image on their next recreate',
     )
   }
   return result

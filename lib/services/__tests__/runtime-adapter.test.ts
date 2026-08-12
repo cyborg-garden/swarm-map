@@ -14,18 +14,18 @@ describe('hermesAdapter Phase-2 members (delegation)', () => {
   })
 
   it('defaultImageRepo is the hermes-agent-mt repo', () => {
-    expect(hermesAdapter.defaultImageRepo).toBe('nimblecoorg/hermes-agent-mt')
+    expect(hermesAdapter.defaultImageRepo).toBe('cyborg-garden/hermes-agent-mt')
   })
 
   it('generateCompose emits the hermes-<name> service readImageRef/setImageRef operate on', () => {
     const compose = hermesAdapter.generateCompose('echo', 8642, '/data/echo', {
-      defaultImage: 'ghcr.io/nimblecoorg/hermes-agent-mt:latest',
+      defaultImage: 'ghcr.io/cyborg-garden/hermes-agent-mt:latest',
     })
     expect(compose).toContain('hermes-echo:')
-    expect(hermesAdapter.readImageRef(compose)).toBe('ghcr.io/nimblecoorg/hermes-agent-mt:latest')
+    expect(hermesAdapter.readImageRef(compose)).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:latest')
 
-    const pinned = hermesAdapter.setImageRef(compose, 'ghcr.io/nimblecoorg/hermes-agent-mt:2026-07-01')
-    expect(hermesAdapter.readImageRef(pinned)).toBe('ghcr.io/nimblecoorg/hermes-agent-mt:2026-07-01')
+    const pinned = hermesAdapter.setImageRef(compose, 'ghcr.io/cyborg-garden/hermes-agent-mt:2026-07-01')
+    expect(hermesAdapter.readImageRef(pinned)).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:2026-07-01')
   })
 })
 

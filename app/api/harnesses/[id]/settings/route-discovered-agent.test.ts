@@ -91,7 +91,7 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
     fs.writeFileSync(
       composeFile,
       generateStandaloneCompose('iris', 8642, agentDir, {
-        defaultImage: 'ghcr.io/nimblecoorg/hermes-agent-mt:latest',
+        defaultImage: 'ghcr.io/cyborg-garden/hermes-agent-mt:latest',
         memory: '2G',
         cpus: '2.0',
         extraMounts: [SPOOL],

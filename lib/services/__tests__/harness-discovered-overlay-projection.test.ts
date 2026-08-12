@@ -152,13 +152,13 @@ describe('discovered harness projection carries overlay host access (#222)', () 
         id: 'h_iris',
         name: 'iris',
         apiPort: 8642,
-        pinnedImageRef: 'ghcr.io/nimblecoorg/hermes-agent-mt:1.4.0',
+        pinnedImageRef: 'ghcr.io/cyborg-garden/hermes-agent-mt:1.4.0',
         lastKnownDigest: 'sha256:aaaa',
       },
     ])
     const iris = service.get('h_iris')!
     expect(iris.status).toBe('running')
-    expect(iris.pinnedImageRef).toBe('ghcr.io/nimblecoorg/hermes-agent-mt:1.4.0')
+    expect(iris.pinnedImageRef).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:1.4.0')
     expect(iris.lastKnownDigest).toBe('sha256:aaaa')
     expect(iris.apiPort).toBe(8642)
   })

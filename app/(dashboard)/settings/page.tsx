@@ -118,7 +118,7 @@ export default function SettingsPage() {
               <div>
                 <p className="font-medium">Build from local source</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  When enabled, new agents build from <span className="font-mono">{settings.hermesDir}</span> instead of pulling <span className="font-mono">ghcr.io/nimblecoorg/hermes-agent-mt:latest</span>
+                  When enabled, new agents build from <span className="font-mono">{settings.hermesDir}</span> instead of pulling <span className="font-mono">ghcr.io/cyborg-garden/hermes-agent-mt:latest</span>
                 </p>
               </div>
               <Switch
