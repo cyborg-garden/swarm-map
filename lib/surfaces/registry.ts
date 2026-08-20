@@ -157,6 +157,10 @@ export const SURFACES: Record<SurfaceSlug, SurfaceSpec> = {
     credentials: ['DISCORD_BOT_TOKEN'],
     admission: {
       users: 'DISCORD_ALLOWED_USERS',
+      // Channel lists accept CATEGORY snowflakes too (hermes-agent-mt#160):
+      // a category id matches every channel in that category, evaluated by
+      // the adapter per message — channels created later are covered without
+      // a re-render. ID-only; category names are never matched.
       groups: 'DISCORD_ALLOWED_CHANNELS',
       roles: 'DISCORD_ALLOWED_ROLES',
       ignoredGroups: 'DISCORD_IGNORED_CHANNELS',

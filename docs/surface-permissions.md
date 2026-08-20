@@ -15,7 +15,12 @@ allowlist "Admins") caused a real silent-bot incident:
   `.env`, **enforced by the agent runtime**. On Discord admission is a union:
   user allowlist ∪ role allowlist ∪ pairing ∪ (opt-in,
   `DISCORD_CHANNEL_SCOPED_ACCESS`) anyone in an approved channel or its
-  threads.
+  threads. Discord channel lists (`DISCORD_ALLOWED_CHANNELS`,
+  `DISCORD_IGNORED_CHANNELS`, free-response) also accept **category**
+  snowflakes: a category id matches every channel in the category, evaluated
+  by the adapter at message time (hermes-agent-mt#160) — so a ring like
+  "the Greenhouse" is one entry, and channels created inside it later are
+  covered without a re-render. ID-only; category names are never matched.
 - **Privilege** — who can approve gated tools (`is_platform_admin`). Lives in
   the `surfaceAdmins` overlay (`harnesses.json`), served live by
   `GET /api/harnesses/:id/surfaces/:platform/admins/:userId`. **Bootstrap
