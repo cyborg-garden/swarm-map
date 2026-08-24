@@ -209,6 +209,16 @@ const PRICING_TABLE: Array<{ pattern: string | RegExp; pricing: PricingEntry }> 
     },
   },
   // ── Z.ai GLM ([intelligent-routing-cost]) ─────────────────────────────
+  // GLM-5.3 — fleet chat primary since 2026-08-20 (replaced Kimi K3 fleet-wide).
+  // OpenRouter $1.40/$4.40, cache-read $0.26 (as of 2026-08-20).
+  {
+    pattern: /^glm-5\.3/,
+    pricing: {
+      inputPerMillion: 1.4,
+      outputPerMillion: 4.4,
+      cacheReadPerMillion: 0.26,
+    },
+  },
   // GLM-5.2 — fleet chat primary. Z.ai LIST price $1.40/$4.40. OpenRouter is
   // running a 45%-off promo (~$0.7644/$2.402) as of 2026-07-23; we price at
   // list, so promo-period spend is over-estimated rather than under-tracked.

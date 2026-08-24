@@ -44,9 +44,12 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
     { id: 'anthropic/claude-opus-4-8', name: 'Claude Opus 4.8 (OR)', tier: 'primary' },
     { id: 'anthropic/claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (OR)', tier: 'primary' },
     { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OR)', tier: 'fallback' },
-    // Fleet chat primary — GLM-5.2 (753B MoE, 1M ctx) served over OpenRouter.
-    // The GLM-primary fleet flip runs through this entry; the direct Z.ai lane
-    // remains available under the `zai` provider above.
+    // Fleet chat primary — GLM-5.3 (1M ctx, released 2026-08) replaced Kimi K3
+    // across the fleet on 2026-08-20 (~2x cheaper input, ~3.4x cheaper output,
+    // Terminal-Bench parity). Text-only; vision stays on the auxiliary router.
+    { id: 'z-ai/glm-5.3', name: 'GLM-5.3 (OR)', tier: 'primary' },
+    // GLM-5.2 (753B MoE, 1M ctx) — previous fleet primary, still primary on
+    // some agents. The direct Z.ai lane remains under the `zai` provider above.
     { id: 'z-ai/glm-5.2', name: 'GLM-5.2 (OR)', tier: 'primary' },
     // Premium on-demand tier — Kimi K3 (1M ctx, released 2026-07-16). Not a
     // fallback rung: operators pull it in explicitly for high-judgment work.
