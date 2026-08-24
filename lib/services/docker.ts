@@ -137,8 +137,20 @@ export class DockerService {
     }
   }
 
+  // Short-TTL cache for batch stats. `docker stats` fans out one API request
+  // per container inside the VM; with the dashboard polling /api/harnesses
+  // every 5s per open tab, uncached calls hammered dockerd hard enough to
+  // wedge the Docker Desktop VM (fleet outage 2026-08-20 → 2026-08-24).
+  // Failures are cached too — a dead daemon must not be re-probed by a 15s
+  // blocking exec on every poll.
+  private statsCache: { ts: number; data: Record<string, ContainerStats> } | null = null
+  private static readonly STATS_CACHE_TTL_MS = 10_000
+
   // Get stats for ALL containers in one call (avoids per-container 10s penalty)
   getAllContainerStats(): Record<string, ContainerStats> {
+    if (this.statsCache && Date.now() - this.statsCache.ts < DockerService.STATS_CACHE_TTL_MS) {
+      return this.statsCache.data
+    }
     try {
       const output = execFileSync(
         'docker',
@@ -171,8 +183,10 @@ export class DockerService {
           // skip unparseable lines
         }
       }
+      this.statsCache = { ts: Date.now(), data: result }
       return result
     } catch {
+      this.statsCache = { ts: Date.now(), data: {} }
       return {}
     }
   }
