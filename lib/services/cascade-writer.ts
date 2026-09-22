@@ -181,10 +181,19 @@ export function applyCascadeToHarness(
     }
     // fallback_providers: section. Same header test as the reader (a trailing
     // comment is still a header) — a missed header appended a duplicate block.
+    // With nothing to write, the existing block is passed through untouched:
+    // this writer never deletes fallback_providers. (Unreachable today — an
+    // empty cascade is rejected above — but kept identical to the models PUT
+    // route's splice so the two can never drift.)
     if (FALLBACK_PROVIDERS_HEADER.test(line)) {
+      if (fpLines.length === 0) {
+        inModelSection = false
+        updated.push(line)
+        continue
+      }
       inFpSection = true
       inModelSection = false
-      if (!fpSectionWritten && fpLines.length > 0) {
+      if (!fpSectionWritten) {
         updated.push(...fpLines)
         fpSectionWritten = true
       }
