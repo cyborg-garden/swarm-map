@@ -105,7 +105,7 @@ describe('ModelCascadeEditor — seeding', () => {
 })
 
 describe('ModelCascadeEditor — never clobber user edits', () => {
-  it('keeps a user edit when props change after the user has touched the cascade', () => {
+  it('keeps a user edit when the server cascade changes after the user has touched the editor', () => {
     const onSave = vi.fn()
     const { rerender } = render(<ModelCascadeEditor {...loadedProps(onSave)} />)
 
@@ -113,10 +113,17 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
     fireEvent.click(screen.getAllByTitle('Remove')[0])
     expect(screen.queryByText('claude-sonnet-4-6')).toBeNull()
 
-    // A background refetch delivers the (unchanged) server state.
-    rerender(<ModelCascadeEditor {...loadedProps(onSave)} fallbackProviders={[...LOADED]} />)
+    // A background refetch delivers a DIFFERENT server cascade. Same-value
+    // props would not exercise the guard at all (the sync key is unchanged).
+    rerender(
+      <ModelCascadeEditor
+        {...loadedProps(onSave)}
+        fallbackProviders={[{ provider: 'ollama', model: 'glm4:9b', base_url: OLLAMA_URL }]}
+      />
+    )
 
-    // The user's removal must survive.
+    // The user's list must survive: no server row, no removed row.
+    expect(screen.queryByText('glm4:9b')).toBeNull()
     expect(screen.queryByText('claude-sonnet-4-6')).toBeNull()
     expect(screen.getByText('qwen3:30b')).toBeInTheDocument()
 
@@ -124,6 +131,25 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
     expect(onSave).toHaveBeenCalledWith([
       { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
     ])
+  })
+
+  it('clears dirty once the server reflects the saved list (Save button disappears)', () => {
+    const onSave = vi.fn()
+    const { rerender } = render(<ModelCascadeEditor {...loadedProps(onSave)} />)
+    fireEvent.click(screen.getAllByTitle('Remove')[0])
+    fireEvent.click(screen.getByRole('button', { name: /save cascade/i }))
+    expect(onSave).toHaveBeenCalledTimes(1)
+
+    // Refetch after the save returns exactly what the user saved.
+    rerender(
+      <ModelCascadeEditor
+        {...loadedProps(onSave)}
+        models={['qwen3:30b']}
+        fallbackProviders={[{ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL }]}
+      />
+    )
+    expect(screen.getByText('qwen3:30b')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save cascade/i })).toBeNull()
   })
 
   it('an untouched editor follows a server-side change to the cascade', () => {

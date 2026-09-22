@@ -247,6 +247,44 @@ describe('Models API — PUT validation', () => {
     expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
   })
 
+  it('legacy body with no provider defaults an unknown model to model.provider, never a null-provider row', async () => {
+    // README/AGENTS document `{"cascade":[...]}` with no provider. An unknown
+    // model must not be written as `- provider: ` (YAML null): Hermes silently
+    // drops such a row and our own reader cannot parse it back, so the editor
+    // and model.fallback silently diverge.
+    const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
+    mockModelProvider.mockReturnValue('anthropic')
+    mockExistingFp.mockReturnValue([
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:8b', base_url: OLLAMA_URL },
+    ])
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+
+    const body = { cascade: ['claude-sonnet-4-6', 'claude-haiku-4-5', 'qwen3:8b'] }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written).not.toMatch(/provider:\s*$/m)
+    expect(written).toMatch(/- provider: anthropic\n\s+model: claude-haiku-4-5/)
+    expect(written).toMatch(/- provider: ollama\n\s+model: qwen3:8b\n\s+base_url: /)
+    expect(written).toMatch(/^model:\n  provider: anthropic\n  default: claude-sonnet-4-6/m)
+  })
+
+  it('legacy body with no provider anywhere rejects an unknown model (400) and writes nothing', async () => {
+    mockModelProvider.mockReturnValue('')
+    mockExistingFp.mockReturnValue([
+      { provider: 'ollama', model: 'qwen3:8b', base_url: 'http://host.docker.internal:11434/v1' },
+    ])
+    const body = { cascade: ['qwen3:8b', 'claude-haiku-4-5'] }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error).toContain('claude-haiku-4-5')
+    expect(json.error).toMatch(/provider/i)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
   it('legacy body never deletes an existing fallback_providers block, even when the reader cannot parse it', async () => {
     // Reader says [] (e.g. a shape it does not understand) but the file has a
     // block. Old code: fpLines empty → section loop ate the block. Must survive.

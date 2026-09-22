@@ -87,9 +87,22 @@ export async function PUT(
     // whole block was dropped and a local model lost its ollama base_url (#149).
     const existing = readFallbackProviders(dataDir)
     if (existing.length > 0 && cascade.length > 0) {
+      // A model with no existing row needs SOME provider. The documented
+      // `{ cascade: [...] }` shape carries none, so fall back to the agent's
+      // current model.provider. With neither we must not write `- provider: `
+      // (YAML null): Hermes drops that row silently and our reader cannot parse
+      // it back, so the editor and model.fallback diverge with no error.
+      const defaultProvider = provider || readModelProvider(dataDir)
+      const unknown = cascade.filter((model) => !existing.some((fp) => fp.model === model))
+      if (!defaultProvider && unknown.length > 0) {
+        return NextResponse.json(
+          { error: `provider required for model "${unknown[0]}": it has no fallback_providers row and the body carries no provider` },
+          { status: 400 }
+        )
+      }
       fallbackProvidersToWrite = cascade.map((model) => {
         const row = existing.find((fp) => fp.model === model)
-        if (!row) return { provider, model }
+        if (!row) return { provider: defaultProvider, model }
         return { provider: row.provider, model: row.model, ...(row.base_url ? { base_url: row.base_url } : {}) }
       })
       // model.provider must follow the new primary row, not the stale body value.
