@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { validateCascadeEntries, type CascadeEntry } from '@/lib/model-catalog'
+import { applyCascadeToHarness } from '@/lib/services/cascade-writer'
 import { readModelConfig, readModelProvider, readFallbackProviders, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
 import type { FallbackProvider } from '@/lib/services/harness'
 import fs from 'fs'
@@ -72,10 +73,13 @@ export async function PUT(
   let fallbackProvidersToWrite: Array<{ provider: string; model: string; base_url?: string }> | undefined
 
   if (body.fallback_providers && body.fallback_providers.length > 0) {
-    fallbackProvidersToWrite = body.fallback_providers
-    // Primary model = first entry, provider from first entry
-    provider = body.fallback_providers[0].provider || ''
-    cascade = body.fallback_providers.map((fp) => fp.model)
+    // fallback_providers shape: the shared, guarded writer (also used by the
+    // cascade library's apply route). Validates credentials before writing.
+    const result = applyCascadeToHarness(id, body.fallback_providers, { who: 'api' })
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: result.status })
+    }
+    return NextResponse.json(result.written)
   } else {
     // Legacy path: string-based cascade
     cascade = body.cascade ?? (body.model ? [body.model] : [])
