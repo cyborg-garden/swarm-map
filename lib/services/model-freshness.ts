@@ -24,6 +24,7 @@
  */
 import type { Key } from '@/lib/types'
 import type { Storage } from './storage'
+import { anthropicEnvVarForValue } from './keys'
 import type { LiveModel } from '@/lib/model-versions'
 
 export const LIVE_PROVIDERS = ['openrouter', 'anthropic', 'zai'] as const
@@ -150,7 +151,12 @@ export class ModelFreshnessService {
     return cached
   }
 
-  /** First configured key for the provider, decrypted. Never logged. */
+  /**
+   * First usable key for the provider, decrypted. Never logged. An Anthropic
+   * key row may hold an OAuth/Bearer token (→ ANTHROPIC_TOKEN); /v1/models
+   * takes x-api-key only, so those are skipped and the first real API key
+   * (→ ANTHROPIC_API_KEY) is used.
+   */
   private keyFor(provider: LiveProvider): string | undefined {
     let keys: Key[]
     try {
@@ -158,13 +164,19 @@ export class ModelFreshnessService {
     } catch {
       return undefined
     }
-    const match = keys.find((k) => k.provider === provider)
-    if (!match) return undefined
-    try {
-      return this.keys.getDecryptedValue(match.id) || undefined
-    } catch {
-      return undefined
+    for (const k of keys) {
+      if (k.provider !== provider) continue
+      let value: string | undefined
+      try {
+        value = this.keys.getDecryptedValue(k.id) || undefined
+      } catch {
+        continue
+      }
+      if (!value) continue
+      if (provider === 'anthropic' && anthropicEnvVarForValue(value) !== 'ANTHROPIC_API_KEY') continue
+      return value
     }
+    return undefined
   }
 
   private async getJson(url: string, headers: Record<string, string>): Promise<unknown | null> {

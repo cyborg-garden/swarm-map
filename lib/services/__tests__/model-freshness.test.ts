@@ -153,17 +153,38 @@ describe('fetchLiveModels', () => {
       }
       return jsonResponse({ data: [{ id: 'claude-a', created_at: '2026-01-01T00:00:00Z' }], has_more: true, last_id: 'claude-a' })
     }) as unknown as typeof fetch
-    const k = keys([keyRow('anthropic')], { k_anthropic: 'sk-ant-secret' })
+    const k = keys([keyRow('anthropic')], { k_anthropic: 'sk-ant-api03-secret' })
     const list = await svc(fetchImpl, k).fetchLiveModels('anthropic')
     expect(list?.models.map((m) => m.id)).toEqual(['claude-a', 'claude-b'])
     const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls
     expect(calls).toHaveLength(2)
     expect(String(calls[0][0]).startsWith(ANTHROPIC_MODELS_URL)).toBe(true)
     const headers = (calls[0][1] as RequestInit).headers as Record<string, string>
-    expect(headers['x-api-key']).toBe('sk-ant-secret')
+    expect(headers['x-api-key']).toBe('sk-ant-api03-secret')
     expect(headers['anthropic-version']).toBe('2023-06-01')
     // the key never lands on disk
-    expect(fs.readFileSync(path.join(dir, cacheFileFor('anthropic')), 'utf-8')).not.toContain('sk-ant-secret')
+    expect(fs.readFileSync(path.join(dir, cacheFileFor('anthropic')), 'utf-8')).not.toContain('sk-ant-api03-secret')
+  })
+
+  it('Anthropic: skips an OAuth/Bearer token key (ANTHROPIC_TOKEN) and sends the first real API key', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [{ id: 'claude-a' }], has_more: false })) as unknown as typeof fetch
+    const k = keys([keyRow('anthropic', 'k_tok'), keyRow('anthropic', 'k_api')], {
+      k_tok: 'sk-ant-oat01-token-secret',
+      k_api: 'sk-ant-api03-real-secret',
+    })
+    const list = await svc(fetchImpl, k).fetchLiveModels('anthropic')
+    expect(list?.models.map((m) => m.id)).toEqual(['claude-a'])
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls
+    expect(calls).toHaveLength(1)
+    const headers = (calls[0][1] as RequestInit).headers as Record<string, string>
+    expect(headers['x-api-key']).toBe('sk-ant-api03-real-secret')
+  })
+
+  it('Anthropic: only token keys configured → null, no request made', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [] })) as unknown as typeof fetch
+    const k = keys([keyRow('anthropic', 'k_tok'), keyRow('anthropic', 'k_cc')], { k_tok: 'sk-ant-oat01-x', k_cc: 'cc-y' })
+    expect(await svc(fetchImpl, k).fetchLiveModels('anthropic')).toBeNull()
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('Z.ai sends a Bearer key and fails soft on an unexpected shape', async () => {

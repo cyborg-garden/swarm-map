@@ -261,6 +261,32 @@ describe('checkModelUpdates — apply mode', () => {
     })
   })
 
+  it('price unknown (Anthropic publishes no pricing): successor reported, apply blocked, nothing written', async () => {
+    liveLists.anthropic = {
+      provider: 'anthropic',
+      fetchedAt: 1,
+      models: [
+        { id: 'claude-sonnet-4-6', created: 1771342990, expiration: null, pricing: null },
+        { id: 'claude-sonnet-4-7', created: 1787000000, expiration: null, pricing: null },
+      ],
+    }
+    makeHarness('pu', {
+      config: fpConfig([['anthropic', 'claude-sonnet-4-6']]),
+      tracking: { [trackingKey('anthropic', 'claude-sonnet-4-6')]: true },
+    })
+    const report = await checkModelUpdates(deps)
+    const claude = entryFor(report, 'h_pu', 'claude-sonnet-4-6')!
+    expect(claude.successor).toBe('claude-sonnet-4-7')
+    expect(claude.kind).toBe('version')
+    expect(claude.priceRatio).toBeUndefined()
+    expect(claude.applied).toBeUndefined()
+    expect(claude.blocked).toBe('price-unknown')
+    expect(readConfig('pu')).toContain('    model: claude-sonnet-4-6')
+    expect(readConfig('pu')).not.toContain('claude-sonnet-4-7')
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+    expect(deps.audit.append).not.toHaveBeenCalled()
+  })
+
   it('untracked entry with a successor: reported, not applied', async () => {
     makeHarness('e', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]) })
     const report = await checkModelUpdates(deps)
@@ -470,7 +496,11 @@ describe('evaluateApply / resolveIntervalMs', () => {
     expect(evaluateApply({ ...base(), entry: { ...base().entry, provider: 'custom' } })).toMatch(/provider-not-auto-updatable/)
     expect(evaluateApply({ ...base(), unstable: true })).toBe('unstable-successor')
     expect(evaluateApply({ ...base(), entry: { ...base().entry, priceRatio: Infinity } })).toMatch(/price-ceiling/)
-    expect(evaluateApply({ ...base(), entry: { ...base().entry, priceRatio: undefined } })).toBeNull()
+    // No pricing published (direct Anthropic / Z.ai) → the ceiling cannot be
+    // checked, so the scheduler must not rotate unattended. A human's one-click
+    // apply stays permissive.
+    expect(evaluateApply({ ...base(), entry: { ...base().entry, priceRatio: undefined } })).toBe('price-unknown')
+    expect(evaluateApply({ ...base(), entry: { ...base().entry, priceRatio: undefined }, automatic: false })).toBeNull()
     expect(evaluateApply({ ...base(), entry: { ...base().entry, kind: 'snapshot' }, automatic: false })).toBeNull()
   })
 

@@ -20,7 +20,8 @@
  *
  * Never applied: ollama (no upstream notion of "newer"), bedrock, custom;
  * snapshot-only bumps (notify only); unstable successors; anything over the
- * price ceiling; a harness with a restart already in flight.
+ * price ceiling, or with no pricing to check it against; a harness with a
+ * restart already in flight.
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
@@ -172,6 +173,10 @@ export function evaluateApply(input: ApplyGuardInput): string | null {
   if (automatic && !entry.tracked) return 'untracked'
   if (automatic && entry.kind !== 'version') return `notify-only:${entry.kind}`
   if (unstable) return 'unstable-successor'
+  // No pricing (direct Anthropic / Z.ai publish none) → the ceiling cannot be
+  // checked, so the scheduler never rotates unattended. A human's one-click
+  // apply has seen the report and may proceed.
+  if (automatic && entry.priceRatio === undefined) return 'price-unknown'
   if (entry.priceRatio !== undefined && entry.priceRatio > settings.maxPriceMultiplier) {
     return `price-ceiling:${entry.priceRatio.toFixed(2)}>${settings.maxPriceMultiplier}`
   }
