@@ -32,7 +32,8 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
-import { ModelCascadeEditor, type FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
+import type { FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
+import { ModelsTab } from '@/components/harness/models-tab'
 
 type PairingUser = {
   userId: string
@@ -898,15 +899,22 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               </p>
             </div>
           ) : (
-          <ModelCascadeEditor
-            // key forces a remount per harness — the editor seeds its cascade
-            // into local state once, so without this an in-app A→B nav keeps A's
-            // cascade and saving B's Models tab could persist A's cascade (D6).
-            key={`${id}:${cascadeEditorGen}`}
-            models={modelConfig.models ?? harness.models ?? []}
-            provider={modelConfig.provider ?? ''}
-            fallbackProviders={modelConfig.fallbackProviders ?? []}
+          <ModelsTab
             harnessId={id}
+            modelConfig={{ ...modelConfig, models: modelConfig.models ?? harness.models ?? [] }}
+            modelTracking={harness.modelTracking}
+            // editorKey forces a remount per harness — the editor seeds its
+            // cascade into local state once, so without this an in-app A→B nav
+            // keeps A's cascade and saving B's Models tab could persist A's
+            // cascade (D6). The generation bumps after a 409 reload.
+            editorKey={`${id}:${cascadeEditorGen}`}
+            // A saved-cascade apply or a successor update rewrote config.yaml
+            // (and restarted) server-side — reload rows + tracking, remount.
+            onCascadeChanged={() => {
+              refetchModels()
+              refetch()
+              setCascadeEditorGen((g) => g + 1)
+            }}
             onSave={async (entries) => {
               setModelSaving(true)
               try {
