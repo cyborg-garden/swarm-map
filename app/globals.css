@@ -48,6 +48,17 @@
   --tier-orgpublic: #D58A5A;
   --tier-public: #C46A6A;
 
+  /* Categorical chart series (dataviz skill, validated on #ffffff):
+     fixed order, never cycled — a 9th series folds into "Other". */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+
   --radius: 8px;
   --radius-pill: 6px;
   --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 0 0 1px var(--border);
@@ -80,6 +91,16 @@
   --danger: #c46a6a;
   --warning: #d58a5a;
   --success: #6bb39a;
+
+  /* Same eight hues re-stepped for the dark surface (validated on #1c1c1b). */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
 
   /* shadcn compat */
   --background: var(--bg);
