@@ -171,6 +171,22 @@ export type AuditEntry = {
   meta?: Record<string, unknown>
 }
 
+// Named cascade library (lib/services/cascades.ts). A saved, portable
+// fallback_providers shape. Never carries api_key.
+export type CascadeLibraryEntry = {
+  provider: string
+  model: string
+  base_url?: string
+}
+
+export type CascadeRecord = {
+  name: string
+  entries: CascadeLibraryEntry[]
+  createdAt: number
+  updatedAt: number
+  sourceHarness?: string
+}
+
 export type Settings = {
   hermesDir: string  // directory to scan for docker-compose*.yml files
   dataDir: string
