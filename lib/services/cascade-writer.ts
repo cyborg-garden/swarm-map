@@ -10,6 +10,7 @@ import {
   MODEL_HEADER,
   FLOW_MAP,
   FLOW_SEQ,
+  isTopLevelLine,
   yamlScalar,
   parseFlowPairs,
   parseFlowMaps,
@@ -60,7 +61,9 @@ import type { FallbackProvider } from '@/lib/services/harness'
  * file's first line ending (CRLF stays CRLF), the output always ends in
  * exactly one newline, and an appended block is separated by one blank line.
  * Flow-form headers (`fallback_providers: []`, `model: {…}`) are sections too
- * and are replaced in place. A file with more than one top-level model: or
+ * and are replaced in place. A section ends where the readers say it ends
+ * (isTopLevelLine, shared with harness.ts): any column-0 line that is not
+ * blank, a comment or a list item — not only a `word:` key (r4). A file with more than one top-level model: or
  * fallback_providers: header is refused with 409 `duplicate-sections`: the
  * readers see only the first, so nobody can say what the write would mean.
  *
@@ -129,23 +132,25 @@ const MANAGED_ROW_KEYS = new Set(['provider', 'model', 'base_url'])
 /** Providers whose primary is addressed by model.base_url (the HSM template writes it for these). */
 const BASE_URL_PROVIDERS = new Set(['ollama', 'custom'])
 
-const TOP_LEVEL_KEY = /^[A-Za-z_][\w-]*:/
 const COL0_COMMENT = /^#/
 const isBlank = (line: string): boolean => line.trim() === ''
 const indentOf = (line: string): number => line.length - line.trimStart().length
 
 /**
  * Where a top-level section's BODY ends: one past the last indented or
- * column-0 list-item line before the next top-level key (or EOF). The blank
+ * column-0 list-item line before the next top-level line (or EOF). The blank
  * lines and column-0 comments that trail the body belong to the file, not to
  * the section — the writer re-emits them and the parsers never see them. A
  * blank or column-0 comment FOLLOWED by more body is inside the section.
+ * "Next top-level line" is the readers' isTopLevelLine, so a line the
+ * readers treat as the end of the section can never be swallowed into the
+ * body here and deleted on write (r4: `2fa: true`, `foo.bar: 1`, `...`).
  */
 function sectionBodyEnd(lines: string[], header: number): number {
   let end = header + 1
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i]
-    if (TOP_LEVEL_KEY.test(line)) break
+    if (isTopLevelLine(line)) break
     if (isBlank(line) || COL0_COMMENT.test(line)) continue
     end = i + 1
   }

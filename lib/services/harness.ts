@@ -461,7 +461,7 @@ export function readModelConfig(dataDir: string): string[] {
         continue
       }
       // Any new top-level key ends both sections
-      if (/^\w/.test(line) && !trimmed.startsWith('#')) {
+      if (isTopLevelLine(line)) {
         inModelSection = false
         inAuxSection = false
       }
@@ -518,6 +518,19 @@ export type FallbackProvider = {
  */
 export const FALLBACK_PROVIDERS_HEADER = /^fallback_providers:(\s|$)/
 export const MODEL_HEADER = /^model:(\s|$)/
+/**
+ * Does this column-0 line END a top-level section? Any non-blank line at
+ * column 0 that is not a comment and not a `- ` list item: a key of any
+ * spelling (`2fa:`, `foo.bar:`, `"quoted key":`), a `...` document-end
+ * marker, a `---` separator. Shared by every reader and by the cascade
+ * writer's sectionBodyEnd — the writer once used a narrower key pattern
+ * (`/^[A-Za-z_][\w-]*:/`) and swallowed the readers' terminator into the
+ * section body, so a `2fa: true` line after model: was deleted on write.
+ */
+export function isTopLevelLine(line: string): boolean {
+  if (!line || /^\s/.test(line) || line.startsWith('#')) return false
+  return !/^-(\s|$)/.test(line)
+}
 /** The inline body of a flow-form header: `key: {a: 1}` → group 1 = `a: 1`; `key: [..]` → group 1 = `..`. */
 export const FLOW_MAP = /^[\w-]+:\s*\{(.*)\}/
 export const FLOW_SEQ = /^[\w-]+:\s*\[(.*)\]/
@@ -595,7 +608,7 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
       }
 
       // Any new top-level key ends the section
-      if (inSection && /^\w/.test(line) && !trimmed.startsWith('#')) {
+      if (inSection && isTopLevelLine(line)) {
         inSection = false
         // Flush last entry
         if (current?.provider && current?.model) {
@@ -680,7 +693,7 @@ export function readModelProvider(dataDir: string): string {
         inModelSection = true
         continue
       }
-      if (/^\w/.test(line) && !trimmed.startsWith('#')) { inModelSection = false }
+      if (isTopLevelLine(line)) { inModelSection = false }
       if (inModelSection) {
         const provMatch = trimmed.match(/^provider:\s*(.+)$/)
         if (provMatch) return yamlScalar(provMatch[1])

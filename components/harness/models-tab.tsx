@@ -17,15 +17,22 @@ export type ModelConfig = {
 
 /**
  * How the page should read a 409 from PUT /api/harnesses/:id/models. The
- * writer sends two different conflicts under one status: the rows on disk no
- * longer match what the editor was seeded from (reload, re-apply the edit),
- * and primary-mismatch — model.default is not row 0 and the save did not put
- * it back at the top. The second is the operator's edit to fix, so the page
- * shows the writer's message and keeps the editor state.
+ * writer sends three conflicts under one status: the rows on disk no longer
+ * match what the editor was seeded from (reload, re-apply the edit);
+ * primary-mismatch — model.default is not row 0 and the save did not put it
+ * back at the top; and duplicate-sections — config.yaml has two top-level
+ * model: / fallback_providers: headers and must be hand-edited. The last two
+ * are the operator's to fix, so the page shows the writer's message and keeps
+ * the editor state. Only the stale-rows conflict reloads: a code-prefixed
+ * error (`code: message`) is an instruction, never a stale read, and
+ * treating it as one (r4) wiped the edit on every save and never showed the
+ * instruction.
  */
-export function cascadeSaveConflict(body: unknown): { kind: 'primary-mismatch'; message: string } | { kind: 'stale' } {
+export function cascadeSaveConflict(body: unknown): { kind: 'primary-mismatch' | 'message'; message: string } | { kind: 'stale' } {
   const error = body && typeof body === 'object' && 'error' in body ? (body as { error?: unknown }).error : undefined
-  if (typeof error === 'string' && error.startsWith('primary-mismatch')) return { kind: 'primary-mismatch', message: error }
+  if (typeof error !== 'string') return { kind: 'stale' }
+  if (error.startsWith('primary-mismatch')) return { kind: 'primary-mismatch', message: error }
+  if (/^[a-z][a-z0-9-]*: /.test(error)) return { kind: 'message', message: error }
   return { kind: 'stale' }
 }
 

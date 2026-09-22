@@ -208,9 +208,14 @@ describe('cascadeSaveConflict — how the page reads a 409 from PUT /models (rou
     expect(cascadeSaveConflict(body)).toEqual({ kind: 'primary-mismatch', message: body.error })
   })
 
-  it('any other 409 (expected_fallback_providers no longer matches) means reload', () => {
+  it('the stale-rows 409 (expected_fallback_providers no longer matches), or no readable body, means reload', () => {
     expect(cascadeSaveConflict({ error: 'The model cascade changed since it was read; reload and try again' })).toEqual({ kind: 'stale' })
     expect(cascadeSaveConflict({})).toEqual({ kind: 'stale' })
     expect(cascadeSaveConflict(null)).toEqual({ kind: 'stale' })
+  })
+
+  it('a duplicate-sections 409 (round-4 audit) is a hand-edit instruction: show it, keep the edit, do not reload', () => {
+    const body = { error: 'duplicate-sections: config.yaml has 2× top-level model: (lines 1, 9); remove the duplicate by hand before saving' }
+    expect(cascadeSaveConflict(body)).toEqual({ kind: 'message', message: body.error })
   })
 })

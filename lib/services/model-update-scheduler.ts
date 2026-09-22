@@ -35,8 +35,14 @@
  * numerically higher one — so it reports no successor at all and the entry
  * is blocked 'retired-current-no-date'.
  *
- * A successor that is already a row of the same provider is never applied
+ * A successor that is already a row of the same provider — on disk, or
+ * claimed by another substitution in the same batch — is never applied
  * ('successor-already-in-cascade'): the rotation would write that row twice.
+ *
+ * The persisted report is also the scheduler's memory: a fail-soft fetch
+ * miss, or a run that cannot read a harness's rows, carries the last known
+ * pricing / release date (and the previous harness block) forward instead
+ * of overwriting them with nothing.
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
@@ -186,7 +192,16 @@ async function evaluateEntry(
   // Ollama has no upstream notion of "newer" — never flagged, never tracked.
   if (provider === 'ollama') return { entry, unstable: false }
   const live = await getLive(provider)
-  if (!live) return { entry, unstable: false }
+  if (!live) {
+    // A fail-soft fetch miss must not FORGET: the report is overwritten
+    // every run, and the last known pricing + release date are what keep
+    // the price ceiling and the "older than current" guard armed once the
+    // provider removes the row. One transient outage used to erase both.
+    const last = prior(h.id, fp.provider, fp.model)
+    if (last?.pricing) entry.pricing = last.pricing
+    if (last?.released) entry.released = last.released
+    return { entry, unstable: false }
+  }
   entry.retired = deps.freshness.isRetired(fp.model, live, deps.today)
   // The current row's pricing: live when the provider still lists it (looked
   // up the way ids are normalized — trimmed, case-insensitive), else the last
@@ -254,7 +269,8 @@ type Substitution = { from: string; to: string; provider: string; priceRatio?: n
  * sections) is reported by its bare code, like the scheduler's own guards;
  * everything else is a validation message.
  */
-const blockedReason = (error: string): string => (/^duplicate-sections\b/.test(error) ? 'duplicate-sections' : `validation:${error}`)
+const blockedReason = (error: string): string =>
+  /^duplicate-sections\b/.test(error) ? 'duplicate-sections' : error === 'successor-already-in-cascade' ? error : `validation:${error}`
 
 /**
  * Rewrite one harness's cascade with the substitutions applied, through
@@ -296,6 +312,15 @@ function performSubstitutions(
   // rotated only some of them would still report — and audit — all of them.
   if (subs.some((s) => !matched.has(subKey(s.provider, s.from)))) {
     return { ok: false, status: 404, error: 'entry not present in fallback_providers' }
+  }
+  // The rows AFTER substitution must still be distinct per (provider, model).
+  // checkModelUpdates blocks a converging successor before it gets here; this
+  // is the last line before the writer, which would emit the duplicate row.
+  const seen = new Set<string>()
+  for (const row of next) {
+    const key = subKey(row.provider, row.model)
+    if (seen.has(key)) return { ok: false, status: 409, error: 'successor-already-in-cascade' }
+    seen.add(key)
   }
   const result = applyCascadeToHarness(h.id, next, { who })
   if (!result.ok) {
@@ -354,17 +379,30 @@ export async function checkModelUpdates(
   const applyMode = opts.apply ?? (settings.enabled && settings.mode === 'apply')
   const getLive = liveCache(deps)
   const prior = priorEntryFrom(deps)
+  const previous = readModelUpdateReport(deps.storage)
   const report: ModelUpdateReport = { checkedAt: Date.now(), enabled: settings.enabled, mode: settings.mode, harnesses: [] }
 
   for (const h of eligibleHarnesses(deps)) {
     const fps = readFallbackProviders(deps.dataDirFor(h))
-    if (fps.length === 0) continue
+    if (fps.length === 0) {
+      // No rows this run (config.yaml unreadable, or mid-rewrite). Dropping
+      // the harness from the report forgets every row's last known pricing
+      // and release date; keep the previous block so the next run that can
+      // read the rows still has them. Nothing is applied from a carried block.
+      const kept = previous?.harnesses.find((x) => x.id === h.id)
+      if (kept) report.harnesses.push(kept)
+      continue
+    }
     const candidates: Candidate[] = []
     for (const fp of fps) candidates.push(await evaluateEntry(h, fp, getLive, deps, prior))
 
     if (applyMode) {
       const subs: Substitution[] = []
       const subCandidates: Candidate[] = []
+      // (provider, model) rows this batch will write — two tracked rows of one
+      // provider converging on the same successor must not both rotate, or the
+      // writer emits that row twice. First in cascade order wins.
+      const planned = new Set<string>()
       for (const c of candidates) {
         if (!c.entry.successor) {
           // The provider removed the row and nothing dates it (bare id, no
@@ -380,12 +418,13 @@ export async function checkModelUpdates(
           settings,
           automatic: true,
           isRestarting: deps.isRestarting,
-          successorInCascade: successorInCascade(fps, c.entry),
+          successorInCascade: successorInCascade(fps, c.entry) || planned.has(trackingKey(c.entry.provider.trim().toLowerCase(), c.entry.successor)),
         })
         if (reason) {
           c.entry.blocked = reason
           continue
         }
+        planned.add(trackingKey(c.entry.provider.trim().toLowerCase(), c.entry.successor))
         subs.push({ from: c.entry.model, to: c.entry.successor, provider: c.entry.provider, priceRatio: c.entry.priceRatio })
         subCandidates.push(c)
       }

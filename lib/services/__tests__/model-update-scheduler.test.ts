@@ -9,6 +9,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { Storage } from '../storage'
+import { readFallbackProviders } from '../harness'
 import {
   checkModelUpdates,
   applyModelUpdate,
@@ -874,5 +875,111 @@ describe('round-3 audit: substitutions keyed by provider + model; successor alre
     expect(e.nearMisses).toContain('x-ai/grok-4.20')
     expect(e.applied).toBe(true)
     expect(readConfig('dated')).toContain('model: x-ai/grok-4.9')
+  })
+})
+
+describe('round-4 audit: converging successors in one batch; report memory across a fetch miss', () => {
+  const twoRowCfg = [
+    'model:',
+    '  provider: openrouter',
+    '  default: z-ai/glm-5.2',
+    '  fallback:',
+    '    - z-ai/glm-5.3',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.2',
+    '    key_env: OPENROUTER_KEY_B',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.3',
+    '    key_env: OPENROUTER_KEY_C',
+    '',
+  ].join('\n')
+  const twoRowEnv = 'OPENROUTER_API_KEY=sk-or\nOPENROUTER_KEY_B=sk-b\nOPENROUTER_KEY_C=sk-c\n'
+  const g54 = { id: 'z-ai/glm-5.4', canonical: 'z-ai/glm-5.4-20260915', created: 1789700000, expiration: null, pricing: p(0.00000091, 0.00000286) }
+
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+
+  it('two tracked rows of one provider converging on the same successor: one rotates, the other is blocked, the file has ONE row of the successor', async () => {
+    liveLists.openrouter = { ...OR_LIVE, models: [g54, ...OR_LIVE.models] }
+    const h = makeHarness('conv', {
+      config: twoRowCfg,
+      env: twoRowEnv,
+      tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true, [trackingKey('openrouter', 'z-ai/glm-5.3')]: true },
+    })
+    const report = await checkModelUpdates(deps)
+    const e52 = entryFor(report, 'h_conv', 'z-ai/glm-5.2')!
+    const e53 = entryFor(report, 'h_conv', 'z-ai/glm-5.3')!
+    expect(e52.successor).toBe('z-ai/glm-5.4')
+    expect(e53.successor).toBe('z-ai/glm-5.4')
+    expect([e52.applied, e53.applied].filter(Boolean)).toHaveLength(1)
+    expect([e52.blocked, e53.blocked].filter(Boolean)).toEqual(['successor-already-in-cascade'])
+    const cfg = readConfig('conv')
+    expect(cfg.match(/model: z-ai\/glm-5\.4/g)).toHaveLength(1)
+    expect(readFallbackProviders(path.join(root, 'conv')).map((r) => r.model).sort()).toEqual(['z-ai/glm-5.3', 'z-ai/glm-5.4'])
+    expect(cfg).toContain('key_env: OPENROUTER_KEY_B')
+    expect(cfg).toContain('key_env: OPENROUTER_KEY_C')
+    expect(cfg).not.toContain('    - z-ai/glm-5.4\n    - z-ai/glm-5.4')
+    expect(h.modelTracking).toEqual({ [trackingKey('openrouter', 'z-ai/glm-5.4')]: true, [trackingKey('openrouter', 'z-ai/glm-5.3')]: true })
+    const applied = (deps.audit.append as ReturnType<typeof vi.fn>).mock.calls.filter(([e]) => e.what === 'cascade:auto-update')
+    expect(applied).toHaveLength(1)
+    expect(deps.harness.restart).toHaveBeenCalledTimes(1)
+  })
+
+  const grok = (extra: LiveModelList['models']): LiveModelList => ({
+    ...OR_LIVE,
+    models: [
+      { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200, expiration: null, pricing: p(0.00000234, 0.0000117) },
+      ...extra,
+    ],
+  })
+  const g47 = { id: 'x-ai/grok-4.7', canonical: 'x-ai/grok-4.7-20260916', created: 1789948800, expiration: null, pricing: p(0.000003, 0.000015) }
+  const g49 = { id: 'x-ai/grok-4.9', canonical: 'x-ai/grok-4.9-20260920', created: 1790294400, expiration: null, pricing: p(0.000003, 0.000015) }
+
+  it('a transient live-fetch miss does not erase the last known pricing + release date from the report', async () => {
+    makeHarness('miss', { config: fpConfig([['openrouter', 'x-ai/grok-4.7']]), tracking: { [trackingKey('openrouter', 'x-ai/grok-4.7')]: true } })
+    liveLists.openrouter = grok([g47])
+    settings = { ...settings, mode: 'notify' }
+    const first = await checkModelUpdates(deps)
+    expect(entryFor(first, 'h_miss', 'x-ai/grok-4.7')!.released).toBe('20260916')
+    // Run 2: the provider is unreachable. The entry stays unflagged but keeps what run 1 knew.
+    liveLists.openrouter = null
+    const second = await checkModelUpdates(deps)
+    const e2 = entryFor(second, 'h_miss', 'x-ai/grok-4.7')!
+    expect(e2.retired).toBe(false)
+    expect(e2.successor).toBeUndefined()
+    expect(e2.released).toBe('20260916')
+    expect(e2.pricing).toEqual(p(0.000003, 0.000015))
+    // Run 3 (apply): 4.7 is gone; 4.20 (older) and 4.9 (newer) are live — the date guard is still armed.
+    liveLists.openrouter = grok([g49])
+    settings = { ...settings, mode: 'apply' }
+    const third = await checkModelUpdates(deps)
+    const e3 = entryFor(third, 'h_miss', 'x-ai/grok-4.7')!
+    expect(e3.retired).toBe(true)
+    expect(e3.successor).toBe('x-ai/grok-4.9')
+    expect(e3.applied).toBe(true)
+    expect(readConfig('miss')).toContain('model: x-ai/grok-4.9')
+  })
+
+  it('a run in which a harness\'s rows cannot be read keeps that harness\'s previous report block', async () => {
+    makeHarness('gone', { config: fpConfig([['openrouter', 'x-ai/grok-4.7']]), tracking: { [trackingKey('openrouter', 'x-ai/grok-4.7')]: true } })
+    liveLists.openrouter = grok([g47])
+    settings = { ...settings, mode: 'notify' }
+    await checkModelUpdates(deps)
+    // Run 2: config.yaml is momentarily unreadable (0 rows).
+    const cfgPath = path.join(root, 'gone', 'config.yaml')
+    const saved = fs.readFileSync(cfgPath, 'utf-8')
+    fs.rmSync(cfgPath)
+    const second = await checkModelUpdates(deps)
+    expect(entryFor(second, 'h_gone', 'x-ai/grok-4.7')?.released).toBe('20260916')
+    fs.writeFileSync(cfgPath, saved)
+    // Run 3 (apply): the date guard still knows 4.20 is older.
+    liveLists.openrouter = grok([g49])
+    settings = { ...settings, mode: 'apply' }
+    const third = await checkModelUpdates(deps)
+    const e3 = entryFor(third, 'h_gone', 'x-ai/grok-4.7')!
+    expect(e3.successor).toBe('x-ai/grok-4.9')
+    expect(e3.applied).toBe(true)
   })
 })

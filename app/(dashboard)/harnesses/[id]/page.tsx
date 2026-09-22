@@ -931,12 +931,13 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                   }),
                 })
                 if (res.status === 409) {
-                  // Two conflicts share the status. primary-mismatch is the
-                  // operator's to fix (move the file's primary to the top and
-                  // save again) — show the writer's message and keep the
-                  // edit. Only the stale-rows conflict reloads and remounts.
+                  // Three conflicts share the status. primary-mismatch (move
+                  // the file's primary to the top) and duplicate-sections
+                  // (hand-edit config.yaml) are the operator's to fix — show
+                  // the writer's message and keep the edit. Only the
+                  // stale-rows conflict reloads and remounts.
                   const conflict = cascadeSaveConflict(await res.json().catch(() => null))
-                  if (conflict.kind === 'primary-mismatch') {
+                  if (conflict.kind !== 'stale') {
                     toast.error(conflict.message)
                     return
                   }

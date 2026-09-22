@@ -1026,3 +1026,55 @@ describe('applyCascadeToHarness — carryFrom (round-3 audit)', () => {
     expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg)
   })
 })
+
+describe('applyCascadeToHarness — section terminator matches the readers (round-4 audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-r4-'))
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_KEY_B']))
+  })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('a digit-leading, dotted or quoted top-level key right after model: is a new section, not body to delete', () => {
+    const file = ['model:', '  provider: anthropic', '  default: a', 'foo.bar: 1', '2fa: true', '"quoted key": 2', 'agent:', '  z: 1', ''].join('\n')
+    fs.writeFileSync(configPath(), file)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'a' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const out = fs.readFileSync(configPath(), 'utf-8')
+    expect(out).toContain('foo.bar: 1\n')
+    expect(out).toContain('2fa: true\n')
+    expect(out).toContain('"quoted key": 2\n')
+    expect(out).toContain('agent:\n  z: 1\n')
+  })
+
+  it('a column-0 key after the last (writer-managed) fallback_providers field survives, and the readers agree it ended the section', () => {
+    const file = ['model:', '  provider: openrouter', '  default: m1', 'fallback_providers:', '  - provider: openrouter', '    model: m1', '2fa: true', 'agent:', '  z: 1', ''].join('\n')
+    fs.writeFileSync(configPath(), file)
+    expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'm1' }])
+    const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'm2', carryFrom: { provider: 'openrouter', model: 'm1' } }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const out = fs.readFileSync(configPath(), 'utf-8')
+    expect(out).toBe(['model:', '  provider: openrouter', '  default: m2', 'fallback_providers:', '  - provider: openrouter', '    model: m2', '2fa: true', 'agent:', '  z: 1', ''].join('\n'))
+    expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'm2' }])
+  })
+
+  it('a document-end marker (...) or a --- separator after model: is kept', () => {
+    const file = ['model:', '  provider: anthropic', '  default: a', '...', ''].join('\n')
+    fs.writeFileSync(configPath(), file)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'a' }], { who: 'api', fallbackProviders: 'keep' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(file)
+  })
+
+  it('a column-0 list item still belongs to the fallback_providers body (readers and writer agree)', () => {
+    const file = ['model:', '  provider: openrouter', '  default: m1', 'fallback_providers:', '- provider: openrouter', '  model: m1', '  key_env: OPENROUTER_KEY_B', 'agent:', '  z: 1', ''].join('\n')
+    fs.writeFileSync(configPath(), file)
+    expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'm1' }])
+    const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'm1' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const out = fs.readFileSync(configPath(), 'utf-8')
+    expect(out).toBe(['model:', '  provider: openrouter', '  default: m1', 'fallback_providers:', '  - provider: openrouter', '    model: m1', '    key_env: OPENROUTER_KEY_B', 'agent:', '  z: 1', ''].join('\n'))
+  })
+})
