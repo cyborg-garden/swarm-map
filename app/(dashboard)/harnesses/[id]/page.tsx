@@ -31,6 +31,7 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
+import { ModelCascadeEditor, type FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
 
 type PairingUser = {
   userId: string
@@ -77,10 +78,6 @@ const SURFACE_STATUS_STYLES: Record<Surface['status'], string> = {
   available: 'bg-muted text-muted-foreground',
   planned: 'bg-[var(--warning)]/10 text-[var(--warning)]',
 }
-
-const MODEL_PROVIDERS = ['anthropic', 'openrouter', 'ollama', 'custom', 'gemini', 'nous', 'bedrock', 'zai'] as const
-
-type FallbackProviderEntry = { provider: string; model: string; base_url?: string }
 
 type ModelConfig = { provider: string; primary: string; models: string[]; fallbackProviders?: FallbackProviderEntry[] }
 
@@ -882,14 +879,25 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
         </TabsContent>
 
         <TabsContent value="models" className="mt-4">
+          {/* Only mount the editor once GET /models has resolved. Mounting it
+              earlier seeded rows from harness.models with no provider and no
+              base_url, and a save then wrote that guess over the real
+              fallback_providers rows (issue #149). */}
+          {!modelConfig ? (
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading model cascade...
+              </p>
+            </div>
+          ) : (
           <ModelCascadeEditor
             // key forces a remount per harness — the editor seeds its cascade
             // into local state once, so without this an in-app A→B nav keeps A's
             // cascade and saving B's Models tab could persist A's cascade (D6).
             key={id}
-            models={modelConfig?.models ?? harness.models ?? []}
-            provider={modelConfig?.provider ?? ''}
-            fallbackProviders={modelConfig?.fallbackProviders ?? []}
+            models={modelConfig.models ?? harness.models ?? []}
+            provider={modelConfig.provider ?? ''}
+            fallbackProviders={modelConfig.fallbackProviders ?? []}
             harnessId={id}
             onSave={async (entries) => {
               setModelSaving(true)
@@ -914,6 +922,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
             }}
             saving={modelSaving}
           />
+          )}
         </TabsContent>
 
         <TabsContent value="surfaces" className="mt-4">
@@ -1531,231 +1540,6 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
           onSaved={() => refetchSurfaces()}
         />
       )}
-    </div>
-  )
-}
-
-function ModelCascadeEditor({
-  models: initialModels,
-  provider: initialProvider,
-  fallbackProviders: initialFallbackProviders,
-  onSave,
-  saving,
-  harnessId,
-}: {
-  models: string[]
-  provider: string
-  fallbackProviders: FallbackProviderEntry[]
-  onSave: (entries: FallbackProviderEntry[]) => void
-  saving: boolean
-  harnessId: string
-}) {
-  // Build initial cascade from fallbackProviders if available, else from models
-  function buildInitialCascade(): FallbackProviderEntry[] {
-    if (initialFallbackProviders.length > 0) {
-      return initialFallbackProviders.map((fp) => ({
-        provider: fp.provider,
-        model: fp.model,
-        ...(fp.base_url ? { base_url: fp.base_url } : {}),
-      }))
-    }
-    // Fallback: convert string models to entries using the provider
-    return initialModels.map((m) => ({
-      provider: initialProvider || 'anthropic',
-      model: m,
-    }))
-  }
-
-  const [cascade, setCascade] = useState<FallbackProviderEntry[]>(buildInitialCascade)
-  const [newModel, setNewModel] = useState('')
-  const [newProvider, setNewProvider] = useState<string>('anthropic')
-  const [newBaseUrl, setNewBaseUrl] = useState('')
-  const [suggesting, setSuggesting] = useState(false)
-
-  async function suggestFromKeys() {
-    setSuggesting(true)
-    try {
-      const res = await fetch(`/api/harnesses/${harnessId}/models/suggest`)
-      const data = await res.json()
-      if (!res.ok) {
-        toast.error(data.error ?? 'Failed to load suggestions')
-        return
-      }
-      if (!data.suggested?.length) {
-        toast.info('No API keys detected — add keys to .env first')
-        return
-      }
-      const newEntries: FallbackProviderEntry[] = data.suggested.map((s: { provider: string; model: string; base_url?: string }) => ({
-        provider: s.provider === 'ollama' ? 'ollama' : s.provider,
-        model: s.model,
-        ...(s.base_url ? { base_url: s.base_url } : {}),
-      }))
-      setCascade(newEntries)
-      toast.success(`Suggested ${data.suggested.length} models from ${data.providers.length} provider${data.providers.length === 1 ? '' : 's'}`)
-    } catch {
-      toast.error('Failed to load suggestions')
-    } finally {
-      setSuggesting(false)
-    }
-  }
-
-  // Sync when data loads
-  useEffect(() => {
-    const built = buildInitialCascade()
-    if (built.length > 0 && cascade.length === 0) {
-      setCascade(built)
-    }
-  }, [initialFallbackProviders, initialModels])
-
-  const showBaseUrl = newProvider === 'ollama' || newProvider === 'custom'
-
-  function addModel() {
-    const m = newModel.trim()
-    if (!m || !newProvider) return
-    if (cascade.some((e) => e.model === m && e.provider === newProvider)) return
-    const entry: FallbackProviderEntry = { provider: newProvider, model: m }
-    if (showBaseUrl && newBaseUrl.trim()) {
-      entry.base_url = newBaseUrl.trim()
-    }
-    setCascade([...cascade, entry])
-    setNewModel('')
-    setNewBaseUrl('')
-  }
-
-  function removeModel(index: number) {
-    setCascade(cascade.filter((_, i) => i !== index))
-  }
-
-  function moveUp(index: number) {
-    if (index === 0) return
-    const next = [...cascade]
-    ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
-    setCascade(next)
-  }
-
-  function moveDown(index: number) {
-    if (index >= cascade.length - 1) return
-    const next = [...cascade]
-    ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
-    setCascade(next)
-  }
-
-  const isDirty = JSON.stringify(cascade) !== JSON.stringify(buildInitialCascade())
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-medium text-sm">Model Cascade</h3>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={suggestFromKeys}
-              disabled={suggesting}
-              className="text-xs text-[var(--accent)] hover:underline disabled:opacity-50"
-            >
-              {suggesting ? 'Detecting...' : 'Suggest from connected keys'}
-            </button>
-            <span className="text-xs text-muted-foreground">Primary at top, fallbacks below</span>
-          </div>
-        </div>
-
-        {cascade.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No models configured. Add one below.</p>
-        ) : (
-          <div className="space-y-1">
-            {cascade.map((entry, i) => (
-              <div
-                key={`${entry.provider}-${entry.model}-${i}`}
-                className={`flex items-center gap-2 p-2 rounded-md border ${i === 0 ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)]'}`}
-              >
-                <span className="text-xs text-muted-foreground w-5 text-center font-medium">
-                  {i + 1}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono truncate">{entry.model}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wide shrink-0">
-                      {entry.provider}
-                    </span>
-                  </div>
-                  {entry.base_url && (
-                    <p className="text-[11px] font-mono text-muted-foreground mt-0.5 truncate">
-                      {entry.base_url}
-                    </p>
-                  )}
-                </div>
-                <div className="flex gap-0.5 shrink-0">
-                  <button
-                    onClick={() => moveUp(i)}
-                    disabled={i === 0}
-                    className="text-xs px-1.5 py-0.5 rounded hover:bg-muted disabled:opacity-30"
-                    title="Move up"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    onClick={() => moveDown(i)}
-                    disabled={i >= cascade.length - 1}
-                    className="text-xs px-1.5 py-0.5 rounded hover:bg-muted disabled:opacity-30"
-                    title="Move down"
-                  >
-                    ↓
-                  </button>
-                  <button
-                    onClick={() => removeModel(i)}
-                    className="text-xs px-1.5 py-0.5 rounded hover:bg-[var(--danger)]/10 text-[var(--danger)]"
-                    title="Remove"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add model */}
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <select
-              value={newProvider}
-              onChange={(e) => setNewProvider(e.target.value)}
-              className="text-sm border border-[var(--border)] rounded-md px-2 py-1.5 bg-[var(--bg)] w-36"
-            >
-              {MODEL_PROVIDERS.map((p) => (
-                <option key={p} value={p}>{p}</option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={newModel}
-              onChange={(e) => setNewModel(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !showBaseUrl && addModel()}
-              placeholder="Model name (e.g. claude-sonnet-4-6)"
-              className="flex-1 text-sm border border-[var(--border)] rounded-md px-2 py-1.5 bg-[var(--bg)] font-mono"
-            />
-            <Button size="sm" variant="outline" onClick={addModel} disabled={!newModel.trim()}>
-              Add
-            </Button>
-          </div>
-          {showBaseUrl && (
-            <input
-              type="text"
-              value={newBaseUrl}
-              onChange={(e) => setNewBaseUrl(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addModel()}
-              placeholder="Base URL (e.g. http://host.docker.internal:11434/v1)"
-              className="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 bg-[var(--bg)] font-mono"
-            />
-          )}
-        </div>
-
-        {isDirty && (
-          <Button size="sm" onClick={() => onSave(cascade)} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Cascade'}
-          </Button>
-        )}
-      </div>
     </div>
   )
 }
