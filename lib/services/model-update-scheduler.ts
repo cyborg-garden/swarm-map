@@ -385,12 +385,28 @@ export async function checkModelUpdates(
   for (const h of eligibleHarnesses(deps)) {
     const fps = readFallbackProviders(deps.dataDirFor(h))
     if (fps.length === 0) {
-      // No rows this run (config.yaml unreadable, or mid-rewrite). Dropping
-      // the harness from the report forgets every row's last known pricing
-      // and release date; keep the previous block so the next run that can
-      // read the rows still has them. Nothing is applied from a carried block.
+      // No rows this run: config.yaml unreadable, mid-rewrite, or the operator
+      // legitimately emptied the cascade — and the reader cannot tell which.
+      // Dropping the harness forgets every row's last known pricing and
+      // release date, so carry the previous block — but carry memory, not
+      // state. A verbatim copy re-listed a stale successor on every run: the
+      // fleet card counted it as "1 update available" and its Update button
+      // 404ed, because the row was no longer in fallback_providers.
       const kept = previous?.harnesses.find((x) => x.id === h.id)
-      if (kept) report.harnesses.push(kept)
+      if (kept) {
+        report.harnesses.push({
+          id: kept.id,
+          name: kept.name,
+          entries: kept.entries.map((e) => ({
+            provider: e.provider,
+            model: e.model,
+            tracked: e.tracked,
+            retired: e.retired,
+            ...(e.pricing ? { pricing: e.pricing } : {}),
+            ...(e.released ? { released: e.released } : {}),
+          })),
+        })
+      }
       continue
     }
     const candidates: Candidate[] = []

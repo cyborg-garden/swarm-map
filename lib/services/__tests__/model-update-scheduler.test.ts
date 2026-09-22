@@ -982,4 +982,32 @@ describe('round-4 audit: converging successors in one batch; report memory acros
     expect(e3.successor).toBe('x-ai/grok-4.9')
     expect(e3.applied).toBe(true)
   })
+
+  it('a harness whose cascade was emptied carries only pricing + release date forward, never a phantom successor', async () => {
+    makeHarness('emptied', { config: fpConfig([['openrouter', 'x-ai/grok-4.7']]), tracking: { [trackingKey('openrouter', 'x-ai/grok-4.7')]: true } })
+    liveLists.openrouter = grok([g47, g49])
+    settings = { ...settings, mode: 'notify' }
+    const first = await checkModelUpdates(deps)
+    const e1 = entryFor(first, 'h_emptied', 'x-ai/grok-4.7')!
+    expect(e1.successor).toBe('x-ai/grok-4.9')
+    expect(e1.released).toBe('20260916')
+    // The operator hand-edits config.yaml down to a bare primary: no fallback_providers at all.
+    fs.writeFileSync(path.join(root, 'emptied', 'config.yaml'), 'model:\n  provider: ollama\n  default: qwen3:30b\n')
+    for (let run = 0; run < 3; run++) {
+      const report = await checkModelUpdates(deps)
+      const block = report.harnesses.find((h) => h.id === 'h_emptied')!
+      expect(block.orphanedTracking).toBeUndefined()
+      const e = entryFor(report, 'h_emptied', 'x-ai/grok-4.7')!
+      // Memory survives: what the row cost and when it shipped.
+      expect(e.released).toBe('20260916')
+      expect(e.pricing).toEqual(p(0.000003, 0.000015))
+      // State does not: nothing on this block can render as "1 update available".
+      expect(e.successor).toBeUndefined()
+      expect(e.kind).toBeUndefined()
+      expect(e.priceRatio).toBeUndefined()
+      expect(e.applied).toBeUndefined()
+      expect(e.blocked).toBeUndefined()
+      expect(e.nearMisses).toBeUndefined()
+    }
+  })
 })
