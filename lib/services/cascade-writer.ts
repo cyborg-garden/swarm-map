@@ -75,7 +75,8 @@ export type CascadeWriteInput = {
    * The row on disk whose unmanaged keys (key_env, api_mode, an inline
    * api_key…) this entry inherits when its own (provider, model) is not on
    * disk — set by the scheduler when it rotates a row to its successor.
-   * Lookup only; never written.
+   * Lookup only; never written; ignored unless its provider is this entry's.
+   * Never accepted from an API body — see PUT /api/harnesses/:id/models.
    */
   carryFrom?: { provider: string; model: string }
 }
@@ -378,15 +379,20 @@ export function applyCascadeToHarness(
   const existingModel = modelStart >= 0 ? parseExistingModelBlock(lines, modelStart, modelEnd) : null
   const existingRows = writeRows && fpStart >= 0 ? parseExistingRows(lines, fpStart, fpEnd) : []
 
-  // The row on disk each entry inherits its unmanaged keys from: its own
-  // (provider, model) when that survives the write, else the row `carryFrom`
-  // names. First come, first served — a row is carried at most once.
+  // The row on disk each entry inherits its unmanaged keys from: the row
+  // `carryFrom` names when the entry has one (a rotation — looked up FIRST,
+  // else a rotation onto a model that is already a row stole that row's
+  // credential and dropped its own), else its own (provider, model). First
+  // come, first served — a row is carried at most once. carryFrom is honoured
+  // only within the entry's own provider: a row's key_env / api_mode never
+  // move onto another provider's row, whoever asks.
   const sameKey = (r: ExistingRow, provider: string, model: string): boolean =>
     !r.used && r.provider.toLowerCase() === provider.toLowerCase() && r.model === model
   const carriedRows: Array<ExistingRow | undefined> = fallbackProvidersToWrite.map((fp) => {
+    const carry = fp.carryFrom && fp.carryFrom.provider.toLowerCase() === fp.provider.toLowerCase() ? fp.carryFrom : undefined
     const row =
-      existingRows.find((r) => sameKey(r, fp.provider, fp.model)) ??
-      (fp.carryFrom ? existingRows.find((r) => sameKey(r, fp.carryFrom!.provider, fp.carryFrom!.model)) : undefined)
+      (carry ? existingRows.find((r) => sameKey(r, carry.provider, carry.model)) : undefined) ??
+      existingRows.find((r) => sameKey(r, fp.provider, fp.model))
     if (row) row.used = true
     return row
   })

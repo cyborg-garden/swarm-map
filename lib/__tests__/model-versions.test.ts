@@ -353,14 +353,42 @@ describe('findSuccessor — newest release wins (re-audit)', () => {
     expect(r.nearMisses).toContain('x-ai/grok-4.7')
   })
 
-  it('current id absent from the live list: the newest release still wins (grok-4.7 gone → grok-4.9, not 4.20)', () => {
+  it('current id absent from the live list, its date known from the last report: the newest release still wins (grok-4.7 gone → grok-4.9, not 4.20)', () => {
     const live: LiveModel[] = [
       { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200 },
       { id: 'x-ai/grok-4.9', canonical: 'x-ai/grok-4.9-20260920', created: 1790294400 },
     ]
-    const r = or('x-ai/grok-4.7', live)
+    const r = findSuccessor({ provider: 'openrouter', model: 'x-ai/grok-4.7' }, live, TODAY, { currentDate: '20260916' })
     expect(r.kind).toBe('version')
     expect(r.successor?.model).toBe('x-ai/grok-4.9')
+    expect(r.nearMisses).toContain('x-ai/grok-4.20')
+    expect(r.currentDate).toBe('20260916')
+  })
+
+  // Round-3 audit: a bare id carries no date. With the row gone from the live
+  // list and no hint, the guard has nothing to compare against — it must NOT
+  // fall open and hand back an older, numerically higher row as a successor.
+  it('absent bare current id with no date anywhere: no version successor; the older higher tuple is a near miss', () => {
+    const live: LiveModel[] = [
+      { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200 },
+      { id: 'x-ai/grok-4.6', canonical: 'x-ai/grok-4.6-20260801', created: 1785542400 },
+    ]
+    const r = or('x-ai/grok-4.7', live)
+    expect(r.successor).toBeUndefined()
+    expect(r.kind).toBeNull()
+    expect(r.nearMisses).toContain('x-ai/grok-4.20')
+    expect(r.currentDate).toBeUndefined()
+  })
+
+  it('absent dated id (MMDD token is not a key) with no hint: deepseek-v4-flash-0731 ↛ v4.1-flash', () => {
+    const live: LiveModel[] = [{ id: 'deepseek/deepseek-v4.1-flash', canonical: 'deepseek/deepseek-v4.1-flash-20260301', created: 1772323200 }]
+    const r = or('deepseek/deepseek-v4-flash-0731', live)
+    expect(r.successor).toBeUndefined()
+    expect(r.nearMisses).toContain('deepseek/deepseek-v4.1-flash')
+  })
+
+  it('a present current row reports its date key, so the scheduler can persist it', () => {
+    expect(or('x-ai/grok-4.1', GROK).currentDate).toBe('20251117')
   })
 
   it('an absent current id with a date in the id keeps the guard: gpt-5-2026-01-01 ↛ older gpt-5.1-2025-06-01', () => {

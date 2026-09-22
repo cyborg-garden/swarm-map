@@ -966,3 +966,63 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
     })
   })
 })
+
+describe('applyCascadeToHarness — carryFrom (round-3 audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-writer-r3-'))
+  })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('a rotation onto a model that is already a row keeps each row\'s own keys (carryFrom is looked up first)', () => {
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: openrouter',
+        '  default: z-ai/glm-5.2',
+        'fallback_providers:',
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.2',
+        '    key_env: OPENROUTER_KEY_B',
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.3',
+        '    key_env: OPENROUTER_KEY_C',
+        '',
+      ].join('\n')
+    )
+    mockEnvVars.mockReturnValue(new Set(['OPENROUTER_KEY_B', 'OPENROUTER_KEY_C']))
+    const res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } },
+        { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+      ],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    const written = fs.readFileSync(configPath(), 'utf-8')
+    expect(written).toContain(
+      '  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_C\n'
+    )
+  })
+
+  it('carryFrom naming a row of ANOTHER provider is ignored: a credential never moves across providers, and the entry is validated on its own', () => {
+    const cfg = ['fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.2', '    key_env: OPENROUTER_KEY_B', '    api_mode: chat_completions', ''].join('\n')
+    fs.writeFileSync(configPath(), cfg)
+    mockEnvVars.mockReturnValue(new Set(['OPENROUTER_KEY_B']))
+    const res = applyCascadeToHarness(
+      'h_test',
+      [{ provider: 'anthropic', model: 'claude-sonnet-4-6', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }],
+      { who: 'api', allowPrimaryChange: true }
+    )
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.status).toBe(400)
+      expect(res.error).toContain('anthropic')
+    }
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg)
+  })
+})
