@@ -96,6 +96,15 @@ describe('Cascades API — collection', () => {
     expect(await (await GET()).json()).toEqual([])
   })
 
+  it('POST rejects a model id containing a newline (config.yaml injection) with 400 and stores nothing', async () => {
+    const res = await POST(
+      post({ name: 'x', entries: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }] })
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/config\.yaml/)
+    expect(await (await GET()).json()).toEqual([])
+  })
+
   it('POST never stores api_key', async () => {
     const res = await POST(
       post({ name: 'leak', entries: [{ provider: 'anthropic', model: 'm', api_key: 'sk-ant-SECRET' }] })

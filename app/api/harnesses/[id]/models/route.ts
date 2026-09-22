@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { validateCascadeEntries, type CascadeEntry } from '@/lib/model-catalog'
-import { applyCascadeToHarness } from '@/lib/services/cascade-writer'
 import { readModelConfig, readModelProvider, readFallbackProviders, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
 import type { FallbackProvider } from '@/lib/services/harness'
 import fs from 'fs'
 import path from 'path'
+// Shared, guarded fallback_providers writer (also used by the cascade library).
+import { applyCascadeToHarness } from '@/lib/services/cascade-writer'
 
 export async function GET(
   _request: Request,

@@ -117,6 +117,28 @@ describe('Cascades API — apply', () => {
     expect(services.audit.query({ what: 'cascade:apply' })).toEqual([])
   })
 
+  // The library sanitizer rejects these at save; a hand-edited cascades.json
+  // must still be stopped at the writer — never written, never restarted.
+  it('400s, writes nothing and never restarts when a stored entry would inject YAML (newline in model id)', async () => {
+    const records = services.storage.read<unknown[]>('cascades.json', [])
+    records.push({
+      name: 'poisoned',
+      entries: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }],
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    services.storage.write('cascades.json', records)
+    fs.writeFileSync(configPath, 'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n')
+    const before = fs.readFileSync(configPath, 'utf-8')
+
+    const res = await POST(post({ harnessId: 'h_test' }), makeParams('poisoned'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/^Invalid model cascade:/)
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe(before)
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+    expect(mockRestart).not.toHaveBeenCalled()
+  })
+
   it('happy path: writes config.yaml, audits cascade:apply, and quick-restarts the harness', async () => {
     const res = await POST(post({ harnessId: 'h_test' }), makeParams('GOOD'))
     expect(res.status).toBe(200)

@@ -50,10 +50,13 @@ export async function PUT(
   }
 
   try {
-    // Entries first so a rename never lands beside an invalid entry set.
-    let record = wantsEntries ? services.cascades.update(name, body.entries ?? []) : undefined
-    if (wantsRename) record = services.cascades.rename(name, body.name as string)
-    return NextResponse.json(record ?? services.cascades.get(name))
+    // One validated write: a 409 on the rename (or a 400 on the entries)
+    // leaves the record exactly as it was — never half-applied.
+    const record = services.cascades.edit(name, {
+      ...(wantsRename ? { name: body.name as string } : {}),
+      ...(wantsEntries ? { entries: body.entries ?? [] } : {}),
+    })
+    return NextResponse.json(record)
   } catch (err) {
     if (err instanceof CascadeLibraryError) {
       return NextResponse.json({ error: err.message }, { status: err.status })

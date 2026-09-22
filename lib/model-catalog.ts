@@ -78,6 +78,29 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
 
 export type CascadeEntry = { provider: string; model: string }
 
+/**
+ * Cascade values (provider / model / base_url) are written into config.yaml
+ * UNQUOTED by line splicing — there is no YAML library on that path. So every
+ * value must be a safe YAML plain scalar on one line. Anything else can inject
+ * top-level keys (a newline), break the mapping (": ", " #", trailing ":") or
+ * change the node's type (a leading indicator such as "-", "[", "@", "\"").
+ *
+ * Returns a human-readable error for an unsafe value, or null when it is safe.
+ * Real ids like `qwen3:30b`, `us.anthropic.…-v1:0` and `org/model` are fine.
+ */
+export function yamlPlainScalarError(value: string, label: string): string | null {
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    return `${label} "${value.replace(/[\x00-\x1f\x7f]/g, '⏎')}" contains a line break or control character and cannot be written to config.yaml`
+  }
+  if (/^[-?:,\[\]{}#&*!|>'"%@\`]/.test(value)) {
+    return `${label} "${value}" starts with a character YAML reserves ("${value[0]}") and cannot be written unquoted to config.yaml`
+  }
+  if (value.includes(': ') || value.includes(' #') || value.endsWith(':')) {
+    return `${label} "${value}" contains ": ", " #" or a trailing ":" and cannot be written unquoted to config.yaml`
+  }
+  return null
+}
+
 // Map env var name → provider, used by the /suggest route to detect which
 // providers an agent has credentials for (read-only; suggestion building only).
 // This is NOT the validation allowlist — see REQUIRED_KEY_BY_PROVIDER below for
@@ -207,6 +230,15 @@ export function validateCascadeEntries(
           ? `Missing model id for provider "${provider}"`
           : 'Missing model id'
       )
+      continue
+    }
+
+    // Both values are spliced into config.yaml unquoted. A value that is not a
+    // safe one-line plain scalar can inject keys or break the file → reject.
+    const scalarError =
+      yamlPlainScalarError(model, 'Model') ?? (provider ? yamlPlainScalarError(provider, 'Provider') : null)
+    if (scalarError) {
+      errors.push(scalarError)
       continue
     }
 

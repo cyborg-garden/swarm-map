@@ -1,8 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 import { services } from '@/lib/services'
-import { validateCascadeEntries, type CascadeEntry } from '@/lib/model-catalog'
-import { readFallbackProviders, guessDataDir, readAgentEnvVarNames } from '@/lib/services/harness'
+import { validateCascadeEntries, yamlPlainScalarError, type CascadeEntry } from '@/lib/model-catalog'
+import { readFallbackProviders, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
 import type { FallbackProvider } from '@/lib/services/harness'
 
 /**
@@ -64,10 +64,12 @@ export function applyCascadeToHarness(
   const dataDir = guessDataDir(harness.serviceName ?? harness.name, containerName)
   const configPath = path.join(dataDir, 'config.yaml')
 
-  // Whitelist-copy: provider/model/base_url only. api_key never gets through.
+  // Whitelist-copy: provider/model/base_url only, trimmed. api_key never gets
+  // through. Trimming here keeps what is WRITTEN identical to what the
+  // validator CHECKS (it trims too) — a trailing "\r" must not slip past it.
   const fallbackProvidersToWrite: CascadeWriteInput[] = (entries ?? []).map((fp) => {
-    const e: CascadeWriteInput = { provider: fp.provider, model: fp.model }
-    if (fp.base_url) e.base_url = fp.base_url
+    const e: CascadeWriteInput = { provider: (fp.provider ?? '').trim(), model: (fp.model ?? '').trim() }
+    if (fp.base_url && fp.base_url.trim()) e.base_url = fp.base_url.trim()
     return e
   })
 
@@ -95,6 +97,14 @@ export function applyCascadeToHarness(
   }))
 
   const modelErrors = validateCascadeEntries(entriesToValidate, presentEnvVars)
+  // validateCascadeEntries covers provider/model; base_url is spliced unquoted
+  // too, so it gets the same plain-scalar check here.
+  for (const fp of fallbackProvidersToWrite) {
+    if (fp.base_url) {
+      const err = yamlPlainScalarError(fp.base_url, `base_url for "${fp.model}"`)
+      if (err) modelErrors.push(err)
+    }
+  }
   if (modelErrors.length > 0) {
     return { ok: false, status: 400, error: `Invalid model cascade: ${modelErrors.join('; ')}` }
   }
@@ -169,8 +179,9 @@ export function applyCascadeToHarness(
       }
       continue
     }
-    // fallback_providers: section
-    if (/^fallback_providers:\s*$/.test(line) || /^fallback_providers:$/.test(line.trim())) {
+    // fallback_providers: section. Same header test as the reader (a trailing
+    // comment is still a header) — a missed header appended a duplicate block.
+    if (FALLBACK_PROVIDERS_HEADER.test(line)) {
       inFpSection = true
       inModelSection = false
       if (!fpSectionWritten && fpLines.length > 0) {

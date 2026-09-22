@@ -1,6 +1,7 @@
 import type { CascadeLibraryEntry, CascadeRecord } from '@/lib/types'
 import type { Storage } from './storage'
 import type { AuditService } from './audit'
+import { yamlPlainScalarError } from '@/lib/model-catalog'
 
 /**
  * Named cascade library.
@@ -20,6 +21,11 @@ import type { AuditService } from './audit'
  *  - Entries must be non-empty; each needs a non-empty provider AND model.
  *    Only provider/model/base_url are kept — api_key (or anything else) is
  *    stripped. A cascade is a routing shape, never a credential store.
+ *  - Every kept value must be a safe one-line YAML plain scalar (see
+ *    yamlPlainScalarError): apply splices them into config.yaml unquoted, so
+ *    a newline or ": " in a stored value could rewrite a live agent's config.
+ *  - edit(name, {name?, entries?}) is atomic: everything is validated (new
+ *    name, clash, entries) before the single write + single audit row.
  */
 
 const CASCADES_FILE = 'cascades.json'
@@ -84,6 +90,15 @@ export function sanitizeCascadeEntries(raw: unknown): CascadeLibraryEntry[] {
     const entry: CascadeLibraryEntry = { provider, model }
     if (typeof obj.base_url === 'string' && obj.base_url.trim()) {
       entry.base_url = obj.base_url.trim()
+    }
+    // Values are written unquoted into config.yaml on apply — refuse anything
+    // that is not a safe one-line plain scalar (newline, ": ", " #", …).
+    const scalarError =
+      yamlPlainScalarError(entry.provider, 'provider') ??
+      yamlPlainScalarError(entry.model, 'model') ??
+      (entry.base_url ? yamlPlainScalarError(entry.base_url, 'base_url') : null)
+    if (scalarError) {
+      throw new CascadeLibraryError('invalid', `Entry ${i + 1}: ${scalarError}`)
     }
     return entry
   })
@@ -153,49 +168,56 @@ export class CascadeLibraryService {
   }
 
   update(name: string, entries: CascadeLibraryEntry[]): CascadeRecord {
-    const clean = sanitizeCascadeEntries(entries)
+    return this.edit(name, { entries })
+  }
+
+  rename(oldName: string, newName: string): CascadeRecord {
+    return this.edit(oldName, { name: newName })
+  }
+
+  /**
+   * Rename and/or replace entries in ONE validated write. Nothing is written
+   * (and nothing audited) unless every part of the patch is valid: the new
+   * name normalises, does not clash with another record, and the entries
+   * sanitize. A 409 on the rename must never leave replaced entries behind.
+   */
+  edit(name: string, patch: { name?: string; entries?: CascadeLibraryEntry[] }): CascadeRecord {
+    const wantsRename = patch.name !== undefined
+    const wantsEntries = patch.entries !== undefined
+    if (!wantsRename && !wantsEntries) {
+      throw new CascadeLibraryError('invalid', 'Provide "name" (rename) and/or "entries" (replace entries)')
+    }
+
+    // Validate everything before touching the records.
+    const next = wantsRename ? normalizeName(patch.name) : undefined
+    const clean = wantsEntries ? sanitizeCascadeEntries(patch.entries) : undefined
+
     const records = this.readAll()
     const idx = records.findIndex((c) => sameName(c.name, name))
     if (idx === -1) {
       throw new CascadeLibraryError('not_found', `Cascade "${name}" not found`)
     }
-    const record: CascadeRecord = { ...records[idx], entries: clean, updatedAt: Date.now() }
-    records[idx] = record
-    this.writeAll(records)
-    this.audit.append({
-      who: 'api',
-      what: 'cascade:save',
-      target: record.name,
-      meta: { name: record.name, harness: record.sourceHarness },
-    })
-    return record
-  }
+    if (next !== undefined) {
+      // Same record, different casing → allowed. Another record → conflict.
+      const clash = records.findIndex((c, i) => i !== idx && sameName(c.name, next))
+      if (clash !== -1) {
+        throw new CascadeLibraryError(
+          'conflict',
+          `A cascade named "${records[clash].name}" already exists`
+        )
+      }
+    }
 
-  rename(oldName: string, newName: string): CascadeRecord {
-    const next = normalizeName(newName)
-    const records = this.readAll()
-    const idx = records.findIndex((c) => sameName(c.name, oldName))
-    if (idx === -1) {
-      throw new CascadeLibraryError('not_found', `Cascade "${oldName}" not found`)
-    }
-    // Same record, different casing → allowed. Another record → conflict.
-    const clash = records.findIndex((c, i) => i !== idx && sameName(c.name, next))
-    if (clash !== -1) {
-      throw new CascadeLibraryError(
-        'conflict',
-        `A cascade named "${records[clash].name}" already exists`
-      )
-    }
     const previous = records[idx].name
-    const record: CascadeRecord = { ...records[idx], name: next, updatedAt: Date.now() }
+    const record: CascadeRecord = { ...records[idx], updatedAt: Date.now() }
+    if (next !== undefined) record.name = next
+    if (clean !== undefined) record.entries = clean
     records[idx] = record
     this.writeAll(records)
-    this.audit.append({
-      who: 'api',
-      what: 'cascade:save',
-      target: record.name,
-      meta: { name: record.name, harness: record.sourceHarness, renamedFrom: previous },
-    })
+
+    const meta: Record<string, unknown> = { name: record.name, harness: record.sourceHarness }
+    if (next !== undefined) meta.renamedFrom = previous
+    this.audit.append({ who: 'api', what: 'cascade:save', target: record.name, meta })
     return record
   }
 

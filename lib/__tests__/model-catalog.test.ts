@@ -173,6 +173,44 @@ describe('validateCascadeEntries', () => {
   })
 })
 
+describe('validateCascadeEntries — YAML-safe plain scalars', () => {
+  // provider/model are written UNQUOTED into config.yaml by line splicing. A
+  // value that is not a safe YAML plain scalar can inject top-level keys
+  // (newline) or break the mapping (": ", " #", trailing ":", leading indicator).
+  const env = new Set(['ANTHROPIC_API_KEY'])
+
+  it('rejects a model id containing a newline (config.yaml key injection)', () => {
+    const errors = validateCascadeEntries(
+      [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }],
+      env
+    )
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatch(/config\.yaml/)
+  })
+
+  it('rejects a provider containing a newline or carriage return', () => {
+    expect(validateCascadeEntries([{ provider: 'anthropic\nfoo: bar', model: 'x' }], env)).toHaveLength(1)
+    expect(validateCascadeEntries([{ provider: 'anthropic\rfoo', model: 'x' }], env)).toHaveLength(1)
+  })
+
+  it('rejects a model id containing ": " or " #" (breaks the plain scalar)', () => {
+    expect(validateCascadeEntries([{ provider: 'anthropic', model: 'foo: bar' }], env)).toHaveLength(1)
+    expect(validateCascadeEntries([{ provider: 'anthropic', model: 'foo #bar' }], env)).toHaveLength(1)
+  })
+
+  it('rejects a model id ending in ":" or starting with a YAML indicator', () => {
+    for (const model of ['foo:', '@cf/meta/llama', '- x', '[a]', '{a}', '"quoted"', "'q'", '&anchor', '*alias', '!tag', '|', '>', '%x', '`x', '#x', '?x', ',x']) {
+      expect(validateCascadeEntries([{ provider: 'anthropic', model }], env), model).toHaveLength(1)
+    }
+  })
+
+  it('accepts real-world ids with inner colons, slashes and dots', () => {
+    for (const model of ['qwen3:30b', 'us.anthropic.claude-sonnet-4-6-20250527-v1:0', 'anthropic/claude-fable-5', 'glm-4.5-flash', 'moonshotai/kimi-k2.7-code']) {
+      expect(validateCascadeEntries([{ provider: 'anthropic', model }], env), model).toEqual([])
+    }
+  })
+})
+
 describe('MODEL_CATALOG — GLM / open-model lane', () => {
   it('exposes GLM-5.2 under a first-class zai provider', () => {
     const zai = MODEL_CATALOG.zai

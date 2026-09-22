@@ -103,6 +103,24 @@ describe('Cascades API — item', () => {
     expect(services.cascades.get('other')).toBeDefined()
   })
 
+  it('PUT {name: conflicting, entries} is 409 and the entries are NOT replaced (atomic)', async () => {
+    services.cascades.save({ name: 'other', entries: ENTRIES })
+    const auditBefore = services.audit.query({ what: 'cascade:save' }).length
+    const next = [{ provider: 'openai', model: 'gpt-5' }]
+    const res = await PUT(req('PUT', { name: 'OTHER', entries: next }), makeParams('fleet'))
+    expect(res.status).toBe(409)
+    expect(services.cascades.get('fleet')?.entries).toEqual(ENTRIES)
+    expect(services.cascades.get('other')?.entries).toEqual(ENTRIES)
+    expect(services.audit.query({ what: 'cascade:save' })).toHaveLength(auditBefore)
+  })
+
+  it('PUT {name, entries: invalid} is 400 and the rename does NOT happen (atomic)', async () => {
+    const res = await PUT(req('PUT', { name: 'renamed', entries: [{ provider: 'anthropic', model: '' }] }), makeParams('fleet'))
+    expect(res.status).toBe(400)
+    expect(services.cascades.get('fleet')?.entries).toEqual(ENTRIES)
+    expect(services.cascades.get('renamed')).toBeUndefined()
+  })
+
   it('PUT with neither name nor entries is 400; empty entries is 400; bad JSON is 400', async () => {
     expect((await PUT(req('PUT', {}), makeParams('fleet'))).status).toBe(400)
     expect((await PUT(req('PUT', { entries: [] }), makeParams('fleet'))).status).toBe(400)

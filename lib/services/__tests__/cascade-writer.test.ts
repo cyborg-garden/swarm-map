@@ -189,6 +189,76 @@ describe('applyCascadeToHarness', () => {
     expect(fs.existsSync(configPath())).toBe(true)
   })
 
+  // Values are written UNQUOTED by line splicing. A newline in a model id would
+  // inject arbitrary top-level keys into config.yaml (then the caller restarts
+  // the agent onto it). Refuse before any byte is written, key or no key.
+  it('returns 400 and writes NOTHING for a model id containing a newline, even with a key present', () => {
+    fs.writeFileSync(configPath(), 'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n')
+    const before = fs.readFileSync(configPath(), 'utf-8')
+    const res = applyCascadeToHarness(
+      'h_test',
+      [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }],
+      { who: 'api' }
+    )
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.status).toBe(400)
+      expect(res.error).toMatch(/^Invalid model cascade:/)
+    }
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(before)
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 and writes NOTHING for a provider or base_url that is not a safe YAML scalar', () => {
+    for (const entry of [
+      { provider: 'anthropic\nfoo: bar', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://h:11434/v1\nplatforms: {}' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://h:11434/v1 #x' },
+      { provider: 'anthropic', model: 'foo: bar' },
+    ]) {
+      const res = applyCascadeToHarness('h_test', [entry], { who: 'api' })
+      expect(res.ok, JSON.stringify(entry)).toBe(false)
+      if (!res.ok) expect(res.status).toBe(400)
+    }
+    expect(fs.existsSync(configPath())).toBe(false)
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
+  // Writer must recognise the same header form the reader does. A header with
+  // a trailing comment was not matched → the old block was left in place AND a
+  // second top-level `fallback_providers:` was appended → duplicate key (#149).
+  it('replaces a fallback_providers block whose header carries a trailing comment (no duplicate block)', () => {
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: anthropic',
+        '  default: claude-sonnet-4-6',
+        'fallback_providers:  # ordered; first entry is primary',
+        '  - provider: anthropic',
+        '    model: claude-sonnet-4-6',
+        '  - provider: ollama',
+        '    model: qwen3:30b',
+        '    base_url: http://host.docker.internal:11434/v1',
+        'credential_pool_strategies: {}',
+        '',
+      ].join('\n')
+    )
+    const entries = [
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    ]
+    const res = applyCascadeToHarness('h_test', entries, { who: 'api' })
+    expect(res.ok).toBe(true)
+    const written = fs.readFileSync(configPath(), 'utf-8')
+    expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
+    expect((written.match(/model: qwen3:30b/g) ?? []).length).toBe(1)
+    expect((written.match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
+    expect(written.indexOf('model: qwen3:30b')).toBeLessThan(written.indexOf('model: claude-sonnet-4-6'))
+    expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
+    expect(readFallbackProviders(tmpDir)).toEqual(entries)
+  })
+
   it('appends an audit entry only when asked, with the caller-supplied who/what/meta', () => {
     applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
     expect(services.audit.append).not.toHaveBeenCalled()

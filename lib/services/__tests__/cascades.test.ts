@@ -229,6 +229,97 @@ describe('CascadeLibraryService', () => {
     expect(rec.entries[0]).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' })
   })
 
+  it('rejects entries that cannot be written as plain YAML scalars (newline, ": ", " #", leading indicator) with 400 and stores nothing', () => {
+    const bad = [
+      { provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' },
+      { provider: 'anthropic\nfoo: bar', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://h:11434/v1\nplatforms: {}' },
+      { provider: 'anthropic', model: 'foo: bar' },
+      { provider: 'anthropic', model: 'foo #bar' },
+      { provider: 'anthropic', model: '@cf/meta/llama' },
+      { provider: 'anthropic', model: 'foo:' },
+    ]
+    for (const entry of bad) {
+      try {
+        cascades.save({ name: 'x', entries: [entry] })
+        throw new Error('expected 400 for ' + JSON.stringify(entry))
+      } catch (e) {
+        expect(e, JSON.stringify(entry)).toBeInstanceOf(CascadeLibraryError)
+        expect((e as CascadeLibraryError).status, JSON.stringify(entry)).toBe(400)
+      }
+    }
+    expect(cascades.list()).toHaveLength(0)
+    expect(fs.existsSync(path.join(tmpDir, 'cascades.json'))).toBe(false)
+
+    // update() runs the same sanitizer
+    cascades.save({ name: 'ok', entries: ENTRIES })
+    expect(() => cascades.update('ok', [bad[0]])).toThrow(CascadeLibraryError)
+    expect(cascades.get('ok')?.entries).toEqual(ENTRIES)
+  })
+
+  it('still accepts real-world ids with inner colons, slashes and dots', () => {
+    const rec = cascades.save({
+      name: 'real',
+      entries: [
+        { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+        { provider: 'bedrock', model: 'us.anthropic.claude-sonnet-4-6-20250527-v1:0' },
+        { provider: 'openrouter', model: 'moonshotai/kimi-k2.7-code' },
+      ],
+    })
+    expect(rec.entries).toHaveLength(3)
+  })
+
+  // --- edit(): atomic rename + entries -----------------------------------
+
+  it('edit() with a conflicting rename AND new entries is 409 and changes nothing (atomic)', () => {
+    cascades.save({ name: 'fleet', entries: ENTRIES })
+    cascades.save({ name: 'other', entries: ENTRIES })
+    const next = [{ provider: 'openai', model: 'gpt-5' }]
+    try {
+      cascades.edit('fleet', { name: 'OTHER', entries: next })
+      throw new Error('expected conflict')
+    } catch (e) {
+      expect(e).toBeInstanceOf(CascadeLibraryError)
+      expect((e as CascadeLibraryError).status).toBe(409)
+    }
+    expect(cascades.get('fleet')?.entries).toEqual(ENTRIES)
+    expect(cascades.get('other')?.entries).toEqual(ENTRIES)
+    expect(audit.query({ what: 'cascade:save' })).toHaveLength(2) // the two saves only
+  })
+
+  it('edit() with a valid rename AND invalid entries is 400 and changes nothing (atomic)', () => {
+    cascades.save({ name: 'fleet', entries: ENTRIES })
+    expect(() =>
+      cascades.edit('fleet', { name: 'renamed', entries: [{ provider: 'anthropic', model: '' }] })
+    ).toThrow(CascadeLibraryError)
+    expect(cascades.get('fleet')?.entries).toEqual(ENTRIES)
+    expect(cascades.get('renamed')).toBeUndefined()
+    expect(audit.query({ what: 'cascade:save' })).toHaveLength(1)
+  })
+
+  it('edit() renames and replaces entries in ONE write with ONE audit row', () => {
+    const rec = cascades.save({ name: 'fleet', entries: ENTRIES, sourceHarness: 'h_a' })
+    const next = [{ provider: 'openai', model: 'gpt-5' }]
+    const out = cascades.edit('fleet', { name: 'renamed', entries: next })
+    expect(out).toMatchObject({ name: 'renamed', entries: next, sourceHarness: 'h_a', createdAt: rec.createdAt })
+    expect(cascades.get('fleet')).toBeUndefined()
+    expect(cascades.list()).toHaveLength(1)
+    const log = audit.query({ what: 'cascade:save' })
+    expect(log).toHaveLength(2)
+    expect(log[0].meta).toMatchObject({ name: 'renamed', harness: 'h_a', renamedFrom: 'fleet' })
+  })
+
+  it('edit() with an empty patch throws 400; on a missing cascade throws 404', () => {
+    cascades.save({ name: 'fleet', entries: ENTRIES })
+    expect(() => cascades.edit('fleet', {})).toThrow(CascadeLibraryError)
+    try {
+      cascades.edit('ghost', { entries: ENTRIES })
+      throw new Error('expected not_found')
+    } catch (e) {
+      expect((e as CascadeLibraryError).status).toBe(404)
+    }
+  })
+
   // --- Audit -------------------------------------------------------------
 
   it('audits save, rename, update and delete', () => {
