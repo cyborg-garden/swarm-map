@@ -11,6 +11,7 @@ import { SurfaceAdminService } from './surface-admins'
 import { LettaService } from './letta'
 import { LettaAgentProvider } from './letta-agent-provider'
 import { CascadeLibraryService } from './cascades'
+import { ModelFreshnessService } from './model-freshness'
 import path from 'path'
 import os from 'os'
 
@@ -29,6 +30,10 @@ const tools = new ToolsService(storage)
 
 const keysService = new KeysService(storage, audit, DATA_DIR)
 
+// Live provider model lists (cached under DATA_DIR/model-lists/, fail-soft).
+// Keys are looked up through KeysService per request and never persisted here.
+const modelFreshness = new ModelFreshnessService(storage, keysService)
+
 // Agents-as-API-resources layer (design §1c). Maps Letta agents → Harness so
 // the fleet list/detail render them uniformly, gated by harness.runtime.
 const lettaService = new LettaService()
@@ -44,6 +49,7 @@ export const services = {
   config,
   harness,
   keys: keysService,
+  modelFreshness,
   tools,
   memory: new MemoryService(storage),
   signalPin: new SignalPinService(keysService, process.env.SIGNAL_API_URL || 'http://localhost:8080'),

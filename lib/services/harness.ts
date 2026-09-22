@@ -1023,6 +1023,12 @@ export class HarnessService {
         ...(overlay.apiPort !== undefined ? { apiPort: overlay.apiPort } : {}),
         ...(overlay.pinnedImageRef ? { pinnedImageRef: overlay.pinnedImageRef } : {}),
         ...(overlay.lastKnownDigest ? { lastKnownDigest: overlay.lastKnownDigest } : {}),
+        //  - modelTracking: the model-update scheduler decides whether it may
+        //    rotate a RUNNING agent's cascade from get(id). Missing here, no
+        //    tracked entry is ever applied.
+        ...(overlay.modelTracking && Object.keys(overlay.modelTracking).length
+          ? { modelTracking: overlay.modelTracking }
+          : {}),
       }
 
       // Override status based on restart tracker
@@ -1117,6 +1123,9 @@ export class HarnessService {
       // overlay stays byte-identical.
       ...(o.extraMounts?.length ? { extraMounts: o.extraMounts } : {}),
       ...(o.extraEnv && Object.keys(o.extraEnv).length ? { extraEnv: o.extraEnv } : {}),
+      // Per-entry "track newest version" flags; omitted when absent so a
+      // legacy overlay stays byte-identical.
+      ...(o.modelTracking && Object.keys(o.modelTracking).length ? { modelTracking: o.modelTracking } : {}),
     }
   }
 
