@@ -175,18 +175,24 @@ fallback_providers:
     ])
   })
 
-  it('handles fallback_providers with api_key (reads but includes it)', () => {
+  // Re-audit: the reader's rows go straight into GET/PUT /api/harnesses/:id/models
+  // responses and the editor echoes them back as expected_fallback_providers.
+  // An inline api_key must never leave the file through this reader.
+  it('never returns an inline api_key (it reaches the browser otherwise)', () => {
     const config = `fallback_providers:
   - provider: anthropic
     model: claude-sonnet-4-5
     api_key: sk-ant-secret
+  - {provider: custom, model: proxy, base_url: http://p:1/v1, api_key: sk-inline-flow}
 `
     fs.writeFileSync(path.join(tmpDir, 'config.yaml'), config)
 
     const result = readFallbackProviders(tmpDir)
     expect(result).toEqual([
-      { provider: 'anthropic', model: 'claude-sonnet-4-5', api_key: 'sk-ant-secret' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      { provider: 'custom', model: 'proxy', base_url: 'http://p:1/v1' },
     ])
+    expect(JSON.stringify(result)).not.toContain('sk-')
   })
 
   // Issue #149 — Trigger B. Hermes' own writer and hand edits both produce

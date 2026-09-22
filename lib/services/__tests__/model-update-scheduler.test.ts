@@ -603,6 +603,104 @@ describe('checkModelUpdates — apply guards added by the audit', () => {
   })
 })
 
+describe('re-audit: rotations, retired rows, the persisted report', () => {
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+
+  const keyEnvCfg = [
+    'model:',
+    '  provider: openrouter',
+    '  default: z-ai/glm-5.2',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.2',
+    '    key_env: OPENROUTER_KEY_B',
+    '    api_mode: chat_completions',
+    '  - provider: anthropic',
+    '    model: claude-sonnet-4-6',
+    '',
+  ].join('\n')
+
+  it('a rotation carries the rotated row\'s own keys (key_env, api_mode) onto the successor row', async () => {
+    makeHarness('ke', {
+      config: keyEnvCfg,
+      env: 'OPENROUTER_API_KEY=sk-or\nOPENROUTER_KEY_B=sk-or-b\nANTHROPIC_API_KEY=sk-ant\n',
+      tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true },
+    })
+    const report = await checkModelUpdates(deps)
+    expect(entryFor(report, 'h_ke', 'z-ai/glm-5.2')!.applied).toBe(true)
+    expect(readConfig('ke')).toContain('  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n    api_mode: chat_completions\n  - provider: anthropic')
+  })
+
+  it('a rotation is not refused for the provider\'s default var when the row authenticates via key_env', async () => {
+    makeHarness('ke2', {
+      config: keyEnvCfg,
+      env: 'OPENROUTER_KEY_B=sk-or-b\nANTHROPIC_API_KEY=sk-ant\n',
+      tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true },
+    })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_ke2', 'z-ai/glm-5.2')!
+    expect(e.blocked).toBeUndefined()
+    expect(e.applied).toBe(true)
+    expect(readConfig('ke2')).toContain('    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B')
+  })
+
+  it('a retired-by-absence tracked row is rotated unattended when the last report carried its pricing', async () => {
+    makeHarness('ra', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]), tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    // Run 1 (notify): glm-5.2 is still listed; its pricing lands in the report.
+    settings = { ...settings, mode: 'notify' }
+    await checkModelUpdates(deps)
+    // The provider removes glm-5.2. Run 2 (apply).
+    liveLists.openrouter = { ...OR_LIVE, models: OR_LIVE.models.filter((m) => m.id !== 'z-ai/glm-5.2') }
+    settings = { ...settings, mode: 'apply' }
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_ra', 'z-ai/glm-5.2')!
+    expect(e.retired).toBe(true)
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.priceRatio).toBeCloseTo(0.00000286 / 0.0000020416, 6)
+    expect(e.blocked).toBeUndefined()
+    expect(e.applied).toBe(true)
+    expect(readConfig('ra')).toContain('    model: z-ai/glm-5.3')
+    expect(deps.harness.restart).toHaveBeenCalledWith('h_ra', 'quick')
+  })
+
+  it('a retired-by-absence row with no known pricing is blocked with a DISTINCT reason, not "price-unknown"', async () => {
+    makeHarness('rb', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]), tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    liveLists.openrouter = { ...OR_LIVE, models: OR_LIVE.models.filter((m) => m.id !== 'z-ai/glm-5.2') }
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_rb', 'z-ai/glm-5.2')!
+    expect(e.retired).toBe(true)
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.blocked).toBe('retired-current-no-pricing')
+    expect(e.applied).toBeUndefined()
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('the current row\'s pricing is found case-insensitively', async () => {
+    makeHarness('ci', { config: fpConfig([['openrouter', 'Z-AI/glm-5.2']]) })
+    settings = { ...settings, mode: 'notify' }
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_ci', 'Z-AI/glm-5.2')!
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.priceRatio).toBeDefined()
+  })
+
+  it('a manual apply marks the entry applied in the persisted report, so the card stops offering it', async () => {
+    makeHarness('ma', { config: fpConfig([['openrouter', 'z-ai/glm-5.2'], ['openrouter', 'moonshotai/kimi-k2.7']]) })
+    settings = { ...settings, mode: 'notify' }
+    await checkModelUpdates(deps)
+    const res = await applyModelUpdate({ harnessId: 'h_ma', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res.ok).toBe(true)
+    const persisted = readModelUpdateReport(storage)!
+    const h = persisted.harnesses.find((x) => x.id === 'h_ma')!
+    expect(h.entries.find((e) => e.model === 'z-ai/glm-5.2')).toMatchObject({ successor: 'z-ai/glm-5.3', applied: true })
+    // The other pending entry is untouched.
+    expect(h.entries.find((e) => e.model === 'moonshotai/kimi-k2.7')).toMatchObject({ successor: 'moonshotai/kimi-k3' })
+    expect(h.entries.find((e) => e.model === 'moonshotai/kimi-k2.7')!.applied).toBeUndefined()
+  })
+})
+
 describe('resolveIntervalMs — bounded (audit)', () => {
   it('never exceeds the 32-bit timer limit (a monthly interval must not become a 1ms hot loop)', () => {
     const s = { enabled: true, mode: 'notify' as const, intervalHours: 720, maxPriceMultiplier: 1.5 }

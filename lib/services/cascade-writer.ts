@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { services } from '@/lib/services'
 import { validateCascadeEntries, yamlPlainScalarError, type CascadeEntry } from '@/lib/model-catalog'
-import { readFallbackProviders, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
+import { readFallbackProviders, readModelConfig, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
 import type { FallbackProvider } from '@/lib/services/harness'
 
 /**
@@ -20,9 +20,20 @@ import type { FallbackProvider } from '@/lib/services/harness'
  * model.provider / model.default / model.fallback / model.base_url and each
  * row's provider / model / base_url. Everything else it finds inside those two
  * sections passes through verbatim — model.api_mode, a row's inline api_key or
- * key_env — as long as the row (provider, model) survives the write. Dropping
- * them silently re-routed a local primary to OpenRouter and killed a proxy
- * credential without a trace in the audit log.
+ * key_env — as long as the row (provider, model) survives the write, OR the
+ * entry names the row it replaces via `carryFrom` (a rotation changes the
+ * model by construction; without carryFrom every scheduler rotation dropped
+ * the row's key_env / api_mode and the agent came back authenticating with
+ * the provider's default var). Dropping them silently re-routed a local
+ * primary to OpenRouter and killed a proxy credential without a trace in the
+ * audit log.
+ *
+ * Primary guard (re-audit): model.default is derived from row 0. When the
+ * file's model.default is NOT fallback_providers[0] (the two sections
+ * drifted apart — matilde), any write that does not put that primary back at
+ * the top would silently switch the agent's primary. Refused with 409 unless
+ * the caller passes `allowPrimaryChange` (the cascade library's apply and the
+ * legacy `{ model }` body, where moving the primary IS the request).
  *
  * Guard: every entry is validated with validateCascadeEntries against the
  * env-var NAMES present in the agent's .env BEFORE anything is written. A
@@ -33,7 +44,18 @@ import type { FallbackProvider } from '@/lib/services/harness'
  * Caller-supplied api_key is never written, whatever the caller passes.
  */
 
-export type CascadeWriteInput = { provider: string; model: string; base_url?: string }
+export type CascadeWriteInput = {
+  provider: string
+  model: string
+  base_url?: string
+  /**
+   * The row on disk whose unmanaged keys (key_env, api_mode, an inline
+   * api_key…) this entry inherits when its own (provider, model) is not on
+   * disk — set by the scheduler when it rotates a row to its successor.
+   * Lookup only; never written.
+   */
+  carryFrom?: { provider: string; model: string }
+}
 
 export type CascadeWriteResult =
   | {
@@ -68,6 +90,12 @@ export type ApplyCascadeOptions = {
    * cascade can be mapped onto — the writer must not invent a block.
    */
   fallbackProviders?: 'write' | 'keep'
+  /**
+   * Permit a write whose row 0 is not the file's current model.default when
+   * the two sections had drifted apart. Off by default: the editor's save
+   * must not move a primary it never showed.
+   */
+  allowPrimaryChange?: boolean
 }
 
 /** Keys of the model: section the writer derives from the entries. */
@@ -225,6 +253,9 @@ export function applyCascadeToHarness(
   const fallbackProvidersToWrite: CascadeWriteInput[] = (entries ?? []).map((fp) => {
     const e: CascadeWriteInput = { provider: (fp.provider ?? '').trim(), model: (fp.model ?? '').trim() }
     if (fp.base_url && fp.base_url.trim()) e.base_url = fp.base_url.trim()
+    if (fp.carryFrom?.provider && fp.carryFrom?.model) {
+      e.carryFrom = { provider: fp.carryFrom.provider.trim(), model: fp.carryFrom.model.trim() }
+    }
     return e
   })
 
@@ -245,10 +276,45 @@ export function applyCascadeToHarness(
   //     motivating case: pushing an openrouter model onto an agent with no
   //     OPENROUTER_API_KEY → restart → crash-loop. All uncertainty fails open
   //     (a valid config must never be blocked). See validateCascadeEntries.
+  let content: string | null
+  try {
+    content = fs.readFileSync(configPath, 'utf-8')
+  } catch {
+    content = null
+  }
+  const lines = content === null ? [] : content.split('\n')
+  const existingModel = parseExistingModelBlock(lines)
+  const existingRows = writeRows ? parseExistingRows(lines) : []
+
+  // The row on disk each entry inherits its unmanaged keys from: its own
+  // (provider, model) when that survives the write, else the row `carryFrom`
+  // names. First come, first served — a row is carried at most once.
+  const sameKey = (r: ExistingRow, provider: string, model: string): boolean =>
+    !r.used && r.provider.toLowerCase() === provider.toLowerCase() && r.model === model
+  const carriedRows: Array<ExistingRow | undefined> = fallbackProvidersToWrite.map((fp) => {
+    const row =
+      existingRows.find((r) => sameKey(r, fp.provider, fp.model)) ??
+      (fp.carryFrom ? existingRows.find((r) => sameKey(r, fp.carryFrom!.provider, fp.carryFrom!.model)) : undefined)
+    if (row) row.used = true
+    return row
+  })
+
   const presentEnvVars = readAgentEnvVarNames(dataDir)
-  const entriesToValidate: CascadeEntry[] = fallbackProvidersToWrite.map((fp) => ({
+  // A row that carries its own credential (inline api_key, or a key_env whose
+  // var IS present) does not authenticate with the provider's default var —
+  // checking that var refused a perfectly serviceable rotation.
+  const hasOwnCredential = (row: ExistingRow | undefined): boolean =>
+    !!row &&
+    row.extra.some((l) => {
+      const m = l.match(/^\s*(api_key|key_env):\s*(\S.*)$/)
+      if (!m) return false
+      if (m[1] === 'api_key') return true
+      return presentEnvVars.has(unquote(m[2]))
+    })
+  const entriesToValidate: CascadeEntry[] = fallbackProvidersToWrite.map((fp, i) => ({
     provider: fp.provider,
     model: fp.model,
+    ...(hasOwnCredential(carriedRows[i]) ? { ownCredential: true } : {}),
   }))
 
   const modelErrors = validateCascadeEntries(entriesToValidate, presentEnvVars)
@@ -272,15 +338,21 @@ export function applyCascadeToHarness(
     }
   }
 
-  let content: string | null
-  try {
-    content = fs.readFileSync(configPath, 'utf-8')
-  } catch {
-    content = null
+  // Primary guard. model.default is derived from row 0; when the file's
+  // model.default is some OTHER model than fallback_providers[0], a write
+  // that does not put it back at the top switches the agent's primary
+  // without anyone having asked for that.
+  if (writeRows && !opts.allowPrimaryChange) {
+    const filePrimary = readModelConfig(dataDir)[0]
+    const row0 = existingRows[0]?.model
+    if (filePrimary && row0 && filePrimary !== row0 && primary !== filePrimary) {
+      return {
+        ok: false,
+        status: 409,
+        error: `primary-mismatch: model.default is "${filePrimary}" but fallback_providers[0] is "${row0}"; put "${filePrimary}" at the top of the cascade before saving`,
+      }
+    }
   }
-  const lines = content === null ? [] : content.split('\n')
-  const existingModel = parseExistingModelBlock(lines)
-  const existingRows = writeRows ? parseExistingRows(lines) : []
 
   // Effective model.provider: the primary row's, else whatever the file says
   // (a legacy body with no provider must not delete the line).
@@ -313,11 +385,12 @@ export function applyCascadeToHarness(
   if (existingModel) modelLines.push(...existingModel.passthrough)
 
   // Build fallback_providers YAML section (root level). A row that survives
-  // the write (same provider + model) carries its unmanaged keys along.
+  // the write (same provider + model), or that an entry names via carryFrom,
+  // carries its unmanaged keys along.
   const fpLines: string[] = []
   if (writeRows) {
     fpLines.push('fallback_providers:')
-    for (const fp of fallbackProvidersToWrite) {
+    fallbackProvidersToWrite.forEach((fp, i) => {
       fpLines.push(`  - provider: ${fp.provider}`)
       fpLines.push(`    model: ${fp.model}`)
       if (fp.base_url) {
@@ -325,12 +398,9 @@ export function applyCascadeToHarness(
       }
       // Do NOT write api_key from the caller (security). An api_key already in
       // the file for THIS row is the operator's and rides along below.
-      const row = existingRows.find((r) => !r.used && r.provider.toLowerCase() === fp.provider.toLowerCase() && r.model === fp.model)
-      if (row) {
-        row.used = true
-        fpLines.push(...row.extra)
-      }
-    }
+      const row = carriedRows[i]
+      if (row) fpLines.push(...row.extra)
+    })
   }
 
   const finish = (): CascadeWriteResult => {
