@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { validateCascadeEntries, type CascadeEntry } from '@/lib/model-catalog'
-import { readModelConfig, readModelProvider, readFallbackProviders, guessDataDir, readAgentEnvVarNames } from '@/lib/services/harness'
+import { readModelConfig, readModelProvider, readFallbackProviders, guessDataDir, readAgentEnvVarNames, FALLBACK_PROVIDERS_HEADER } from '@/lib/services/harness'
 import type { FallbackProvider } from '@/lib/services/harness'
 import fs from 'fs'
 import path from 'path'
@@ -80,6 +80,21 @@ export async function PUT(
     // Legacy path: string-based cascade
     cascade = body.cascade ?? (body.model ? [body.model] : [])
     provider = body.provider || ''
+
+    // Map each model onto its existing fallback_providers row so a reorder
+    // through this shape keeps each row's provider + base_url. Only a model
+    // with no existing row is defaulted to body.provider. Without this the
+    // whole block was dropped and a local model lost its ollama base_url (#149).
+    const existing = readFallbackProviders(dataDir)
+    if (existing.length > 0 && cascade.length > 0) {
+      fallbackProvidersToWrite = cascade.map((model) => {
+        const row = existing.find((fp) => fp.model === model)
+        if (!row) return { provider, model }
+        return { provider: row.provider, model: row.model, ...(row.base_url ? { base_url: row.base_url } : {}) }
+      })
+      // model.provider must follow the new primary row, not the stale body value.
+      provider = fallbackProvidersToWrite[0].provider || provider
+    }
   }
 
   const primary = cascade[0] || ''
@@ -168,11 +183,19 @@ export async function PUT(
       }
       continue
     }
-    // fallback_providers: section
-    if (/^fallback_providers:\s*$/.test(line) || /^fallback_providers:$/.test(line.trim())) {
+    // fallback_providers: section. Same header test as the reader (a trailing
+    // comment is still a header) — a missed header appended a duplicate block.
+    // With nothing to write, the existing block is passed through untouched:
+    // this route never deletes fallback_providers.
+    if (FALLBACK_PROVIDERS_HEADER.test(line)) {
+      if (fpLines.length === 0) {
+        inModelSection = false
+        updated.push(line)
+        continue
+      }
       inFpSection = true
       inModelSection = false
-      if (!fpSectionWritten && fpLines.length > 0) {
+      if (!fpSectionWritten) {
         updated.push(...fpLines)
         fpSectionWritten = true
       }

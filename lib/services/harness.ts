@@ -497,6 +497,14 @@ export type FallbackProvider = {
   api_key?: string
 }
 
+/**
+ * Matches the top-level `fallback_providers:` header, with or without a
+ * trailing comment. Shared with the writer in the models PUT route so the
+ * two can never disagree about what a header looks like — a header the
+ * writer failed to recognise got a second block appended below it (#149).
+ */
+export const FALLBACK_PROVIDERS_HEADER = /^fallback_providers:\s*(#.*)?$/
+
 export function readFallbackProviders(dataDir: string): FallbackProvider[] {
   try {
     const configPath = path.join(dataDir, 'config.yaml')
@@ -510,8 +518,9 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
     for (const line of lines) {
       const trimmed = line.trim()
 
-      // Detect the fallback_providers: top-level key
-      if (/^fallback_providers:\s*$/.test(line) || /^fallback_providers:$/.test(line.trim())) {
+      // Detect the fallback_providers: top-level key (a trailing comment is
+      // still a bare header — `fallback_providers:  # note`).
+      if (FALLBACK_PROVIDERS_HEADER.test(line)) {
         inSection = true
         continue
       }
@@ -542,8 +551,18 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
           providers.push(entry)
         }
         current = {}
-        // Parse the key on the same line as "- "
         const rest = trimmed.slice(2).trim()
+        // Flow-style item: `- {provider: ollama, model: x, base_url: y}`
+        const flow = rest.match(/^\{(.*)\}$/)
+        if (flow) {
+          for (const pair of flow[1].matchAll(/(\w+):\s*("[^"]*"|'[^']*'|[^,}]+)/g)) {
+            const key = pair[1] as keyof FallbackProvider
+            const val = pair[2].trim().replace(/^["']|["']$/g, '')
+            if (val) (current as Record<string, string>)[key] = val
+          }
+          continue
+        }
+        // Parse the key on the same line as "- "
         const kv = rest.match(/^(\w+):\s*(.+)$/)
         if (kv) {
           const key = kv[1] as keyof FallbackProvider

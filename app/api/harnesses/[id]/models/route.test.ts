@@ -25,12 +25,19 @@ vi.mock('@/lib/services', () => ({
 // Default fixture: the agent has an Anthropic key only. Individual tests
 // override it to exercise the credential-presence guard.
 const mockEnvVars = vi.fn(() => new Set<string>(['ANTHROPIC_API_KEY']))
+// What the agent's config.yaml currently holds under fallback_providers.
+// Default: nothing. Legacy-body tests override it to prove rows are preserved.
+const mockExistingFp = vi.fn((): Array<{ provider: string; model: string; base_url?: string }> => [])
+const mockModelProvider = vi.fn(() => '')
 
-vi.mock('@/lib/services/harness', () => ({
+vi.mock('@/lib/services/harness', async (importOriginal) => ({
+  // The writer shares the reader's header regex; use the real one so the
+  // route test exercises the same header form the reader accepts.
+  FALLBACK_PROVIDERS_HEADER: (await importOriginal<typeof import('@/lib/services/harness')>()).FALLBACK_PROVIDERS_HEADER,
   guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
   readModelConfig: vi.fn(() => []),
-  readModelProvider: vi.fn(() => ''),
-  readFallbackProviders: vi.fn(() => []),
+  readModelProvider: vi.fn(() => mockModelProvider()),
+  readFallbackProviders: vi.fn(() => mockExistingFp()),
   readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
 }))
 
@@ -53,6 +60,8 @@ describe('Models API — PUT validation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY']))
+    mockExistingFp.mockReturnValue([])
+    mockModelProvider.mockReturnValue('')
     // Pretend config.yaml exists and is writable; capture writes in-memory.
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n' as never
@@ -180,5 +189,126 @@ describe('Models API — PUT validation', () => {
     for (const l of lines.slice(start + 1, end)) {
       if (l.trim() !== '') expect(l).toMatch(/^\s+/)
     }
+  })
+
+  // --- Issue #149 --------------------------------------------------------------
+  //
+  // Legacy body shape `{ provider, cascade: string[] }` (API callers, README
+  // example). Before: fpLines was empty, so the section loop DELETED the whole
+  // existing fallback_providers block, and every row's provider/base_url was
+  // lost. After: each cascade model is mapped onto its existing row (keeping
+  // provider + base_url); only a model with no existing row gets body.provider.
+  it('legacy body preserves existing ollama row (provider + base_url) when reordered to primary', async () => {
+    const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY']))
+    mockModelProvider.mockReturnValue('anthropic')
+    mockExistingFp.mockReturnValue([
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
+    ])
+    const existing = [
+      'model:',
+      '  provider: anthropic',
+      '  default: claude-sonnet-4-6',
+      '  fallback:',
+      '    - qwen3:30b',
+      '',
+      'fallback_providers:',
+      '  - provider: anthropic',
+      '    model: claude-sonnet-4-6',
+      '  - provider: ollama',
+      '    model: qwen3:30b',
+      `    base_url: ${OLLAMA_URL}`,
+      'credential_pool_strategies: {}',
+      '',
+    ].join('\n')
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(existing as never)
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+
+    // Local model promoted to primary, plus one brand-new anthropic fallback.
+    const body = { provider: 'anthropic', cascade: ['qwen3:30b', 'claude-sonnet-4-6', 'claude-haiku-4-5'] }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(200)
+
+    // The block survived — exactly one header.
+    expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
+    // qwen3 kept its ollama provider AND base_url; it was not rewritten as anthropic.
+    expect(written).toMatch(/- provider: ollama\n\s+model: qwen3:30b\n\s+base_url: http:\/\/host\.docker\.internal:11434\/v1/)
+    expect(written).not.toMatch(/- provider: anthropic\n\s+model: qwen3:30b/)
+    // model.provider follows the new primary row, not the stale body.provider.
+    expect(written).toMatch(/^model:\n  provider: ollama\n  default: qwen3:30b/m)
+    // The unknown model defaulted to body.provider.
+    expect(written).toMatch(/- provider: anthropic\n\s+model: claude-haiku-4-5/)
+    // Order in the block follows the cascade order.
+    expect(written.indexOf('model: qwen3:30b')).toBeLessThan(written.indexOf('model: claude-sonnet-4-6'))
+    expect(written.indexOf('model: claude-sonnet-4-6')).toBeLessThan(written.indexOf('model: claude-haiku-4-5'))
+    // Trailing top-level key intact, exactly once.
+    expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
+  })
+
+  it('legacy body never deletes an existing fallback_providers block, even when the reader cannot parse it', async () => {
+    // Reader says [] (e.g. a shape it does not understand) but the file has a
+    // block. Old code: fpLines empty → section loop ate the block. Must survive.
+    mockExistingFp.mockReturnValue([])
+    const existing = [
+      'model:',
+      '  provider: anthropic',
+      '  default: claude-sonnet-4-6',
+      'fallback_providers:',
+      '  - provider: ollama',
+      '    model: qwen3:30b',
+      '    base_url: http://host.docker.internal:11434/v1',
+      'credential_pool_strategies: {}',
+      '',
+    ].join('\n')
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(existing as never)
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+
+    const body = { provider: 'anthropic', cascade: ['claude-opus-4-8'] }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
+    expect(written).toContain('model: qwen3:30b')
+    expect(written).toContain('base_url: http://host.docker.internal:11434/v1')
+    expect(written).toMatch(/^model:\n  provider: anthropic\n  default: claude-opus-4-8/m)
+    expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
+  })
+
+  // Writer must recognise the same header form the reader does. A header with
+  // a trailing comment was not matched → the old block was left in place AND a
+  // second top-level `fallback_providers:` was appended → duplicate key.
+  it('replaces a fallback_providers block whose header carries a trailing comment (no duplicate block)', async () => {
+    const existing = [
+      'model:',
+      '  provider: anthropic',
+      '  default: claude-sonnet-4-6',
+      'fallback_providers:  # ordered; first entry is primary',
+      '  - provider: anthropic',
+      '    model: claude-sonnet-4-6',
+      '  - provider: ollama',
+      '    model: qwen3:30b',
+      '    base_url: http://host.docker.internal:11434/v1',
+      'credential_pool_strategies: {}',
+      '',
+    ].join('\n')
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(existing as never)
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+
+    const body = {
+      fallback_providers: [
+        { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      ],
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
+    expect((written.match(/model: qwen3:30b/g) ?? []).length).toBe(1)
+    expect((written.match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
+    expect(written.indexOf('model: qwen3:30b')).toBeLessThan(written.indexOf('model: claude-sonnet-4-6'))
+    expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
   })
 })
