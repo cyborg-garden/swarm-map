@@ -78,7 +78,7 @@ export function ModelAutoUpdateControls({
     <div className="space-y-3 text-sm">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-medium">Model updates</p>
+          <p className="font-medium">Automatic updates</p>
           <p className={`text-xs mt-0.5 ${settings.enabled ? 'text-[var(--success)]' : 'text-muted-foreground'}`}>
             {policyStatusLabel(settings)}
           </p>
@@ -87,7 +87,7 @@ export function ModelAutoUpdateControls({
           checked={settings.enabled}
           onCheckedChange={(v) => update({ enabled: v })}
           disabled={saving}
-          aria-label="Model updates"
+          aria-label="Automatic updates"
         />
       </div>
 

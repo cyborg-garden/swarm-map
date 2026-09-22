@@ -30,16 +30,27 @@ const mockEnvVars = vi.fn(() => new Set<string>(['ANTHROPIC_API_KEY']))
 const mockExistingFp = vi.fn((): Array<{ provider: string; model: string; base_url?: string }> => [])
 const mockModelProvider = vi.fn(() => '')
 
-vi.mock('@/lib/services/harness', async (importOriginal) => ({
-  // The writer shares the reader's header regex; use the real one so the
-  // route test exercises the same header form the reader accepts.
-  FALLBACK_PROVIDERS_HEADER: (await importOriginal<typeof import('@/lib/services/harness')>()).FALLBACK_PROVIDERS_HEADER,
-  guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
-  readModelConfig: vi.fn(() => []),
-  readModelProvider: vi.fn(() => mockModelProvider()),
-  readFallbackProviders: vi.fn(() => mockExistingFp()),
-  readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
-}))
+vi.mock('@/lib/services/harness', async (importOriginal) => {
+  // The writer shares the readers' header regexes and scalar helpers; use
+  // the real ones so the route test exercises the same header forms the
+  // readers accept.
+  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, FLOW_MAP, FLOW_SEQ, yamlScalar, parseFlowPairs, parseFlowMaps } =
+    await importOriginal<typeof import('@/lib/services/harness')>()
+  return {
+    FALLBACK_PROVIDERS_HEADER,
+    MODEL_HEADER,
+    FLOW_MAP,
+    FLOW_SEQ,
+    yamlScalar,
+    parseFlowPairs,
+    parseFlowMaps,
+    guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
+    readModelConfig: vi.fn(() => []),
+    readModelProvider: vi.fn(() => mockModelProvider()),
+    readFallbackProviders: vi.fn(() => mockExistingFp()),
+    readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
+  }
+})
 
 import { PUT } from './route'
 import { services } from '@/lib/services'

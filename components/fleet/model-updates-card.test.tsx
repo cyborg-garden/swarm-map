@@ -64,7 +64,10 @@ describe('ModelUpdatesCard — policy', () => {
   it('disabled state reads "Off — models stay pinned" and hides mode/price', async () => {
     render(<ModelUpdatesCard />)
     expect(await screen.findByText('Off — models stay pinned')).toBeInTheDocument()
-    expect(screen.getByRole('switch', { name: /model updates/i })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.getByRole('switch', { name: 'Automatic updates' })).toHaveAttribute('aria-checked', 'false')
+    // The card heading says "Model updates" once; the toggle row must not repeat it.
+    expect(screen.getAllByText('Model updates')).toHaveLength(1)
+    expect(screen.getByText('Automatic updates')).toBeInTheDocument()
     expect(screen.queryByLabelText('Mode')).toBeNull()
     expect(screen.queryByLabelText(/price ceiling/i)).toBeNull()
     expect(screen.getByText(/never checked/i)).toBeInTheDocument()
@@ -73,7 +76,7 @@ describe('ModelUpdatesCard — policy', () => {
   it('toggling on PUTs {enabled:true} and reveals mode + price ceiling', async () => {
     routes['PUT /api/settings/model-auto-update'] = (init) => ({ status: 200, body: { ...OFF, ...JSON.parse(String(init?.body)) } })
     render(<ModelUpdatesCard />)
-    fireEvent.click(await screen.findByRole('switch', { name: /model updates/i }))
+    fireEvent.click(await screen.findByRole('switch', { name: 'Automatic updates' }))
     expect(await screen.findByText(/On — notify only/i)).toBeInTheDocument()
     const put = calls.find((c) => c.url === '/api/settings/model-auto-update' && c.init?.method === 'PUT')!
     expect(JSON.parse(String(put.init?.body))).toEqual({ enabled: true })
@@ -229,7 +232,7 @@ describe('ModelAutoUpdateControls (shared with the settings page)', () => {
   it('renders the same toggle block standalone', async () => {
     routes['GET /api/settings/model-auto-update'] = { status: 200, body: ON_APPLY }
     render(<Host />)
-    expect(await screen.findByRole('switch', { name: /model updates/i })).toHaveAttribute('aria-checked', 'true')
+    expect(await screen.findByRole('switch', { name: 'Automatic updates' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText(/On — applies tracked updates/i)).toBeInTheDocument()
     expect(screen.getByLabelText('Mode')).toHaveValue('apply')
   })

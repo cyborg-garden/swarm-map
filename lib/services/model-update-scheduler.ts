@@ -225,6 +225,14 @@ export function evaluateApply(input: ApplyGuardInput): string | null {
 type Substitution = { from: string; to: string; provider: string; priceRatio?: number }
 
 /**
+ * The report's `blocked` reason for a writer refusal. A refusal that names
+ * a file-shape problem the operator has to fix by hand (duplicate top-level
+ * sections) is reported by its bare code, like the scheduler's own guards;
+ * everything else is a validation message.
+ */
+const blockedReason = (error: string): string => (/^duplicate-sections\b/.test(error) ? 'duplicate-sections' : `validation:${error}`)
+
+/**
  * Rewrite one harness's cascade with the substitutions applied, through
  * applyCascadeToHarness (the single validated write path); rotate the
  * tracking keys; quick-restart; audit each substitution. When the writer
@@ -337,7 +345,7 @@ export async function checkModelUpdates(
         const done = performSubstitutions(h, subs, 'scheduler', deps)
         for (const c of subCandidates) {
           if (done.ok) c.entry.applied = true
-          else c.entry.blocked = `validation:${done.error}`
+          else c.entry.blocked = blockedReason(done.error)
         }
       }
     }

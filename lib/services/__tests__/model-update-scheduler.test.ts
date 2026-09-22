@@ -710,3 +710,51 @@ describe('resolveIntervalMs — bounded (audit)', () => {
     expect(resolveIntervalMs(s, String(2 ** 31 - 1))).toBe(2 ** 31 - 1)
   })
 })
+
+// --- r3 nits: duplicate sections ---------------------------------------------
+describe('duplicate top-level sections (r3)', () => {
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+  // Two fallback_providers: blocks: the reader only sees the first, so a
+  // rotation would rewrite a file whose effective cascade nobody can name.
+  const cfg = [
+    'model:',
+    '  provider: openrouter',
+    '  default: z-ai/glm-5.2',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.2',
+    'platforms: {}',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: moonshotai/kimi-k3',
+    '',
+  ].join('\n')
+
+  it('scheduler: blocked with reason duplicate-sections, nothing written, no restart, blocked audit row', async () => {
+    makeHarness('dup', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const glm = entryFor(report, 'h_dup', 'z-ai/glm-5.2')!
+    expect(glm.successor).toBe('z-ai/glm-5.3')
+    expect(glm.applied).toBeUndefined()
+    expect(glm.blocked).toBe('duplicate-sections')
+    expect(readConfig('dup')).toBe(cfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+    expect(deps.audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({ what: 'cascade:auto-update:blocked', meta: expect.objectContaining({ reason: expect.stringMatching(/^duplicate-sections/) }) }),
+    )
+  })
+
+  it('manual apply: 409 with the duplicate-sections error, nothing written', async () => {
+    makeHarness('dup2', { config: cfg })
+    const res = await applyModelUpdate({ harnessId: 'h_dup2', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.status).toBe(409)
+      expect(res.error).toMatch(/duplicate-sections/)
+    }
+    expect(readConfig('dup2')).toBe(cfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+})

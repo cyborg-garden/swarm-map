@@ -438,8 +438,19 @@ export function readModelConfig(dataDir: string): string[] {
       const line = lines[i]
       const trimmed = line.trim()
 
-      // Detect top-level sections (no leading spaces)
-      if (/^model:/.test(line)) {
+      // Detect top-level sections (no leading spaces). A flow-form header
+      // (`model: {provider: x, default: y}`) carries its whole body inline.
+      if (MODEL_HEADER.test(line)) {
+        const flow = line.match(FLOW_MAP)
+        if (flow) {
+          for (const [key, raw] of parseFlowPairs(flow[1])) {
+            const val = yamlScalar(raw)
+            if (!val || models.includes(val)) continue
+            if (key === 'default') models.unshift(val)
+            else if (key === 'fallback') models.push(val)
+          }
+          continue
+        }
         inModelSection = true
         inAuxSection = false
         continue
@@ -458,14 +469,14 @@ export function readModelConfig(dataDir: string): string[] {
       if (inModelSection) {
         const defaultMatch = trimmed.match(/^default:\s*(.+)$/)
         if (defaultMatch) {
-          const val = defaultMatch[1].trim().replace(/^["']|["']$/g, '')
+          const val = yamlScalar(defaultMatch[1])
           if (val && !models.includes(val)) {
             models.unshift(val) // primary model goes first
           }
         }
         const fallbackMatch = trimmed.match(/^fallback:\s*(.+)$/)
         if (fallbackMatch) {
-          const val = fallbackMatch[1].trim().replace(/^["']|["']$/g, '')
+          const val = yamlScalar(fallbackMatch[1])
           if (val && !models.includes(val)) {
             models.push(val)
           }
@@ -476,7 +487,7 @@ export function readModelConfig(dataDir: string): string[] {
       if (inAuxSection) {
         const modelMatch = trimmed.match(/^model:\s*(.+)$/)
         if (modelMatch) {
-          const val = modelMatch[1].trim().replace(/^["']|["']$/g, '')
+          const val = yamlScalar(modelMatch[1])
           if (val && !models.includes(val)) {
             models.push(val)
           }
@@ -497,12 +508,45 @@ export type FallbackProvider = {
 }
 
 /**
- * Matches the top-level `fallback_providers:` header, with or without a
- * trailing comment. Shared with the writer in the models PUT route so the
- * two can never disagree about what a header looks like — a header the
- * writer failed to recognise got a second block appended below it (#149).
+ * Matches the top-level `fallback_providers:` / `model:` headers in every
+ * form a hand-edited file uses: bare (`model:`), with a trailing comment
+ * (`fallback_providers:  # note`), or flow (`fallback_providers: []`,
+ * `model: {provider: x, default: y}`). Shared with the cascade writer so the
+ * readers and the writer can never disagree about what a header looks like —
+ * a header the writer failed to recognise got a second block appended below
+ * it (#149, and again for the flow forms in r3).
  */
-export const FALLBACK_PROVIDERS_HEADER = /^fallback_providers:\s*(#.*)?$/
+export const FALLBACK_PROVIDERS_HEADER = /^fallback_providers:(\s|$)/
+export const MODEL_HEADER = /^model:(\s|$)/
+/** The inline body of a flow-form header: `key: {a: 1}` → group 1 = `a: 1`; `key: [..]` → group 1 = `..`. */
+export const FLOW_MAP = /^[\w-]+:\s*\{(.*)\}/
+export const FLOW_SEQ = /^[\w-]+:\s*\[(.*)\]/
+
+/**
+ * A YAML scalar as these line readers understand it: surrounding quotes
+ * stripped, a trailing ` # comment` dropped (a `#` glued to the value —
+ * `qwen3:30b#q4` — is part of it), a value that IS a comment → ''.
+ */
+export function yamlScalar(raw: string): string {
+  const s = raw.trim()
+  if (s.startsWith('"') || s.startsWith("'")) {
+    const close = s.indexOf(s[0], 1)
+    if (close > 0) return s.slice(1, close)
+    return s.replace(/^["']|["']$/g, '')
+  }
+  if (s.startsWith('#')) return ''
+  return s.replace(/\s+#.*$/, '').trim()
+}
+
+/** `key: value` pairs of a flow mapping body (`{…}` without the braces). Values are raw — quote-aware, quotes kept. */
+export function parseFlowPairs(body: string): Array<[string, string]> {
+  return [...body.matchAll(/([\w-]+):\s*("[^"]*"|'[^']*'|[^,}]*)/g)].map((m) => [m[1], m[2].trim()])
+}
+
+/** Each `{…}` mapping of a flow sequence body (`[…]` without the brackets), as flow pairs. */
+export function parseFlowMaps(body: string): Array<Array<[string, string]>> {
+  return [...body.matchAll(/\{([^}]*)\}/g)].map((m) => parseFlowPairs(m[1]))
+}
 
 /**
  * Rows of the first fallback_providers: block — provider / model / base_url
@@ -526,8 +570,26 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
       const trimmed = line.trim()
 
       // Detect the fallback_providers: top-level key (a trailing comment is
-      // still a bare header — `fallback_providers:  # note`).
+      // still a bare header — `fallback_providers:  # note`). A flow-form
+      // header (`fallback_providers: []`, `[{…}, {…}]`) IS the whole block:
+      // its rows are read inline and nothing below it belongs to it.
       if (FALLBACK_PROVIDERS_HEADER.test(line)) {
+        const flow = line.match(FLOW_SEQ)
+        if (flow) {
+          for (const pairs of parseFlowMaps(flow[1])) {
+            const row: Record<string, string> = {}
+            for (const [key, raw] of pairs) {
+              const val = yamlScalar(raw)
+              if (val) row[key] = val
+            }
+            if (row.provider && row.model) {
+              const entry: FallbackProvider = { provider: row.provider, model: row.model }
+              if (row.base_url) entry.base_url = row.base_url
+              providers.push(entry)
+            }
+          }
+          continue
+        }
         inSection = true
         continue
       }
@@ -560,9 +622,8 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
         // Flow-style item: `- {provider: ollama, model: x, base_url: y}`
         const flow = rest.match(/^\{(.*)\}$/)
         if (flow) {
-          for (const pair of flow[1].matchAll(/(\w+):\s*("[^"]*"|'[^']*'|[^,}]+)/g)) {
-            const key = pair[1] as keyof FallbackProvider
-            const val = pair[2].trim().replace(/^["']|["']$/g, '')
+          for (const [key, raw] of parseFlowPairs(flow[1])) {
+            const val = yamlScalar(raw)
             if (val) (current as Record<string, string>)[key] = val
           }
           continue
@@ -571,7 +632,7 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
         const kv = rest.match(/^(\w+):\s*(.+)$/)
         if (kv) {
           const key = kv[1] as keyof FallbackProvider
-          const val = kv[2].trim().replace(/^["']|["']$/g, '')
+          const val = yamlScalar(kv[2])
           if (val) (current as Record<string, string>)[key] = val
         }
         continue
@@ -582,7 +643,7 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
         const kv = trimmed.match(/^(\w+):\s*(.+)$/)
         if (kv) {
           const key = kv[1] as keyof FallbackProvider
-          const val = kv[2].trim().replace(/^["']|["']$/g, '')
+          const val = yamlScalar(kv[2])
           if (val) (current as Record<string, string>)[key] = val
         }
       }
@@ -610,11 +671,19 @@ export function readModelProvider(dataDir: string): string {
     let inModelSection = false
     for (const line of lines) {
       const trimmed = line.trim()
-      if (/^model:/.test(line)) { inModelSection = true; continue }
+      if (MODEL_HEADER.test(line)) {
+        const flow = line.match(FLOW_MAP)
+        if (flow) {
+          const prov = parseFlowPairs(flow[1]).find(([key]) => key === 'provider')
+          return prov ? yamlScalar(prov[1]) : ''
+        }
+        inModelSection = true
+        continue
+      }
       if (/^\w/.test(line) && !trimmed.startsWith('#')) { inModelSection = false }
       if (inModelSection) {
         const provMatch = trimmed.match(/^provider:\s*(.+)$/)
-        if (provMatch) return provMatch[1].trim().replace(/^["']|["']$/g, '')
+        if (provMatch) return yamlScalar(provMatch[1])
       }
     }
     return ''
