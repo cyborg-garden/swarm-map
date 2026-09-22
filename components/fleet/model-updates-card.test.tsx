@@ -159,6 +159,40 @@ describe('ModelUpdatesCard — report', () => {
     expect(toast.success).toHaveBeenCalled()
   })
 
+  // Re-audit: in apply mode the check route rotates tracked successors and
+  // restarts those harnesses. The toast said "every model is current".
+  it('Check now in apply mode reports what was applied and restarted, never "every model is current"', async () => {
+    routes['GET /api/settings/model-auto-update'] = { status: 200, body: ON_APPLY }
+    routes['POST /api/fleet/model-updates/check'] = {
+      status: 200,
+      body: {
+        checkedAt: Date.now(),
+        enabled: true,
+        mode: 'apply',
+        harnesses: [
+          { id: 'h_bh', name: 'blackhouse', entries: [{ provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', kind: 'version', applied: true }] },
+          { id: 'h_iris', name: 'iris', entries: [{ provider: 'openrouter', model: 'moonshotai/kimi-k2.7', tracked: false, retired: false, successor: 'moonshotai/kimi-k3', kind: 'version' }] },
+        ],
+      },
+    }
+    render(<ModelUpdatesCard />)
+    fireEvent.click(await screen.findByRole('button', { name: /check now/i }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const msg = String(vi.mocked(toast.success).mock.calls[0][0])
+    expect(msg).toMatch(/1 update applied/)
+    expect(msg).toMatch(/blackhouse/)
+    expect(msg).toMatch(/restart/)
+    expect(msg).toMatch(/1 more available/)
+    expect(msg).not.toMatch(/every model is current/)
+  })
+
+  it('Check now with nothing applied and nothing pending says every model is current', async () => {
+    routes['POST /api/fleet/model-updates/check'] = { status: 200, body: { checkedAt: Date.now(), enabled: true, mode: 'notify', harnesses: [{ id: 'h', name: 'h', entries: [{ provider: 'anthropic', model: 'x', tracked: false, retired: false }] }] } }
+    render(<ModelUpdatesCard />)
+    fireEvent.click(await screen.findByRole('button', { name: /check now/i }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Checked — every model is current'))
+  })
+
   it('Check now failure toasts the error', async () => {
     routes['POST /api/fleet/model-updates/check'] = { status: 500, body: { error: 'model update check failed' } }
     render(<ModelUpdatesCard />)
