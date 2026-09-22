@@ -12,6 +12,8 @@ import { LettaService } from './letta'
 import { LettaAgentProvider } from './letta-agent-provider'
 import { CascadeLibraryService } from './cascades'
 import { ModelFreshnessService } from './model-freshness'
+import { AnalyticsService } from './analytics'
+import { agentDataDirForName } from './harness'
 import path from 'path'
 import os from 'os'
 
@@ -42,6 +44,16 @@ const lettaAgents = new LettaAgentProvider(lettaService)
 // Wire ToolsService into HarnessService for auto-discovery of tools
 harness.setToolsService(tools)
 
+// Analytics (#206): reads state.db per harness on its own endpoints with a
+// server-side cache — never from discover()/list(), which the dashboard polls.
+// Letta rows have no state.db (same skip as the snapshot scheduler).
+const analytics = new AnalyticsService({
+  listTargets: () => harness
+    .list()
+    .filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
+    .map((h) => ({ harnessId: h.id, name: h.name, dataDir: agentDataDirForName(h.name) })),
+})
+
 export const services = {
   storage,
   docker,
@@ -61,4 +73,5 @@ export const services = {
   letta: lettaService,
   // Provider that maps Letta agents → Harness objects for the fleet UI (slice 1).
   lettaAgents,
+  analytics,
 }
