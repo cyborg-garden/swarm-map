@@ -73,6 +73,13 @@ export const DEFAULT_MODEL_AUTO_UPDATE: ModelAutoUpdateSettings = {
  * callers that accept a partial (PUT /api/settings/model-auto-update) merge it
  * over the current block first, then validate the result.
  */
+/**
+ * Upper bound for the scheduler interval (30 days). Node's timers take a
+ * 32-bit ms delay; anything past ~596h overflows to 1ms and the daily tick
+ * becomes a hot loop, so the scheduler also clamps (resolveIntervalMs).
+ */
+export const MAX_MODEL_UPDATE_INTERVAL_HOURS = 720
+
 export function validateModelAutoUpdate(input: unknown): ModelAutoUpdateSettings {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new Error('modelAutoUpdate must be a JSON object')
@@ -85,6 +92,9 @@ export function validateModelAutoUpdate(input: unknown): ModelAutoUpdateSettings
   if (v.mode !== 'notify' && v.mode !== 'apply') throw new Error('modelAutoUpdate.mode must be "notify" or "apply"')
   if (typeof v.intervalHours !== 'number' || !Number.isFinite(v.intervalHours) || v.intervalHours <= 0) {
     throw new Error('modelAutoUpdate.intervalHours must be a positive number')
+  }
+  if (v.intervalHours > MAX_MODEL_UPDATE_INTERVAL_HOURS) {
+    throw new Error(`modelAutoUpdate.intervalHours must be at most ${MAX_MODEL_UPDATE_INTERVAL_HOURS}`)
   }
   if (typeof v.maxPriceMultiplier !== 'number' || !Number.isFinite(v.maxPriceMultiplier) || v.maxPriceMultiplier <= 0) {
     throw new Error('modelAutoUpdate.maxPriceMultiplier must be a positive number')

@@ -21,11 +21,12 @@
  * Never applied: ollama (no upstream notion of "newer"), bedrock, custom;
  * snapshot-only bumps (notify only); unstable successors; anything over the
  * price ceiling, or with no pricing to check it against; a harness with a
- * restart already in flight.
+ * restart already in flight; a config whose model.default is not
+ * fallback_providers[0] (the rewrite would switch the primary).
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
-import { readFallbackProviders, guessDataDir, type FallbackProvider } from './harness'
+import { readFallbackProviders, readModelConfig, guessDataDir, type FallbackProvider } from './harness'
 import { applyCascadeToHarness } from './cascade-writer'
 import { isRestarting as trackerIsRestarting } from './restart-tracker'
 import { isLiveProvider, type LiveModelList, type LiveProvider } from './model-freshness'
@@ -67,7 +68,13 @@ export type ModelUpdateReport = {
   checkedAt: number
   enabled: boolean
   mode: ModelAutoUpdateSettings['mode']
-  harnesses: Array<{ id: string; name: string; entries: ModelUpdateEntry[] }>
+  harnesses: Array<{
+    id: string
+    name: string
+    entries: ModelUpdateEntry[]
+    /** modelTracking keys that match no current fallback_providers row (a stale save wrote over a rotated entry). */
+    orphanedTracking?: string[]
+  }>
 }
 
 export type SchedulerDeps = {
@@ -202,6 +209,23 @@ function performSubstitutions(
 ): { ok: true } | { ok: false; status: number; error: string } {
   const dataDir = deps.dataDirFor(h)
   const current = readFallbackProviders(dataDir)
+  // The writer derives model.default from row 0. When the file's primary is
+  // some OTHER model (model: and fallback_providers: drifted apart), any
+  // rewrite — even of a fallback row — would silently switch the agent's
+  // primary. Refuse instead; a human has to reconcile the two sections.
+  const filePrimary = readModelConfig(dataDir)[0]
+  if (filePrimary && current[0] && filePrimary !== current[0].model) {
+    const reason = `primary-mismatch: model.default is "${filePrimary}" but fallback_providers[0] is "${current[0].model}"`
+    for (const s of subs) {
+      deps.audit.append({
+        who,
+        what: 'cascade:auto-update:blocked',
+        target: h.name,
+        meta: { harness: h.id, from: s.from, to: s.to, provider: s.provider, reason },
+      })
+    }
+    return { ok: false, status: 409, error: reason }
+  }
   const byFrom = new Map(subs.map((s) => [s.from, s]))
   const next = current.map((fp) => {
     const s = byFrom.get(fp.model)
@@ -296,7 +320,15 @@ export async function checkModelUpdates(
         }
       }
     }
-    report.harnesses.push({ id: h.id, name: h.name, entries: candidates.map((c) => c.entry) })
+    const orphanedTracking = Object.keys(h.modelTracking ?? {}).filter(
+      (key) => h.modelTracking?.[key] === true && !fps.some((fp) => trackingKey(fp.provider, fp.model) === key),
+    )
+    report.harnesses.push({
+      id: h.id,
+      name: h.name,
+      entries: candidates.map((c) => c.entry),
+      ...(orphanedTracking.length ? { orphanedTracking } : {}),
+    })
   }
 
   deps.storage.write(MODEL_UPDATES_FILE, report)
@@ -338,7 +370,7 @@ export async function applyModelUpdate(
   const reason = evaluateApply({ harness: h, entry: c.entry, unstable: c.unstable, settings, automatic: false, isRestarting: deps.isRestarting })
   if (reason) return { ok: false, status: reason === 'restart-in-flight' ? 409 : 400, error: `Blocked: ${reason}` }
   const done = performSubstitutions(h, [{ from: fp.model, to: input.to, provider: fp.provider, priceRatio: c.entry.priceRatio }], 'api', deps)
-  if (!done.ok) return { ok: false, status: done.status, error: done.error }
+  if (!done.ok) return { ok: false, status: done.status, error: done.status === 409 ? `Blocked: ${done.error}` : done.error }
   return { ok: true, harnessId: h.id, from: fp.model, to: input.to, priceRatio: c.entry.priceRatio }
 }
 
@@ -362,11 +394,18 @@ declare global {
   var __hsmModelUpdateSchedulerStarted: boolean | undefined
 }
 
+/**
+ * Largest delay Node's setInterval honours (2^31 - 1 ms ≈ 24.8 days). A
+ * larger value overflows to 1ms — a monthly interval became a hot loop that
+ * re-read every config.yaml and could restart harnesses continuously.
+ */
+export const MAX_INTERVAL_MS = 2 ** 31 - 1
+
 export function resolveIntervalMs(settings: ModelAutoUpdateSettings, env: string | undefined = process.env.MODEL_UPDATE_INTERVAL_MS): number {
   const envInterval = parseInt(env ?? '', 10)
-  if (Number.isFinite(envInterval) && envInterval > 0) return envInterval
+  if (Number.isFinite(envInterval) && envInterval > 0) return Math.min(envInterval, MAX_INTERVAL_MS)
   const hours = Number.isFinite(settings.intervalHours) && settings.intervalHours > 0 ? settings.intervalHours : 24
-  return Math.round(hours * 60 * 60 * 1000)
+  return Math.min(Math.round(hours * 60 * 60 * 1000), MAX_INTERVAL_MS)
 }
 
 export async function startModelUpdateScheduler(): Promise<void> {
