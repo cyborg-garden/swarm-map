@@ -177,6 +177,11 @@ Any AI agent (Claude Code, Hermes, etc.) can orchestrate your fleet via the REST
 | `GET` | `/api/harnesses/:id/models` | Model cascade config |
 | `PUT` | `/api/harnesses/:id/models` | Update cascade (`{ cascade: [...] }`) |
 | `POST` | `/api/harnesses/:id/duplicate` | Clone harness config (`{ name }`) |
+| `POST` | `/api/harnesses/:id/cascade/save-as` | Snapshot the harness's current `fallback_providers` into the cascade library (`{ name, overwrite? }`) |
+| `GET` | `/api/cascades` | Named cascade library (saved, portable `fallback_providers` shapes) |
+| `POST` | `/api/cascades` | Save a cascade (`{ name, entries, sourceHarness?, overwrite? }`; existing name → 409 unless `overwrite`) |
+| `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read / rename+edit (`{ name?, entries? }`) / delete a cascade |
+| `POST` | `/api/cascades/:name/apply` | Port a cascade onto a harness (`{ harnessId, restart? }`); refuses (400, no write, no restart) if the harness lacks a provider's key |
 | `POST` | `/api/harnesses/:id/artifacts/sync` | Install missing manifest artifacts onto an existing agent, no-clobber (`{ dryRun?, force? }`) |
 | `POST` | `/api/setup/deploy` | Deploy new agent (full wizard payload) |
 | `POST` | `/api/setup/detect` | Scan for Hermes compose directories |
