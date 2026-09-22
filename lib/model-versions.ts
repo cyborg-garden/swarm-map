@@ -235,7 +235,10 @@ function sameRouting(a: Set<string>, b: Set<string>): boolean {
  * Find the newest version of `current` in `live`. A version bump (kind
  * 'version') wins over a newer snapshot of the same version (kind 'snapshot');
  * no match → kind null. A bump released BEFORE the current row is never a
- * successor (see grok-4.20); among the rest the highest version wins.
+ * successor (see grok-4.20); among the rest the NEWEST RELEASE wins, version
+ * number as the tie-break — never the other way round. Version-first let the
+ * grok-4.20 trap back in for any row older than both 4.20 and 4.7 (grok-4.1
+ * rotated to 4.20 and was then stuck: 4.7 is a lower tuple).
  */
 export function findSuccessor(
   current: { provider: string; model: string },
@@ -267,8 +270,13 @@ export function findSuccessor(
     return null
   }
   const cmpDate = (a: string | null, b: string | null): number => (a ?? '') < (b ?? '') ? -1 : (a ?? '') > (b ?? '') ? 1 : 0
-  const curRow = rows.find((x) => x.r.id === current.model)
-  const curDate = curRow ? dateKeyOf(curRow) : null
+  // The current row, looked up the way the normalizer reads ids (trimmed,
+  // case-insensitive). When the provider no longer lists it (retired by
+  // absence) the date can still come from the id itself; the guard below
+  // must not switch itself off just because the row is gone.
+  const curId = current.model.trim().toLowerCase()
+  const curRow = rows.find((x) => x.r.id.trim().toLowerCase() === curId)
+  const curDate = curRow ? dateKeyOf(curRow) : dateKeyOf({ r: { id: current.model }, n: cur })
   // A version number is not a timeline: live OpenRouter has x-ai/grok-4.20
   // (2026-03) beside x-ai/grok-4.7 (2026-09). A higher version with an OLDER
   // release date than the current row is a near miss, never a successor —
@@ -282,8 +290,8 @@ export function findSuccessor(
     .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && !olderThanCurrent(x))
     .sort(
       (a, b) =>
-        compareVersions(b.n.version ?? [], a.n.version ?? []) ||
         cmpDate(dateKeyOf(b), dateKeyOf(a)) ||
+        compareVersions(b.n.version ?? [], a.n.version ?? []) ||
         (b.r.created ?? 0) - (a.r.created ?? 0),
     )
   const snapBumps = same
@@ -292,8 +300,19 @@ export function findSuccessor(
   const olderVersionBumps = same
     .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && olderThanCurrent(x))
     .map((x) => x.r.id)
+  // A LOWER version released AFTER the current row (grok-4.20 → grok-4.7) is
+  // never applied, but the operator has to be able to see it: once rotated
+  // onto 4.20 the harness would otherwise sit there with no signal at all.
+  const newerLowerVersions = same
+    .filter((x) => {
+      if (compareVersions(x.n.version ?? [], cur.version ?? []) >= 0 || !curDate) return false
+      const d = dateKeyOf(x)
+      return d !== null && d > curDate
+    })
+    .map((x) => x.r.id)
   const nearMisses = [
     ...olderVersionBumps,
+    ...newerLowerVersions,
     ...rows
       .filter(
         ({ n }) =>

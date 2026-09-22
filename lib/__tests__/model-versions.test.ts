@@ -320,3 +320,59 @@ describe('findSuccessor — release-date ordering (audit)', () => {
     expect(fwd.successor?.model).toBe('deepseek/deepseek-r1-0528')
   })
 })
+
+// --- Re-audit: newest release wins, and the date guard cannot go inert ------
+//
+// Sorting version bumps by version number first let the grok-4.20 trap back
+// in for any row older than BOTH 4.20 and 4.7: grok-4.1 resolved to 4.20 and
+// was then stuck there (4.7 is a lower tuple). And when the current id was
+// not in the live list at all — retired by absence, or a case mismatch — the
+// "older than current" guard had no date to compare against and switched
+// itself off.
+describe('findSuccessor — newest release wins (re-audit)', () => {
+  const GROK: LiveModel[] = [
+    { id: 'x-ai/grok-4.7', canonical: 'x-ai/grok-4.7-20260916', created: 1789948800, pricing: p(0.000003, 0.000015) },
+    { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200, pricing: p(0.00000234, 0.0000117) },
+    { id: 'x-ai/grok-4.1', canonical: 'x-ai/grok-4.1-20251117', created: 1763337600, pricing: p(0.000003, 0.000015) },
+    { id: 'x-ai/grok-4', canonical: 'x-ai/grok-4-20250709', created: 1752019200, pricing: p(0.000003, 0.000015) },
+  ]
+
+  it('grok-4.1 → grok-4.7 (newest release), never the numerically higher but older grok-4.20', () => {
+    const r = or('x-ai/grok-4.1', GROK)
+    expect(r.kind).toBe('version')
+    expect(r.successor?.model).toBe('x-ai/grok-4.7')
+  })
+
+  it('grok-4 → grok-4.7', () => {
+    expect(or('x-ai/grok-4', GROK).successor?.model).toBe('x-ai/grok-4.7')
+  })
+
+  it('a newer-dated LOWER tuple is at least a near miss (grok-4.20 shows grok-4.7)', () => {
+    const r = or('x-ai/grok-4.20', GROK)
+    expect(r.successor).toBeUndefined()
+    expect(r.nearMisses).toContain('x-ai/grok-4.7')
+  })
+
+  it('current id absent from the live list: the newest release still wins (grok-4.7 gone → grok-4.9, not 4.20)', () => {
+    const live: LiveModel[] = [
+      { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200 },
+      { id: 'x-ai/grok-4.9', canonical: 'x-ai/grok-4.9-20260920', created: 1790294400 },
+    ]
+    const r = or('x-ai/grok-4.7', live)
+    expect(r.kind).toBe('version')
+    expect(r.successor?.model).toBe('x-ai/grok-4.9')
+  })
+
+  it('an absent current id with a date in the id keeps the guard: gpt-5-2026-01-01 ↛ older gpt-5.1-2025-06-01', () => {
+    const live: LiveModel[] = [{ id: 'openai/gpt-5.1-2025-06-01', canonical: 'openai/gpt-5.1-2025-06-01', created: 1748736000 }]
+    const r = or('openai/gpt-5-2026-01-01', live)
+    expect(r.successor).toBeUndefined()
+    expect(r.nearMisses).toContain('openai/gpt-5.1-2025-06-01')
+  })
+
+  it('finds its own row case-insensitively so the date guard stays active ("X-AI/grok-4.7 " ↛ grok-4.20)', () => {
+    const r = or('X-AI/grok-4.7 ', GROK)
+    expect(r.successor).toBeUndefined()
+    expect(r.nearMisses).toContain('x-ai/grok-4.20')
+  })
+})
