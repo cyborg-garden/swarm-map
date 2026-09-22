@@ -281,3 +281,42 @@ describe('priceRatio', () => {
     expect(priceRatio(p(0, 0), p(0, 0))).toBe(1)
   })
 })
+
+// --- Audit: release-date ordering ------------------------------------------
+//
+// Version numbers alone are not a timeline. Live OpenRouter (2026-09-22) has
+// x-ai/grok-4.20 (released 2026-03-09) beside x-ai/grok-4.7 (2026-09-16):
+// [4,20] > [4,7] numerically, but 4.20 is the OLDER model. And snapshot keys
+// used to mix YYYYMMDD, raw MMDD tokens and epoch strings, so a bare id could
+// be reported as the "newer snapshot" of a dated retrain.
+describe('findSuccessor — release-date ordering (audit)', () => {
+  const GROK: LiveModel[] = [
+    { id: 'x-ai/grok-4.7', canonical: 'x-ai/grok-4.7-20260916', created: 1789948800, pricing: p(0.000003, 0.000015) },
+    { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200, pricing: p(0.00000234, 0.0000117) },
+    { id: 'x-ai/grok-4.5', canonical: 'x-ai/grok-4.5-20260601', created: 1780000000, pricing: p(0.000003, 0.000015) },
+  ]
+
+  it('a higher version number with an OLDER release date is never a successor (grok-4.7 ↛ grok-4.20)', () => {
+    const r = or('x-ai/grok-4.7', GROK)
+    expect(r.successor).toBeUndefined()
+    expect(r.kind).toBeNull()
+  })
+
+  it('drops the older-dated bump and picks the highest of the rest (grok-4.5 → grok-4.7, never 4.20)', () => {
+    const r = or('x-ai/grok-4.5', GROK)
+    expect(r.kind).toBe('version')
+    expect(r.successor?.model).toBe('x-ai/grok-4.7')
+  })
+
+  it('a bare id created before a dated retrain is not its newer snapshot (deepseek-r1-0528 ↛ deepseek-r1)', () => {
+    const R1: LiveModel[] = [
+      { id: 'deepseek/deepseek-r1-0528', canonical: 'deepseek/deepseek-r1-0528', created: 1748390400 },
+      { id: 'deepseek/deepseek-r1', canonical: 'deepseek/deepseek-r1', created: 1737331200 },
+    ]
+    expect(or('deepseek/deepseek-r1-0528', R1).successor).toBeUndefined()
+    // The real direction still resolves, through `created` when the id token is a bare MMDD.
+    const fwd = or('deepseek/deepseek-r1', R1)
+    expect(fwd.kind).toBe('snapshot')
+    expect(fwd.successor?.model).toBe('deepseek/deepseek-r1-0528')
+  })
+})
