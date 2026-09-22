@@ -23,6 +23,7 @@ import { SlackSetupDialog } from '@/components/surfaces/slack-setup-dialog'
 import { EditSurfaceDialog } from '@/components/surfaces/edit-surface-dialog'
 import { SignalPinManager } from '@/components/surfaces/signal-pin-manager'
 import { SettingsTab } from '@/components/harness/settings-tab'
+import { AnalyticsTab } from '@/components/harness/analytics-tab'
 import { toast } from 'sonner'
 import { Globe, Bot, Pencil, ChevronDown, ChevronRight, Shield, Loader2, Save, RotateCw, Users, X } from 'lucide-react'
 import { SURFACE_SLUGS } from '@/lib/surfaces/registry'
@@ -722,6 +723,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="usage">Usage</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="models">Models</TabsTrigger>
           <TabsTrigger value="tools">Tools ({allToolsEnabled ? allTools.length : harnessTools.length}/{allTools.length})</TabsTrigger>
           <TabsTrigger value="surfaces">Surfaces ({connectedSurfaces.length})</TabsTrigger>
@@ -748,7 +750,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               <Row label="Cost this week" value={fmtUsd(usageData?.costWeek, usageData?.costStatus)} />
               <Row label="Cost this month" value={fmtUsd(usageData?.costMonth, usageData?.costStatus)} />
               <Row label="CPU" value={`${harness.cpu}%`} />
-              <Row label="Memory" value={`${harness.mem}%`} />
+              <Row label="Memory" value={`${harness.mem} MiB`} />
             </div>
             {harness.health.errors > 0 && (
               <div className="col-span-2 rounded-xl border border-[var(--danger)] bg-[var(--danger)]/5 p-4">
@@ -876,6 +878,10 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               </p>
             )}
           </div>
+        </TabsContent>
+
+        <TabsContent value="analytics" className="mt-4">
+          <AnalyticsTab harnessId={harness.id} />
         </TabsContent>
 
         <TabsContent value="models" className="mt-4">
