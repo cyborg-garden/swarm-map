@@ -705,6 +705,96 @@ export function readModelProvider(dataDir: string): string {
   }
 }
 
+/** The primary as the runtime resolves it: model.provider / model.default (/ model.base_url). */
+export type CascadePrimary = { provider: string; model: string; base_url?: string }
+
+/**
+ * The cascade the way hermes-agent consumes it (verified against the
+ * runtime, 2026-09-23): the PRIMARY is the model: section, the FALLBACKS are
+ * the fallback_providers rows in order, and a row identical to the current
+ * (provider, model) is skipped when the chain is walked. Whether a file
+ * repeats its primary as row 0 (the HSM editor used to write that; `hermes
+ * fallback` and hand edits do not) is therefore a per-file CONVENTION, not a
+ * drift: readers report it, the writer preserves it, nothing warns about it.
+ */
+export type HarnessCascade = {
+  primary: CascadePrimary | null
+  /** Every fallback_providers row, verbatim — the duplicate included. */
+  fallbacks: FallbackProvider[]
+  /** fallbacks[0] is the primary again (provider case-insensitive, model exact). */
+  primaryDuplicatedAsRow0: boolean
+}
+
+/** Same (provider, model) row: provider case-insensitive, model exact. */
+export function sameCascadeRow(a: { provider: string; model: string }, b: { provider: string; model: string }): boolean {
+  return a.provider.trim().toLowerCase() === b.provider.trim().toLowerCase() && a.model.trim() === b.model.trim()
+}
+
+/**
+ * The model: block's managed keys, `default:` ONLY for the model (a
+ * `fallback:` or auxiliary model is never promoted to primary). Values are
+ * comment-stripped and unquoted like every other reader here.
+ */
+function readModelBlock(dataDir: string): { provider: string; default: string; base_url: string } {
+  const out = { provider: '', default: '', base_url: '' }
+  try {
+    const content = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf-8')
+    const lines = content.split('\n')
+    let inModelSection = false
+    for (const line of lines) {
+      if (MODEL_HEADER.test(line)) {
+        const flow = line.match(FLOW_MAP)
+        if (flow) {
+          for (const [key, raw] of parseFlowPairs(flow[1])) {
+            if (key === 'provider' && !out.provider) out.provider = yamlScalar(raw)
+            else if (key === 'default' && !out.default) out.default = yamlScalar(raw)
+            else if (key === 'base_url' && !out.base_url) out.base_url = yamlScalar(raw)
+          }
+          return out
+        }
+        inModelSection = true
+        continue
+      }
+      if (isTopLevelLine(line)) {
+        if (inModelSection) break
+        continue
+      }
+      if (!inModelSection) continue
+      const trimmed = line.trim()
+      const kv = trimmed.match(/^(provider|default|base_url):\s*(.+)$/)
+      if (!kv) continue
+      const key = kv[1] as 'provider' | 'default' | 'base_url'
+      if (!out[key]) out[key] = yamlScalar(kv[2])
+    }
+  } catch {
+    // unreadable → empty block
+  }
+  return out
+}
+
+export function readCascade(dataDir: string): HarnessCascade {
+  const block = readModelBlock(dataDir)
+  const fallbacks = readFallbackProviders(dataDir)
+  let primary: CascadePrimary | null = null
+  if (block.default) {
+    primary = { provider: block.provider, model: block.default }
+    if (block.base_url) primary.base_url = block.base_url
+  }
+  const primaryDuplicatedAsRow0 = !!primary && fallbacks.length > 0 && sameCascadeRow(fallbacks[0], primary)
+  return { primary, fallbacks, primaryDuplicatedAsRow0 }
+}
+
+/**
+ * The chain as the runtime walks it and the editor shows it: the primary,
+ * then every fallback row — minus the duplicate row 0 when the file has one.
+ * With no primary (no `default:`), the rows alone.
+ */
+export function cascadeChain(c: HarnessCascade): CascadePrimary[] {
+  const rows = c.primaryDuplicatedAsRow0 ? c.fallbacks.slice(1) : c.fallbacks
+  const fallbacks = rows.map((r) => ({ provider: r.provider, model: r.model, ...(r.base_url ? { base_url: r.base_url } : {}) }))
+  return c.primary ? [c.primary, ...fallbacks] : fallbacks
+}
+
 /**
  * Read the set of env-var NAMES configured (with a real value) in an agent's
  * .env file. Used to decide which model providers the agent can actually serve.

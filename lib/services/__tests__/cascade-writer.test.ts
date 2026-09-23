@@ -1,6 +1,7 @@
 /**
  * Tests for applyCascadeToHarness — the single server-side path that writes a
- * fallback_providers cascade into an agent's config.yaml.
+ * model cascade (primary = model:, fallbacks = fallback_providers) into an
+ * agent's config.yaml.
  *
  * Extracted from PUT /api/harnesses/:id/models so the cascade library's
  * "apply" route and the manual editor share ONE guarded writer. The most
@@ -44,7 +45,8 @@ vi.mock('@/lib/services/harness', async () => {
 })
 
 import { applyCascadeToHarness } from '../cascade-writer'
-import { readFallbackProviders, readModelConfig } from '@/lib/services/harness'
+import { readFallbackProviders, readModelConfig, readCascade, cascadeChain } from '@/lib/services/harness'
+import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
 import { services } from '@/lib/services'
 
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -118,12 +120,17 @@ describe('applyCascadeToHarness', () => {
       expect(res.written.provider).toBe('anthropic')
       expect(res.written.primary).toBe('claude-sonnet-4-6')
       expect(res.written.models).toEqual(['claude-sonnet-4-6', 'claude-haiku-4-5'])
-      expect(res.written.fallbackProviders).toEqual(entries)
+      expect(res.written.chain).toEqual(entries)
+      // The primary lives in model:, the fallbacks in fallback_providers — a
+      // fresh file repeats nothing.
+      expect(res.written.fallbackProviders).toEqual([entries[1]])
     }
     const written = fs.readFileSync(configPath(), 'utf-8')
-    expect(written).toContain('model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  fallback:\n    - claude-haiku-4-5\n')
+    expect(written).toContain('model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n')
+    expect(written).not.toContain('fallback:')
     expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-4-6')
-    expect(readFallbackProviders(tmpDir)).toEqual(entries)
+    expect(readFallbackProviders(tmpDir)).toEqual([entries[1]])
+    expect(cascadeChain(readCascade(tmpDir))).toEqual(entries)
     expect(services.harness.updateConfig).toHaveBeenCalledWith('h_test', {
       models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
     })
@@ -158,9 +165,11 @@ describe('applyCascadeToHarness', () => {
     expect((written.match(/^model:/gm) ?? []).length).toBe(1)
     expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
     expect(written).not.toContain('api_key')
+    // The file repeated its primary as row 0, so the new primary is repeated too.
     expect(readFallbackProviders(tmpDir)).toEqual(entries)
     expect(readModelConfig(tmpDir)[0]).toBe('claude-opus-4-8')
-    expect(written).toContain('  fallback:\n    - qwen3:30b')
+    // model.fallback is not read by the runtime; a file without the key does not gain one.
+    expect(written).not.toContain('fallback:\n')
   })
 
   it('never writes api_key into config.yaml even if an entry carries one', () => {
@@ -338,8 +347,8 @@ describe('applyCascadeToHarness', () => {
     )
     expect(res.ok).toBe(true)
     expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  fallback:\n    - claude-haiku-4-5-20251001\n' +
-        '\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: anthropic\n    model: claude-haiku-4-5-20251001\n'
+      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n' +
+        '\nfallback_providers:\n  - provider: anthropic\n    model: claude-haiku-4-5-20251001\n'
     )
   })
 
@@ -413,8 +422,13 @@ describe('applyCascadeToHarness — round-trip and preconditions (audit)', () =>
     expect(modelBlock).toMatch(/^  default: qwen3:30b$/m)
     expect(modelBlock).toMatch(/^  base_url: "?http:\/\/host\.docker\.internal:11434\/v1"?$/m)
     expect(modelBlock).toMatch(/^  api_mode: chat_completions$/m)
-    expect(modelBlock).toMatch(/^  fallback:\n    - z-ai\/glm-5\.3$/m)
+    expect(modelBlock).not.toContain('fallback:')
     expect((written.match(/^model:/gm) ?? []).length).toBe(1)
+    // The duplicate row 0 (the file's convention) followed the primary; the rotated row is row 1.
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'custom', model: 'qwen3:30b', base_url: OLLAMA_URL },
+      { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+    ])
   })
 
   it('model.base_url follows the new primary row: written from entry 0, dropped when a cloud primary replaces a local one', () => {
@@ -570,11 +584,12 @@ describe('applyCascadeToHarness — round-trip and preconditions (audit)', () =>
 
   // --- Re-audit -------------------------------------------------------------
 
-  describe('primary-mismatch guard (re-audit)', () => {
-    // matilde-shaped: model.default is kimi-k3 while fallback_providers[0] is
-    // glm-5.3. The writer derives model.default from row 0, so an editor save
-    // that only touched row 2 silently switched the agent's primary.
-    const drifted = [
+  describe('a primary that is not fallback_providers[0] is the ordinary shape, never a mismatch', () => {
+    // matilde-shaped: model.default is kimi-k3 and fallback_providers[0] is
+    // glm-5.3. The runtime tries kimi-k3 first and glm-5.3 second — that is
+    // exactly what the chain [kimi-k3, glm-5.3, …] says. PR #243 refused this
+    // file with 409 primary-mismatch because it assumed row 0 == primary.
+    const matilde = [
       'model:',
       '  provider: openrouter',
       '  default: moonshotai/kimi-k3',
@@ -586,54 +601,41 @@ describe('applyCascadeToHarness — round-trip and preconditions (audit)', () =>
       '',
     ].join('\n')
 
-    it('refuses (409) a save whose row 0 is not the file\'s primary, and writes nothing', () => {
-      fs.writeFileSync(configPath(), drifted)
+    it('a save that edits a fallback row keeps model.default and adds no duplicate row', () => {
+      fs.writeFileSync(configPath(), matilde)
       mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const chain = cascadeChain(readCascade(tmpDir))
+      expect(chain.map((e) => e.model)).toEqual(['moonshotai/kimi-k3', 'z-ai/glm-5.3', 'claude-sonnet-5'])
       const res = applyCascadeToHarness(
         'h_test',
-        [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
-        { who: 'api', expected: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5' }] }
+        [chain[0], chain[1], { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
+        { who: 'api', expected: chain }
       )
-      expect(res.ok).toBe(false)
-      if (!res.ok) {
-        expect(res.status).toBe(409)
-        expect(res.error).toMatch(/primary-mismatch/)
-        expect(res.error).toContain('moonshotai/kimi-k3')
-      }
-      expect(fs.readFileSync(configPath(), 'utf-8')).toBe(drifted)
-      expect(services.harness.updateConfig).not.toHaveBeenCalled()
+      expect(res.ok).toBe(true)
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe(matilde.replace('claude-sonnet-5\n', 'claude-sonnet-5.1\n'))
     })
 
-    it('allows the save that puts the file\'s primary back at the top (reconciliation)', () => {
-      fs.writeFileSync(configPath(), drifted)
+    it('a one-entry chain (library apply) makes that entry the primary and empties the rows in place', () => {
+      fs.writeFileSync(configPath(), matilde)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-5' }], { who: 'api' })
+      expect(res.ok).toBe(true)
+      expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-5')
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: anthropic\n  default: claude-sonnet-5\nfallback_providers: []\n')
+    })
+
+    it('promoting a fallback to primary rewrites model: and drops it from the rows', () => {
+      fs.writeFileSync(configPath(), matilde)
       mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
       const res = applyCascadeToHarness(
         'h_test',
-        [{ provider: 'openrouter', model: 'moonshotai/kimi-k3' }, { provider: 'openrouter', model: 'z-ai/glm-5.3' }],
+        [{ provider: 'anthropic', model: 'claude-sonnet-5' }, { provider: 'openrouter', model: 'moonshotai/kimi-k3' }, { provider: 'openrouter', model: 'z-ai/glm-5.3' }],
         { who: 'api' }
       )
       expect(res.ok).toBe(true)
-      expect(readModelConfig(tmpDir)[0]).toBe('moonshotai/kimi-k3')
-    })
-
-    it('allowPrimaryChange (cascade library apply, legacy {model} body) may move the primary', () => {
-      fs.writeFileSync(configPath(), drifted)
-      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
-      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-5' }], { who: 'api', allowPrimaryChange: true })
-      expect(res.ok).toBe(true)
-      expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-5')
-    })
-
-    it('no drift (model.default == row 0) → a reorder is an ordinary edit', () => {
-      fs.writeFileSync(configPath(), drifted.replace('default: moonshotai/kimi-k3', 'default: z-ai/glm-5.3'))
-      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
-      const res = applyCascadeToHarness(
-        'h_test',
-        [{ provider: 'anthropic', model: 'claude-sonnet-5' }, { provider: 'openrouter', model: 'z-ai/glm-5.3' }],
-        { who: 'api' }
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+        'model:\n  provider: anthropic\n  default: claude-sonnet-5\nfallback_providers:\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n  - provider: openrouter\n    model: z-ai/glm-5.3\n'
       )
-      expect(res.ok).toBe(true)
-      expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-5')
     })
   })
 
@@ -762,11 +764,11 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
       const written = fs.readFileSync(configPath(), 'utf-8')
       // The template's hint comment sits under `default:` and stays there;
       // the fallback list the writer adds follows it.
-      const expected =
-        template
-          .replace('  # fallback: <model>  # uncomment to set a fallback model\n', '  # fallback: <model>  # uncomment to set a fallback model\n  fallback:\n    - z-ai/glm-5.3\n')
-          .replace(/\n*$/, '\n') +
-        '\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: openrouter\n    model: z-ai/glm-5.3\n'
+      // The template's commented `# fallback:` hint stays a comment (the
+      // runtime never reads model.fallback, so the writer does not add the
+      // key); the fallback lands in an appended fallback_providers block
+      // that does NOT repeat the primary.
+      const expected = template.replace(/\n*$/, '\n') + '\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n'
       expect(written).toBe(expected)
     })
 
@@ -794,9 +796,10 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
       fs.writeFileSync(configPath(), cfg)
       const entries = [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }]
       for (let i = 0; i < 2; i++) {
-        const res = applyCascadeToHarness('h_test', entries, { who: 'scheduler', allowPrimaryChange: true })
+        const res = applyCascadeToHarness('h_test', entries, { who: 'scheduler' })
         expect(res.ok).toBe(true)
       }
+      // The file repeated its primary as row 0; the rotated primary is repeated the same way.
       expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg.replaceAll('z-ai/glm-5.2', 'z-ai/glm-5.3'))
     })
 
@@ -840,23 +843,23 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
 
     it('an appended block is separated by ONE blank line, never two, and the file still ends with one newline', () => {
       fs.writeFileSync(configPath(), 'platforms: {}\n\n')
-      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { provider: 'anthropic', model: 'claude-haiku-4-5' }], { who: 'api' })
       expect(res.ok).toBe(true)
       expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-        'platforms: {}\n\nmodel:\n  provider: anthropic\n  default: claude-sonnet-4-6\n\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
+        'platforms: {}\n\nmodel:\n  provider: anthropic\n  default: claude-sonnet-4-6\n\nfallback_providers:\n  - provider: anthropic\n    model: claude-haiku-4-5\n'
       )
     })
 
     it('CRLF input stays CRLF throughout, including the appended block and the trailing newline', () => {
       fs.writeFileSync(configPath(), 'model:\r\n  provider: anthropic\r\n  default: old\r\n  api_mode: chat\r\n\r\nplatforms: {}\r\n')
-      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api', allowPrimaryChange: true })
+      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { provider: 'anthropic', model: 'claude-haiku-4-5' }], { who: 'api' })
       expect(res.ok).toBe(true)
       const written = fs.readFileSync(configPath(), 'utf-8')
       expect(written).toBe(
-        'model:\r\n  provider: anthropic\r\n  default: claude-sonnet-4-6\r\n  api_mode: chat\r\n\r\nplatforms: {}\r\n\r\nfallback_providers:\r\n  - provider: anthropic\r\n    model: claude-sonnet-4-6\r\n'
+        'model:\r\n  provider: anthropic\r\n  default: claude-sonnet-4-6\r\n  api_mode: chat\r\n\r\nplatforms: {}\r\n\r\nfallback_providers:\r\n  - provider: anthropic\r\n    model: claude-haiku-4-5\r\n'
       )
       expect(written).not.toMatch(/[^\r]\n/)
-      expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+      expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'anthropic', model: 'claude-haiku-4-5' }])
       expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-4-6')
     })
   })
@@ -864,26 +867,29 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
   describe('flow-form headers', () => {
     it('`fallback_providers: []` is replaced in place, not appended as a second block', () => {
       fs.writeFileSync(configPath(), 'model: {provider: anthropic, default: old, api_mode: chat}\nfallback_providers: []\nplatforms: {}\n')
-      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api', allowPrimaryChange: true })
+      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { provider: 'anthropic', model: 'claude-haiku-4-5' }], { who: 'api' })
       expect(res.ok).toBe(true)
       expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-        'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  api_mode: chat\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\nplatforms: {}\n'
+        'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  api_mode: chat\nfallback_providers:\n  - provider: anthropic\n    model: claude-haiku-4-5\nplatforms: {}\n'
       )
+      // …and a chain with no fallbacks writes an empty flow block in place, never deletes the section.
+      const none = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+      expect(none.ok).toBe(true)
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  api_mode: chat\nfallback_providers: []\nplatforms: {}\n')
     })
 
-    it('a flow `fallback_providers: [{…}]` row keeps its extras and the primary guard reads the flow model block', () => {
+    it('a flow `fallback_providers: [{…}]` row keeps its extras across a rotation, and the flow model block is expanded around an unchanged primary', () => {
       fs.writeFileSync(
         configPath(),
         'model: {provider: openrouter, default: moonshotai/kimi-k3}\nfallback_providers: [{provider: openrouter, model: z-ai/glm-5.2, key_env: OR_ALT}]\n'
       )
-      // model.default (kimi-k3) is not row 0 (glm-5.2): the guard must see it through the flow form.
-      const refused = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }], { who: 'scheduler' })
-      expect(refused.ok).toBe(false)
-      if (!refused.ok) expect(refused.error).toMatch(/primary-mismatch/)
-      const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }], { who: 'api', allowPrimaryChange: true })
+      // The scheduler rotates the fallback row; the primary (kimi-k3, read through the flow form) stays.
+      const chain = cascadeChain(readCascade(tmpDir))
+      expect(chain).toEqual([{ provider: 'openrouter', model: 'moonshotai/kimi-k3' }, { provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+      const res = applyCascadeToHarness('h_test', [chain[0], { provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }], { who: 'scheduler' })
       expect(res.ok).toBe(true)
       expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-        'model:\n  provider: openrouter\n  default: z-ai/glm-5.3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OR_ALT\n'
+        'model:\n  provider: openrouter\n  default: moonshotai/kimi-k3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OR_ALT\n'
       )
     })
   })
@@ -923,7 +929,7 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
     })
   })
 
-  describe('scalar comments and the primary guard', () => {
+  describe('scalar comments', () => {
     it('a trailing comment on model.default / row values is not part of the value', () => {
       const cfg = [
         'model:',
@@ -938,7 +944,8 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
       fs.writeFileSync(configPath(), cfg)
       expect(readModelConfig(tmpDir)).toEqual(['z-ai/glm-5.2'])
       expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
-      // Same primary as the file → no primary-mismatch (the guard compared "z-ai/glm-5.2  # pinned" before).
+      // The duplicate row 0 is matched against the comment-stripped primary (it compared "z-ai/glm-5.2  # pinned" before).
+      expect(readCascade(tmpDir).primaryDuplicatedAsRow0).toBe(true)
       const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
       expect(res.ok).toBe(true)
       const written = fs.readFileSync(configPath(), 'utf-8')
@@ -946,7 +953,7 @@ describe('applyCascadeToHarness — config.yaml integrity', () => {
       expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }])
     })
 
-    it('no default: key in the model block → the primary guard does not fire on a fallback: or auxiliary model', () => {
+    it('no default: key in the model block → a fallback: or auxiliary model is never taken for the primary; the write installs one', () => {
       const cfg = [
         'model:',
         '  provider: openrouter',
@@ -1016,7 +1023,7 @@ describe('applyCascadeToHarness — carryFrom (round-3 audit)', () => {
     const res = applyCascadeToHarness(
       'h_test',
       [{ provider: 'anthropic', model: 'claude-sonnet-4-6', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }],
-      { who: 'api', allowPrimaryChange: true }
+      { who: 'api' }
     )
     expect(res.ok).toBe(false)
     if (!res.ok) {
@@ -1076,5 +1083,148 @@ describe('applyCascadeToHarness — section terminator matches the readers (roun
     expect(res.ok).toBe(true)
     const out = fs.readFileSync(configPath(), 'utf-8')
     expect(out).toBe(['model:', '  provider: openrouter', '  default: m1', 'fallback_providers:', '  - provider: openrouter', '    model: m1', '    key_env: OPENROUTER_KEY_B', 'agent:', '  z: 1', ''].join('\n'))
+  })
+})
+
+// --- Chain semantics (fix for PR #243's wrong premise) ------------------------
+// The runtime's cascade is primary = model: section, then fallback_providers
+// rows in order; a row identical to the current (provider, model) is skipped.
+// Both fleet conventions (primary repeated as row 0 / not repeated) are valid
+// and must survive a save untouched.
+describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks = fallback_providers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-chain-'))
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+  })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  for (const [name, cfg] of Object.entries(FLEET_SHAPES)) {
+    it(`a no-op save over ${name} is byte-identical (convention preserved)`, () => {
+      fs.writeFileSync(configPath(), cfg)
+      const chain = cascadeChain(readCascade(tmpDir))
+      expect(chain.length).toBeGreaterThan(0)
+      const res = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+      expect(res.ok).toBe(true)
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg)
+      if (res.ok) expect(res.written.chain).toEqual(chain)
+    })
+  }
+
+  it('cyborg: reordering the fallbacks leaves model: alone and never adds a duplicate row', () => {
+    fs.writeFileSync(configPath(), CYBORG)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const reordered = [chain[0], chain[2], chain[1], chain[3], chain[4]]
+    const res = applyCascadeToHarness('h_test', reordered, { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    const out = fs.readFileSync(configPath(), 'utf-8')
+    expect(out).toBe(
+      CYBORG.replace(
+        '  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n',
+        '  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
+      )
+    )
+    expect(readCascade(tmpDir).primaryDuplicatedAsRow0).toBe(false)
+    expect(cascadeChain(readCascade(tmpDir))).toEqual(reordered)
+  })
+
+  it('iris: promoting a fallback to primary swaps model.default and the row, keeps api_mode, adds no duplicate', () => {
+    fs.writeFileSync(configPath(), IRIS)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [chain[1], chain[0], chain[2]], { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+      IRIS.replace('  default: z-ai/glm-5.3\n', '  default: moonshotai/kimi-k3\n').replace('    model: moonshotai/kimi-k3\n', '    model: z-ai/glm-5.3\n')
+    )
+  })
+
+  it('cryptids: changing the primary rewrites model.default AND the duplicate row 0 together', () => {
+    fs.writeFileSync(configPath(), CRYPTIDS)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.4' }, ...chain.slice(1)], { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(CRYPTIDS.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.4'))
+    const after = readCascade(tmpDir)
+    expect(after.primaryDuplicatedAsRow0).toBe(true)
+    expect(after.fallbacks[0]).toEqual(after.primary)
+  })
+
+  it('cryptids: a rotation of the primary (carryFrom) keeps the duplicate row in sync, extras included', () => {
+    fs.writeFileSync(configPath(), CRYPTIDS.replace('    model: z-ai/glm-5.3\n', '    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n'))
+    mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_KEY_B']))
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness(
+      'h_test',
+      [{ provider: 'openrouter', model: 'z-ai/glm-5.4', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.3' } }, ...chain.slice(1)],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    const out = fs.readFileSync(configPath(), 'utf-8')
+    expect(out).toContain('  default: z-ai/glm-5.4\n')
+    expect(out).toContain('fallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.4\n    key_env: OPENROUTER_KEY_B\n  - provider: anthropic')
+    expect(out).not.toContain('z-ai/glm-5.3')
+    // A duplicate row that no longer matched the primary after a rotation would be a bug.
+    const after = readCascade(tmpDir)
+    expect(after.primaryDuplicatedAsRow0).toBe(true)
+    expect(after.fallbacks[0].model).toBe('z-ai/glm-5.4')
+  })
+
+  it('blackhouse: adding a fallback keeps the duplicate-only convention (row 0 stays the primary)', () => {
+    fs.writeFileSync(configPath(), BLACKHOUSE)
+    const chain = cascadeChain(readCascade(tmpDir))
+    expect(chain).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+    const res = applyCascadeToHarness('h_test', [...chain, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+      BLACKHOUSE.replace('    model: z-ai/glm-5.2\n', '    model: z-ai/glm-5.2\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
+    )
+  })
+
+  it('matilde: the write result reports the chain and the raw rows separately', () => {
+    fs.writeFileSync(configPath(), MATILDE)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', chain, { who: 'api' })
+    expect(res.ok).toBe(true)
+    if (res.ok) {
+      expect(res.written.primary).toBe('moonshotai/kimi-k3')
+      expect(res.written.models).toEqual(chain.map((e) => e.model))
+      expect(res.written.chain).toEqual(chain)
+      expect(res.written.fallbackProviders).toHaveLength(5)
+      expect(res.written.fallbackProviders[0]).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+      expect(res.written.fallbackProviders[4]).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: FLEET_OLLAMA_URL })
+    }
+  })
+
+  it('`expected` is compared against the CHAIN (primary first), so a stale editor loses to a rotated primary', () => {
+    fs.writeFileSync(configPath(), CYBORG)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const stale = [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, ...chain.slice(1)]
+    const res = applyCascadeToHarness('h_test', stale, { who: 'api', expected: stale })
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.status).toBe(409)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(CYBORG)
+  })
+
+  it('model.fallback is rewritten only when the file already has the key (the runtime never reads it)', () => {
+    const withKey = 'model:\n  provider: openrouter\n  default: z-ai/glm-5.3\n  fallback:\n    - moonshotai/kimi-k3\nfallback_providers:\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n'
+    fs.writeFileSync(configPath(), withKey)
+    const chain = cascadeChain(readCascade(tmpDir))
+    expect(applyCascadeToHarness('h_test', chain, { who: 'api' }).ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(withKey)
+    const res = applyCascadeToHarness('h_test', [...chain, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+      'model:\n  provider: openrouter\n  default: z-ai/glm-5.3\n  fallback:\n    - moonshotai/kimi-k3\n    - claude-sonnet-4-6\nfallback_providers:\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
+    )
+  })
+
+  it('a primary with no fallbacks over a file with no fallback_providers block appends nothing', () => {
+    const bare = 'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\nplatforms: {}\n'
+    fs.writeFileSync(configPath(), bare)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-opus-4-8' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(bare.replace('claude-sonnet-4-6', 'claude-opus-4-8'))
   })
 })
