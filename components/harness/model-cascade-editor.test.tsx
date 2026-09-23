@@ -37,7 +37,7 @@ function preLoadProps(onSave = vi.fn()) {
   return {
     models: ['claude-sonnet-4-6', 'qwen3:30b'],
     provider: '',
-    fallbackProviders: [] as FallbackProviderEntry[],
+    chain: [] as FallbackProviderEntry[],
     onSave,
     saving: false,
     harnessId: 'h_test',
@@ -48,7 +48,7 @@ function loadedProps(onSave = vi.fn()) {
   return {
     models: ['claude-sonnet-4-6', 'qwen3:30b'],
     provider: 'anthropic',
-    fallbackProviders: LOADED,
+    chain: LOADED,
     onSave,
     saving: false,
     harnessId: 'h_test',
@@ -56,7 +56,7 @@ function loadedProps(onSave = vi.fn()) {
 }
 
 describe('ModelCascadeEditor — seeding', () => {
-  it('does not invent an anthropic provider for rows when provider is unknown and no fallback_providers', () => {
+  it('does not invent an anthropic provider for rows when provider is unknown and no chain', () => {
     render(<ModelCascadeEditor {...preLoadProps()} />)
     // No row may carry a guessed provider. The editor must wait for real data.
     expect(rowProviders('anthropic')).toHaveLength(0)
@@ -64,7 +64,7 @@ describe('ModelCascadeEditor — seeding', () => {
     expect(screen.getByText(/no models configured/i)).toBeInTheDocument()
   })
 
-  it('seeds from string models when provider is known but fallback_providers is absent', () => {
+  it('seeds from string models when provider is known but the chain is absent', () => {
     render(
       <ModelCascadeEditor
         {...preLoadProps()}
@@ -118,7 +118,7 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
     rerender(
       <ModelCascadeEditor
         {...loadedProps(onSave)}
-        fallbackProviders={[{ provider: 'ollama', model: 'glm4:9b', base_url: OLLAMA_URL }]}
+        chain={[{ provider: 'ollama', model: 'glm4:9b', base_url: OLLAMA_URL }]}
       />
     )
 
@@ -145,7 +145,7 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
       <ModelCascadeEditor
         {...loadedProps(onSave)}
         models={['qwen3:30b']}
-        fallbackProviders={[{ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL }]}
+        chain={[{ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL }]}
       />
     )
     expect(screen.getByText('qwen3:30b')).toBeInTheDocument()
@@ -159,7 +159,7 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
     rerender(
       <ModelCascadeEditor
         {...loadedProps()}
-        fallbackProviders={[{ provider: 'ollama', model: 'glm4:9b', base_url: OLLAMA_URL }]}
+        chain={[{ provider: 'ollama', model: 'glm4:9b', base_url: OLLAMA_URL }]}
       />
     )
     expect(screen.getByText('glm4:9b')).toBeInTheDocument()
@@ -176,8 +176,19 @@ describe('ModelCascadeEditor — row status (tracking, retired, successors)', ()
     { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
   ]
   function statusProps() {
-    return { ...loadedProps(), provider: 'openrouter', models: ROWS.map((r) => r.model), fallbackProviders: ROWS }
+    return { ...loadedProps(), provider: 'openrouter', models: ROWS.map((r) => r.model), chain: ROWS }
   }
+
+  it('row 1 is the primary by construction: labelled "primary", and Track latest is offered on it too', () => {
+    render(<ModelCascadeEditor {...statusProps()} rowStatus={{ tracking: {}, onTrackingChange: vi.fn() }} />)
+    const badges = screen.getAllByText('primary')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].closest('[data-row]')).toHaveAttribute('data-row', 'openrouter/z-ai/glm-5.2')
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toBeInTheDocument()
+    // Promote the anthropic row: the badge follows the row, not the model.
+    fireEvent.click(screen.getAllByTitle('Move up')[1])
+    expect(screen.getByText('primary').closest('[data-row]')).toHaveAttribute('data-row', 'anthropic/claude-sonnet-4-6')
+  })
 
   it('renders nothing extra when no rowStatus is given', () => {
     render(<ModelCascadeEditor {...statusProps()} />)

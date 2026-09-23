@@ -12,33 +12,39 @@ export type ModelConfig = {
   provider: string
   primary: string
   models: string[]
+  /** Raw fallback_providers rows (a duplicate row 0 included). */
   fallbackProviders?: FallbackProviderEntry[]
+  /** The chain the editor shows: the primary (model:) first, then the fallbacks. */
+  chain?: FallbackProviderEntry[]
+  primaryEntry?: FallbackProviderEntry | null
+  /** The file repeats its primary as fallback_providers[0] — a convention the writer preserves. */
+  primaryDuplicatedAsRow0?: boolean
 }
 
 /**
  * How the page should read a 409 from PUT /api/harnesses/:id/models. The
- * writer sends three conflicts under one status: the rows on disk no longer
- * match what the editor was seeded from (reload, re-apply the edit);
- * primary-mismatch — model.default is not row 0 and the save did not put it
- * back at the top; and duplicate-sections — config.yaml has two top-level
- * model: / fallback_providers: headers and must be hand-edited. The last two
- * are the operator's to fix, so the page shows the writer's message and keeps
- * the editor state. Only the stale-rows conflict reloads: a code-prefixed
- * error (`code: message`) is an instruction, never a stale read, and
- * treating it as one (r4) wiped the edit on every save and never showed the
- * instruction.
+ * writer sends two conflicts under one status: the chain on disk no longer
+ * matches what the editor was seeded from (reload, re-apply the edit); and
+ * duplicate-sections — config.yaml has two top-level model: /
+ * fallback_providers: headers and must be hand-edited. The latter is the
+ * operator's to fix, so the page shows the writer's message and keeps the
+ * editor state. Only the stale conflict reloads: a code-prefixed error
+ * (`code: message`) is an instruction, never a stale read, and treating it
+ * as one (r4) wiped the edit on every save and never showed the instruction.
  */
-export function cascadeSaveConflict(body: unknown): { kind: 'primary-mismatch' | 'message'; message: string } | { kind: 'stale' } {
+export function cascadeSaveConflict(body: unknown): { kind: 'message'; message: string } | { kind: 'stale' } {
   const error = body && typeof body === 'object' && 'error' in body ? (body as { error?: unknown }).error : undefined
   if (typeof error !== 'string') return { kind: 'stale' }
-  if (error.startsWith('primary-mismatch')) return { kind: 'primary-mismatch', message: error }
   if (/^[a-z][a-z0-9-]*: /.test(error)) return { kind: 'message', message: error }
   return { kind: 'stale' }
 }
 
 /**
  * The Models tab body: the cascade editor decorated with per-row status,
- * plus the saved-cascade library.
+ * plus the saved-cascade library. Rows are the CHAIN from GET /models —
+ * the primary (model.provider / model.default) first, then the
+ * fallback_providers rows — so row 1 is the primary by construction and
+ * every status source below (tracking, retired, successors) keys on it too.
  *
  * Status sources (all fail-soft — a missing source means no decoration):
  *  - tracking:   harness.modelTracking, edited via PUT /api/harnesses/:id/models/tracking
@@ -67,14 +73,7 @@ export function ModelsTab({
   /** Something rewrote the cascade on disk (apply / update) — refetch. */
   onCascadeChanged: () => void
 }) {
-  const rows = useMemo(() => modelConfig.fallbackProviders ?? [], [modelConfig.fallbackProviders])
-
-  // --- primary drift -------------------------------------------------------
-  // The writer derives model.default from row 0 and refuses (409) a save that
-  // would move a primary the editor never showed. Show the file's primary
-  // when it is not row 0 so the operator can put it back at the top.
-  const primary = (modelConfig.primary ?? '').trim()
-  const primaryMismatch = !!primary && rows.length > 0 && rows[0].model.trim() !== primary
+  const rows = useMemo(() => modelConfig.chain ?? [], [modelConfig.chain])
 
   // --- tracking ------------------------------------------------------------
   // Derived from the prop, with a local override that lives only as long as
@@ -173,20 +172,11 @@ export function ModelsTab({
 
   return (
     <div className="space-y-4">
-      {primaryMismatch && (
-        <div role="alert" className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/10 p-3 text-xs">
-          <p>
-            <span className="font-medium">The agent&apos;s primary is not the first row.</span>{' '}
-            <code>model.default</code> in config.yaml is <span className="font-mono">{primary}</span>, but the cascade below starts with{' '}
-            <span className="font-mono">{rows[0].model}</span>. Saving is refused until <span className="font-mono">{primary}</span> is back at the top — move it up, or add it as the first row.
-          </p>
-        </div>
-      )}
       <ModelCascadeEditor
         key={editorKey}
         models={modelConfig.models ?? []}
         provider={modelConfig.provider ?? ''}
-        fallbackProviders={rows}
+        chain={rows}
         harnessId={harnessId}
         onSave={onSave}
         saving={saving}

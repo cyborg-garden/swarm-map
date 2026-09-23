@@ -32,19 +32,21 @@ export type RowStatus = {
  * Build the cascade the editor should show for a given set of server props.
  *
  * Preference order:
- *   1. fallback_providers rows — they carry provider + base_url per row.
+ *   1. the chain from GET /models — the primary (model.provider /
+ *      model.default) first, then every fallback_providers row, each with
+ *      its own provider + base_url. Row 1 IS the primary by construction.
  *   2. string models stamped with the known model.provider.
- *   3. nothing. When the provider is unknown AND there are no rows we do NOT
+ *   3. nothing. When the provider is unknown AND there is no chain we do NOT
  *      guess — a guessed provider was issue #149: rows seeded as `anthropic`
  *      before GET /models resolved, then saved back over real ollama rows.
  */
 export function buildCascadeFromProps(
   models: string[],
   provider: string,
-  fallbackProviders: FallbackProviderEntry[]
+  chain: FallbackProviderEntry[]
 ): FallbackProviderEntry[] {
-  if (fallbackProviders.length > 0) {
-    return fallbackProviders.map((fp) => ({
+  if (chain.length > 0) {
+    return chain.map((fp) => ({
       provider: fp.provider,
       model: fp.model,
       ...(fp.base_url ? { base_url: fp.base_url } : {}),
@@ -59,7 +61,7 @@ export function buildCascadeFromProps(
 export function ModelCascadeEditor({
   models: initialModels,
   provider: initialProvider,
-  fallbackProviders: initialFallbackProviders,
+  chain: initialChain,
   onSave,
   saving,
   harnessId,
@@ -67,13 +69,15 @@ export function ModelCascadeEditor({
 }: {
   models: string[]
   provider: string
-  fallbackProviders: FallbackProviderEntry[]
+  /** The chain from GET /models: primary first, then the fallbacks. */
+  chain: FallbackProviderEntry[]
+  /** Called with the edited chain: entries[0] is the primary, the rest are the fallbacks. */
   onSave: (entries: FallbackProviderEntry[]) => void
   saving: boolean
   harnessId: string
   rowStatus?: RowStatus
 }) {
-  const built = buildCascadeFromProps(initialModels, initialProvider, initialFallbackProviders)
+  const built = buildCascadeFromProps(initialModels, initialProvider, initialChain)
   const builtKey = JSON.stringify(built)
 
   const [cascade, setCascade] = useState<FallbackProviderEntry[]>(built)
@@ -178,7 +182,7 @@ export function ModelCascadeEditor({
             >
               {suggesting ? 'Detecting...' : 'Suggest from connected keys'}
             </button>
-            <span className="text-xs text-muted-foreground">Primary at top, fallbacks below</span>
+            <span className="text-xs text-muted-foreground" title="Row 1 is written to model.default; the rest are the fallback_providers rows, tried in order">Row 1 is the primary; fallbacks follow in order</span>
           </div>
         </div>
 
@@ -207,6 +211,14 @@ export function ModelCascadeEditor({
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wide shrink-0">
                       {entry.provider}
                     </span>
+                    {i === 0 && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] font-medium uppercase tracking-wide shrink-0"
+                        title="Written to model.provider / model.default — the model the agent tries first"
+                      >
+                        primary
+                      </span>
+                    )}
                     {retired && (
                       <span
                         className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--danger)]/10 text-[var(--danger)] font-medium uppercase tracking-wide shrink-0"
