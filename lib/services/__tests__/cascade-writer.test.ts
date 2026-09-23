@@ -46,7 +46,7 @@ vi.mock('@/lib/services/harness', async () => {
 
 import { applyCascadeToHarness } from '../cascade-writer'
 import { readFallbackProviders, readModelConfig, readCascade, cascadeChain } from '@/lib/services/harness'
-import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
+import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, P2, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
 import { services } from '@/lib/services'
 
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -1282,12 +1282,137 @@ describe('applyCascadeToHarness — the hermes "new format" model: forms', () =>
     expect(after).not.toContain('default:')
   })
 
-  it('model.model AND model.default: default is the managed key, model passes through verbatim', () => {
+  it('model.model AND model.default: default is the managed key, model passes through verbatim IN PLACE (round-trip stable)', () => {
     const both = 'model:\n  provider: openrouter\n  model: moonshotai/kimi-k3\n  default: z-ai/glm-5.3\n'
     fs.writeFileSync(configPath(), both)
     const chain = cascadeChain(readCascade(tmpDir))
+    const noop = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+    expect(noop.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(both)
     const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'z-ai/glm-5.4' }], { who: 'api' })
     expect(res.ok).toBe(true)
-    expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: openrouter\n  default: z-ai/glm-5.4\n  model: moonshotai/kimi-k3\n')
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: openrouter\n  model: moonshotai/kimi-k3\n  default: z-ai/glm-5.4\n')
+  })
+
+  it('an EMPTY `default:` is absent (as the reader has it): model.model is the primary key and the duplicate row 0 with its key_env survives', () => {
+    // hermes: `default` empty → model.model promoted. The file repeats that
+    // primary as row 0 (HSM convention) and that row carries a key_env.
+    const cfg = 'model:\n  provider: openrouter\n  default:\n  model: z-ai/glm-5.3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OR_ALT_KEY\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
+    fs.writeFileSync(configPath(), cfg)
+    const c = readCascade(tmpDir)
+    expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+    expect(c.primaryDuplicatedAsRow0).toBe(true)
+    const chain = cascadeChain(c)
+    expect(chain).toHaveLength(2)
+    // Add a fallback. Before the fix the writer read `default:` as the
+    // primary's key with no value, saw no duplicate convention, and wrote
+    // the chain's rows alone — row 0 with its key_env vanished.
+    const res = applyCascadeToHarness('h_test', [...chain, { provider: 'openrouter', model: 'moonshotai/kimi-k3' }], { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    const after = fs.readFileSync(configPath(), 'utf-8')
+    expect(after).toContain('  model: z-ai/glm-5.3\n')
+    expect(after).not.toMatch(/^\s+default:/m)
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+    ])
+    expect(after).toContain('    key_env: OR_ALT_KEY\n')
+    expect(readCascade(tmpDir).primaryDuplicatedAsRow0).toBe(true)
+  })
+
+  it('passthrough keys keep their place among the managed keys (a key before `default:` stays before it)', () => {
+    const cfg = 'model:\n  api_mode: chat\n  provider: openrouter\n  timeout: 30\n  default: z-ai/glm-5.3\n'
+    fs.writeFileSync(configPath(), cfg)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'z-ai/glm-5.4' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg.replace('z-ai/glm-5.3', 'z-ai/glm-5.4'))
+  })
+})
+
+describe('applyCascadeToHarness — root-level provider: / base_url: siblings (P2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-writer-root-'))
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+  })
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
+
+  it('P2: the chain reads the root siblings onto the primary, and a no-op save is byte-identical', () => {
+    fs.writeFileSync(configPath(), P2)
+    const chain = cascadeChain(readCascade(tmpDir))
+    expect(chain[0]).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: FLEET_OLLAMA_URL })
+    const res = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(P2)
+  })
+
+  it('P2: rotating the model only keeps the scalar form and the root siblings', () => {
+    fs.writeFileSync(configPath(), P2)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'qwen3:32b' }, ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(P2.replace('model: qwen3:30b', 'model: qwen3:32b'))
+    expect(readCascade(tmpDir).primary).toEqual({ provider: 'ollama', model: 'qwen3:32b', base_url: FLEET_OLLAMA_URL })
+  })
+
+  it('P2: a cloud primary takes the root provider AND base_url with it — no root base_url survives, the ollama row is kept as the chain says', () => {
+    fs.writeFileSync(configPath(), P2)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-opus-4-8' }, chain[0], ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const after = fs.readFileSync(configPath(), 'utf-8')
+    expect(after).toBe(
+      [
+        'model:',
+        '  provider: anthropic',
+        '  default: claude-opus-4-8',
+        'fallback_providers:',
+        '  - provider: ollama',
+        '    model: qwen3:30b',
+        `    base_url: ${FLEET_OLLAMA_URL}`,
+        '  - provider: anthropic',
+        '    model: claude-sonnet-4-6',
+        'platforms:',
+        '  discord:',
+        '    enabled: true',
+        '',
+      ].join('\n'),
+    )
+    expect(after).not.toMatch(/^base_url:/m)
+    expect(after).not.toMatch(/^provider:/m)
+    expect(readCascade(tmpDir).primary).toEqual({ provider: 'anthropic', model: 'claude-opus-4-8' })
+  })
+
+  it('P2: a chain that omits the ollama row drops it — nothing is invented either way', () => {
+    fs.writeFileSync(configPath(), P2)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-opus-4-8' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).not.toContain('ollama')
+    expect(fs.readFileSync(configPath(), 'utf-8')).not.toContain(FLEET_OLLAMA_URL)
+  })
+
+  it('P2: changing only the base_url on the same provider moves provider + base_url into the block and clears the root', () => {
+    fs.writeFileSync(configPath(), P2)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], base_url: 'http://ollama.local:11434/v1' }, ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const after = fs.readFileSync(configPath(), 'utf-8')
+    expect(after.startsWith('model:\n  provider: ollama\n  default: qwen3:30b\n  base_url: http://ollama.local:11434/v1\nfallback_providers:\n')).toBe(true)
+    expect(after).not.toMatch(/^(base_url|provider|api_base):/m)
+  })
+
+  it('a block with its own provider but a root base_url (+ a stale root api_base): a cloud primary removes both root lines', () => {
+    const cfg = `model:\n  provider: ollama\n  default: qwen3:30b\nbase_url: ${FLEET_OLLAMA_URL}\napi_base: ${FLEET_OLLAMA_URL}\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n`
+    fs.writeFileSync(configPath(), cfg)
+    const chain = cascadeChain(readCascade(tmpDir))
+    expect(chain[0]).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: FLEET_OLLAMA_URL })
+    const noop = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+    expect(noop.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(cfg)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-opus-4-8' }, ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: anthropic\n  default: claude-opus-4-8\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
   })
 })

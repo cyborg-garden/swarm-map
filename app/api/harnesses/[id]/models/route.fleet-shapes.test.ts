@@ -36,7 +36,7 @@ vi.mock('@/lib/services/harness', async (importOriginal) => ({
 
 import { GET, PUT } from './route'
 import { readCascade, readFallbackProviders } from '@/lib/services/harness'
-import { CYBORG, MATILDE, CRYPTIDS, IRIS, FLEET_SHAPES, OLLAMA_URL } from '@/lib/services/__tests__/fleet-shapes'
+import { CYBORG, MATILDE, CRYPTIDS, IRIS, P2, FLEET_SHAPES, OLLAMA_URL } from '@/lib/services/__tests__/fleet-shapes'
 
 const params = { params: Promise.resolve({ id: 'h_test' }) }
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -131,5 +131,79 @@ describe('PUT { fallback_providers } is fallback-only: the primary survives on e
     const res = await put({ fallback_providers: rows, expected_fallback_providers: [rows[0]] })
     expect(res.status).toBe(409)
     expect(onDisk()).toBe(CYBORG)
+  })
+})
+
+describe('PUT { chain } on a file with rows but no primary: promoting a fallback is an opt-in, never an accident (review round 2)', () => {
+  const NO_PRIMARY = 'model:\n  provider: openrouter\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.2\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n'
+
+  it('GET reports primaryEntry null and the chain is the rows alone', async () => {
+    seed(NO_PRIMARY)
+    const g = await get()
+    expect(g.primaryEntry).toBeNull()
+    expect(g.chain.map((r: { model: string }) => r.model)).toEqual(['z-ai/glm-5.2', 'moonshotai/kimi-k3'])
+  })
+
+  it('a { chain } save without set_primary → 409 no-primary-in-file, file untouched (same refusal as the scheduler / manual apply)', async () => {
+    seed(NO_PRIMARY)
+    const g = await get()
+    const res = await put({ chain: [g.chain[1], g.chain[0]], expected_chain: g.chain })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/^no-primary-in-file: /)
+    expect(onDisk()).toBe(NO_PRIMARY)
+    expect(readCascade(tmpDir).primary).toBeNull()
+  })
+
+  it('with set_primary: true the operator opts in: chain[0] is written to model.default and the rest are the rows', async () => {
+    seed(NO_PRIMARY)
+    const g = await get()
+    const res = await put({ chain: [g.chain[1], g.chain[0]], expected_chain: g.chain, set_primary: true })
+    expect(res.status).toBe(200)
+    const after = readCascade(tmpDir)
+    expect(after.primary).toEqual({ provider: 'openrouter', model: 'moonshotai/kimi-k3' })
+    expect(after.fallbacks).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+    expect(after.primaryDuplicatedAsRow0).toBe(false)
+  })
+
+  it('a file with NO model section and no rows (fresh agent) takes a { chain } without the opt-in — nothing is promoted', async () => {
+    seed('platforms:\n  discord:\n    enabled: true\n')
+    const res = await put({ chain: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }] })
+    expect(res.status).toBe(200)
+    expect(readCascade(tmpDir).primary).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6' })
+  })
+})
+
+describe('P2: scalar model: with root provider / base_url siblings, through the route', () => {
+  it('GET chain[0] carries the root provider and base_url; a GET → PUT { chain } round trip is byte-identical', async () => {
+    seed(P2)
+    const g = await get()
+    expect(g.primaryEntry).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL })
+    expect(g.chain[0]).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL })
+    expect(g.provider).toBe('ollama')
+    const res = await put({ chain: g.chain, expected_chain: g.chain })
+    expect(res.status).toBe(200)
+    expect(onDisk()).toBe(P2)
+  })
+
+  it('promoting the anthropic fallback over the ollama primary leaves no root base_url behind and keeps the ollama row', async () => {
+    seed(P2)
+    const g = await get()
+    const res = await put({ chain: [g.chain[1], g.chain[0]], expected_chain: g.chain })
+    expect(res.status).toBe(200)
+    const after = onDisk()
+    expect(after).not.toMatch(/^(base_url|provider|api_base):/m)
+    expect(after.startsWith('model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n')).toBe(true)
+    expect(readCascade(tmpDir).fallbacks).toEqual([{ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL }])
+  })
+})
+
+describe('PUT { fallback_providers }: a row equal to the primary is never written as a fallback', () => {
+  it('cyborg (primary not duplicated): a body row equal to model.default is dropped, the file does not flip to the duplicate convention', async () => {
+    seed(CYBORG)
+    const rows = readFallbackProviders(tmpDir)
+    const res = await put({ fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, ...rows], expected_fallback_providers: rows })
+    expect(res.status).toBe(200)
+    expect(onDisk()).toBe(CYBORG)
+    expect(readCascade(tmpDir).primaryDuplicatedAsRow0).toBe(false)
   })
 })

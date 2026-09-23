@@ -11,6 +11,7 @@ import {
   readAgentEnvVarNames,
   FALLBACK_PROVIDERS_HEADER,
   MODEL_HEADER,
+  ROOT_MODEL_SIBLING,
   FLOW_MAP,
   FLOW_SEQ,
   isTopLevelLine,
@@ -193,8 +194,14 @@ type ExistingModelBlock = {
    * with the key when the key goes.
    */
   managedTrail: Record<string, string[]>
-  /** Every key the writer does not manage, verbatim, with its nested lines. */
-  passthrough: string[]
+  /**
+   * Every key of the block in file order. A key the writer does not manage
+   * carries its lines verbatim (nested lines and trailing comments
+   * included); a managed key carries null and is rewritten in place, so a
+   * file with both model.model and model.default round-trips in its own
+   * order.
+   */
+  keys: Array<{ key: string; lines: string[] | null }>
 }
 
 /**
@@ -207,7 +214,7 @@ function parseExistingModelBlock(lines: string[], start: number, end: number): E
   const body = flow ? parseFlowPairs(flow[1]).map(([k, v]) => `  ${k}: ${v}`) : lines.slice(start + 1, end)
   const firstKey = body.find((l) => l.trim() && !l.trim().startsWith('#') && indentOf(l) > 0)
   const keyIndent = firstKey ? indentOf(firstKey) : 2
-  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', primaryKey: 'default', hasFallbackKey: false, leading: [], managedTrail: {}, passthrough: [] }
+  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', primaryKey: 'default', hasFallbackKey: false, leading: [], managedTrail: {}, keys: [] }
   // The scalar form: `model: <id>` — the whole section is the header line.
   const scalar = flow ? '' : yamlScalar(lines[start].slice('model:'.length))
   if (scalar) {
@@ -219,9 +226,13 @@ function parseExistingModelBlock(lines: string[], start: number, end: number): E
     const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
     return isKey ? trimmed.slice(0, trimmed.indexOf(':')) : null
   }
-  // model.model is the primary's key only when there is no model.default (as hermes resolves it).
+  // model.model is the primary's key only when there is no model.default
+  // WITH A VALUE (as hermes resolves it — an empty `default:` is absent to
+  // the reader too, so the writer must not take it for the primary's key).
+  const valueOf = (line: string, key: string): string => yamlScalar(line.trim().slice(key.length + 1))
   const keys = body.map(keyOf)
-  if (!keys.includes('default') && keys.includes('model')) out.primaryKey = 'model'
+  const hasDefault = body.some((l) => keyOf(l) === 'default' && valueOf(l, 'default') !== '')
+  if (!hasDefault && keys.includes('model')) out.primaryKey = 'model'
   let managed: boolean | null = null // null = before the first key
   let managedKey = ''
   for (const line of body) {
@@ -230,18 +241,18 @@ function parseExistingModelBlock(lines: string[], start: number, end: number): E
     if (key !== null) {
       managed = MANAGED_MODEL_KEYS.has(key) || key === out.primaryKey
       managedKey = managed ? key : ''
-      if (key === 'provider') out.provider = yamlScalar(trimmed.slice('provider:'.length))
+      if (key === 'provider') out.provider = valueOf(line, key)
       if (key === out.primaryKey) {
-        const v = yamlScalar(trimmed.slice(key.length + 1))
+        const v = valueOf(line, key)
         if (v) out.default = v
       }
       if (key === 'base_url') out.baseUrlLine = line
       if (key === 'fallback') out.hasFallbackKey = true
-      if (!managed) out.passthrough.push(line)
+      out.keys.push({ key, lines: managed ? null : [line] })
       continue
     }
     if (managed === null) out.leading.push(line)
-    else if (managed === false) out.passthrough.push(line)
+    else if (managed === false) out.keys[out.keys.length - 1].lines!.push(line)
     else if (!trimmed || trimmed.startsWith('#')) (out.managedTrail[managedKey] ??= []).push(line)
   }
   return out
@@ -418,10 +429,29 @@ export function applyCascadeToHarness(
   const existingModel = modelStart >= 0 ? parseExistingModelBlock(lines, modelStart, modelEnd) : null
   const existingRows = writeRows && fpStart >= 0 ? parseExistingRows(lines, fpStart, fpEnd) : []
 
+  // Root-level `provider:` / `base_url:` / `api_base:` lines beside model:
+  // (the hermes "new format" scalar `model: <id>` is usually written this
+  // way). The runtime merges each onto the primary when the block lacks the
+  // key — so the primary ON DISK is what the readers report, root included.
+  // The lines stay where they are while the primary's provider and base_url
+  // do not change (a no-op save is byte-identical); the moment chain[0]
+  // changes either, they move into the model: block and the root lines go —
+  // a root base_url that belonged to the old (local) provider must never be
+  // merged onto the cloud primary that replaced it.
+  const rootSiblings = lines.flatMap((l, i) => {
+    const m = l.match(ROOT_MODEL_SIBLING)
+    return m ? [{ index: i, key: m[1], value: yamlScalar(m[2]) }] : []
+  })
+  const rootValue = (key: string): string => rootSiblings.find((r) => r.key === key)?.value ?? ''
+  const rootProvider = existingModel?.provider ? '' : rootValue('provider')
+  const rootBaseUrl = existingModel?.baseUrlLine ? '' : rootValue('base_url') || rootValue('api_base')
+  const diskProvider = existingModel?.provider || rootProvider
+  const diskBaseUrl = existingModel?.baseUrlLine ? yamlScalar(existingModel.baseUrlLine.trim().slice('base_url:'.length)) : rootBaseUrl
+
   // The file's convention: did it repeat model.default as fallback_providers[0]?
   // (Compared comment-stripped, provider case-insensitive.) Preserved on
   // write, never invented, never removed.
-  const primaryOnDisk = existingModel?.default ? { provider: existingModel.provider, model: existingModel.default } : null
+  const primaryOnDisk = existingModel?.default ? { provider: diskProvider, model: existingModel.default } : null
   const duplicateOnDisk = !!primaryOnDisk && existingRows.length > 0 && sameCascadeRow(existingRows[0], primaryOnDisk)
 
   // The row on disk each entry inherits its unmanaged keys from: the row
@@ -485,42 +515,71 @@ export function applyCascadeToHarness(
 
   // Effective model.provider: the primary's, else whatever the file says
   // (a legacy body with no provider must not delete the line).
-  const provider = entryProvider || existingModel?.provider || ''
+  const provider = entryProvider || diskProvider || ''
   const ind = existingModel?.indent ?? '  '
+  const primaryBaseUrl = primaryEntry?.base_url
+  // Do the root siblings move into the block on this write? Only when the
+  // primary's provider or base_url changes; a rotation of the model id alone
+  // leaves the file's shape alone.
+  const providerChanged = !!entryProvider && entryProvider.toLowerCase() !== diskProvider.toLowerCase()
+  const baseUrlChanged = primaryBaseUrl !== undefined && primaryBaseUrl !== diskBaseUrl
+  const migrateRoot = rootSiblings.length > 0 && (providerChanged || baseUrlChanged)
+  // A key the root supplies and this write leaves there is not repeated in the block.
+  const providerStaysAtRoot = !!rootProvider && !migrateRoot
+  const baseUrlStaysAtRoot = !!rootBaseUrl && !migrateRoot
 
   // Build the model section of config.yaml. Managed keys come from the
-  // chain; every other key of the existing block passes through verbatim.
-  // Comment / blank lines the file had under a managed key ride with it.
+  // chain; every other key of the existing block passes through verbatim,
+  // in its own place among them. Comment / blank lines the file had under a
+  // managed key ride with it.
   const trail = (key: string): string[] => existingModel?.managedTrail[key] ?? []
-  const modelLines = ['model:', ...(existingModel?.leading ?? [])]
-  if (provider) modelLines.push(`${ind}provider: ${provider}`, ...trail('provider'))
+  const managedOut: Record<string, string[]> = {}
+  if (provider && !providerStaysAtRoot) managedOut.provider = [`${ind}provider: ${provider}`, ...trail('provider')]
   // The primary goes under the key the file already uses for it (model.model
   // when the block has that and no default — see ExistingModelBlock.primaryKey).
   const primaryKey = existingModel?.primaryKey ?? 'default'
-  modelLines.push(`${ind}${primaryKey}: ${primary}`, ...trail(primaryKey))
+  managedOut[primaryKey] = [`${ind}${primaryKey}: ${primary}`, ...trail(primaryKey)]
   // model.base_url follows the primary. With no base_url on it, the existing
-  // line stays only while it can still be meant for this primary: the
+  // value stays only while it can still be meant for this primary: the
   // provider is unchanged / unspecified, or is one that is addressed by URL.
   // A local ollama URL must not leak onto a cloud primary that replaced it.
-  const primaryBaseUrl = primaryEntry?.base_url
   if (primaryBaseUrl) {
-    modelLines.push(`${ind}base_url: ${primaryBaseUrl}`, ...trail('base_url'))
-  } else if (existingModel?.baseUrlLine) {
+    if (!baseUrlStaysAtRoot) managedOut.base_url = [`${ind}base_url: ${primaryBaseUrl}`, ...trail('base_url')]
+  } else if (existingModel?.baseUrlLine || (rootBaseUrl && migrateRoot)) {
     const p = provider.toLowerCase()
-    const keep = !entryProvider || p === existingModel.provider.toLowerCase() || BASE_URL_PROVIDERS.has(p)
-    if (keep) modelLines.push(existingModel.baseUrlLine, ...trail('base_url'))
+    const keep = !entryProvider || p === diskProvider.toLowerCase() || BASE_URL_PROVIDERS.has(p)
+    if (keep) managedOut.base_url = [existingModel?.baseUrlLine ?? `${ind}base_url: ${rootBaseUrl}`, ...trail('base_url')]
   }
   // model.fallback: the runtime never reads it. A file that has the key gets
   // it rewritten from the fallbacks (dropped when there are none); a file
   // without it does not gain one.
   if (existingModel?.hasFallbackKey && cascade.length > 1) {
-    modelLines.push(`${ind}fallback:`)
-    for (const m of cascade.slice(1)) {
-      modelLines.push(`${ind}${ind}- ${m}`)
-    }
-    modelLines.push(...trail('fallback'))
+    managedOut.fallback = [`${ind}fallback:`, ...cascade.slice(1).map((m) => `${ind}${ind}- ${m}`), ...trail('fallback')]
   }
-  if (existingModel) modelLines.push(...existingModel.passthrough)
+  const modelLines = ['model:', ...(existingModel?.leading ?? [])]
+  // Managed keys keep the position they had on disk; one the file did not
+  // have goes in front of the first on-disk managed key that follows it in
+  // the canonical order (provider, primary, base_url, fallback), else last.
+  const CANONICAL = ['provider', primaryKey, 'base_url', 'fallback']
+  const emitted = new Set<string>()
+  const emit = (key: string) => {
+    if (emitted.has(key)) return
+    emitted.add(key)
+    modelLines.push(...(managedOut[key] ?? []))
+  }
+  const managedOnDisk = new Set((existingModel?.keys ?? []).filter((k) => k.lines === null).map((k) => k.key))
+  for (const k of existingModel?.keys ?? []) {
+    if (k.lines !== null) {
+      modelLines.push(...k.lines)
+      continue
+    }
+    for (const c of CANONICAL) {
+      if (c === k.key) break
+      if (!managedOnDisk.has(c)) emit(c)
+    }
+    emit(k.key)
+  }
+  for (const c of CANONICAL) emit(c)
   // The scalar form (`model: <id>`) stays scalar while the block would hold
   // nothing but the primary: an unchanged primary re-emits the header
   // verbatim, a rotated one keeps the shape. A provider or base_url on the
@@ -588,6 +647,8 @@ export function applyCascadeToHarness(
   const splices = [
     ...(modelStart >= 0 ? [{ start: modelStart, end: modelEnd, lines: modelLines }] : []),
     ...(fpStart >= 0 && fpLines.length > 0 ? [{ start: fpStart, end: fpEnd, lines: fpLines }] : []),
+    // The root siblings, once moved into the block, are deleted line by line.
+    ...(migrateRoot ? rootSiblings.map((r) => ({ start: r.index, end: r.index + 1, lines: [] as string[] })) : []),
   ].sort((a, b) => a.start - b.start)
   const updated: string[] = []
   let cursor = 0

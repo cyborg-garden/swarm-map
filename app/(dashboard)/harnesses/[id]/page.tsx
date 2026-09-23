@@ -913,7 +913,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               refetch()
               setCascadeEditorGen((g) => g + 1)
             }}
-            onSave={async (chain) => {
+            onSave={async (chain, opts) => {
               setModelSaving(true)
               try {
                 const res = await fetch(`/api/harnesses/${id}/models`, {
@@ -925,9 +925,14 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                   // longer matches — the model-update scheduler or another
                   // tab wrote since — so a stale save cannot silently undo
                   // an applied update.
+                  // set_primary: the editor passes it only from the state
+                  // where the file had no primary and the operator saw the
+                  // note — without it the server refuses to promote a
+                  // fallback into model.default (no-primary-in-file).
                   body: JSON.stringify({
                     chain,
                     expected_chain: modelConfig.chain ?? [],
+                    ...(opts?.setPrimary ? { set_primary: true } : {}),
                   }),
                 })
                 if (res.status === 409) {

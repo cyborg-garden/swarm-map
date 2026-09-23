@@ -253,3 +253,37 @@ describe('ModelCascadeEditor — row status (tracking, retired, successors)', ()
     expect(screen.getByRole('button', { name: /updating/i })).toBeDisabled()
   })
 })
+
+describe('ModelCascadeEditor — a file with rows but no primary on disk (review round 2)', () => {
+  const ROWS: FallbackProviderEntry[] = [
+    { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+    { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+  ]
+  const props = (onSave = vi.fn()) => ({ ...loadedProps(onSave), provider: 'openrouter', models: ROWS.map((r) => r.model), chain: ROWS, primaryEntry: null })
+
+  it('row 1 is NOT badged primary; it carries a note that saving will make it the primary', () => {
+    render(<ModelCascadeEditor {...props()} rowStatus={{ tracking: {}, onTrackingChange: vi.fn() }} />)
+    expect(screen.queryByText('primary')).toBeNull()
+    const note = screen.getByText(/no primary on disk/i)
+    expect(note.closest('[data-row]')).toHaveAttribute('data-row', 'openrouter/z-ai/glm-5.2')
+    expect(screen.getAllByText(/no primary on disk/i)).toHaveLength(1)
+  })
+
+  it('a save from that state sends setPrimary: true — the operator opted in by reading the note', () => {
+    const onSave = vi.fn()
+    render(<ModelCascadeEditor {...props(onSave)} />)
+    fireEvent.click(screen.getAllByTitle('Move up')[1])
+    fireEvent.click(screen.getByRole('button', { name: /save cascade/i }))
+    expect(onSave).toHaveBeenCalledWith([ROWS[1], ROWS[0]], { setPrimary: true })
+  })
+
+  it('with a primary on disk the save carries no flag and row 1 is badged as before', () => {
+    const onSave = vi.fn()
+    render(<ModelCascadeEditor {...props(onSave)} primaryEntry={ROWS[0]} />)
+    expect(screen.getByText('primary')).toBeInTheDocument()
+    expect(screen.queryByText(/no primary on disk/i)).toBeNull()
+    fireEvent.click(screen.getAllByTitle('Move up')[1])
+    fireEvent.click(screen.getByRole('button', { name: /save cascade/i }))
+    expect(onSave).toHaveBeenCalledWith([ROWS[1], ROWS[0]])
+  })
+})

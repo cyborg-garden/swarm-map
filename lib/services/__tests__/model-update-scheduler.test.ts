@@ -1125,6 +1125,26 @@ describe('a file with rows but no primary: nothing is "primary" and nothing inve
     expect(readCascade(path.join(root, 'nop')).primary).toBeNull()
   })
 
+  it('check (notify): an entry with a successor is reported blocked no-primary-in-file too — the Update button must not offer a promotion', async () => {
+    makeHarness('nop', { config: NO_PRIMARY })
+    const report = await checkModelUpdates(deps)
+    const glm = entryFor(report, 'h_nop', 'z-ai/glm-5.2')!
+    expect(glm.successor).toBe('z-ai/glm-5.3')
+    expect(glm.blocked).toBe('no-primary-in-file')
+    // kimi-k3 has no successor: nothing to block.
+    expect(entryFor(report, 'h_nop', 'moonshotai/kimi-k3')!.blocked).toBeUndefined()
+    expect(deps.audit.append).not.toHaveBeenCalled()
+  })
+
+  it('apply: the no-primary refusal is a file-shape fact, not a per-run event — no blocked audit row', async () => {
+    settings = { ...settings, mode: 'apply' }
+    makeHarness('nop', { config: NO_PRIMARY, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    expect(entryFor(report, 'h_nop', 'z-ai/glm-5.2')!.blocked).toBe('no-primary-in-file')
+    expect(deps.audit.append).not.toHaveBeenCalledWith(expect.objectContaining({ what: 'cascade:auto-update:blocked' }))
+    expect(readConfig('nop')).toBe(NO_PRIMARY)
+  })
+
   it('manual apply on such a file → 409 Blocked: no-primary-in-file, nothing written', async () => {
     makeHarness('nop', { config: NO_PRIMARY })
     const res = await applyModelUpdate({ harnessId: 'h_nop', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)

@@ -342,6 +342,10 @@ function performSubstitutions(
   }
   const result: CascadeWriteResult = onDisk.primary ? applyCascadeToHarness(h.id, next, { who }) : { ok: false, status: 409, error: NO_PRIMARY }
   if (!result.ok) {
+    // A missing primary is a fact about the file, not an event of this run:
+    // the report carries it on every entry (see checkModelUpdates) and an
+    // audit row per run per entry would only repeat it.
+    if (result.error === NO_PRIMARY) return { ok: false, status: result.status, error: result.error }
     for (const s of subs) {
       deps.audit.append({
         who,
@@ -434,7 +438,12 @@ export async function checkModelUpdates(
     const candidates: Candidate[] = []
     for (const [i, fp] of chain.entries()) candidates.push(await evaluateEntry(h, fp, i === 0 && cascade.primary ? 'primary' : 'fallback', getLive, deps, prior))
 
-    if (applyMode) {
+    if (!cascade.primary) {
+      // No model.default: a rotation would invent one (the writer puts
+      // chain[0] into model.default), so every successor is blocked — in
+      // notify mode too, so the Update button does not offer the promotion.
+      for (const c of candidates) if (c.entry.successor) c.entry.blocked = NO_PRIMARY
+    } else if (applyMode) {
       const subs: Substitution[] = []
       const subCandidates: Candidate[] = []
       // (provider, model) rows this batch will write — two tracked rows of one

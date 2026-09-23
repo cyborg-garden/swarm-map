@@ -66,7 +66,7 @@ export function ModelsTab({
   harnessId: string
   modelConfig: ModelConfig
   modelTracking?: Record<string, boolean>
-  onSave: (entries: FallbackProviderEntry[]) => void
+  onSave: (entries: FallbackProviderEntry[], opts?: { setPrimary: true }) => void
   saving: boolean
   /** Remount key for the editor (per harness + generation). */
   editorKey: string
@@ -145,6 +145,16 @@ export function ModelsTab({
     }
     return out
   }, [report, harnessId])
+  // A successor the report blocked (no primary on disk, a guard) keeps its
+  // hint; the Update button is disabled with the reason.
+  const blocked = useMemo(() => {
+    const mine = report?.harnesses?.find((h) => h.id === harnessId)
+    const out: Record<string, string> = {}
+    for (const e of mine?.entries ?? []) {
+      if (e.successor && !e.applied && e.blocked) out[rowKey(e)] = e.blocked
+    }
+    return out
+  }, [report, harnessId])
   const [updatingKey, setUpdatingKey] = useState<string | null>(null)
   async function applyUpdate(entry: FallbackProviderEntry, to: string) {
     const key = rowKey(entry)
@@ -177,6 +187,7 @@ export function ModelsTab({
         models={modelConfig.models ?? []}
         provider={modelConfig.provider ?? ''}
         chain={rows}
+        primaryEntry={modelConfig.primaryEntry}
         harnessId={harnessId}
         onSave={onSave}
         saving={saving}
@@ -187,6 +198,7 @@ export function ModelsTab({
           successors,
           onApplyUpdate: applyUpdate,
           updatingKey,
+          blocked,
         }}
       />
       <SavedCascades harnessId={harnessId} onApplied={onCascadeChanged} />

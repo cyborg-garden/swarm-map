@@ -78,13 +78,19 @@ const whitelist = (rows: RowInput[]): CascadeWriteInput[] =>
  * PUT /api/harnesses/:id/models
  *
  * Three body shapes, one writer:
- *  - `{ chain: Row[], expected_chain?: Row[] }` — the cascade editor.
- *    chain[0] is the primary (written to model:), the rest are the
- *    fallback_providers rows; the file's own convention about repeating the
- *    primary as row 0 is preserved by the writer. `expected_chain` is what
- *    the editor last read; when the chain on disk differs (the scheduler
- *    rotated an entry, or another tab saved) the write is refused with 409
- *    and nothing changes.
+ *  - `{ chain: Row[], expected_chain?: Row[], set_primary?: true }` — the
+ *    cascade editor. chain[0] is the primary (written to model:), the rest
+ *    are the fallback_providers rows; the file's own convention about
+ *    repeating the primary as row 0 is preserved by the writer.
+ *    `expected_chain` is what the editor last read; when the chain on disk
+ *    differs (the scheduler rotated an entry, or another tab saved) the
+ *    write is refused with 409 and nothing changes. On a file that has rows
+ *    but NO primary (no model.default) chain[0] is a fallback the runtime
+ *    never treated as primary, so writing it to model.default would promote
+ *    it silently — the same write the scheduler and the manual apply refuse
+ *    as `no-primary-in-file`. It is refused here too (409) unless the body
+ *    says `set_primary: true`: the editor sends that only from a state where
+ *    the operator was shown the note.
  *  - `{ fallback_providers: Row[], expected_fallback_providers?: Row[] }` —
  *    the pre-chain editor / API shape. It names the section it rewrites: the
  *    rows become the fallback_providers block and the primary (model:) is
@@ -92,10 +98,10 @@ const whitelist = (rows: RowInput[]): CascadeWriteInput[] =>
  *    round trip is a no-op on every file. (Taking row 0 as the primary,
  *    which is what this body once meant, rewrote model.default to the first
  *    fallback on every file that does not repeat its primary as row 0 — 3 of
- *    5 fleet agents — and the real primary vanished.) On a file that repeats
- *    the primary as row 0 the writer owns that row: any row equal to the
- *    primary is dropped from the body and the duplicate is re-emitted at row
- *    0, so the primary is never written twice. A file with no primary at all
+ *    5 fleet agents — and the real primary vanished.) A row equal to the
+ *    primary is dropped from the body on EVERY file: the writer re-emits
+ *    the duplicate at row 0 on a file that has that convention, and a file
+ *    that does not must not be flipped to it. A file with no primary at all
  *    cannot take this body (409: send `{ chain }`). `expected_fallback_providers`
  *    is compared against the raw rows on disk.
  *  - `{ provider?, model? | cascade?: string[] }` — the legacy string shape
@@ -122,6 +128,7 @@ export async function PUT(
     cascade?: string[]
     chain?: RowInput[]
     expected_chain?: RowInput[]
+    set_primary?: boolean
     fallback_providers?: RowInput[]
     expected_fallback_providers?: RowInput[]
   }
@@ -134,6 +141,16 @@ export async function PUT(
   const dataDir = dataDirFor(harness)
 
   if (Array.isArray(body.chain) && body.chain.length > 0) {
+    const onDisk = readCascade(dataDir)
+    if (!onDisk.primary && onDisk.fallbacks.length > 0 && body.set_primary !== true) {
+      const first = body.chain[0]
+      return NextResponse.json(
+        {
+          error: `no-primary-in-file: this agent has no primary model (model.default) on disk, so row 1 is a fallback, not the primary; saving would make "${(first?.model ?? '').trim()}" the primary — send set_primary: true to do that on purpose`,
+        },
+        { status: 409 }
+      )
+    }
     const expected = Array.isArray(body.expected_chain) ? whitelist(body.expected_chain) : undefined
     const result = applyCascadeToHarness(id, whitelist(body.chain), { who: 'api', expected })
     if (!result.ok) {
@@ -160,7 +177,7 @@ export async function PUT(
     }
     const primary = onDisk.primary
     const rows = whitelist(body.fallback_providers)
-    const fallbacks = onDisk.primaryDuplicatedAsRow0 ? rows.filter((r) => !sameCascadeRow(r, primary)) : rows
+    const fallbacks = rows.filter((r) => !sameCascadeRow(r, primary))
     const result = applyCascadeToHarness(id, [{ provider: primary.provider, model: primary.model, ...(primary.base_url ? { base_url: primary.base_url } : {}) }, ...fallbacks], { who: 'api' })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })

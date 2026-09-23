@@ -10,7 +10,8 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { readCascade, cascadeChain } from '../harness'
-import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, OLLAMA_URL } from './fleet-shapes'
+import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, P2, OLLAMA_URL } from './fleet-shapes'
+import { readModelProvider } from '../harness'
 
 let dir = ''
 const write = (content: string) => fs.writeFileSync(path.join(dir, 'config.yaml'), content)
@@ -142,5 +143,35 @@ describe('readCascade — the hermes "new format" model: forms', () => {
   it('model.default wins over model.model when both are present (as at runtime)', () => {
     write('model:\n  provider: openrouter\n  model: moonshotai/kimi-k3\n  default: z-ai/glm-5.3\n')
     expect(readCascade(dir).primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+  })
+})
+
+describe('readCascade — root-level provider: / base_url: siblings (hermes _normalize_root_model_keys)', () => {
+  it('P2: a scalar `model: <id>` takes the root provider and base_url as its own', () => {
+    write(P2)
+    const c = readCascade(dir)
+    expect(c.primary).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL })
+    expect(c.primaryDuplicatedAsRow0).toBe(false)
+    expect(cascadeChain(c)).toEqual([
+      { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    ])
+    expect(readModelProvider(dir)).toBe('ollama')
+  })
+
+  it('a block that lacks provider / base_url takes them from the root; a root api_base is the base_url alias', () => {
+    write(`model:\n  default: qwen3:30b\nprovider: ollama\napi_base: ${OLLAMA_URL}\n`)
+    expect(readCascade(dir).primary).toEqual({ provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL })
+  })
+
+  it('the model: block wins over the root: a root provider / base_url never overrides model.provider / model.base_url', () => {
+    write(`model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  base_url: https://proxy.example/v1\nprovider: ollama\nbase_url: ${OLLAMA_URL}\n`)
+    expect(readCascade(dir).primary).toEqual({ provider: 'anthropic', model: 'claude-sonnet-4-6', base_url: 'https://proxy.example/v1' })
+    expect(readModelProvider(dir)).toBe('anthropic')
+  })
+
+  it('a `provider:` under another top-level key (a fallback row, a nested map) is not a root sibling', () => {
+    write('model: qwen3:30b\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\nauxiliary:\n  provider: ollama\n')
+    expect(readCascade(dir).primary).toEqual({ provider: '', model: 'qwen3:30b' })
   })
 })

@@ -116,4 +116,26 @@ export const IRIS = [
   '',
 ].join('\n')
 
-export const FLEET_SHAPES: Record<string, string> = { cyborg: CYBORG, matilde: MATILDE, cryptids: CRYPTIDS, blackhouse: BLACKHOUSE, iris: IRIS }
+/**
+ * P2 (a personal instance): the hermes "new format" scalar `model: <id>`
+ * with the primary's provider and base_url as ROOT-level siblings. hermes
+ * reads them the way it reads model.provider / model.base_url when the
+ * model: section lacks the key (_normalize_root_model_keys, fallback-only)
+ * and drops the root keys on its next save. So the primary here IS
+ * ollama / qwen3:30b @ OLLAMA_URL, and a cloud primary that replaces it must
+ * take the root base_url with it.
+ */
+export const P2 = [
+  'model: qwen3:30b',
+  'provider: ollama',
+  `base_url: ${OLLAMA_URL}`,
+  'fallback_providers:',
+  '  - provider: anthropic',
+  '    model: claude-sonnet-4-6',
+  'platforms:',
+  '  discord:',
+  '    enabled: true',
+  '',
+].join('\n')
+
+export const FLEET_SHAPES: Record<string, string> = { cyborg: CYBORG, matilde: MATILDE, cryptids: CRYPTIDS, blackhouse: BLACKHOUSE, iris: IRIS, p2: P2 }

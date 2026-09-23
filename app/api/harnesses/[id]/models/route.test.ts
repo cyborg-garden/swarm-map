@@ -37,11 +37,12 @@ vi.mock('@/lib/services/harness', async (importOriginal) => {
   // The writer shares the readers' header regexes and scalar helpers; use
   // the real ones so the route test exercises the same header forms the
   // readers accept.
-  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, FLOW_MAP, FLOW_SEQ, isTopLevelLine, yamlScalar, parseFlowPairs, parseFlowMaps, cascadeChain, sameCascadeRow } =
+  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, ROOT_MODEL_SIBLING, FLOW_MAP, FLOW_SEQ, isTopLevelLine, yamlScalar, parseFlowPairs, parseFlowMaps, cascadeChain, sameCascadeRow } =
     await importOriginal<typeof import('@/lib/services/harness')>()
   return {
     FALLBACK_PROVIDERS_HEADER,
     MODEL_HEADER,
+    ROOT_MODEL_SIBLING,
     FLOW_MAP,
     FLOW_SEQ,
     isTopLevelLine,

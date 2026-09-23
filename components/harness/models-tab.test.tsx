@@ -178,6 +178,30 @@ describe('ModelsTab', () => {
     expect(props.onCascadeChanged).not.toHaveBeenCalled()
   })
 
+  it('a successor the report marks blocked keeps its hint but the Update button is disabled with the reason', async () => {
+    const blockedReport = {
+      ...REPORT,
+      harnesses: [{ id: 'h_test', name: 'test', entries: [
+        { provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', blocked: 'no-primary-in-file' },
+      ] }],
+    }
+    routes['GET /api/fleet/model-updates'] = { status: 200, body: blockedReport }
+    render(<ModelsTab {...baseProps()} modelConfig={{ ...CONFIG, primaryEntry: null }} />)
+    expect(await screen.findByText(/newer: z-ai\/glm-5\.3/)).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: /update z-ai\/glm-5\.2 to z-ai\/glm-5\.3/i })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', expect.stringMatching(/no-primary-in-file/))
+  })
+
+  it('the no-primary note reaches the editor from GET /models (primaryEntry null) and the page save carries setPrimary', async () => {
+    const props = baseProps()
+    render(<ModelsTab {...props} modelConfig={{ ...MATILDE_CONFIG, primaryEntry: null }} />)
+    expect(screen.getByText(/no primary on disk/i)).toBeInTheDocument()
+    fireEvent.click(screen.getAllByTitle('Move up')[1])
+    fireEvent.click(screen.getByRole('button', { name: /save cascade/i }))
+    expect(props.onSave).toHaveBeenCalledWith(expect.any(Array), { setPrimary: true })
+  })
+
   // --- Chain semantics ------------------------------------------------------
 
   it('a primary that is not fallback_providers[0] is shown as row 1 of the chain — no warning, nothing to fix', async () => {

@@ -675,34 +675,9 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
   }
 }
 
+/** model.provider as the runtime resolves it — the model: block's, else the root-level `provider:` sibling (see readModelBlock). */
 export function readModelProvider(dataDir: string): string {
-  try {
-    const configPath = path.join(dataDir, 'config.yaml')
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const lines = content.split('\n')
-
-    let inModelSection = false
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (MODEL_HEADER.test(line)) {
-        const flow = line.match(FLOW_MAP)
-        if (flow) {
-          const prov = parseFlowPairs(flow[1]).find(([key]) => key === 'provider')
-          return prov ? yamlScalar(prov[1]) : ''
-        }
-        inModelSection = true
-        continue
-      }
-      if (isTopLevelLine(line)) { inModelSection = false }
-      if (inModelSection) {
-        const provMatch = trimmed.match(/^provider:\s*(.+)$/)
-        if (provMatch) return yamlScalar(provMatch[1])
-      }
-    }
-    return ''
-  } catch {
-    return ''
-  }
+  return readModelBlock(dataDir).provider
 }
 
 /** The primary as the runtime resolves it: model.provider / model.default (/ model.base_url). */
@@ -731,23 +706,39 @@ export function sameCascadeRow(a: { provider: string; model: string }, b: { prov
 }
 
 /**
+ * A root-level `provider:` / `base_url:` / `api_base:` line — the primary's
+ * provider and base URL written beside `model:` instead of under it. hermes
+ * merges each onto the model: block when the block lacks that key
+ * (_normalize_root_model_keys: fallback-only, never overriding model.*;
+ * `api_base` is the alias for `base_url`) and drops the root keys on its next
+ * save. The readers and the cascade writer share this pattern so they agree
+ * on which lines they are.
+ */
+export const ROOT_MODEL_SIBLING = /^(provider|base_url|api_base):\s*(.+)$/
+
+/**
  * The model: block's managed keys, read the way hermes loads them (cli.py):
  * the primary is `model.default`; when that key is absent, `model.model`
  * (promoted to default at load); and a scalar `model: <id>` — the "new
- * format" — is the default with no provider. A `fallback:` or auxiliary
- * model is never promoted to primary. Values are comment-stripped and
- * unquoted like every other reader here.
+ * format" — is the default with no provider of its own. A `fallback:` or
+ * auxiliary model is never promoted to primary. A provider / base_url the
+ * block lacks comes from the root-level siblings (ROOT_MODEL_SIBLING), as
+ * at runtime. Values are comment-stripped and unquoted like every other
+ * reader here.
  */
 function readModelBlock(dataDir: string): { provider: string; default: string; base_url: string } {
   const out = { provider: '', default: '', base_url: '' }
   // model.model, applied only when model.default is absent (default wins at runtime).
   let modelKey = ''
+  const root = { provider: '', base_url: '', api_base: '' }
   try {
     const content = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf-8')
     const lines = content.split('\n')
     let inModelSection = false
+    let modelSeen = false
     for (const line of lines) {
-      if (MODEL_HEADER.test(line)) {
+      if (!modelSeen && MODEL_HEADER.test(line)) {
+        modelSeen = true
         const flow = line.match(FLOW_MAP)
         if (flow) {
           for (const [key, raw] of parseFlowPairs(flow[1])) {
@@ -756,18 +747,23 @@ function readModelBlock(dataDir: string): { provider: string; default: string; b
             else if (key === 'model' && !modelKey) modelKey = yamlScalar(raw)
             else if (key === 'base_url' && !out.base_url) out.base_url = yamlScalar(raw)
           }
-          break
+          continue
         }
         const scalar = yamlScalar(line.slice('model:'.length))
         if (scalar) {
           out.default = scalar
-          break
+          continue
         }
         inModelSection = true
         continue
       }
       if (isTopLevelLine(line)) {
-        if (inModelSection) break
+        inModelSection = false
+        const sib = line.match(ROOT_MODEL_SIBLING)
+        if (sib) {
+          const key = sib[1] as keyof typeof root
+          if (!root[key]) root[key] = yamlScalar(sib[2])
+        }
         continue
       }
       if (!inModelSection) continue
@@ -785,6 +781,8 @@ function readModelBlock(dataDir: string): { provider: string; default: string; b
     // unreadable → empty block
   }
   if (!out.default && modelKey) out.default = modelKey
+  if (!out.provider) out.provider = root.provider
+  if (!out.base_url) out.base_url = root.base_url || root.api_base
   return out
 }
 
