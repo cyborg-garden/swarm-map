@@ -75,3 +75,13 @@ describe('validateModelAutoUpdate / validateSettingsPatch', () => {
     expect(() => validateSettingsPatch({ modelAutoUpdate: { enabled: true } })).toThrow(/mode/)
   })
 })
+
+describe('validateModelAutoUpdate — interval upper bound (audit)', () => {
+  it('rejects an interval above 720h and accepts 720h', async () => {
+    expect(() => validateModelAutoUpdate({ ...DEFAULT_MODEL_AUTO_UPDATE, intervalHours: 721 })).toThrow(/720/)
+    expect(() => validateModelAutoUpdate({ ...DEFAULT_MODEL_AUTO_UPDATE, intervalHours: Infinity })).toThrow()
+    expect(validateModelAutoUpdate({ ...DEFAULT_MODEL_AUTO_UPDATE, intervalHours: 720 }).intervalHours).toBe(720)
+    expect((await put({ intervalHours: 721 })).status).toBe(400)
+    expect(await (await GET()).json()).toEqual(DEFAULT_MODEL_AUTO_UPDATE)
+  })
+})

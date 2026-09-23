@@ -5,6 +5,8 @@ const state = vi.hoisted(() => ({
   harness: undefined as { id: string; name: string; modelTracking?: Record<string, boolean> } | undefined,
   updateConfig: vi.fn(),
   auditAppend: vi.fn(),
+  // What config.yaml currently holds under fallback_providers.
+  rows: [] as Array<{ provider: string; model: string }>,
 }))
 const { updateConfig, auditAppend } = state
 
@@ -13,6 +15,11 @@ vi.mock('@/lib/services', () => ({
     harness: { get: (id: string) => (state.harness && state.harness.id === id ? state.harness : undefined), updateConfig: state.updateConfig },
     audit: { append: state.auditAppend },
   },
+}))
+
+vi.mock('@/lib/services/harness', () => ({
+  guessDataDir: () => '/tmp/hsm-tracking-test',
+  readFallbackProviders: () => state.rows,
 }))
 
 import { PUT } from './route'
@@ -25,6 +32,11 @@ const put = (id: string, body: unknown) =>
 describe('PUT /api/harnesses/[id]/models/tracking', () => {
   beforeEach(() => {
     state.harness = { id: 'h_test', name: 'test', modelTracking: { 'openrouter/moonshotai/kimi-k2.7-code': true } }
+    state.rows = [
+      { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+      { provider: 'openrouter', model: 'moonshotai/kimi-k2.7-code' },
+      { provider: 'ollama', model: 'qwen3:30b' },
+    ]
     updateConfig.mockReset()
     auditAppend.mockReset()
   })
@@ -54,5 +66,18 @@ describe('PUT /api/harnesses/[id]/models/tracking', () => {
     expect((await put('h_test', { 'openrouter/x': 'yes' })).status).toBe(400)
     expect((await put('h_test', ['openrouter/x'])).status).toBe(400)
     expect(updateConfig).not.toHaveBeenCalled()
+  })
+
+  // Audit: a stale UI must not record intent for a row that no longer exists
+  // (the scheduler may have rotated it) — the key would orphan silently.
+  it('refuses tracking a key that matches no current fallback_providers row; clearing one is always allowed', async () => {
+    const res = await put('h_test', { 'openrouter/z-ai/glm-5.3': true })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toContain('openrouter/z-ai/glm-5.3')
+    expect(updateConfig).not.toHaveBeenCalled()
+
+    const clear = await put('h_test', { 'openrouter/z-ai/glm-5.3': false, 'openrouter/moonshotai/kimi-k2.7-code': false })
+    expect(clear.status).toBe(200)
+    expect(await clear.json()).toEqual({ modelTracking: {} })
   })
 })

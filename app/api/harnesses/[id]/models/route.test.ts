@@ -350,3 +350,74 @@ describe('Models API — PUT validation', () => {
     expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
   })
 })
+
+// --- Audit: the legacy body shape must go through the same guarded writer -----
+describe('Models API — legacy body through the shared writer (audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+    mockExistingFp.mockReturnValue([])
+    mockModelProvider.mockReturnValue('')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const capture = () => {
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+    return () => written
+  }
+
+  it('{cascade} with no fallback_providers block keeps model.provider', async () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue('model:\n  provider: openrouter\n  default: z-ai/glm-5.2\nagent:\n  max_turns: 60\n' as never)
+    const get = capture()
+    const res = await PUT(makeRequest({ cascade: ['z-ai/glm-5.3'] }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(get()).toMatch(/^model:\n  provider: openrouter\n  default: z-ai\/glm-5\.3\n/m)
+    expect(get()).toContain('agent:\n  max_turns: 60')
+    expect(await res.json()).toMatchObject({ provider: 'openrouter', primary: 'z-ai/glm-5.3' })
+  })
+
+  it('{model} on a template custom primary keeps model.provider and model.base_url', async () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      'model:\n  provider: custom\n  default: qwen3:30b\n  base_url: "http://host.docker.internal:11434/v1"\n\ncompression:\n  enabled: true\n' as never
+    )
+    const get = capture()
+    const res = await PUT(makeRequest({ model: 'glm4:9b' }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(get()).toMatch(/^model:\n  provider: custom\n  default: glm4:9b\n  base_url: "http:\/\/host\.docker\.internal:11434\/v1"\n/m)
+    expect(get()).toContain('compression:\n  enabled: true')
+  })
+
+  it('{cascade} with duplicate ids writes each row once and never lists the primary under fallback:', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n' as never
+    )
+    const get = capture()
+    const res = await PUT(makeRequest({ cascade: ['claude-sonnet-4-6', 'claude-sonnet-4-6'] }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect((get().match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
+    expect(get()).not.toContain('fallback:')
+    expect((await res.json()).models).toEqual(['claude-sonnet-4-6'])
+  })
+
+  it('legacy body rejects an unsafe base_url carried on an existing row (same scalar check as the fallback_providers shape)', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'ollama', model: 'qwen3:30b', base_url: 'http://x\nevil: true' }])
+    const res = await PUT(makeRequest({ cascade: ['qwen3:30b'] }), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+
+  it('fallback_providers shape with a stale expected_fallback_providers → 409, nothing written', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'openrouter', model: 'z-ai/glm-5.3' }])
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+      expected_fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(409)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+})

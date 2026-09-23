@@ -511,3 +511,104 @@ describe('evaluateApply / resolveIntervalMs', () => {
     expect(resolveIntervalMs(s, 'junk')).toBe(6 * 3600 * 1000)
   })
 })
+
+// --- Audit ------------------------------------------------------------------
+describe('checkModelUpdates — apply guards added by the audit', () => {
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+
+  it('primary-mismatch: a tracked fallback row is not rotated when model.default is a different model', async () => {
+    // model.default is Kimi K3 while fallback_providers[0] is the tracked GLM row.
+    // The writer derives model.default from row 0, so an apply here would
+    // silently switch the agent's primary. Must block, write nothing, restart nothing.
+    const cfg = [
+      'model:',
+      '  provider: openrouter',
+      '  default: moonshotai/kimi-k3',
+      'fallback_providers:',
+      '  - provider: openrouter',
+      '    model: z-ai/glm-5.2',
+      '  - provider: openrouter',
+      '    model: moonshotai/kimi-k3',
+      '',
+    ].join('\n')
+    makeHarness('pm', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const glm = entryFor(report, 'h_pm', 'z-ai/glm-5.2')!
+    expect(glm.successor).toBe('z-ai/glm-5.3')
+    expect(glm.applied).toBeUndefined()
+    expect(glm.blocked).toMatch(/primary-mismatch/)
+    expect(readConfig('pm')).toBe(cfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+    expect(deps.audit.append).toHaveBeenCalledWith(
+      expect.objectContaining({ what: 'cascade:auto-update:blocked', meta: expect.objectContaining({ reason: expect.stringMatching(/primary-mismatch/) }) }),
+    )
+  })
+
+  it('manual apply is refused on the same primary mismatch', async () => {
+    const cfg = [
+      'model:',
+      '  provider: openrouter',
+      '  default: moonshotai/kimi-k3',
+      'fallback_providers:',
+      '  - provider: openrouter',
+      '    model: z-ai/glm-5.2',
+      '  - provider: openrouter',
+      '    model: moonshotai/kimi-k3',
+      '',
+    ].join('\n')
+    makeHarness('pm2', { config: cfg })
+    const res = await applyModelUpdate({ harnessId: 'h_pm2', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toMatch(/primary-mismatch/)
+    expect(readConfig('pm2')).toBe(cfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('a rotation keeps the other rows\' extra keys (inline api_key) and the model block\'s base_url', async () => {
+    const cfg = [
+      'model:',
+      '  provider: openrouter',
+      '  default: z-ai/glm-5.2',
+      '  base_url: https://openrouter.example/v1',
+      'fallback_providers:',
+      '  - provider: openrouter',
+      '    model: z-ai/glm-5.2',
+      '  - provider: custom',
+      '    model: some-proxy-model',
+      '    base_url: http://proxy:4000/v1',
+      '    api_key: sk-proxy-inline',
+      '',
+    ].join('\n')
+    makeHarness('rk', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    expect(entryFor(report, 'h_rk', 'z-ai/glm-5.2')!.applied).toBe(true)
+    const out = readConfig('rk')
+    expect(out).toContain('    api_key: sk-proxy-inline')
+    expect(out).toContain('  base_url: https://openrouter.example/v1')
+    expect(out).toContain('    model: z-ai/glm-5.3')
+  })
+
+  it('the report surfaces tracking keys that match no current row (orphaned after a stale save)', async () => {
+    makeHarness('or', {
+      config: fpConfig([['openrouter', 'z-ai/glm-5.2']]),
+      tracking: { [trackingKey('openrouter', 'z-ai/glm-5.3')]: true },
+    })
+    settings = { ...settings, mode: 'notify' }
+    const report = await checkModelUpdates(deps)
+    const h = report.harnesses.find((x) => x.id === 'h_or')!
+    expect(h.orphanedTracking).toEqual(['openrouter/z-ai/glm-5.3'])
+    expect(entryFor(report, 'h_or', 'z-ai/glm-5.2')!.tracked).toBe(false)
+  })
+})
+
+describe('resolveIntervalMs — bounded (audit)', () => {
+  it('never exceeds the 32-bit timer limit (a monthly interval must not become a 1ms hot loop)', () => {
+    const s = { enabled: true, mode: 'notify' as const, intervalHours: 720, maxPriceMultiplier: 1.5 }
+    expect(resolveIntervalMs(s, undefined)).toBeLessThanOrEqual(2 ** 31 - 1)
+    expect(resolveIntervalMs(s, undefined)).toBeGreaterThan(24 * 3600 * 1000)
+    expect(resolveIntervalMs(s, '9999999999')).toBeLessThanOrEqual(2 ** 31 - 1)
+    expect(resolveIntervalMs(s, String(2 ** 31 - 1))).toBe(2 ** 31 - 1)
+  })
+})

@@ -183,6 +183,8 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
   const [modelProvider, setModelProvider] = useState('')
   const [modelName, setModelName] = useState('')
   const [modelSaving, setModelSaving] = useState(false)
+  // Bumped after a 409 so the editor remounts on the freshly fetched rows.
+  const [cascadeEditorGen, setCascadeEditorGen] = useState(0)
 
   // Surface settings state
   const [surfaceSettings, setSurfaceSettings] = useState<Settings | null>(null)
@@ -900,7 +902,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
             // key forces a remount per harness — the editor seeds its cascade
             // into local state once, so without this an in-app A→B nav keeps A's
             // cascade and saving B's Models tab could persist A's cascade (D6).
-            key={id}
+            key={`${id}:${cascadeEditorGen}`}
             models={modelConfig.models ?? harness.models ?? []}
             provider={modelConfig.provider ?? ''}
             fallbackProviders={modelConfig.fallbackProviders ?? []}
@@ -911,9 +913,26 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                 const res = await fetch(`/api/harnesses/${id}/models`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ fallback_providers: entries }),
+                  // What this editor was seeded from. The server refuses (409)
+                  // when the rows on disk no longer match — the model-update
+                  // scheduler or another tab wrote since — so a stale save
+                  // cannot silently undo an applied update.
+                  body: JSON.stringify({
+                    fallback_providers: entries,
+                    expected_fallback_providers: modelConfig.fallbackProviders ?? [],
+                  }),
                 })
-                if (!res.ok) { toast.error('Failed to save'); return }
+                if (res.status === 409) {
+                  toast.error('The cascade changed since you opened it — reloaded; please re-apply your edit')
+                  await refetchModels()
+                  setCascadeEditorGen((g) => g + 1)
+                  return
+                }
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}))
+                  toast.error(err.error ?? 'Failed to save')
+                  return
+                }
                 toast.success('Model cascade saved')
                 refetchModels()
                 // Auto-restart to pick up cascade changes

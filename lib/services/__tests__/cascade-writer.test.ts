@@ -358,3 +358,209 @@ describe('applyCascadeToHarness', () => {
     })
   })
 })
+
+// --- Audit: the writer must round-trip what it does not manage --------------
+describe('applyCascadeToHarness — round-trip and preconditions (audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-writer-'))
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY']))
+  })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
+
+  it('keeps model.base_url and other model.* keys (api_mode) when a different row is rotated', () => {
+    // The HSM template writes provider: custom + base_url for a local primary.
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: custom',
+        '  default: qwen3:30b',
+        `  base_url: "${OLLAMA_URL}"`,
+        '  api_mode: chat_completions',
+        '',
+        'fallback_providers:',
+        '  - provider: custom',
+        '    model: qwen3:30b',
+        `    base_url: "${OLLAMA_URL}"`,
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.2',
+        'platforms:',
+        '  telegram:',
+        '    enabled: true',
+        '',
+      ].join('\n')
+    )
+    const res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'custom', model: 'qwen3:30b', base_url: OLLAMA_URL },
+        { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+      ],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    const written = fs.readFileSync(configPath(), 'utf-8')
+    const modelBlock = written.slice(0, written.indexOf('fallback_providers:'))
+    expect(modelBlock).toMatch(/^  provider: custom$/m)
+    expect(modelBlock).toMatch(/^  default: qwen3:30b$/m)
+    expect(modelBlock).toMatch(/^  base_url: "?http:\/\/host\.docker\.internal:11434\/v1"?$/m)
+    expect(modelBlock).toMatch(/^  api_mode: chat_completions$/m)
+    expect(modelBlock).toMatch(/^  fallback:\n    - z-ai\/glm-5\.3$/m)
+    expect((written.match(/^model:/gm) ?? []).length).toBe(1)
+  })
+
+  it('model.base_url follows the new primary row: written from entry 0, dropped when a cloud primary replaces a local one', () => {
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: anthropic',
+        '  default: claude-sonnet-4-6',
+        'fallback_providers:',
+        '  - provider: anthropic',
+        '    model: claude-sonnet-4-6',
+        '  - provider: ollama',
+        '    model: qwen3:30b',
+        `    base_url: ${OLLAMA_URL}`,
+        '',
+      ].join('\n')
+    )
+    // Local model promoted to primary → model.base_url must appear.
+    let res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      ],
+      { who: 'api' }
+    )
+    expect(res.ok).toBe(true)
+    let written = fs.readFileSync(configPath(), 'utf-8')
+    expect(written).toMatch(/^model:\n  provider: ollama\n  default: qwen3:30b\n  base_url: http:\/\/host\.docker\.internal:11434\/v1\n/m)
+
+    // Cloud model back to primary → the local base_url must not leak onto it.
+    res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
+      ],
+      { who: 'api' }
+    )
+    expect(res.ok).toBe(true)
+    written = fs.readFileSync(configPath(), 'utf-8')
+    const modelBlock = written.slice(0, written.indexOf('fallback_providers:'))
+    expect(modelBlock).not.toContain('base_url')
+    expect(modelBlock).toMatch(/^  provider: anthropic\n  default: claude-sonnet-4-6\n/m)
+  })
+
+  it('round-trips unknown row keys (api_key, key_env, api_mode) on rows it did not change; still never writes a caller-supplied api_key', () => {
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: openrouter',
+        '  default: z-ai/glm-5.2',
+        'fallback_providers:',
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.2',
+        '  - provider: custom',
+        '    model: some-proxy-model',
+        '    base_url: http://proxy:4000/v1',
+        '    api_key: sk-proxy-inline',
+        '    key_env: PROXY_KEY',
+        '    api_mode: chat_completions',
+        'platforms:',
+        '  telegram:',
+        '    enabled: true',
+        '',
+      ].join('\n')
+    )
+    const res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+        { provider: 'custom', model: 'some-proxy-model', base_url: 'http://proxy:4000/v1', api_key: 'sk-from-ui' } as never,
+      ],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    const written = fs.readFileSync(configPath(), 'utf-8')
+    expect(written).toContain('    api_key: sk-proxy-inline')
+    expect(written).toContain('    key_env: PROXY_KEY')
+    expect(written).toContain('    api_mode: chat_completions')
+    expect(written).not.toContain('sk-from-ui')
+    expect(written).toContain('    model: z-ai/glm-5.3')
+    expect(written).not.toContain('z-ai/glm-5.2')
+    // Extra keys stay inside their own row (between the custom row and the next top-level key).
+    const customIdx = written.indexOf('model: some-proxy-model')
+    expect(written.indexOf('api_key: sk-proxy-inline')).toBeGreaterThan(customIdx)
+    expect(written.indexOf('api_key: sk-proxy-inline')).toBeLessThan(written.indexOf('platforms:'))
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+      { provider: 'custom', model: 'some-proxy-model', base_url: 'http://proxy:4000/v1', api_key: 'sk-proxy-inline' },
+    ])
+  })
+
+  it('does not carry a row\'s extra keys onto a row that replaced it with a different model', () => {
+    fs.writeFileSync(
+      configPath(),
+      [
+        'model:',
+        '  provider: custom',
+        '  default: proxy-a',
+        'fallback_providers:',
+        '  - provider: custom',
+        '    model: proxy-a',
+        '    base_url: http://proxy:4000/v1',
+        '    api_key: sk-proxy-inline',
+        '',
+      ].join('\n')
+    )
+    const res = applyCascadeToHarness('h_test', [{ provider: 'custom', model: 'proxy-b', base_url: 'http://other:1/v1' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).not.toContain('api_key')
+  })
+
+  it('refuses with 409 and writes nothing when `expected` no longer matches the rows on disk', () => {
+    const before = ['model:', '  provider: openrouter', '  default: z-ai/glm-5.3', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.3', ''].join('\n')
+    fs.writeFileSync(configPath(), before)
+    // The editor was opened while the file still said glm-5.2; the scheduler rotated it since.
+    const res = applyCascadeToHarness(
+      'h_test',
+      [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+      { who: 'api', expected: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }] }
+    )
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.status).toBe(409)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(before)
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+
+    // Matching expectation → the write proceeds.
+    const ok = applyCascadeToHarness(
+      'h_test',
+      [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+      { who: 'api', expected: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }] }
+    )
+    expect(ok.ok).toBe(true)
+    expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+  })
+
+  it('fallbackProviders: "keep" rewrites only the model block and leaves the block on disk untouched', () => {
+    const fpBlock = ['fallback_providers:', '  - provider: ollama', '    model: qwen3:30b', `    base_url: ${OLLAMA_URL}`].join('\n')
+    fs.writeFileSync(configPath(), ['model:', '  provider: custom', '  default: qwen3:30b', `  base_url: "${OLLAMA_URL}"`, fpBlock, 'agent:', '  max_turns: 60', ''].join('\n'))
+    // No provider from the caller → the existing provider line (and its base_url) stay.
+    const res = applyCascadeToHarness('h_test', [{ provider: '', model: 'glm4:9b' }], { who: 'api', fallbackProviders: 'keep' })
+    expect(res.ok).toBe(true)
+    if (res.ok) expect(res.written.provider).toBe('custom')
+    const written = fs.readFileSync(configPath(), 'utf-8')
+    expect(written).toMatch(/^model:\n  provider: custom\n  default: glm4:9b\n  base_url: "http:\/\/host\.docker\.internal:11434\/v1"\n/m)
+    expect(written).toContain(fpBlock)
+    expect(written).toContain('agent:\n  max_turns: 60')
+  })
+})

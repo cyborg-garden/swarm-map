@@ -222,7 +222,8 @@ export type SuccessorResult = {
   parsed: NormalizedModelId
   successor?: { model: string; canonical?: string; created?: number; pricing?: LiveModelPricing | null }
   kind: SuccessorKind | null
-  /** Same family, higher version, but a different tag set — shown, never applied. */
+  /** Same family, higher version, but a different tag set — or an older
+   *  release than the current row. Shown, never applied. */
   nearMisses: string[]
 }
 
@@ -233,7 +234,8 @@ function sameRouting(a: Set<string>, b: Set<string>): boolean {
 /**
  * Find the newest version of `current` in `live`. A version bump (kind
  * 'version') wins over a newer snapshot of the same version (kind 'snapshot');
- * no match → kind null.
+ * no match → kind null. A bump released BEFORE the current row is never a
+ * successor (see grok-4.20); among the rest the highest version wins.
  */
 export function findSuccessor(
   current: { provider: string; model: string },
@@ -251,34 +253,58 @@ export function findSuccessor(
       !n.unstable &&
       !(r.expiration && r.expiration < today),
   )
-  // OpenRouter: canonical_slug carries the full YYYYMMDD for BOTH bare and
-  // dated ids (deepseek-v4-flash → ...-20260423, deepseek-v4-flash-0731 →
-  // ...-20260731). Prefer it; fall back to the id's own token, then created.
-  const snapOf = ({ r, n }: { r: LiveModel; n: NormalizedModelId }): string =>
-    r.canonical?.match(/(20\d{6})$/)?.[1] ?? (n.snapshot ? n.snapshot.replace(/-/g, '') : String(r.created ?? 0))
+  // Release-date key, one domain only: YYYYMMDD. OpenRouter's canonical_slug
+  // carries it for BOTH bare and dated ids (deepseek-v4-flash → ...-20260423,
+  // deepseek-v4-flash-0731 → ...-20260731); else a full date in the id itself;
+  // else `created`. A raw MMDD/YYMM token or an epoch string is NEVER used as
+  // a key — mixing domains made '1737331200' (an epoch) sort after '0528'
+  // (a token) and reported the January original as the newer snapshot.
+  const dateKeyOf = ({ r, n }: { r: LiveModel; n: NormalizedModelId }): string | null => {
+    const fromCanonical = r.canonical?.match(/(20\d{6})$/)?.[1]
+    if (fromCanonical) return fromCanonical
+    if (n.snapshot && /^20\d{2}-\d{2}(-\d{2})?$/.test(n.snapshot)) return n.snapshot.replace(/-/g, '').padEnd(8, '0')
+    if (typeof r.created === 'number' && r.created > 0) return new Date(r.created * 1000).toISOString().slice(0, 10).replace(/-/g, '')
+    return null
+  }
+  const cmpDate = (a: string | null, b: string | null): number => (a ?? '') < (b ?? '') ? -1 : (a ?? '') > (b ?? '') ? 1 : 0
+  const curRow = rows.find((x) => x.r.id === current.model)
+  const curDate = curRow ? dateKeyOf(curRow) : null
+  // A version number is not a timeline: live OpenRouter has x-ai/grok-4.20
+  // (2026-03) beside x-ai/grok-4.7 (2026-09). A higher version with an OLDER
+  // release date than the current row is a near miss, never a successor —
+  // applying it is a silent downgrade.
+  const olderThanCurrent = (x: { r: LiveModel; n: NormalizedModelId }): boolean => {
+    if (!curDate) return false
+    const d = dateKeyOf(x)
+    return d !== null && d < curDate
+  }
   const versionBumps = same
-    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0)
+    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && !olderThanCurrent(x))
     .sort(
       (a, b) =>
         compareVersions(b.n.version ?? [], a.n.version ?? []) ||
-        (snapOf(b) > snapOf(a) ? 1 : snapOf(b) < snapOf(a) ? -1 : 0) ||
+        cmpDate(dateKeyOf(b), dateKeyOf(a)) ||
         (b.r.created ?? 0) - (a.r.created ?? 0),
     )
-  const curRow = rows.find((x) => x.r.id === current.model)
   const snapBumps = same
-    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) === 0 && curRow && snapOf(x) > snapOf(curRow))
-    .sort((a, b) => (snapOf(b) > snapOf(a) ? 1 : snapOf(b) < snapOf(a) ? -1 : 0))
-  const nearMisses = rows
-    .filter(
-      ({ n }) =>
-        !n.alias &&
-        n.familyKey === cur.familyKey &&
-        n.tagKey !== cur.tagKey &&
-        compareVersions(n.version ?? [], cur.version ?? []) > 0 &&
-        !n.unstable,
-    )
+    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) === 0 && curDate !== null && cmpDate(dateKeyOf(x), curDate) > 0)
+    .sort((a, b) => cmpDate(dateKeyOf(b), dateKeyOf(a)))
+  const olderVersionBumps = same
+    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && olderThanCurrent(x))
     .map((x) => x.r.id)
-    .slice(0, 6)
+  const nearMisses = [
+    ...olderVersionBumps,
+    ...rows
+      .filter(
+        ({ n }) =>
+          !n.alias &&
+          n.familyKey === cur.familyKey &&
+          n.tagKey !== cur.tagKey &&
+          compareVersions(n.version ?? [], cur.version ?? []) > 0 &&
+          !n.unstable,
+      )
+      .map((x) => x.r.id),
+  ].slice(0, 6)
 
   const pick = versionBumps[0] ?? snapBumps[0]
   const kind: SuccessorKind | null = versionBumps[0] ? 'version' : snapBumps[0] ? 'snapshot' : null
