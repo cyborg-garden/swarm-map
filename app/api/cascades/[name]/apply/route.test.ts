@@ -62,7 +62,7 @@ vi.mock('@/lib/services/harness', async () => {
 
 import { POST } from './route'
 import { services } from '@/lib/services'
-import { readFallbackProviders, readModelConfig } from '@/lib/services/harness'
+import { readFallbackProviders, readModelConfig, readCascade, cascadeChain } from '@/lib/services/harness'
 
 const configPath = path.join(agentDir, 'config.yaml')
 const GOOD = [
@@ -92,8 +92,8 @@ describe('Cascades API — apply', () => {
     fs.rmSync(path.join(tmpDir, 'cascades.json'), { force: true })
     fs.rmSync(path.join(tmpDir, 'audit.jsonl'), { force: true })
     fs.rmSync(configPath, { force: true })
-    services.cascades.save({ name: 'good', entries: GOOD })
-    services.cascades.save({ name: 'needs-openrouter', entries: NEEDS_OPENROUTER })
+    services.cascades.save({ name: 'good', chain: GOOD })
+    services.cascades.save({ name: 'needs-openrouter', chain: NEEDS_OPENROUTER })
   })
   afterAll(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -123,7 +123,7 @@ describe('Cascades API — apply', () => {
     const records = services.storage.read<unknown[]>('cascades.json', [])
     records.push({
       name: 'poisoned',
-      entries: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }],
+      chain: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }],
       createdAt: 1,
       updatedAt: 1,
     })
@@ -148,9 +148,11 @@ describe('Cascades API — apply', () => {
       name: 'good',
       harness: 'h_test',
       restarted: true,
-      applied: { provider: 'anthropic', primary: 'claude-sonnet-4-6', models: ['claude-sonnet-4-6', 'claude-haiku-4-5'] },
+      applied: { provider: 'anthropic', primary: 'claude-sonnet-4-6', models: ['claude-sonnet-4-6', 'claude-haiku-4-5'], chain: GOOD },
     })
-    expect(readFallbackProviders(agentDir)).toEqual(GOOD)
+    // A fresh file: primary in model:, the fallback as the only row.
+    expect(cascadeChain(readCascade(agentDir))).toEqual(GOOD)
+    expect(readFallbackProviders(agentDir)).toEqual([GOOD[1]])
     expect(services.harness.updateConfig).toHaveBeenCalledWith('h_test', {
       models: ['claude-sonnet-4-6', 'claude-haiku-4-5'],
     })
@@ -164,9 +166,10 @@ describe('Cascades API — apply', () => {
     expect(log[0].meta).toMatchObject({ name: 'good', harness: 'h_test' })
   })
 
-  // Re-audit: applying a saved cascade replaces the whole cascade, primary
-  // included — the writer's primary-mismatch guard must not refuse it.
-  it('applies over a drifted file (model.default ≠ fallback_providers[0]) — the library apply owns the primary', async () => {
+  // Applying a saved cascade replaces the whole chain, primary included, and
+  // keeps the target file's convention: this file does not repeat its primary
+  // as row 0, so the applied one is not repeated either.
+  it('applies over a file whose primary is not row 0 (matilde-shaped), preserving that convention', async () => {
     fs.writeFileSync(
       configPath,
       ['model:', '  provider: openrouter', '  default: moonshotai/kimi-k3', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.3', '  - provider: openrouter', '    model: moonshotai/kimi-k3', ''].join('\n')
@@ -174,7 +177,21 @@ describe('Cascades API — apply', () => {
     const res = await POST(post({ harnessId: 'h_test' }), makeParams('good'))
     expect(res.status).toBe(200)
     expect(readModelConfig(agentDir)[0]).toBe('claude-sonnet-4-6')
-    expect(readFallbackProviders(agentDir)).toEqual(GOOD)
+    expect(cascadeChain(readCascade(agentDir))).toEqual(GOOD)
+    expect(readFallbackProviders(agentDir)).toEqual([GOOD[1]])
+  })
+
+  it('applies over a file that repeats its primary as row 0 (HSM-saved), keeping that convention too', async () => {
+    fs.writeFileSync(
+      configPath,
+      ['model:', '  provider: openrouter', '  default: z-ai/glm-5.3', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.3', '  - provider: openrouter', '    model: moonshotai/kimi-k3', ''].join('\n')
+    )
+    const res = await POST(post({ harnessId: 'h_test' }), makeParams('good'))
+    expect(res.status).toBe(200)
+    expect(fs.readFileSync(configPath, 'utf-8')).toBe(
+      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: anthropic\n    model: claude-haiku-4-5\n'
+    )
+    expect(cascadeChain(readCascade(agentDir))).toEqual(GOOD)
   })
 
   it('restart:false writes but does not restart', async () => {
@@ -194,7 +211,7 @@ describe('Cascades API — apply', () => {
     const json = await res.json()
     expect(json.restarted).toBe(false)
     expect(json.restartError).toBe('no compose file')
-    expect(readFallbackProviders(agentDir)).toEqual(GOOD)
+    expect(cascadeChain(readCascade(agentDir))).toEqual(GOOD)
   })
 
   it('404 for an unknown cascade; 404 for an unknown harness; neither writes or restarts', async () => {

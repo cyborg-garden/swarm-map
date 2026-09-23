@@ -31,6 +31,8 @@ function installFetch() {
   }))
 }
 
+// HSM-saved shape: the primary is repeated as fallback_providers[0]; GET
+// /models folds the duplicate out of the chain.
 const CONFIG = {
   provider: 'openrouter',
   primary: 'z-ai/glm-5.2',
@@ -40,6 +42,32 @@ const CONFIG = {
     { provider: 'anthropic', model: 'claude-sonnet-4-6' },
     { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
   ],
+  chain: [
+    { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+    { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+  ],
+  primaryEntry: { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+  primaryDuplicatedAsRow0: true,
+}
+
+// cyborg/matilde shape: the primary lives only in model: and the rows are
+// the fallbacks. The chain starts with the primary; nothing is wrong.
+const MATILDE_CONFIG = {
+  provider: 'openrouter',
+  primary: 'moonshotai/kimi-k3',
+  models: ['moonshotai/kimi-k3'],
+  fallbackProviders: [
+    { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+    { provider: 'zai', model: 'glm-5.3' },
+  ],
+  chain: [
+    { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+    { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+    { provider: 'zai', model: 'glm-5.3' },
+  ],
+  primaryEntry: { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
+  primaryDuplicatedAsRow0: false,
 }
 
 const REPORT = {
@@ -150,19 +178,56 @@ describe('ModelsTab', () => {
     expect(props.onCascadeChanged).not.toHaveBeenCalled()
   })
 
-  // --- Re-audit -----------------------------------------------------------
-
-  it('warns when config.yaml\'s primary (model.default) is not the first cascade row', async () => {
-    render(<ModelsTab {...baseProps()} modelConfig={{ ...CONFIG, primary: 'moonshotai/kimi-k3' }} />)
-    const alert = screen.getByRole('alert')
-    expect(alert).toHaveTextContent('moonshotai/kimi-k3')
-    expect(alert).toHaveTextContent('z-ai/glm-5.2')
-    expect(alert).toHaveTextContent(/model\.default/)
+  it('a successor the report marks blocked keeps its hint but the Update button is disabled with the reason', async () => {
+    const blockedReport = {
+      ...REPORT,
+      harnesses: [{ id: 'h_test', name: 'test', entries: [
+        { provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', blocked: 'no-primary-in-file' },
+      ] }],
+    }
+    routes['GET /api/fleet/model-updates'] = { status: 200, body: blockedReport }
+    render(<ModelsTab {...baseProps()} modelConfig={{ ...CONFIG, primaryEntry: null }} />)
+    expect(await screen.findByText(/newer: z-ai\/glm-5\.3/)).toBeInTheDocument()
+    const button = screen.getByRole('button', { name: /update z-ai\/glm-5\.2 to z-ai\/glm-5\.3/i })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', expect.stringMatching(/no-primary-in-file/))
   })
 
-  it('no warning when model.default is row 0', async () => {
-    render(<ModelsTab {...baseProps()} />)
+  it('the no-primary note reaches the editor from GET /models (primaryEntry null) and the page save carries setPrimary', async () => {
+    const props = baseProps()
+    render(<ModelsTab {...props} modelConfig={{ ...MATILDE_CONFIG, primaryEntry: null }} />)
+    expect(screen.getByText(/no primary on disk/i)).toBeInTheDocument()
+    fireEvent.click(screen.getAllByTitle('Move up')[1])
+    fireEvent.click(screen.getByRole('button', { name: /save cascade/i }))
+    expect(props.onSave).toHaveBeenCalledWith(expect.any(Array), { setPrimary: true })
+  })
+
+  // --- Chain semantics ------------------------------------------------------
+
+  it('a primary that is not fallback_providers[0] is shown as row 1 of the chain — no warning, nothing to fix', async () => {
+    render(<ModelsTab {...baseProps()} modelConfig={MATILDE_CONFIG} />)
     expect(screen.queryByRole('alert')).toBeNull()
+    const rows = document.querySelectorAll('[data-row]')
+    expect(Array.from(rows).map((r) => r.getAttribute('data-row'))).toEqual(['openrouter/moonshotai/kimi-k3', 'openrouter/z-ai/glm-5.2', 'zai/glm-5.3'])
+    expect(screen.getByText('primary').closest('[data-row]')).toHaveAttribute('data-row', 'openrouter/moonshotai/kimi-k3')
+  })
+
+  it('the duplicate row 0 of an HSM-saved file is not shown twice', async () => {
+    render(<ModelsTab {...baseProps()} />)
+    expect(screen.getAllByText('z-ai/glm-5.2')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-row]')).toHaveLength(3)
+  })
+
+  it('live lists are fetched for the providers in the CHAIN, so a primary only present in model: gets its retired check', async () => {
+    routes['GET /api/models/live?provider=zai'] = { status: 204 }
+    render(<ModelsTab {...baseProps()} modelConfig={{ ...MATILDE_CONFIG, chain: [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, ...MATILDE_CONFIG.chain.slice(1)] }} />)
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/models/live?provider=anthropic')).toBe(true))
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/models/live?provider=zai')).toBe(true))
+  })
+
+  it('Track latest is offered on the primary row', async () => {
+    render(<ModelsTab {...baseProps()} modelConfig={MATILDE_CONFIG} modelTracking={{ 'openrouter/moonshotai/kimi-k3': true }} />)
+    expect(screen.getByRole('switch', { name: /track latest for moonshotai\/kimi-k3/i })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('Track latest follows the modelTracking prop after the cascade was rotated server-side', async () => {
@@ -175,6 +240,8 @@ describe('ModelsTab', () => {
       primary: 'z-ai/glm-5.3',
       models: ['z-ai/glm-5.3', 'claude-sonnet-4-6', 'qwen3:30b'],
       fallbackProviders: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, ...CONFIG.fallbackProviders.slice(1)],
+      chain: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, ...CONFIG.chain.slice(1)],
+      primaryEntry: { provider: 'openrouter', model: 'z-ai/glm-5.3' },
     }
     rerender(<ModelsTab {...props} modelConfig={rotated} modelTracking={{ 'openrouter/z-ai/glm-5.3': true }} editorKey="h_test:1" />)
     expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.3/i })).toHaveAttribute('aria-checked', 'true')
@@ -203,10 +270,6 @@ describe('ModelsTab', () => {
 })
 
 describe('cascadeSaveConflict — how the page reads a 409 from PUT /models (round-3 audit)', () => {
-  it('a primary-mismatch 409 carries the writer\'s message and keeps the edit', () => {
-    const body = { error: 'primary-mismatch: model.default is "X" but fallback_providers[0] is "A"; put "X" at the top of the cascade before saving' }
-    expect(cascadeSaveConflict(body)).toEqual({ kind: 'primary-mismatch', message: body.error })
-  })
 
   it('the stale-rows 409 (expected_fallback_providers no longer matches), or no readable body, means reload', () => {
     expect(cascadeSaveConflict({ error: 'The model cascade changed since it was read; reload and try again' })).toEqual({ kind: 'stale' })

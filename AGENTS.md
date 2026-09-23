@@ -69,7 +69,15 @@ AES-256-GCM at rest. Machine-local key at `~/.hermes-swarm-map/.key` (0600 permi
 
 ### Model Cascade
 
-Each harness has an ordered fallback chain. Primary model at position 0, fallbacks after. Stored in the agent's `config.yaml` under `model.default` and `model.fallback`. Editable via the cascade editor in the GUI or `PUT /api/harnesses/:id/models` with `{ cascade: ["model-1", "model-2", ...] }`.
+Each harness has an ordered chain, modelled the way hermes-agent consumes it:
+
+- **Primary** = the `model:` section of the agent's `config.yaml` (`model.provider`, `model.default`, optional `model.base_url`). The runtime tries it first and returns to it each turn.
+- **Fallbacks** = the `fallback_providers:` rows, in order. When the primary fails the runtime walks them one by one, skipping any row equal to the current `(provider, model)`.
+- `model.fallback` is **not read** by the runtime; Swarm Map rewrites it only when a file already has the key, and never adds it.
+
+Whether a file repeats its primary as `fallback_providers[0]` is a **per-file convention, not a drift** (the HSM editor used to write the duplicate; `hermes fallback` and hand edits do not — both shapes exist on the fleet). `readCascade()` reports it as `primaryDuplicatedAsRow0`; the writer preserves it (the duplicate row is kept in sync with `model.default` across rotations) and never invents or removes it. A no-op save is byte-identical on either shape.
+
+The editor shows the **chain** (`GET /api/harnesses/:id/models` → `chain`): row 1 is the primary by construction and can be tracked like any other entry. Save with `PUT /api/harnesses/:id/models` `{ chain: [...], expected_chain: [...] }`; the string form `{ cascade: ["model-1", "model-2", ...] }` still works. The pre-chain `{ fallback_providers: [...] }` body is **fallback-only**: it rewrites the `fallback_providers` rows and never touches the primary (a GET → PUT of the raw `fallbackProviders` is a no-op; on a duplicate-row-0 file the primary's row stays the writer's; a file with no primary gets 409 — send `{ chain }`). The primary is read the way hermes loads it: `model.default`, else `model.model`, else a scalar `model: <id>`; the writer keeps whichever form the file uses. Every write goes through `applyCascadeToHarness` (`lib/services/cascade-writer.ts`), which validates provider credentials before touching the file.
 
 ### Agent Data Directories
 

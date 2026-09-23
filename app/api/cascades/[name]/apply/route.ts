@@ -4,8 +4,10 @@ import { applyCascadeToHarness } from '@/lib/services/cascade-writer'
 
 // POST /api/cascades/:name/apply { harnessId, restart?: boolean (default true) }
 //
-// Ports a saved cascade onto a harness through the shared guarded writer.
-// A provider the target harness has no credential for → 400 with the
+// Ports a saved cascade (chain[0] = primary → model:, the rest →
+// fallback_providers) onto a harness through the shared guarded writer,
+// which keeps the TARGET file's convention about repeating the primary as
+// row 0. A provider the target harness has no credential for → 400 with the
 // validation message, config.yaml untouched, NO restart. On success the
 // harness is quick-restarted (same as the UI after a manual cascade save)
 // unless restart:false. Audited as cascade:apply { name, harness }.
@@ -33,11 +35,9 @@ export async function POST(
     return NextResponse.json({ error: 'Cascade not found' }, { status: 404 })
   }
 
-  const result = applyCascadeToHarness(harnessId, cascade.entries, {
+  const result = applyCascadeToHarness(harnessId, cascade.chain, {
     who: 'api',
     audit: { what: 'cascade:apply', meta: { name: cascade.name, harness: harnessId } },
-    // A saved cascade replaces the whole cascade, primary included.
-    allowPrimaryChange: true,
   })
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status })

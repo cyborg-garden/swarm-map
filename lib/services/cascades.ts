@@ -6,17 +6,23 @@ import { yamlPlainScalarError } from '@/lib/model-catalog'
 /**
  * Named cascade library.
  *
- * A cascade is a saved, named `fallback_providers` list — an ordered set of
- * {provider, model, base_url?} entries — that can be applied (ported) to any
- * harness via `applyCascadeToHarness` (lib/services/cascade-writer.ts).
+ * A cascade is a saved, named CHAIN — an ordered list of {provider, model,
+ * base_url?} entries where chain[0] is the PRIMARY (written to model:) and
+ * the rest are the FALLBACKS (written to fallback_providers) — that can be
+ * applied (ported) to any harness via `applyCascadeToHarness`
+ * (lib/services/cascade-writer.ts), which keeps the target file's own
+ * convention about repeating the primary as row 0.
  *
  * Persisted at DATA_DIR/cascades.json as a flat array of CascadeRecord.
+ * Records written before chain semantics carried the list under `entries`
+ * (entries[0] was already the primary); they are migrated to `chain` on
+ * read and persisted in the new shape on the next write.
  *
  * Rules:
  *  - Names are trimmed, 1–64 chars, unique case-insensitively. Lookups
  *    (get/update/rename/remove) match case-insensitively.
  *  - save() with an existing name throws a 409 CascadeLibraryError UNLESS
- *    `overwrite: true`. Overwrite replaces entries + sourceHarness, adopts the
+ *    `overwrite: true`. Overwrite replaces chain + sourceHarness, adopts the
  *    new name's casing, and preserves the original createdAt.
  *  - Entries must be non-empty; each needs a non-empty provider AND model.
  *    Only provider/model/base_url are kept — api_key (or anything else) is
@@ -24,8 +30,8 @@ import { yamlPlainScalarError } from '@/lib/model-catalog'
  *  - Every kept value must be a safe one-line YAML plain scalar (see
  *    yamlPlainScalarError): apply splices them into config.yaml unquoted, so
  *    a newline or ": " in a stored value could rewrite a live agent's config.
- *  - edit(name, {name?, entries?}) is atomic: everything is validated (new
- *    name, clash, entries) before the single write + single audit row.
+ *  - edit(name, {name?, chain?}) is atomic: everything is validated (new
+ *    name, clash, chain) before the single write + single audit row.
  */
 
 const CASCADES_FILE = 'cascades.json'
@@ -47,7 +53,7 @@ export class CascadeLibraryError extends Error {
 
 export type CascadeSaveInput = {
   name: string
-  entries: CascadeLibraryEntry[]
+  chain: CascadeLibraryEntry[]
   sourceHarness?: string
 }
 
@@ -70,7 +76,7 @@ function sameName(a: string, b: string): boolean {
 }
 
 /**
- * Whitelist-copy entries: keep provider/model/base_url only. api_key must
+ * Whitelist-copy chain: keep provider/model/base_url only. api_key must
  * never reach disk (and never be written to config.yaml on apply either).
  */
 export function sanitizeCascadeEntries(raw: unknown): CascadeLibraryEntry[] {
@@ -111,8 +117,14 @@ export class CascadeLibraryService {
   ) {}
 
   private readAll(): CascadeRecord[] {
-    const data = this.storage.read<CascadeRecord[]>(CASCADES_FILE, [])
-    return Array.isArray(data) ? data : []
+    const data = this.storage.read<Array<CascadeRecord & { entries?: CascadeLibraryEntry[] }>>(CASCADES_FILE, [])
+    if (!Array.isArray(data)) return []
+    // Read-time migration: `entries` (pre chain semantics) → `chain`.
+    return data.map((rec) => {
+      if (Array.isArray(rec.chain)) return rec
+      const { entries, ...rest } = rec
+      return { ...rest, chain: Array.isArray(entries) ? entries : [] }
+    })
   }
 
   private writeAll(records: CascadeRecord[]): void {
@@ -131,7 +143,7 @@ export class CascadeLibraryService {
 
   save(input: CascadeSaveInput, opts: { overwrite?: boolean } = {}): CascadeRecord {
     const name = normalizeName(input.name)
-    const entries = sanitizeCascadeEntries(input.entries)
+    const chain = sanitizeCascadeEntries(input.chain)
     const sourceHarness =
       typeof input.sourceHarness === 'string' && input.sourceHarness.trim()
         ? input.sourceHarness.trim()
@@ -143,11 +155,11 @@ export class CascadeLibraryService {
 
     let record: CascadeRecord
     if (idx === -1) {
-      record = { name, entries, createdAt: now, updatedAt: now }
+      record = { name, chain, createdAt: now, updatedAt: now }
       if (sourceHarness) record.sourceHarness = sourceHarness
       records.push(record)
     } else if (opts.overwrite) {
-      record = { name, entries, createdAt: records[idx].createdAt, updatedAt: now }
+      record = { name, chain, createdAt: records[idx].createdAt, updatedAt: now }
       if (sourceHarness) record.sourceHarness = sourceHarness
       records[idx] = record
     } else {
@@ -167,8 +179,8 @@ export class CascadeLibraryService {
     return record
   }
 
-  update(name: string, entries: CascadeLibraryEntry[]): CascadeRecord {
-    return this.edit(name, { entries })
+  update(name: string, chain: CascadeLibraryEntry[]): CascadeRecord {
+    return this.edit(name, { chain })
   }
 
   rename(oldName: string, newName: string): CascadeRecord {
@@ -176,21 +188,21 @@ export class CascadeLibraryService {
   }
 
   /**
-   * Rename and/or replace entries in ONE validated write. Nothing is written
+   * Rename and/or replace chain in ONE validated write. Nothing is written
    * (and nothing audited) unless every part of the patch is valid: the new
-   * name normalises, does not clash with another record, and the entries
-   * sanitize. A 409 on the rename must never leave replaced entries behind.
+   * name normalises, does not clash with another record, and the chain
+   * sanitize. A 409 on the rename must never leave replaced chain behind.
    */
-  edit(name: string, patch: { name?: string; entries?: CascadeLibraryEntry[] }): CascadeRecord {
+  edit(name: string, patch: { name?: string; chain?: CascadeLibraryEntry[] }): CascadeRecord {
     const wantsRename = patch.name !== undefined
-    const wantsEntries = patch.entries !== undefined
+    const wantsEntries = patch.chain !== undefined
     if (!wantsRename && !wantsEntries) {
-      throw new CascadeLibraryError('invalid', 'Provide "name" (rename) and/or "entries" (replace entries)')
+      throw new CascadeLibraryError('invalid', 'Provide "name" (rename) and/or "chain" (replace chain)')
     }
 
     // Validate everything before touching the records.
     const next = wantsRename ? normalizeName(patch.name) : undefined
-    const clean = wantsEntries ? sanitizeCascadeEntries(patch.entries) : undefined
+    const clean = wantsEntries ? sanitizeCascadeEntries(patch.chain) : undefined
 
     const records = this.readAll()
     const idx = records.findIndex((c) => sameName(c.name, name))
@@ -211,7 +223,7 @@ export class CascadeLibraryService {
     const previous = records[idx].name
     const record: CascadeRecord = { ...records[idx], updatedAt: Date.now() }
     if (next !== undefined) record.name = next
-    if (clean !== undefined) record.entries = clean
+    if (clean !== undefined) record.chain = clean
     records[idx] = record
     this.writeAll(records)
 

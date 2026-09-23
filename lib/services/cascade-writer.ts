@@ -4,10 +4,14 @@ import { services } from '@/lib/services'
 import { validateCascadeEntries, yamlPlainScalarError, type CascadeEntry } from '@/lib/model-catalog'
 import {
   readFallbackProviders,
+  readCascade,
+  cascadeChain,
+  sameCascadeRow,
   guessDataDir,
   readAgentEnvVarNames,
   FALLBACK_PROVIDERS_HEADER,
   MODEL_HEADER,
+  ROOT_MODEL_SIBLING,
   FLOW_MAP,
   FLOW_SEQ,
   isTopLevelLine,
@@ -15,18 +19,31 @@ import {
   parseFlowPairs,
   parseFlowMaps,
 } from '@/lib/services/harness'
-import type { FallbackProvider } from '@/lib/services/harness'
+import type { FallbackProvider, CascadePrimary } from '@/lib/services/harness'
 
 /**
- * applyCascadeToHarness — the ONE guarded path that writes a fallback_providers
- * cascade into an agent's config.yaml.
+ * applyCascadeToHarness — the ONE guarded path that writes a model cascade
+ * into an agent's config.yaml.
  *
  * Every write to the model: / fallback_providers: sections goes through here:
- * PUT /api/harnesses/:id/models (both body shapes), the cascade library's
- * apply route, and the model-update scheduler (automatic and one-click). The
- * model: section is derived from the entries (provider + default + base_url
- * from entry 0, fallback from the rest), fallback_providers: is written at
- * root level, and both sections are spliced by LINE, never via a YAML library.
+ * PUT /api/harnesses/:id/models (every body shape), the cascade library's
+ * apply route, and the model-update scheduler (automatic and one-click).
+ *
+ * The input is a CHAIN, modelled the way hermes-agent consumes it (verified
+ * against the runtime, 2026-09-23): chain[0] is the PRIMARY and is written to
+ * model.provider / model.default (/ model.base_url); chain[1..] are the
+ * FALLBACKS and are written as the fallback_providers rows, in order. The
+ * runtime tries the primary, then walks fallback_providers row by row,
+ * skipping any row equal to the current (provider, model) — so whether a
+ * file repeats its primary as row 0 is a per-file CONVENTION, not a drift.
+ * The writer PRESERVES it: when the file on disk had model.default repeated
+ * as fallback_providers[0] (the shape the HSM editor used to write), the new
+ * primary is written as row 0 again, kept in sync with model.default; when
+ * it did not (hand-edited / `hermes fallback`), no duplicate is invented. A
+ * no-op save over either shape is byte-identical. model.fallback is never
+ * read by the runtime, so it is rewritten only when the file already has the
+ * key, and never added. Both sections are spliced by LINE, never via a YAML
+ * library.
  *
  * Round-trip contract (audit 2026-09): the writer only OWNS
  * model.provider / model.default / model.fallback / model.base_url and each
@@ -39,13 +56,6 @@ import type { FallbackProvider } from '@/lib/services/harness'
  * the provider's default var). Dropping them silently re-routed a local
  * primary to OpenRouter and killed a proxy credential without a trace in the
  * audit log.
- *
- * Primary guard (re-audit): model.default is derived from row 0. When the
- * file's model.default is NOT fallback_providers[0] (the two sections
- * drifted apart — matilde), any write that does not put that primary back at
- * the top would silently switch the agent's primary. Refused with 409 unless
- * the caller passes `allowPrimaryChange` (the cascade library's apply and the
- * legacy `{ model }` body, where moving the primary IS the request).
  *
  * Guard: every entry is validated with validateCascadeEntries against the
  * env-var NAMES present in the agent's .env BEFORE anything is written. A
@@ -90,7 +100,11 @@ export type CascadeWriteResult =
       written: {
         provider: string
         primary: string
+        /** Model ids of the chain, primary first. */
         models: string[]
+        /** The chain read back from disk: primary, then the fallbacks (duplicate row 0 folded away). */
+        chain: CascadePrimary[]
+        /** The raw fallback_providers rows read back from disk (a duplicate row 0 included). */
         fallbackProviders: FallbackProvider[]
       }
     }
@@ -102,27 +116,22 @@ export type ApplyCascadeOptions = {
   /** When set, a successful write appends this audit entry (target = harness id). */
   audit?: { what: string; meta?: Record<string, unknown> }
   /**
-   * Optimistic precondition: the rows the caller last READ. When the rows on
-   * disk differ (another writer — the scheduler, another tab — got there
-   * first) the write is refused with 409 and nothing is touched. Without it a
-   * stale editor save silently reverted an applied update and orphaned its
+   * Optimistic precondition: the CHAIN the caller last READ (primary first,
+   * as readCascade/cascadeChain report it). When the chain on disk differs
+   * (another writer — the scheduler, another tab — got there first) the
+   * write is refused with 409 and nothing is touched. Without it a stale
+   * editor save silently reverted an applied update and orphaned its
    * tracking key.
    */
   expected?: CascadeWriteInput[]
   /**
-   * 'write' (default): fallback_providers is rewritten from `entries`.
+   * 'write' (default): fallback_providers is rewritten from chain[1..].
    * 'keep': only the model: section is rewritten; whatever fallback_providers
    * block is on disk passes through untouched. For the legacy
    * `{ provider, model | cascade }` body when the agent has no rows the
    * cascade can be mapped onto — the writer must not invent a block.
    */
   fallbackProviders?: 'write' | 'keep'
-  /**
-   * Permit a write whose row 0 is not the file's current model.default when
-   * the two sections had drifted apart. Off by default: the editor's save
-   * must not move a primary it never showed.
-   */
-  allowPrimaryChange?: boolean
 }
 
 /** Keys of the model: section the writer derives from the entries. */
@@ -161,10 +170,21 @@ type ExistingModelBlock = {
   /** Indent of the block's keys ('  ' unless the file says otherwise). */
   indent: string
   provider: string
-  /** model.default as written, when the key is present with a value. */
+  /** The primary as written (model.default, else model.model, else the scalar `model: <id>`), when present with a value. */
   default?: string
+  /**
+   * The key the primary is written under. `default` unless the block has a
+   * `model:` key and NO `default:` — hermes promotes model.model to
+   * model.default at load, so that key IS the primary and is rewritten in
+   * place; adding a `default:` beside it would shadow the operator's key.
+   */
+  primaryKey: 'default' | 'model'
+  /** The verbatim header when it was the scalar form (`model: <id>`) — re-emitted as such while nothing else needs the block form. */
+  scalarLine?: string
   /** The verbatim `base_url:` line, if any. */
   baseUrlLine?: string
+  /** The block had a `fallback:` key. The runtime never reads it; the writer rewrites it only when it was there. */
+  hasFallbackKey: boolean
   /** Comment / blank lines between the header and the first key, verbatim. */
   leading: string[]
   /**
@@ -174,8 +194,14 @@ type ExistingModelBlock = {
    * with the key when the key goes.
    */
   managedTrail: Record<string, string[]>
-  /** Every key the writer does not manage, verbatim, with its nested lines. */
-  passthrough: string[]
+  /**
+   * Every key of the block in file order. A key the writer does not manage
+   * carries its lines verbatim (nested lines and trailing comments
+   * included); a managed key carries null and is rewritten in place, so a
+   * file with both model.model and model.default round-trips in its own
+   * order.
+   */
+  keys: Array<{ key: string; lines: string[] | null }>
 }
 
 /**
@@ -188,33 +214,51 @@ function parseExistingModelBlock(lines: string[], start: number, end: number): E
   const body = flow ? parseFlowPairs(flow[1]).map(([k, v]) => `  ${k}: ${v}`) : lines.slice(start + 1, end)
   const firstKey = body.find((l) => l.trim() && !l.trim().startsWith('#') && indentOf(l) > 0)
   const keyIndent = firstKey ? indentOf(firstKey) : 2
-  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', leading: [], managedTrail: {}, passthrough: [] }
+  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', primaryKey: 'default', hasFallbackKey: false, leading: [], managedTrail: {}, keys: [] }
+  // The scalar form: `model: <id>` — the whole section is the header line.
+  const scalar = flow ? '' : yamlScalar(lines[start].slice('model:'.length))
+  if (scalar) {
+    out.scalarLine = lines[start]
+    out.default = scalar
+  }
+  const keyOf = (line: string): string | null => {
+    const trimmed = line.trim()
+    const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
+    return isKey ? trimmed.slice(0, trimmed.indexOf(':')) : null
+  }
+  // model.model is the primary's key only when there is no model.default
+  // WITH A VALUE (as hermes resolves it — an empty `default:` is absent to
+  // the reader too, so the writer must not take it for the primary's key).
+  const valueOf = (line: string, key: string): string => yamlScalar(line.trim().slice(key.length + 1))
+  const keys = body.map(keyOf)
+  const hasDefault = body.some((l) => keyOf(l) === 'default' && valueOf(l, 'default') !== '')
+  if (!hasDefault && keys.includes('model')) out.primaryKey = 'model'
   let managed: boolean | null = null // null = before the first key
   let managedKey = ''
   for (const line of body) {
     const trimmed = line.trim()
-    const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
-    if (isKey) {
-      const key = trimmed.slice(0, trimmed.indexOf(':'))
-      managed = MANAGED_MODEL_KEYS.has(key)
+    const key = keyOf(line)
+    if (key !== null) {
+      managed = MANAGED_MODEL_KEYS.has(key) || key === out.primaryKey
       managedKey = managed ? key : ''
-      if (key === 'provider') out.provider = yamlScalar(trimmed.slice('provider:'.length))
-      if (key === 'default') {
-        const v = yamlScalar(trimmed.slice('default:'.length))
+      if (key === 'provider') out.provider = valueOf(line, key)
+      if (key === out.primaryKey) {
+        const v = valueOf(line, key)
         if (v) out.default = v
       }
       if (key === 'base_url') out.baseUrlLine = line
-      if (!managed) out.passthrough.push(line)
+      if (key === 'fallback') out.hasFallbackKey = true
+      out.keys.push({ key, lines: managed ? null : [line] })
       continue
     }
     if (managed === null) out.leading.push(line)
-    else if (managed === false) out.passthrough.push(line)
+    else if (managed === false) out.keys[out.keys.length - 1].lines!.push(line)
     else if (!trimmed || trimmed.startsWith('#')) (out.managedTrail[managedKey] ??= []).push(line)
   }
   return out
 }
 
-type ExistingRow = { provider: string; model: string; extra: string[]; used: boolean }
+type ExistingRow = { provider: string; model: string; hasBaseUrl: boolean; extra: string[]; used: boolean }
 
 /**
  * Read the rows of the fallback_providers: block at lines[start] (body up to
@@ -232,7 +276,7 @@ function parseExistingRows(lines: string[], start: number, end: number): Existin
       const model = get('model')
       if (!prov || !model) continue
       const extra = pairs.filter(([key]) => !MANAGED_ROW_KEYS.has(key)).map(([key, raw]) => `    ${key}: ${raw}`)
-      rows.push({ provider: yamlScalar(prov[1]), model: yamlScalar(model[1]), extra, used: false })
+      rows.push({ provider: yamlScalar(prov[1]), model: yamlScalar(model[1]), hasBaseUrl: !!get('base_url'), extra, used: false })
     }
     return rows
   }
@@ -250,7 +294,7 @@ function parseExistingRows(lines: string[], start: number, end: number): Existin
         return l.slice(Math.min(-delta, indentOf(l)))
       }
       const extra = cur.fields.filter((f) => !MANAGED_ROW_KEYS.has(f.key)).flatMap((f) => f.lines.map(reindent))
-      rows.push({ provider: yamlScalar(prov.lines[0].trim().slice('provider:'.length)), model: yamlScalar(model.lines[0].trim().slice('model:'.length)), extra, used: false })
+      rows.push({ provider: yamlScalar(prov.lines[0].trim().slice('provider:'.length)), model: yamlScalar(model.lines[0].trim().slice('model:'.length)), hasBaseUrl: !!get('base_url'), extra, used: false })
     }
     cur = null
   }
@@ -302,7 +346,7 @@ const sameRows = (a: CascadeWriteInput[], b: CascadeWriteInput[]): boolean =>
 
 export function applyCascadeToHarness(
   harnessId: string,
-  entries: CascadeWriteInput[],
+  chain: CascadeWriteInput[],
   opts: ApplyCascadeOptions
 ): CascadeWriteResult {
   const harness = services.harness.get(harnessId)
@@ -322,7 +366,7 @@ export function applyCascadeToHarness(
   // Whitelist-copy: provider/model/base_url only, trimmed. api_key never gets
   // through. Trimming here keeps what is WRITTEN identical to what the
   // validator CHECKS (it trims too) — a trailing "\r" must not slip past it.
-  const fallbackProvidersToWrite: CascadeWriteInput[] = (entries ?? []).map((fp) => {
+  const chainToWrite: CascadeWriteInput[] = (chain ?? []).map((fp) => {
     const e: CascadeWriteInput = { provider: (fp.provider ?? '').trim(), model: (fp.model ?? '').trim() }
     if (fp.base_url && fp.base_url.trim()) e.base_url = fp.base_url.trim()
     if (fp.carryFrom?.provider && fp.carryFrom?.model) {
@@ -331,9 +375,10 @@ export function applyCascadeToHarness(
     return e
   })
 
-  // Primary model = first entry, provider from first entry
-  const entryProvider = fallbackProvidersToWrite[0]?.provider || ''
-  const cascade = fallbackProvidersToWrite.map((fp) => fp.model)
+  // chain[0] is the primary: model.provider / model.default come from it.
+  const primaryEntry = chainToWrite[0]
+  const entryProvider = primaryEntry?.provider || ''
+  const cascade = chainToWrite.map((fp) => fp.model)
   const primary = cascade[0] || ''
 
   if (cascade.length === 0) {
@@ -384,16 +429,43 @@ export function applyCascadeToHarness(
   const existingModel = modelStart >= 0 ? parseExistingModelBlock(lines, modelStart, modelEnd) : null
   const existingRows = writeRows && fpStart >= 0 ? parseExistingRows(lines, fpStart, fpEnd) : []
 
+  // Root-level `provider:` / `base_url:` / `api_base:` lines beside model:
+  // (the hermes "new format" scalar `model: <id>` is usually written this
+  // way). The runtime merges each onto the primary when the block lacks the
+  // key — so the primary ON DISK is what the readers report, root included.
+  // The lines stay where they are while the primary's provider and base_url
+  // do not change (a no-op save is byte-identical); the moment chain[0]
+  // changes either, they move into the model: block and the root lines go —
+  // a root base_url that belonged to the old (local) provider must never be
+  // merged onto the cloud primary that replaced it.
+  const rootSiblings = lines.flatMap((l, i) => {
+    const m = l.match(ROOT_MODEL_SIBLING)
+    return m ? [{ index: i, key: m[1], value: yamlScalar(m[2]) }] : []
+  })
+  const rootValue = (key: string): string => rootSiblings.find((r) => r.key === key)?.value ?? ''
+  const rootProvider = existingModel?.provider ? '' : rootValue('provider')
+  const rootBaseUrl = existingModel?.baseUrlLine ? '' : rootValue('base_url') || rootValue('api_base')
+  const diskProvider = existingModel?.provider || rootProvider
+  const diskBaseUrl = existingModel?.baseUrlLine ? yamlScalar(existingModel.baseUrlLine.trim().slice('base_url:'.length)) : rootBaseUrl
+
+  // The file's convention: did it repeat model.default as fallback_providers[0]?
+  // (Compared comment-stripped, provider case-insensitive.) Preserved on
+  // write, never invented, never removed.
+  const primaryOnDisk = existingModel?.default ? { provider: diskProvider, model: existingModel.default } : null
+  const duplicateOnDisk = !!primaryOnDisk && existingRows.length > 0 && sameCascadeRow(existingRows[0], primaryOnDisk)
+
   // The row on disk each entry inherits its unmanaged keys from: the row
   // `carryFrom` names when the entry has one (a rotation — looked up FIRST,
   // else a rotation onto a model that is already a row stole that row's
   // credential and dropped its own), else its own (provider, model). First
   // come, first served — a row is carried at most once. carryFrom is honoured
   // only within the entry's own provider: a row's key_env / api_mode never
-  // move onto another provider's row, whoever asks.
+  // move onto another provider's row, whoever asks. Under the duplicate
+  // convention the primary's row is fallback_providers[0], so its extras
+  // follow the primary the same way.
   const sameKey = (r: ExistingRow, provider: string, model: string): boolean =>
     !r.used && r.provider.toLowerCase() === provider.toLowerCase() && r.model === model
-  const carriedRows: Array<ExistingRow | undefined> = fallbackProvidersToWrite.map((fp) => {
+  const carriedRows: Array<ExistingRow | undefined> = chainToWrite.map((fp) => {
     const carry = fp.carryFrom && fp.carryFrom.provider.toLowerCase() === fp.provider.toLowerCase() ? fp.carryFrom : undefined
     const row =
       (carry ? existingRows.find((r) => sameKey(r, carry.provider, carry.model)) : undefined) ??
@@ -414,7 +486,7 @@ export function applyCascadeToHarness(
       if (m[1] === 'api_key') return true
       return presentEnvVars.has(yamlScalar(m[2]))
     })
-  const entriesToValidate: CascadeEntry[] = fallbackProvidersToWrite.map((fp, i) => ({
+  const entriesToValidate: CascadeEntry[] = chainToWrite.map((fp, i) => ({
     provider: fp.provider,
     model: fp.model,
     ...(hasOwnCredential(carriedRows[i]) ? { ownCredential: true } : {}),
@@ -423,7 +495,7 @@ export function applyCascadeToHarness(
   const modelErrors = validateCascadeEntries(entriesToValidate, presentEnvVars)
   // validateCascadeEntries covers provider/model; base_url is spliced unquoted
   // too, so it gets the same plain-scalar check here.
-  for (const fp of fallbackProvidersToWrite) {
+  for (const fp of chainToWrite) {
     if (fp.base_url) {
       const err = yamlPlainScalarError(fp.base_url, `base_url for "${fp.model}"`)
       if (err) modelErrors.push(err)
@@ -433,83 +505,124 @@ export function applyCascadeToHarness(
     return { ok: false, status: 400, error: `Invalid model cascade: ${modelErrors.join('; ')}` }
   }
 
-  // Optimistic precondition against what the caller last read.
+  // Optimistic precondition against the chain the caller last read.
   if (opts.expected) {
-    const current = readFallbackProviders(dataDir)
+    const current = cascadeChain(readCascade(dataDir))
     if (!sameRows(current, opts.expected)) {
       return { ok: false, status: 409, error: 'The model cascade changed since it was read; reload and try again' }
     }
   }
 
-  // Primary guard. model.default is derived from row 0; when the file's
-  // model.default is some OTHER model than fallback_providers[0], a write
-  // that does not put it back at the top switches the agent's primary
-  // without anyone having asked for that.
-  // Only a `default:` key that is actually present can disagree with row 0 —
-  // readModelConfig()[0] fell back to a `fallback:` or auxiliary model and
-  // refused writes over files that had no primary at all.
-  if (writeRows && !opts.allowPrimaryChange && existingModel?.default) {
-    const filePrimary = existingModel.default
-    const row0 = existingRows[0]?.model
-    if (row0 && filePrimary !== row0 && primary !== filePrimary) {
-      return {
-        ok: false,
-        status: 409,
-        error: `primary-mismatch: model.default is "${filePrimary}" but fallback_providers[0] is "${row0}"; put "${filePrimary}" at the top of the cascade before saving`,
-      }
-    }
-  }
-
-  // Effective model.provider: the primary row's, else whatever the file says
+  // Effective model.provider: the primary's, else whatever the file says
   // (a legacy body with no provider must not delete the line).
-  const provider = entryProvider || existingModel?.provider || ''
+  const provider = entryProvider || diskProvider || ''
   const ind = existingModel?.indent ?? '  '
+  const primaryBaseUrl = primaryEntry?.base_url
+  // Do the root siblings move into the block on this write? Only when the
+  // primary's provider or base_url changes; a rotation of the model id alone
+  // leaves the file's shape alone.
+  const providerChanged = !!entryProvider && entryProvider.toLowerCase() !== diskProvider.toLowerCase()
+  const baseUrlChanged = primaryBaseUrl !== undefined && primaryBaseUrl !== diskBaseUrl
+  const migrateRoot = rootSiblings.length > 0 && (providerChanged || baseUrlChanged)
+  // A key the root supplies and this write leaves there is not repeated in the block.
+  const providerStaysAtRoot = !!rootProvider && !migrateRoot
+  const baseUrlStaysAtRoot = !!rootBaseUrl && !migrateRoot
 
   // Build the model section of config.yaml. Managed keys come from the
-  // entries; every other key of the existing block passes through verbatim.
-  // Comment / blank lines the file had under a managed key ride with it.
+  // chain; every other key of the existing block passes through verbatim,
+  // in its own place among them. Comment / blank lines the file had under a
+  // managed key ride with it.
   const trail = (key: string): string[] => existingModel?.managedTrail[key] ?? []
-  const modelLines = ['model:', ...(existingModel?.leading ?? [])]
-  if (provider) modelLines.push(`${ind}provider: ${provider}`, ...trail('provider'))
-  modelLines.push(`${ind}default: ${primary}`, ...trail('default'))
-  // model.base_url follows the primary row. With no base_url on that row, the
-  // existing line stays only while it can still be meant for this primary: the
+  const managedOut: Record<string, string[]> = {}
+  if (provider && !providerStaysAtRoot) managedOut.provider = [`${ind}provider: ${provider}`, ...trail('provider')]
+  // The primary goes under the key the file already uses for it (model.model
+  // when the block has that and no default — see ExistingModelBlock.primaryKey).
+  const primaryKey = existingModel?.primaryKey ?? 'default'
+  managedOut[primaryKey] = [`${ind}${primaryKey}: ${primary}`, ...trail(primaryKey)]
+  // model.base_url follows the primary. With no base_url on it, the existing
+  // value stays only while it can still be meant for this primary: the
   // provider is unchanged / unspecified, or is one that is addressed by URL.
   // A local ollama URL must not leak onto a cloud primary that replaced it.
-  const primaryBaseUrl = fallbackProvidersToWrite[0]?.base_url
   if (primaryBaseUrl) {
-    modelLines.push(`${ind}base_url: ${primaryBaseUrl}`, ...trail('base_url'))
-  } else if (existingModel?.baseUrlLine) {
+    if (!baseUrlStaysAtRoot) managedOut.base_url = [`${ind}base_url: ${primaryBaseUrl}`, ...trail('base_url')]
+  } else if (existingModel?.baseUrlLine || (rootBaseUrl && migrateRoot)) {
     const p = provider.toLowerCase()
-    const keep = !entryProvider || p === existingModel.provider.toLowerCase() || BASE_URL_PROVIDERS.has(p)
-    if (keep) modelLines.push(existingModel.baseUrlLine, ...trail('base_url'))
+    const keep = !entryProvider || p === diskProvider.toLowerCase() || BASE_URL_PROVIDERS.has(p)
+    if (keep) managedOut.base_url = [existingModel?.baseUrlLine ?? `${ind}base_url: ${rootBaseUrl}`, ...trail('base_url')]
   }
-  if (cascade.length > 1) {
-    modelLines.push(`${ind}fallback:`)
-    for (const m of cascade.slice(1)) {
-      modelLines.push(`${ind}${ind}- ${m}`)
+  // model.fallback: the runtime never reads it. A file that has the key gets
+  // it rewritten from the fallbacks (dropped when there are none); a file
+  // without it does not gain one.
+  if (existingModel?.hasFallbackKey && cascade.length > 1) {
+    managedOut.fallback = [`${ind}fallback:`, ...cascade.slice(1).map((m) => `${ind}${ind}- ${m}`), ...trail('fallback')]
+  }
+  const modelLines = ['model:', ...(existingModel?.leading ?? [])]
+  // Managed keys keep the position they had on disk; one the file did not
+  // have goes in front of the first on-disk managed key that follows it in
+  // the canonical order (provider, primary, base_url, fallback), else last.
+  const CANONICAL = ['provider', primaryKey, 'base_url', 'fallback']
+  const emitted = new Set<string>()
+  const emit = (key: string) => {
+    if (emitted.has(key)) return
+    emitted.add(key)
+    modelLines.push(...(managedOut[key] ?? []))
+  }
+  const managedOnDisk = new Set((existingModel?.keys ?? []).filter((k) => k.lines === null).map((k) => k.key))
+  for (const k of existingModel?.keys ?? []) {
+    if (k.lines !== null) {
+      modelLines.push(...k.lines)
+      continue
     }
-    modelLines.push(...trail('fallback'))
+    for (const c of CANONICAL) {
+      if (c === k.key) break
+      if (!managedOnDisk.has(c)) emit(c)
+    }
+    emit(k.key)
   }
-  if (existingModel) modelLines.push(...existingModel.passthrough)
+  for (const c of CANONICAL) emit(c)
+  // The scalar form (`model: <id>`) stays scalar while the block would hold
+  // nothing but the primary: an unchanged primary re-emits the header
+  // verbatim, a rotated one keeps the shape. A provider or base_url on the
+  // primary needs the block form, so the section upgrades to it.
+  if (existingModel?.scalarLine !== undefined && modelLines.length === 2 && modelLines[1] === `${ind}default: ${primary}`) {
+    modelLines.splice(0, 2, primary === existingModel.default ? existingModel.scalarLine : `model: ${primary}`)
+  }
 
-  // Build fallback_providers YAML section (root level). A row that survives
-  // the write (same provider + model), or that an entry names via carryFrom,
-  // carries its unmanaged keys along.
+  // Build the fallback_providers YAML section (root level): chain[1..], with
+  // the primary repeated as row 0 only when the file already did that. A row
+  // that survives the write (same provider + model), or that an entry names
+  // via carryFrom, carries its unmanaged keys along. An UNCHANGED primary's
+  // duplicate row keeps whether it carried a base_url (a no-op save must not
+  // add one); a new primary's duplicate row takes the primary's base_url.
   const fpLines: string[] = []
   if (writeRows) {
-    fpLines.push('fallback_providers:')
-    fallbackProvidersToWrite.forEach((fp, i) => {
-      fpLines.push(`  - provider: ${fp.provider}`)
-      fpLines.push(`    model: ${fp.model}`)
-      if (fp.base_url) {
-        fpLines.push(`    base_url: ${fp.base_url}`)
+    type RowToWrite = { row: CascadeWriteInput; carried: ExistingRow | undefined; base_url?: string }
+    const rowsToWrite: RowToWrite[] = chainToWrite.slice(1).map((row, i) => ({ row, carried: carriedRows[i + 1], base_url: row.base_url }))
+    if (duplicateOnDisk && primaryEntry) {
+      const primaryUnchanged = !!primaryOnDisk && sameCascadeRow(primaryEntry, primaryOnDisk)
+      rowsToWrite.unshift({
+        row: primaryEntry,
+        carried: carriedRows[0],
+        base_url: primaryUnchanged && !existingRows[0].hasBaseUrl ? undefined : primaryEntry.base_url,
+      })
+    }
+    if (rowsToWrite.length > 0) {
+      fpLines.push('fallback_providers:')
+      for (const { row, carried, base_url } of rowsToWrite) {
+        fpLines.push(`  - provider: ${row.provider}`)
+        fpLines.push(`    model: ${row.model}`)
+        if (base_url) {
+          fpLines.push(`    base_url: ${base_url}`)
+        }
+        // Do NOT write api_key from the caller (security). An api_key already in
+        // the file for THIS row is the operator's and rides along below.
+        if (carried) fpLines.push(...carried.extra)
       }
-      // Do NOT write api_key from the caller (security). An api_key already in
-      // the file for THIS row is the operator's and rides along below.
-      const row = carriedRows[i]
-      if (row) fpLines.push(...row.extra)
-    })
+    } else if (fpStart >= 0) {
+      // No fallbacks: the section stays (empty) rather than vanishing —
+      // deleting a top-level key the operator wrote is not this writer's call.
+      fpLines.push('fallback_providers: []')
+    }
   }
 
   const finish = (): CascadeWriteResult => {
@@ -523,7 +636,8 @@ export function applyCascadeToHarness(
       })
     }
     const respFp = readFallbackProviders(dataDir)
-    return { ok: true, written: { provider, primary, models: cascade, fallbackProviders: respFp } }
+    const respChain = cascadeChain(readCascade(dataDir))
+    return { ok: true, written: { provider, primary, models: cascade, chain: respChain, fallbackProviders: respFp } }
   }
 
   // Replace each section in place: header through the end of its body. What
@@ -533,6 +647,8 @@ export function applyCascadeToHarness(
   const splices = [
     ...(modelStart >= 0 ? [{ start: modelStart, end: modelEnd, lines: modelLines }] : []),
     ...(fpStart >= 0 && fpLines.length > 0 ? [{ start: fpStart, end: fpEnd, lines: fpLines }] : []),
+    // The root siblings, once moved into the block, are deleted line by line.
+    ...(migrateRoot ? rootSiblings.map((r) => ({ start: r.index, end: r.index + 1, lines: [] as string[] })) : []),
   ].sort((a, b) => a.start - b.start)
   const updated: string[] = []
   let cursor = 0
@@ -545,6 +661,7 @@ export function applyCascadeToHarness(
   // A section the file did not have is appended after ONE blank line; the
   // file always ends in exactly one newline (an appended block after a file
   // that already ended in a blank line used to land two blank lines deep).
+  // A fallback_providers block with nothing in it is not appended.
   const trimTrailingBlanks = () => {
     while (updated.length && isBlank(updated[updated.length - 1])) updated.pop()
   }

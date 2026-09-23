@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { CascadeLibraryError } from '@/lib/services/cascades'
-import { guessDataDir, readFallbackProviders } from '@/lib/services/harness'
+import { guessDataDir, readCascade, cascadeChain } from '@/lib/services/harness'
 
 // POST /api/harnesses/:id/cascade/save-as { name, overwrite? }
 //
-// Snapshots the harness's CURRENT fallback_providers (from config.yaml) into
-// the named cascade library, with sourceHarness = this harness. api_key
-// values present in config.yaml are stripped by the library. 400 when the
-// harness has no fallback_providers block to save; 409 on an existing name
-// unless overwrite:true.
+// Snapshots the harness's CURRENT cascade — the primary from model: first,
+// then the fallback_providers rows (a row 0 that merely repeats the primary
+// folded away) — into the named cascade library, with sourceHarness = this
+// harness. api_key values present in config.yaml are stripped by the library.
+// 400 when the harness has neither a primary nor rows to save; 409 on an
+// existing name unless overwrite:true.
 
 export async function POST(
   request: Request,
@@ -35,17 +36,17 @@ export async function POST(
     : harness.name
   const dataDir = guessDataDir(harness.serviceName ?? harness.name, containerName)
 
-  const entries = readFallbackProviders(dataDir)
-  if (entries.length === 0) {
+  const chain = cascadeChain(readCascade(dataDir))
+  if (chain.length === 0) {
     return NextResponse.json(
-      { error: 'This harness has no fallback_providers cascade to save' },
+      { error: 'This harness has no model cascade to save' },
       { status: 400 }
     )
   }
 
   try {
     const record = services.cascades.save(
-      { name: body.name ?? '', entries, sourceHarness: id },
+      { name: body.name ?? '', chain, sourceHarness: id },
       { overwrite: body.overwrite === true }
     )
     return NextResponse.json(record, { status: 201 })

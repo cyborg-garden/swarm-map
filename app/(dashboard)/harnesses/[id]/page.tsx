@@ -32,8 +32,7 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
-import type { FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
-import { ModelsTab, cascadeSaveConflict } from '@/components/harness/models-tab'
+import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
 
 type PairingUser = {
   userId: string
@@ -81,7 +80,6 @@ const SURFACE_STATUS_STYLES: Record<Surface['status'], string> = {
   planned: 'bg-[var(--warning)]/10 text-[var(--warning)]',
 }
 
-type ModelConfig = { provider: string; primary: string; models: string[]; fallbackProviders?: FallbackProviderEntry[] }
 
 type LogsResponse = { logs: string; lines: number }
 
@@ -890,8 +888,8 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
         <TabsContent value="models" className="mt-4">
           {/* Only mount the editor once GET /models has resolved. Mounting it
               earlier seeded rows from harness.models with no provider and no
-              base_url, and a save then wrote that guess over the real
-              fallback_providers rows (issue #149). */}
+              base_url, and a save then wrote that guess over the real chain
+              (issue #149). */}
           {!modelConfig ? (
             <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
               <p className="text-sm text-muted-foreground flex items-center gap-2">
@@ -915,27 +913,33 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               refetch()
               setCascadeEditorGen((g) => g + 1)
             }}
-            onSave={async (entries) => {
+            onSave={async (chain, opts) => {
               setModelSaving(true)
               try {
                 const res = await fetch(`/api/harnesses/${id}/models`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
-                  // What this editor was seeded from. The server refuses (409)
-                  // when the rows on disk no longer match — the model-update
-                  // scheduler or another tab wrote since — so a stale save
-                  // cannot silently undo an applied update.
+                  // The edited chain (row 1 = primary → model:, the rest →
+                  // fallback_providers) plus what this editor was seeded
+                  // from. The server refuses (409) when the chain on disk no
+                  // longer matches — the model-update scheduler or another
+                  // tab wrote since — so a stale save cannot silently undo
+                  // an applied update.
+                  // set_primary: the editor passes it only from the state
+                  // where the file had no primary and the operator saw the
+                  // note — without it the server refuses to promote a
+                  // fallback into model.default (no-primary-in-file).
                   body: JSON.stringify({
-                    fallback_providers: entries,
-                    expected_fallback_providers: modelConfig.fallbackProviders ?? [],
+                    chain,
+                    expected_chain: modelConfig.chain ?? [],
+                    ...(opts?.setPrimary ? { set_primary: true } : {}),
                   }),
                 })
                 if (res.status === 409) {
-                  // Three conflicts share the status. primary-mismatch (move
-                  // the file's primary to the top) and duplicate-sections
-                  // (hand-edit config.yaml) are the operator's to fix — show
-                  // the writer's message and keep the edit. Only the
-                  // stale-rows conflict reloads and remounts.
+                  // Two conflicts share the status. duplicate-sections
+                  // (hand-edit config.yaml) is the operator's to fix — show
+                  // the writer's message and keep the edit. Only the stale
+                  // conflict reloads and remounts.
                   const conflict = cascadeSaveConflict(await res.json().catch(() => null))
                   if (conflict.kind !== 'stale') {
                     toast.error(conflict.message)

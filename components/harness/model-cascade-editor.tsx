@@ -26,25 +26,29 @@ export type RowStatus = {
   onApplyUpdate?: (entry: FallbackProviderEntry, to: string) => void
   /** Row whose Update is in flight. */
   updatingKey?: string | null
+  /** Row → reason the fleet report blocked its successor (Update is disabled with it). */
+  blocked?: Record<string, string>
 }
 
 /**
  * Build the cascade the editor should show for a given set of server props.
  *
  * Preference order:
- *   1. fallback_providers rows — they carry provider + base_url per row.
+ *   1. the chain from GET /models — the primary (model.provider /
+ *      model.default) first, then every fallback_providers row, each with
+ *      its own provider + base_url. Row 1 IS the primary by construction.
  *   2. string models stamped with the known model.provider.
- *   3. nothing. When the provider is unknown AND there are no rows we do NOT
+ *   3. nothing. When the provider is unknown AND there is no chain we do NOT
  *      guess — a guessed provider was issue #149: rows seeded as `anthropic`
  *      before GET /models resolved, then saved back over real ollama rows.
  */
 export function buildCascadeFromProps(
   models: string[],
   provider: string,
-  fallbackProviders: FallbackProviderEntry[]
+  chain: FallbackProviderEntry[]
 ): FallbackProviderEntry[] {
-  if (fallbackProviders.length > 0) {
-    return fallbackProviders.map((fp) => ({
+  if (chain.length > 0) {
+    return chain.map((fp) => ({
       provider: fp.provider,
       model: fp.model,
       ...(fp.base_url ? { base_url: fp.base_url } : {}),
@@ -59,7 +63,8 @@ export function buildCascadeFromProps(
 export function ModelCascadeEditor({
   models: initialModels,
   provider: initialProvider,
-  fallbackProviders: initialFallbackProviders,
+  chain: initialChain,
+  primaryEntry,
   onSave,
   saving,
   harnessId,
@@ -67,13 +72,25 @@ export function ModelCascadeEditor({
 }: {
   models: string[]
   provider: string
-  fallbackProviders: FallbackProviderEntry[]
-  onSave: (entries: FallbackProviderEntry[]) => void
+  /** The chain from GET /models: primary first, then the fallbacks. */
+  chain: FallbackProviderEntry[]
+  /**
+   * GET /models' primaryEntry: null when the file has rows but no primary
+   * (no model.default). Row 1 is then a fallback, not the primary — it is
+   * not badged, and a save says so explicitly (setPrimary) because it WILL
+   * make row 1 the primary. Undefined = unknown (pre-load) = no note.
+   */
+  primaryEntry?: FallbackProviderEntry | null
+  /**
+   * Called with the edited chain: entries[0] is the primary, the rest are
+   * the fallbacks. `setPrimary` is passed only from the no-primary state.
+   */
+  onSave: (entries: FallbackProviderEntry[], opts?: { setPrimary: true }) => void
   saving: boolean
   harnessId: string
   rowStatus?: RowStatus
 }) {
-  const built = buildCascadeFromProps(initialModels, initialProvider, initialFallbackProviders)
+  const built = buildCascadeFromProps(initialModels, initialProvider, initialChain)
   const builtKey = JSON.stringify(built)
 
   const [cascade, setCascade] = useState<FallbackProviderEntry[]>(built)
@@ -164,6 +181,8 @@ export function ModelCascadeEditor({
   }
 
   const isDirty = JSON.stringify(cascade) !== builtKey
+  const noPrimaryOnDisk = primaryEntry === null && cascade.length > 0
+  const save = () => (noPrimaryOnDisk ? onSave(cascade, { setPrimary: true }) : onSave(cascade))
 
   return (
     <div className="space-y-4">
@@ -178,7 +197,7 @@ export function ModelCascadeEditor({
             >
               {suggesting ? 'Detecting...' : 'Suggest from connected keys'}
             </button>
-            <span className="text-xs text-muted-foreground">Primary at top, fallbacks below</span>
+            <span className="text-xs text-muted-foreground" title="Row 1 is written to model.default; the rest are the fallback_providers rows, tried in order">Row 1 is the primary; fallbacks follow in order</span>
           </div>
         </div>
 
@@ -192,6 +211,7 @@ export function ModelCascadeEditor({
               const retired = rowStatus?.retiredKeys?.has(key) ?? false
               const successor = rowStatus?.successors?.[key]
               const updating = rowStatus?.updatingKey === key
+              const blockedReason = rowStatus?.blocked?.[key]
               return (
               <div
                 key={`${entry.provider}-${entry.model}-${i}`}
@@ -207,6 +227,22 @@ export function ModelCascadeEditor({
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wide shrink-0">
                       {entry.provider}
                     </span>
+                    {i === 0 && !noPrimaryOnDisk && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--accent)]/15 text-[var(--accent)] font-medium uppercase tracking-wide shrink-0"
+                        title="Written to model.provider / model.default — the model the agent tries first"
+                      >
+                        primary
+                      </span>
+                    )}
+                    {i === 0 && noPrimaryOnDisk && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--warning)]/15 text-[var(--warning)] font-medium shrink-0"
+                        title="config.yaml has fallback rows but no model.default, so the agent runs on its own built-in default; this row is a fallback today. Saving writes it to model.default."
+                      >
+                        no primary on disk — save will make this the primary
+                      </span>
+                    )}
                     {retired && (
                       <span
                         className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--danger)]/10 text-[var(--danger)] font-medium uppercase tracking-wide shrink-0"
@@ -228,9 +264,9 @@ export function ModelCascadeEditor({
                         <button
                           type="button"
                           onClick={() => rowStatus.onApplyUpdate?.(entry, successor)}
-                          disabled={updating || isDirty}
+                          disabled={updating || isDirty || !!blockedReason}
                           aria-label={updating ? `Updating ${entry.model}` : `Update ${entry.model} to ${successor}`}
-                          title={isDirty ? 'Save the cascade first' : `Replace ${entry.model} with ${successor} and restart`}
+                          title={blockedReason ? `Blocked: ${blockedReason}` : isDirty ? 'Save the cascade first' : `Replace ${entry.model} with ${successor} and restart`}
                           className="text-[11px] text-[var(--accent)] hover:underline disabled:opacity-50 disabled:no-underline shrink-0"
                         >
                           {updating ? 'Updating…' : 'Update'}
@@ -322,7 +358,7 @@ export function ModelCascadeEditor({
         </div>
 
         {isDirty && (
-          <Button size="sm" onClick={() => onSave(cascade)} disabled={saving}>
+          <Button size="sm" onClick={save} disabled={saving}>
             {saving ? 'Saving...' : 'Save Cascade'}
           </Button>
         )}

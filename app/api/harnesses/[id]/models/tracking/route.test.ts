@@ -5,7 +5,8 @@ const state = vi.hoisted(() => ({
   harness: undefined as { id: string; name: string; modelTracking?: Record<string, boolean> } | undefined,
   updateConfig: vi.fn(),
   auditAppend: vi.fn(),
-  // What config.yaml currently holds under fallback_providers.
+  // What config.yaml currently holds: the primary (model:) and the fallback_providers rows.
+  primary: null as { provider: string; model: string } | null,
   rows: [] as Array<{ provider: string; model: string }>,
 }))
 const { updateConfig, auditAppend } = state
@@ -17,10 +18,18 @@ vi.mock('@/lib/services', () => ({
   },
 }))
 
-vi.mock('@/lib/services/harness', () => ({
-  guessDataDir: () => '/tmp/hsm-tracking-test',
-  readFallbackProviders: () => state.rows,
-}))
+vi.mock('@/lib/services/harness', async (importOriginal) => {
+  const { cascadeChain, sameCascadeRow } = await importOriginal<typeof import('@/lib/services/harness')>()
+  return {
+    guessDataDir: () => '/tmp/hsm-tracking-test',
+    cascadeChain,
+    readCascade: () => ({
+      primary: state.primary,
+      fallbacks: state.rows,
+      primaryDuplicatedAsRow0: !!state.primary && state.rows.length > 0 && sameCascadeRow(state.rows[0], state.primary),
+    }),
+  }
+})
 
 import { PUT } from './route'
 
@@ -32,6 +41,8 @@ const put = (id: string, body: unknown) =>
 describe('PUT /api/harnesses/[id]/models/tracking', () => {
   beforeEach(() => {
     state.harness = { id: 'h_test', name: 'test', modelTracking: { 'openrouter/moonshotai/kimi-k2.7-code': true } }
+    // HSM-saved shape: the primary is repeated as row 0.
+    state.primary = { provider: 'openrouter', model: 'z-ai/glm-5.2' }
     state.rows = [
       { provider: 'openrouter', model: 'z-ai/glm-5.2' },
       { provider: 'openrouter', model: 'moonshotai/kimi-k2.7-code' },
@@ -70,7 +81,15 @@ describe('PUT /api/harnesses/[id]/models/tracking', () => {
 
   // Audit: a stale UI must not record intent for a row that no longer exists
   // (the scheduler may have rotated it) — the key would orphan silently.
-  it('refuses tracking a key that matches no current fallback_providers row; clearing one is always allowed', async () => {
+  it('the PRIMARY can be tracked even when the file does not repeat it as a fallback_providers row', async () => {
+    state.primary = { provider: 'openrouter', model: 'moonshotai/kimi-k3' }
+    state.rows = [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }]
+    const res = await put('h_test', { 'openrouter/moonshotai/kimi-k3': true })
+    expect(res.status).toBe(200)
+    expect(updateConfig).toHaveBeenCalledWith('h_test', { modelTracking: { 'openrouter/moonshotai/kimi-k2.7-code': true, 'openrouter/moonshotai/kimi-k3': true } })
+  })
+
+  it('refuses tracking a key that matches no current chain entry; clearing one is always allowed', async () => {
     const res = await put('h_test', { 'openrouter/z-ai/glm-5.3': true })
     expect(res.status).toBe(409)
     expect((await res.json()).error).toContain('openrouter/z-ai/glm-5.3')

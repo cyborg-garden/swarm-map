@@ -174,13 +174,13 @@ Any AI agent (Claude Code, Hermes, etc.) can orchestrate your fleet via the REST
 | `POST` | `/api/harnesses/:id/start` | Start |
 | `POST` | `/api/harnesses/restart-running` | Bulk quick-restart all running |
 | `GET` | `/api/harnesses/:id/logs` | Container logs (`?lines=100`) |
-| `GET` | `/api/harnesses/:id/models` | Model cascade config |
-| `PUT` | `/api/harnesses/:id/models` | Update cascade (`{ cascade: [...] }`) |
+| `GET` | `/api/harnesses/:id/models` | Model cascade: `chain` (primary from `model:` first, then the `fallback_providers` rows), `primaryEntry`, `primaryDuplicatedAsRow0`, raw `fallbackProviders` |
+| `PUT` | `/api/harnesses/:id/models` | Update the cascade (`{ chain: [...], expected_chain?: [...] }`, `chain[0]` = primary; `{ cascade: [...] }` still accepted; `{ fallback_providers: [...] }` rewrites the fallback rows only and never touches the primary — 409 on a file with no primary) |
 | `POST` | `/api/harnesses/:id/duplicate` | Clone harness config (`{ name }`) |
-| `POST` | `/api/harnesses/:id/cascade/save-as` | Snapshot the harness's current `fallback_providers` into the cascade library (`{ name, overwrite? }`) |
-| `GET` | `/api/cascades` | Named cascade library (saved, portable `fallback_providers` shapes) |
-| `POST` | `/api/cascades` | Save a cascade (`{ name, entries, sourceHarness?, overwrite? }`; existing name → 409 unless `overwrite`) |
-| `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read / rename+edit (`{ name?, entries? }`) / delete a cascade |
+| `POST` | `/api/harnesses/:id/cascade/save-as` | Snapshot the harness's current chain (primary + fallbacks) into the cascade library (`{ name, overwrite? }`) |
+| `GET` | `/api/cascades` | Named cascade library (saved, portable chains: `chain[0]` is the primary) |
+| `POST` | `/api/cascades` | Save a cascade (`{ name, chain, sourceHarness?, overwrite? }`; `entries` accepted as an alias; existing name → 409 unless `overwrite`) |
+| `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read / rename+edit (`{ name?, chain? }`) / delete a cascade |
 | `POST` | `/api/cascades/:name/apply` | Port a cascade onto a harness (`{ harnessId, restart? }`); refuses (400, no write, no restart) if the harness lacks a provider's key |
 | `POST` | `/api/harnesses/:id/artifacts/sync` | Install missing manifest artifacts onto an existing agent, no-clobber (`{ dryRun?, force? }`) |
 | `POST` | `/api/setup/deploy` | Deploy new agent (full wizard payload) |

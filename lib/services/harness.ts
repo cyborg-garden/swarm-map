@@ -675,34 +675,138 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
   }
 }
 
+/** model.provider as the runtime resolves it — the model: block's, else the root-level `provider:` sibling (see readModelBlock). */
 export function readModelProvider(dataDir: string): string {
-  try {
-    const configPath = path.join(dataDir, 'config.yaml')
-    const content = fs.readFileSync(configPath, 'utf-8')
-    const lines = content.split('\n')
+  return readModelBlock(dataDir).provider
+}
 
+/** The primary as the runtime resolves it: model.provider / model.default (/ model.base_url). */
+export type CascadePrimary = { provider: string; model: string; base_url?: string }
+
+/**
+ * The cascade the way hermes-agent consumes it (verified against the
+ * runtime, 2026-09-23): the PRIMARY is the model: section, the FALLBACKS are
+ * the fallback_providers rows in order, and a row identical to the current
+ * (provider, model) is skipped when the chain is walked. Whether a file
+ * repeats its primary as row 0 (the HSM editor used to write that; `hermes
+ * fallback` and hand edits do not) is therefore a per-file CONVENTION, not a
+ * drift: readers report it, the writer preserves it, nothing warns about it.
+ */
+export type HarnessCascade = {
+  primary: CascadePrimary | null
+  /** Every fallback_providers row, verbatim — the duplicate included. */
+  fallbacks: FallbackProvider[]
+  /** fallbacks[0] is the primary again (provider case-insensitive, model exact). */
+  primaryDuplicatedAsRow0: boolean
+}
+
+/** Same (provider, model) row: provider case-insensitive, model exact. */
+export function sameCascadeRow(a: { provider: string; model: string }, b: { provider: string; model: string }): boolean {
+  return a.provider.trim().toLowerCase() === b.provider.trim().toLowerCase() && a.model.trim() === b.model.trim()
+}
+
+/**
+ * A root-level `provider:` / `base_url:` / `api_base:` line — the primary's
+ * provider and base URL written beside `model:` instead of under it. hermes
+ * merges each onto the model: block when the block lacks that key
+ * (_normalize_root_model_keys: fallback-only, never overriding model.*;
+ * `api_base` is the alias for `base_url`) and drops the root keys on its next
+ * save. The readers and the cascade writer share this pattern so they agree
+ * on which lines they are.
+ */
+export const ROOT_MODEL_SIBLING = /^(provider|base_url|api_base):\s*(.+)$/
+
+/**
+ * The model: block's managed keys, read the way hermes loads them (cli.py):
+ * the primary is `model.default`; when that key is absent, `model.model`
+ * (promoted to default at load); and a scalar `model: <id>` — the "new
+ * format" — is the default with no provider of its own. A `fallback:` or
+ * auxiliary model is never promoted to primary. A provider / base_url the
+ * block lacks comes from the root-level siblings (ROOT_MODEL_SIBLING), as
+ * at runtime. Values are comment-stripped and unquoted like every other
+ * reader here.
+ */
+function readModelBlock(dataDir: string): { provider: string; default: string; base_url: string } {
+  const out = { provider: '', default: '', base_url: '' }
+  // model.model, applied only when model.default is absent (default wins at runtime).
+  let modelKey = ''
+  const root = { provider: '', base_url: '', api_base: '' }
+  try {
+    const content = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf-8')
+    const lines = content.split('\n')
     let inModelSection = false
+    let modelSeen = false
     for (const line of lines) {
-      const trimmed = line.trim()
-      if (MODEL_HEADER.test(line)) {
+      if (!modelSeen && MODEL_HEADER.test(line)) {
+        modelSeen = true
         const flow = line.match(FLOW_MAP)
         if (flow) {
-          const prov = parseFlowPairs(flow[1]).find(([key]) => key === 'provider')
-          return prov ? yamlScalar(prov[1]) : ''
+          for (const [key, raw] of parseFlowPairs(flow[1])) {
+            if (key === 'provider' && !out.provider) out.provider = yamlScalar(raw)
+            else if (key === 'default' && !out.default) out.default = yamlScalar(raw)
+            else if (key === 'model' && !modelKey) modelKey = yamlScalar(raw)
+            else if (key === 'base_url' && !out.base_url) out.base_url = yamlScalar(raw)
+          }
+          continue
+        }
+        const scalar = yamlScalar(line.slice('model:'.length))
+        if (scalar) {
+          out.default = scalar
+          continue
         }
         inModelSection = true
         continue
       }
-      if (isTopLevelLine(line)) { inModelSection = false }
-      if (inModelSection) {
-        const provMatch = trimmed.match(/^provider:\s*(.+)$/)
-        if (provMatch) return yamlScalar(provMatch[1])
+      if (isTopLevelLine(line)) {
+        inModelSection = false
+        const sib = line.match(ROOT_MODEL_SIBLING)
+        if (sib) {
+          const key = sib[1] as keyof typeof root
+          if (!root[key]) root[key] = yamlScalar(sib[2])
+        }
+        continue
       }
+      if (!inModelSection) continue
+      const trimmed = line.trim()
+      const kv = trimmed.match(/^(provider|default|model|base_url):\s*(.+)$/)
+      if (!kv) continue
+      if (kv[1] === 'model') {
+        if (!modelKey) modelKey = yamlScalar(kv[2])
+        continue
+      }
+      const key = kv[1] as 'provider' | 'default' | 'base_url'
+      if (!out[key]) out[key] = yamlScalar(kv[2])
     }
-    return ''
   } catch {
-    return ''
+    // unreadable → empty block
   }
+  if (!out.default && modelKey) out.default = modelKey
+  if (!out.provider) out.provider = root.provider
+  if (!out.base_url) out.base_url = root.base_url || root.api_base
+  return out
+}
+
+export function readCascade(dataDir: string): HarnessCascade {
+  const block = readModelBlock(dataDir)
+  const fallbacks = readFallbackProviders(dataDir)
+  let primary: CascadePrimary | null = null
+  if (block.default) {
+    primary = { provider: block.provider, model: block.default }
+    if (block.base_url) primary.base_url = block.base_url
+  }
+  const primaryDuplicatedAsRow0 = !!primary && fallbacks.length > 0 && sameCascadeRow(fallbacks[0], primary)
+  return { primary, fallbacks, primaryDuplicatedAsRow0 }
+}
+
+/**
+ * The chain as the runtime walks it and the editor shows it: the primary,
+ * then every fallback row — minus the duplicate row 0 when the file has one.
+ * With no primary (no `default:`), the rows alone.
+ */
+export function cascadeChain(c: HarnessCascade): CascadePrimary[] {
+  const rows = c.primaryDuplicatedAsRow0 ? c.fallbacks.slice(1) : c.fallbacks
+  const fallbacks = rows.map((r) => ({ provider: r.provider, model: r.model, ...(r.base_url ? { base_url: r.base_url } : {}) }))
+  return c.primary ? [c.primary, ...fallbacks] : fallbacks
 }
 
 /**

@@ -1,17 +1,19 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { readFallbackProviders, guessDataDir } from '@/lib/services/harness'
+import { readCascade, cascadeChain, guessDataDir } from '@/lib/services/harness'
 
 // PUT /api/harnesses/[id]/models/tracking
 //   { "provider/model": true | false, ... }
 //
 // Sets "track the newest version of this model" per cascade entry. Keys are
-// "provider/model" exactly as the entry appears in fallback_providers
-// (e.g. "openrouter/z-ai/glm-5.2"). false clears the flag. Ollama entries are
-// refused: a local tag has no upstream notion of "newer" and must never be
-// auto-tracked. A key that matches no CURRENT fallback_providers row is
-// refused (409): the scheduler may have rotated that entry since the UI read
-// it, and recording intent for a row that no longer exists orphans the key.
+// "provider/model" exactly as the entry appears in the chain — the primary
+// (model.provider / model.default) included, whether or not the file repeats
+// it as a fallback_providers row (e.g. "openrouter/z-ai/glm-5.2"). false
+// clears the flag. Ollama entries are refused: a local tag has no upstream
+// notion of "newer" and must never be auto-tracked. A key that matches no
+// CURRENT chain entry is refused (409): the scheduler may have rotated that
+// entry since the UI read it, and recording intent for an entry that no
+// longer exists orphans the key.
 // Clearing (false) is always allowed. This only records intent — nothing is
 // written to the agent until the model-update scheduler (or the manual apply
 // route) acts on it.
@@ -51,15 +53,15 @@ export async function PUT(
         ? 'hermes-personal'
         : `hermes-${harness.name}`
       : harness.name
-    const rows = readFallbackProviders(guessDataDir(harness.serviceName ?? harness.name, containerName))
-    const current = new Set(rows.map((fp) => `${fp.provider.trim().toLowerCase()}/${fp.model.trim()}`))
+    const chain = cascadeChain(readCascade(guessDataDir(harness.serviceName ?? harness.name, containerName)))
+    const current = new Set(chain.map((fp) => `${fp.provider.trim().toLowerCase()}/${fp.model.trim()}`))
     const missing = wanted.filter((key) => {
       const slash = key.indexOf('/')
       return !current.has(`${key.slice(0, slash).trim().toLowerCase()}/${key.slice(slash + 1).trim()}`)
     })
     if (missing.length > 0) {
       return NextResponse.json(
-        { error: `"${missing[0]}" is not in this harness's fallback_providers (the cascade may have changed since it was read); reload and try again` },
+        { error: `"${missing[0]}" is not in this harness's model cascade (it may have changed since it was read); reload and try again` },
         { status: 409 },
       )
     }
