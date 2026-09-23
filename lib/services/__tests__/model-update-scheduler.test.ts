@@ -1094,3 +1094,41 @@ describe('chain semantics: the primary is a tracked entry too', () => {
     expect(cascadeChain(readCascade(path.join(root, 'man')))[0].model).toBe('z-ai/glm-5.3')
   })
 })
+
+describe('a file with rows but no primary: nothing is "primary" and nothing invents model.default', () => {
+  // hermes uses its own configured/hardcoded default when model.default is
+  // absent — so fallback_providers[0] is NOT the primary, and rotating it
+  // by writing a brand-new `default:` silently replaces the agent's real
+  // primary with a rotated fallback.
+  const NO_PRIMARY = 'model:\n  provider: openrouter\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.2\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n'
+
+  it('check (notify): every entry is role fallback', async () => {
+    makeHarness('nop', { config: NO_PRIMARY })
+    const report = await checkModelUpdates(deps)
+    const entries = report.harnesses.find((h) => h.id === 'h_nop')!.entries
+    expect(entries.map((e) => [e.model, e.role])).toEqual([
+      ['z-ai/glm-5.2', 'fallback'],
+      ['moonshotai/kimi-k3', 'fallback'],
+    ])
+  })
+
+  it('apply: a tracked row is blocked no-primary-in-file; config.yaml is untouched', async () => {
+    settings = { ...settings, mode: 'apply' }
+    makeHarness('nop', { config: NO_PRIMARY, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_nop', 'z-ai/glm-5.2')!
+    expect(e.role).toBe('fallback')
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.applied).toBeUndefined()
+    expect(e.blocked).toBe('no-primary-in-file')
+    expect(readConfig('nop')).toBe(NO_PRIMARY)
+    expect(readCascade(path.join(root, 'nop')).primary).toBeNull()
+  })
+
+  it('manual apply on such a file → 409 Blocked: no-primary-in-file, nothing written', async () => {
+    makeHarness('nop', { config: NO_PRIMARY })
+    const res = await applyModelUpdate({ harnessId: 'h_nop', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res).toEqual({ ok: false, status: 409, error: 'Blocked: no-primary-in-file' })
+    expect(readConfig('nop')).toBe(NO_PRIMARY)
+  })
+})

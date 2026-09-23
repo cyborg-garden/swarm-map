@@ -50,7 +50,7 @@
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
 import { readCascade, cascadeChain, guessDataDir, type CascadePrimary } from './harness'
-import { applyCascadeToHarness, type CascadeWriteInput } from './cascade-writer'
+import { applyCascadeToHarness, type CascadeWriteInput, type CascadeWriteResult } from './cascade-writer'
 import { isRestarting as trackerIsRestarting } from './restart-tracker'
 import { isLiveProvider, type LiveModelList, type LiveProvider } from './model-freshness'
 
@@ -277,7 +277,16 @@ type Substitution = { from: string; to: string; provider: string; priceRatio?: n
  * everything else is a validation message.
  */
 const blockedReason = (error: string): string =>
-  /^duplicate-sections\b/.test(error) ? 'duplicate-sections' : error === 'successor-already-in-cascade' ? error : `validation:${error}`
+  /^duplicate-sections\b/.test(error) ? 'duplicate-sections' : error === 'successor-already-in-cascade' || error === NO_PRIMARY ? error : `validation:${error}`
+
+/**
+ * A file with fallback rows but no primary (no model.default / model.model /
+ * scalar model:): hermes runs on its own configured default, which is not in
+ * the file. The writer always puts chain[0] into model.default, so a
+ * rotation there would INVENT a primary — a rotated fallback silently
+ * replacing the agent's real one. Refused instead.
+ */
+const NO_PRIMARY = 'no-primary-in-file'
 
 /**
  * Rewrite one harness's cascade with the substitutions applied, through
@@ -297,7 +306,8 @@ function performSubstitutions(
   // The chain as the runtime sees it: primary first, then the rows. A
   // substitution on chain[0] rewrites model.default (and the duplicate row 0
   // when the file has one — the writer keeps them in sync).
-  const current = cascadeChain(readCascade(dataDir))
+  const onDisk = readCascade(dataDir)
+  const current = cascadeChain(onDisk)
   // A rotated entry names the entry it replaces (carryFrom) so its key_env /
   // api_mode / inline api_key ride along onto the successor — the writer
   // only matches extras by (provider, model) otherwise, and a rotation
@@ -330,7 +340,7 @@ function performSubstitutions(
     if (seen.has(key)) return { ok: false, status: 409, error: 'successor-already-in-cascade' }
     seen.add(key)
   }
-  const result = applyCascadeToHarness(h.id, next, { who })
+  const result: CascadeWriteResult = onDisk.primary ? applyCascadeToHarness(h.id, next, { who }) : { ok: false, status: 409, error: NO_PRIMARY }
   if (!result.ok) {
     for (const s of subs) {
       deps.audit.append({
@@ -391,7 +401,8 @@ export async function checkModelUpdates(
   const report: ModelUpdateReport = { checkedAt: Date.now(), enabled: settings.enabled, mode: settings.mode, harnesses: [] }
 
   for (const h of eligibleHarnesses(deps)) {
-    const chain = cascadeChain(readCascade(deps.dataDirFor(h)))
+    const cascade = readCascade(deps.dataDirFor(h))
+    const chain = cascadeChain(cascade)
     if (chain.length === 0) {
       // Nothing this run — no primary and no rows: config.yaml unreadable,
       // mid-rewrite, or the operator legitimately emptied it — and the reader
@@ -418,8 +429,10 @@ export async function checkModelUpdates(
       }
       continue
     }
+    // chain[0] is the primary only when the file HAS one; with no
+    // model.default the chain is the rows alone and every entry is a fallback.
     const candidates: Candidate[] = []
-    for (const [i, fp] of chain.entries()) candidates.push(await evaluateEntry(h, fp, i === 0 ? 'primary' : 'fallback', getLive, deps, prior))
+    for (const [i, fp] of chain.entries()) candidates.push(await evaluateEntry(h, fp, i === 0 && cascade.primary ? 'primary' : 'fallback', getLive, deps, prior))
 
     if (applyMode) {
       const subs: Substitution[] = []
@@ -516,13 +529,14 @@ export async function applyModelUpdate(
   const h = deps.harness.get(input.harnessId)
   if (!h) return { ok: false, status: 404, error: 'Harness not found' }
   if (h.runtime === 'letta' || h.runtime === 'letta-server') return { ok: false, status: 400, error: 'Not a container harness' }
-  const chain = cascadeChain(readCascade(deps.dataDirFor(h)))
+  const cascade = readCascade(deps.dataDirFor(h))
+  const chain = cascadeChain(cascade)
   const matches = chain.filter((fp) => fp.model === input.from && (!input.provider || fp.provider.trim().toLowerCase() === input.provider.trim().toLowerCase()))
   if (matches.length === 0) return { ok: false, status: 404, error: `"${input.from}" is not in this harness's model cascade` }
   if (matches.length > 1) return { ok: false, status: 400, error: `"${input.from}" appears under more than one provider; pass provider` }
   const fp = matches[0]
   const settings = deps.config.getModelAutoUpdate()
-  const c = await evaluateEntry(h, fp, chain[0] === fp ? 'primary' : 'fallback', liveCache(deps), deps, priorEntryFrom(deps))
+  const c = await evaluateEntry(h, fp, chain[0] === fp && cascade.primary ? 'primary' : 'fallback', liveCache(deps), deps, priorEntryFrom(deps))
   if (!c.entry.successor) return { ok: false, status: 409, error: `No live successor for "${input.from}"` }
   if (c.entry.successor !== input.to) {
     return { ok: false, status: 409, error: `Live successor for "${input.from}" is "${c.entry.successor}", not "${input.to}"` }
