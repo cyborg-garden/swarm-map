@@ -9,7 +9,8 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { Storage } from '../storage'
-import { readFallbackProviders } from '../harness'
+import { readFallbackProviders, readCascade, cascadeChain } from '../harness'
+import { CYBORG, CRYPTIDS, MATILDE } from './fleet-shapes'
 import {
   checkModelUpdates,
   applyModelUpdate,
@@ -101,6 +102,8 @@ function makeHarness(name: string, opts: { config: string; env?: string; trackin
   return h
 }
 
+// The HSM-editor convention: model.default repeated as fallback_providers[0].
+// The chain the scheduler sees is [entries[0] (primary), ...entries[1..]].
 const fpConfig = (entries: Array<[string, string]>) =>
   [
     'model:',
@@ -519,52 +522,48 @@ describe('checkModelUpdates — apply guards added by the audit', () => {
     settings = { ...settings, mode: 'apply' }
   })
 
-  it('primary-mismatch: a tracked fallback row is not rotated when model.default is a different model', async () => {
-    // model.default is Kimi K3 while fallback_providers[0] is the tracked GLM row.
-    // The writer derives model.default from row 0, so an apply here would
-    // silently switch the agent's primary. Must block, write nothing, restart nothing.
-    const cfg = [
-      'model:',
-      '  provider: openrouter',
-      '  default: moonshotai/kimi-k3',
-      'fallback_providers:',
-      '  - provider: openrouter',
-      '    model: z-ai/glm-5.2',
-      '  - provider: openrouter',
-      '    model: moonshotai/kimi-k3',
-      '',
-    ].join('\n')
-    makeHarness('pm', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+  // matilde-shaped: model.default is kimi-k3 and the tracked row is the FIRST
+  // FALLBACK. PR #243 blocked this as primary-mismatch on the wrong premise
+  // (row 0 == primary). The runtime tries kimi-k3 first and glm-5.2 second, so
+  // rotating the fallback row must touch nothing but that row.
+  const fallbackTrackedCfg = [
+    'model:',
+    '  provider: openrouter',
+    '  default: moonshotai/kimi-k3',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.2',
+    '  - provider: anthropic',
+    '    model: claude-sonnet-4-6',
+    '',
+  ].join('\n')
+
+  it('a tracked FALLBACK row is rotated without touching model.default (no primary-mismatch block)', async () => {
+    makeHarness('pm', { config: fallbackTrackedCfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
     const report = await checkModelUpdates(deps)
     const glm = entryFor(report, 'h_pm', 'z-ai/glm-5.2')!
     expect(glm.successor).toBe('z-ai/glm-5.3')
-    expect(glm.applied).toBeUndefined()
-    expect(glm.blocked).toMatch(/primary-mismatch/)
-    expect(readConfig('pm')).toBe(cfg)
-    expect(deps.harness.restart).not.toHaveBeenCalled()
-    expect(deps.audit.append).toHaveBeenCalledWith(
-      expect.objectContaining({ what: 'cascade:auto-update:blocked', meta: expect.objectContaining({ reason: expect.stringMatching(/primary-mismatch/) }) }),
-    )
+    expect(glm.role).toBe('fallback')
+    expect(glm.blocked).toBeUndefined()
+    expect(glm.applied).toBe(true)
+    expect(readConfig('pm')).toBe(fallbackTrackedCfg.replace('z-ai/glm-5.2', 'z-ai/glm-5.3'))
+    expect(deps.harness.restart).toHaveBeenCalledWith('h_pm', 'quick')
+    // The primary is reported first, as the primary; a rotated entry keeps
+    // the id it was evaluated under, flagged applied.
+    const entries = report.harnesses.find((h) => h.id === 'h_pm')!.entries
+    expect(entries.map((e) => [e.model, e.role, e.applied])).toEqual([
+      ['moonshotai/kimi-k3', 'primary', undefined],
+      ['z-ai/glm-5.2', 'fallback', true],
+      ['claude-sonnet-4-6', 'fallback', undefined],
+    ])
   })
 
-  it('manual apply is refused on the same primary mismatch', async () => {
-    const cfg = [
-      'model:',
-      '  provider: openrouter',
-      '  default: moonshotai/kimi-k3',
-      'fallback_providers:',
-      '  - provider: openrouter',
-      '    model: z-ai/glm-5.2',
-      '  - provider: openrouter',
-      '    model: moonshotai/kimi-k3',
-      '',
-    ].join('\n')
-    makeHarness('pm2', { config: cfg })
+  it('manual apply of a fallback row on the same shape leaves model.default alone', async () => {
+    makeHarness('pm2', { config: fallbackTrackedCfg })
     const res = await applyModelUpdate({ harnessId: 'h_pm2', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
-    expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.error).toMatch(/primary-mismatch/)
-    expect(readConfig('pm2')).toBe(cfg)
-    expect(deps.harness.restart).not.toHaveBeenCalled()
+    expect(res.ok).toBe(true)
+    expect(readConfig('pm2')).toBe(fallbackTrackedCfg.replace('z-ai/glm-5.2', 'z-ai/glm-5.3'))
+    expect(deps.harness.restart).toHaveBeenCalledWith('h_pm2', 'quick')
   })
 
   it('a rotation keeps the other rows\' extra keys (inline api_key) and the model block\'s base_url', async () => {
@@ -991,23 +990,107 @@ describe('round-4 audit: converging successors in one batch; report memory acros
     const e1 = entryFor(first, 'h_emptied', 'x-ai/grok-4.7')!
     expect(e1.successor).toBe('x-ai/grok-4.9')
     expect(e1.released).toBe('20260916')
-    // The operator hand-edits config.yaml down to a bare primary: no fallback_providers at all.
+    // The operator hand-edits config.yaml down to a bare primary: no
+    // fallback_providers at all. The primary IS a chain, so the block is
+    // rebuilt from it: the removed row is gone (its tracking key is orphaned),
+    // and nothing can render as "1 update available".
     fs.writeFileSync(path.join(root, 'emptied', 'config.yaml'), 'model:\n  provider: ollama\n  default: qwen3:30b\n')
     for (let run = 0; run < 3; run++) {
       const report = await checkModelUpdates(deps)
       const block = report.harnesses.find((h) => h.id === 'h_emptied')!
-      expect(block.orphanedTracking).toBeUndefined()
-      const e = entryFor(report, 'h_emptied', 'x-ai/grok-4.7')!
-      // Memory survives: what the row cost and when it shipped.
-      expect(e.released).toBe('20260916')
-      expect(e.pricing).toEqual(p(0.000003, 0.000015))
-      // State does not: nothing on this block can render as "1 update available".
-      expect(e.successor).toBeUndefined()
-      expect(e.kind).toBeUndefined()
-      expect(e.priceRatio).toBeUndefined()
-      expect(e.applied).toBeUndefined()
-      expect(e.blocked).toBeUndefined()
-      expect(e.nearMisses).toBeUndefined()
+      expect(block.entries.map((e) => [e.model, e.role])).toEqual([['qwen3:30b', 'primary']])
+      expect(block.orphanedTracking).toEqual(['openrouter/x-ai/grok-4.7'])
+      expect(entryFor(report, 'h_emptied', 'x-ai/grok-4.7')).toBeUndefined()
     }
+    // A file with NEITHER a primary nor rows (unreadable, mid-rewrite) still carries the previous block.
+    fs.writeFileSync(path.join(root, 'emptied', 'config.yaml'), 'platforms: {}\n')
+    const report = await checkModelUpdates(deps)
+    expect(report.harnesses.find((h) => h.id === 'h_emptied')!.entries.map((e) => e.model)).toEqual(['qwen3:30b'])
+  })
+})
+
+// --- Chain semantics (fix for PR #243's wrong premise) ------------------------
+describe('chain semantics: the primary is a tracked entry too', () => {
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+
+  it('cyborg (primary not in the rows): the report lists the primary first with role primary, then each row', async () => {
+    settings = { ...settings, mode: 'notify' }
+    makeHarness('cyborg', { config: CYBORG })
+    const report = await checkModelUpdates(deps)
+    const entries = report.harnesses.find((h) => h.id === 'h_cyborg')!.entries
+    expect(entries.map((e) => [e.provider, e.model, e.role])).toEqual([
+      ['openrouter', 'z-ai/glm-5.3', 'primary'],
+      ['anthropic', 'claude-sonnet-4-6', 'fallback'],
+      ['openrouter', 'anthropic/claude-sonnet-4.6', 'fallback'],
+      ['openrouter', 'deepseek/deepseek-v4-flash-0731', 'fallback'],
+      ['ollama', 'qwen3.5:9b', 'fallback'],
+    ])
+  })
+
+  it('cryptids (primary duplicated as row 0): ONE entry for the primary, not two', async () => {
+    settings = { ...settings, mode: 'notify' }
+    makeHarness('cryptids', { config: CRYPTIDS })
+    const report = await checkModelUpdates(deps)
+    const entries = report.harnesses.find((h) => h.id === 'h_cryptids')!.entries
+    expect(entries.map((e) => [e.model, e.role])).toEqual([
+      ['z-ai/glm-5.3', 'primary'],
+      ['claude-sonnet-4-6', 'fallback'],
+      ['qwen3:30b', 'fallback'],
+    ])
+  })
+
+  it('rotating a tracked PRIMARY on a file that does not repeat it rewrites model.default and adds no row', async () => {
+    const cfg = CYBORG.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
+    makeHarness('cyb', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_cyb', 'z-ai/glm-5.2')!
+    expect(e.role).toBe('primary')
+    expect(e.applied).toBe(true)
+    expect(readConfig('cyb')).toBe(cfg.replace('  default: z-ai/glm-5.2', '  default: z-ai/glm-5.3'))
+    expect(readCascade(path.join(root, 'cyb')).primaryDuplicatedAsRow0).toBe(false)
+    expect(harnesses.find((h) => h.id === 'h_cyb')!.modelTracking).toEqual({ [trackingKey('openrouter', 'z-ai/glm-5.3')]: true })
+  })
+
+  it('rotating a tracked PRIMARY on a file that repeats it rewrites model.default AND the duplicate row 0 together', async () => {
+    const cfg = CRYPTIDS.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.2')
+    makeHarness('cry', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    expect(entryFor(report, 'h_cry', 'z-ai/glm-5.2')!.applied).toBe(true)
+    expect(readConfig('cry')).toBe(CRYPTIDS)
+    const after = readCascade(path.join(root, 'cry'))
+    expect(after.primaryDuplicatedAsRow0).toBe(true)
+    // A duplicate row that no longer matched the primary after a rotation would be a bug.
+    expect(after.fallbacks[0]).toEqual(after.primary)
+  })
+
+  it('a tracked fallback whose successor is the PRIMARY is blocked (successor-already-in-cascade)', async () => {
+    // matilde-shaped, but the primary is glm-5.3 and a fallback row is glm-5.2.
+    const cfg = MATILDE.replace('  default: moonshotai/kimi-k3', '  default: z-ai/glm-5.3').replace('    model: z-ai/glm-5.3', '    model: z-ai/glm-5.2')
+    makeHarness('succ', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_succ', 'z-ai/glm-5.2')!
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.blocked).toBe('successor-already-in-cascade')
+    expect(readConfig('succ')).toBe(cfg)
+  })
+
+  it('orphaned tracking is judged against the chain: the primary\'s key is never an orphan', async () => {
+    settings = { ...settings, mode: 'notify' }
+    makeHarness('orph', { config: CYBORG, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.3')]: true, [trackingKey('openrouter', 'gone/model')]: true } })
+    const report = await checkModelUpdates(deps)
+    const h = report.harnesses.find((x) => x.id === 'h_orph')!
+    expect(h.orphanedTracking).toEqual(['openrouter/gone/model'])
+    expect(entryFor(report, 'h_orph', 'z-ai/glm-5.3')!.tracked).toBe(true)
+  })
+
+  it('manual apply on the primary (not in the rows) works by model id, no provider needed', async () => {
+    const cfg = CYBORG.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
+    makeHarness('man', { config: cfg })
+    const res = await applyModelUpdate({ harnessId: 'h_man', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res.ok).toBe(true)
+    expect(readConfig('man')).toBe(CYBORG)
+    expect(cascadeChain(readCascade(path.join(root, 'man')))[0].model).toBe('z-ai/glm-5.3')
   })
 })

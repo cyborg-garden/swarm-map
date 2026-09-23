@@ -5,11 +5,16 @@
  * instrumentation.ts, HMR-guarded on globalThis, MODEL_UPDATE_INTERVAL_MS
  * overrides the settings interval.
  *
- * checkModelUpdates() walks every non-Letta harness's fallback_providers,
+ * checkModelUpdates() walks every non-Letta harness's model CASCADE — the
+ * primary from model: first (role 'primary'), then each fallback_providers
+ * row (role 'fallback'), the way the runtime tries them; see readCascade —
  * fetches each provider's live list once (cached, fail-soft), and writes a
  * report to DATA_DIR/model-updates.json: per entry — tracked?, retired?,
  * successor + kind + priceRatio. That report is what the UI and the manual
- * apply route read.
+ * apply route read. The primary is an entry like any other: it can be
+ * tracked, and rotating it rewrites model.default (and, on a file that
+ * repeats the primary as fallback_providers[0], that row too — the writer
+ * keeps them in sync).
  *
  * In 'apply' mode a tracked entry is rotated to its successor ONLY when every
  * guard passes (see evaluateApply) — and the rewrite goes through
@@ -21,9 +26,7 @@
  * Never applied: ollama (no upstream notion of "newer"), bedrock, custom;
  * snapshot-only bumps (notify only); unstable successors; anything over the
  * price ceiling, or with no pricing to check it against; a harness with a
- * restart already in flight; a config whose model.default is not
- * fallback_providers[0] (the writer refuses: the rewrite would switch the
- * primary).
+ * restart already in flight.
  *
  * A row the provider has REMOVED (retired by absence — the case auto-update
  * exists for) has no live pricing to check the ceiling against. Its last
@@ -46,7 +49,7 @@
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
-import { readFallbackProviders, guessDataDir, type FallbackProvider } from './harness'
+import { readCascade, cascadeChain, guessDataDir, type CascadePrimary } from './harness'
 import { applyCascadeToHarness, type CascadeWriteInput } from './cascade-writer'
 import { isRestarting as trackerIsRestarting } from './restart-tracker'
 import { isLiveProvider, type LiveModelList, type LiveProvider } from './model-freshness'
@@ -72,6 +75,8 @@ export function trackingKey(provider: string, model: string): string {
 export type ModelUpdateEntry = {
   provider: string
   model: string
+  /** 'primary' = the model: section (listed first); 'fallback' = a fallback_providers row. Absent on reports persisted before chain semantics. */
+  role?: 'primary' | 'fallback'
   tracked: boolean
   retired: boolean
   successor?: string
@@ -98,7 +103,7 @@ export type ModelUpdateReport = {
     id: string
     name: string
     entries: ModelUpdateEntry[]
-    /** modelTracking keys that match no current fallback_providers row (a stale save wrote over a rotated entry). */
+    /** modelTracking keys that match no current chain entry (a stale save wrote over a rotated entry). */
     orphanedTracking?: string[]
   }>
 }
@@ -170,14 +175,15 @@ function priorEntryFrom(deps: SchedulerDeps): PriorEntry {
       ?.entries.find((e) => sameId(e.provider, provider) && sameId(e.model, model))
 }
 
-/** Is `entry`'s successor already a row of the same provider in `fps`? Rotating would duplicate that row. */
-function successorInCascade(fps: FallbackProvider[], entry: ModelUpdateEntry): boolean {
-  return !!entry.successor && fps.some((fp) => sameId(fp.provider, entry.provider) && sameId(fp.model, entry.successor!))
+/** Is `entry`'s successor already an entry of the same provider in the chain (primary included)? Rotating would duplicate it. */
+function successorInCascade(chain: CascadePrimary[], entry: ModelUpdateEntry): boolean {
+  return !!entry.successor && chain.some((fp) => sameId(fp.provider, entry.provider) && sameId(fp.model, entry.successor!))
 }
 
 async function evaluateEntry(
   h: Harness,
-  fp: FallbackProvider,
+  fp: CascadePrimary,
+  role: 'primary' | 'fallback',
   getLive: (provider: string) => Promise<LiveModelList | null>,
   deps: SchedulerDeps,
   prior: PriorEntry,
@@ -186,6 +192,7 @@ async function evaluateEntry(
   const entry: ModelUpdateEntry = {
     provider: fp.provider,
     model: fp.model,
+    role,
     tracked: isTracked(h, fp.provider, fp.model),
     retired: false,
   }
@@ -287,13 +294,14 @@ function performSubstitutions(
   deps: SchedulerDeps,
 ): { ok: true } | { ok: false; status: number; error: string } {
   const dataDir = deps.dataDirFor(h)
-  const current = readFallbackProviders(dataDir)
-  // A rotated row names the row it replaces (carryFrom) so its key_env /
+  // The chain as the runtime sees it: primary first, then the rows. A
+  // substitution on chain[0] rewrites model.default (and the duplicate row 0
+  // when the file has one — the writer keeps them in sync).
+  const current = cascadeChain(readCascade(dataDir))
+  // A rotated entry names the entry it replaces (carryFrom) so its key_env /
   // api_mode / inline api_key ride along onto the successor — the writer
   // only matches extras by (provider, model) otherwise, and a rotation
-  // changes the model by construction. The writer's primary-mismatch guard
-  // (model.default ≠ fallback_providers[0]) refuses the whole write with
-  // 409; that lands in the blocked-audit path below.
+  // changes the model by construction.
   // Substitutions are keyed by (provider, model) — the tracking key. Keyed by
   // model alone, two rows with the same id under different providers
   // collapsed onto one substitution: one row rotated, the other was reported
@@ -308,10 +316,10 @@ function performSubstitutions(
     matched.add(key)
     return { provider: fp.provider, model: s.to, base_url: fp.base_url, carryFrom: { provider: fp.provider, model: fp.model } }
   })
-  // Every substitution must name a row that is actually on disk; a write that
-  // rotated only some of them would still report — and audit — all of them.
+  // Every substitution must name an entry that is actually on disk; a write
+  // that rotated only some of them would still report — and audit — all of them.
   if (subs.some((s) => !matched.has(subKey(s.provider, s.from)))) {
-    return { ok: false, status: 404, error: 'entry not present in fallback_providers' }
+    return { ok: false, status: 404, error: 'entry not present in the cascade' }
   }
   // The rows AFTER substitution must still be distinct per (provider, model).
   // checkModelUpdates blocks a converging successor before it gets here; this
@@ -383,15 +391,15 @@ export async function checkModelUpdates(
   const report: ModelUpdateReport = { checkedAt: Date.now(), enabled: settings.enabled, mode: settings.mode, harnesses: [] }
 
   for (const h of eligibleHarnesses(deps)) {
-    const fps = readFallbackProviders(deps.dataDirFor(h))
-    if (fps.length === 0) {
-      // No rows this run: config.yaml unreadable, mid-rewrite, or the operator
-      // legitimately emptied the cascade — and the reader cannot tell which.
-      // Dropping the harness forgets every row's last known pricing and
-      // release date, so carry the previous block — but carry memory, not
-      // state. A verbatim copy re-listed a stale successor on every run: the
-      // fleet card counted it as "1 update available" and its Update button
-      // 404ed, because the row was no longer in fallback_providers.
+    const chain = cascadeChain(readCascade(deps.dataDirFor(h)))
+    if (chain.length === 0) {
+      // Nothing this run — no primary and no rows: config.yaml unreadable,
+      // mid-rewrite, or the operator legitimately emptied it — and the reader
+      // cannot tell which. Dropping the harness forgets every entry's last
+      // known pricing and release date, so carry the previous block — but
+      // carry memory, not state. A verbatim copy re-listed a stale successor
+      // on every run: the fleet card counted it as "1 update available" and
+      // its Update button 404ed, because the entry was no longer in the chain.
       const kept = previous?.harnesses.find((x) => x.id === h.id)
       if (kept) {
         report.harnesses.push({
@@ -400,6 +408,7 @@ export async function checkModelUpdates(
           entries: kept.entries.map((e) => ({
             provider: e.provider,
             model: e.model,
+            ...(e.role ? { role: e.role } : {}),
             tracked: e.tracked,
             retired: e.retired,
             ...(e.pricing ? { pricing: e.pricing } : {}),
@@ -410,7 +419,7 @@ export async function checkModelUpdates(
       continue
     }
     const candidates: Candidate[] = []
-    for (const fp of fps) candidates.push(await evaluateEntry(h, fp, getLive, deps, prior))
+    for (const [i, fp] of chain.entries()) candidates.push(await evaluateEntry(h, fp, i === 0 ? 'primary' : 'fallback', getLive, deps, prior))
 
     if (applyMode) {
       const subs: Substitution[] = []
@@ -434,7 +443,7 @@ export async function checkModelUpdates(
           settings,
           automatic: true,
           isRestarting: deps.isRestarting,
-          successorInCascade: successorInCascade(fps, c.entry) || planned.has(trackingKey(c.entry.provider.trim().toLowerCase(), c.entry.successor)),
+          successorInCascade: successorInCascade(chain, c.entry) || planned.has(trackingKey(c.entry.provider.trim().toLowerCase(), c.entry.successor)),
         })
         if (reason) {
           c.entry.blocked = reason
@@ -453,7 +462,7 @@ export async function checkModelUpdates(
       }
     }
     const orphanedTracking = Object.keys(h.modelTracking ?? {}).filter(
-      (key) => h.modelTracking?.[key] === true && !fps.some((fp) => trackingKey(fp.provider, fp.model) === key),
+      (key) => h.modelTracking?.[key] === true && !chain.some((fp) => trackingKey(fp.provider, fp.model) === key),
     )
     report.harnesses.push({
       id: h.id,
@@ -507,13 +516,13 @@ export async function applyModelUpdate(
   const h = deps.harness.get(input.harnessId)
   if (!h) return { ok: false, status: 404, error: 'Harness not found' }
   if (h.runtime === 'letta' || h.runtime === 'letta-server') return { ok: false, status: 400, error: 'Not a container harness' }
-  const fps = readFallbackProviders(deps.dataDirFor(h))
-  const matches = fps.filter((fp) => fp.model === input.from && (!input.provider || fp.provider.trim().toLowerCase() === input.provider.trim().toLowerCase()))
-  if (matches.length === 0) return { ok: false, status: 404, error: `"${input.from}" is not in this harness's fallback_providers` }
+  const chain = cascadeChain(readCascade(deps.dataDirFor(h)))
+  const matches = chain.filter((fp) => fp.model === input.from && (!input.provider || fp.provider.trim().toLowerCase() === input.provider.trim().toLowerCase()))
+  if (matches.length === 0) return { ok: false, status: 404, error: `"${input.from}" is not in this harness's model cascade` }
   if (matches.length > 1) return { ok: false, status: 400, error: `"${input.from}" appears under more than one provider; pass provider` }
   const fp = matches[0]
   const settings = deps.config.getModelAutoUpdate()
-  const c = await evaluateEntry(h, fp, liveCache(deps), deps, priorEntryFrom(deps))
+  const c = await evaluateEntry(h, fp, chain[0] === fp ? 'primary' : 'fallback', liveCache(deps), deps, priorEntryFrom(deps))
   if (!c.entry.successor) return { ok: false, status: 409, error: `No live successor for "${input.from}"` }
   if (c.entry.successor !== input.to) {
     return { ok: false, status: 409, error: `Live successor for "${input.from}" is "${c.entry.successor}", not "${input.to}"` }
@@ -525,7 +534,7 @@ export async function applyModelUpdate(
     settings,
     automatic: false,
     isRestarting: deps.isRestarting,
-    successorInCascade: successorInCascade(fps, c.entry),
+    successorInCascade: successorInCascade(chain, c.entry),
   })
   if (reason) return { ok: false, status: reason === 'restart-in-flight' ? 409 : 400, error: `Blocked: ${reason}` }
   const done = performSubstitutions(h, [{ from: fp.model, to: input.to, provider: fp.provider, priceRatio: c.entry.priceRatio }], 'api', deps)
