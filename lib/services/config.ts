@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-import type { Settings, Model, Person, Surface } from '@/lib/types'
+import type { Settings, Model, Person, Surface, ModelAutoUpdateSettings } from '@/lib/types'
 import type { Storage } from './storage'
 import { assertNoNewline } from '@/lib/env-helpers'
 
@@ -51,11 +51,60 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         }
         out.localApiPort = value
         break
+      case 'modelAutoUpdate':
+        out.modelAutoUpdate = validateModelAutoUpdate(value)
+        break
       default:
         throw new Error(`unknown settings key: ${key}`)
     }
   }
   return out
+}
+
+export const DEFAULT_MODEL_AUTO_UPDATE: ModelAutoUpdateSettings = {
+  enabled: false,
+  mode: 'notify',
+  intervalHours: 24,
+  maxPriceMultiplier: 1.5,
+}
+
+/**
+ * Validate a full modelAutoUpdate block. Every field is required and typed —
+ * callers that accept a partial (PUT /api/settings/model-auto-update) merge it
+ * over the current block first, then validate the result.
+ */
+/**
+ * Upper bound for the scheduler interval (30 days). Node's timers take a
+ * 32-bit ms delay; anything past ~596h overflows to 1ms and the daily tick
+ * becomes a hot loop, so the scheduler also clamps (resolveIntervalMs).
+ */
+export const MAX_MODEL_UPDATE_INTERVAL_HOURS = 720
+
+export function validateModelAutoUpdate(input: unknown): ModelAutoUpdateSettings {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error('modelAutoUpdate must be a JSON object')
+  }
+  const v = input as Record<string, unknown>
+  for (const key of Object.keys(v)) {
+    if (!(key in DEFAULT_MODEL_AUTO_UPDATE)) throw new Error(`unknown modelAutoUpdate key: ${key}`)
+  }
+  if (typeof v.enabled !== 'boolean') throw new Error('modelAutoUpdate.enabled must be a boolean')
+  if (v.mode !== 'notify' && v.mode !== 'apply') throw new Error('modelAutoUpdate.mode must be "notify" or "apply"')
+  if (typeof v.intervalHours !== 'number' || !Number.isFinite(v.intervalHours) || v.intervalHours <= 0) {
+    throw new Error('modelAutoUpdate.intervalHours must be a positive number')
+  }
+  if (v.intervalHours > MAX_MODEL_UPDATE_INTERVAL_HOURS) {
+    throw new Error(`modelAutoUpdate.intervalHours must be at most ${MAX_MODEL_UPDATE_INTERVAL_HOURS}`)
+  }
+  if (typeof v.maxPriceMultiplier !== 'number' || !Number.isFinite(v.maxPriceMultiplier) || v.maxPriceMultiplier <= 0) {
+    throw new Error('modelAutoUpdate.maxPriceMultiplier must be a positive number')
+  }
+  return {
+    enabled: v.enabled,
+    mode: v.mode,
+    intervalHours: v.intervalHours,
+    maxPriceMultiplier: v.maxPriceMultiplier,
+  }
 }
 
 const SETTINGS_FILE = 'settings.json'
@@ -129,6 +178,20 @@ export class ConfigService {
     const updated = { ...current, ...validated }
     this.storage.write(SETTINGS_FILE, updated)
     return updated
+  }
+
+  /** The model-update policy with defaults filled in (never undefined). */
+  getModelAutoUpdate(): ModelAutoUpdateSettings {
+    return { ...DEFAULT_MODEL_AUTO_UPDATE, ...(this.getSettings().modelAutoUpdate ?? {}) }
+  }
+
+  /** Merge a partial policy over the current one, validate, persist. Throws on a bad patch. */
+  updateModelAutoUpdate(partial: unknown): ModelAutoUpdateSettings {
+    if (typeof partial !== 'object' || partial === null || Array.isArray(partial)) {
+      throw new Error('modelAutoUpdate must be a JSON object')
+    }
+    const merged = validateModelAutoUpdate({ ...this.getModelAutoUpdate(), ...(partial as Record<string, unknown>) })
+    return this.updateSettings({ modelAutoUpdate: merged }).modelAutoUpdate ?? merged
   }
 
   listModels(): Model[] {

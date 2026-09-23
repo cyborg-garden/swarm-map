@@ -2,11 +2,31 @@
 
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
+import { isTrackableProvider, rowKey } from '@/lib/model-row-status'
 
 export const MODEL_PROVIDERS = ['anthropic', 'openrouter', 'ollama', 'custom', 'gemini', 'nous', 'bedrock', 'zai'] as const
 
 export type FallbackProviderEntry = { provider: string; model: string; base_url?: string }
+
+/**
+ * Optional per-row status the editor can decorate rows with. All keys are
+ * rowKey(entry) = "provider/model". Everything is optional and absent means
+ * "render nothing" — the editor never invents status.
+ */
+export type RowStatus = {
+  /** "Track latest" flags (harness.modelTracking). */
+  tracking?: Record<string, boolean>
+  onTrackingChange?: (entry: FallbackProviderEntry, tracked: boolean) => void
+  /** Rows whose id the provider's live list no longer serves. */
+  retiredKeys?: ReadonlySet<string>
+  /** Row → successor id from the fleet model-updates report. */
+  successors?: Record<string, string>
+  onApplyUpdate?: (entry: FallbackProviderEntry, to: string) => void
+  /** Row whose Update is in flight. */
+  updatingKey?: string | null
+}
 
 /**
  * Build the cascade the editor should show for a given set of server props.
@@ -43,6 +63,7 @@ export function ModelCascadeEditor({
   onSave,
   saving,
   harnessId,
+  rowStatus,
 }: {
   models: string[]
   provider: string
@@ -50,6 +71,7 @@ export function ModelCascadeEditor({
   onSave: (entries: FallbackProviderEntry[]) => void
   saving: boolean
   harnessId: string
+  rowStatus?: RowStatus
 }) {
   const built = buildCascadeFromProps(initialModels, initialProvider, initialFallbackProviders)
   const builtKey = JSON.stringify(built)
@@ -164,9 +186,16 @@ export function ModelCascadeEditor({
           <p className="text-sm text-muted-foreground italic">No models configured. Add one below.</p>
         ) : (
           <div className="space-y-1">
-            {cascade.map((entry, i) => (
+            {cascade.map((entry, i) => {
+              const key = rowKey(entry)
+              const trackable = !!rowStatus?.onTrackingChange && isTrackableProvider(entry.provider)
+              const retired = rowStatus?.retiredKeys?.has(key) ?? false
+              const successor = rowStatus?.successors?.[key]
+              const updating = rowStatus?.updatingKey === key
+              return (
               <div
                 key={`${entry.provider}-${entry.model}-${i}`}
+                data-row={key}
                 className={`flex items-center gap-2 p-2 rounded-md border ${i === 0 ? 'border-[var(--accent)] bg-[var(--accent)]/5' : 'border-[var(--border)]'}`}
               >
                 <span className="text-xs text-muted-foreground w-5 text-center font-medium">
@@ -178,13 +207,53 @@ export function ModelCascadeEditor({
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-medium uppercase tracking-wide shrink-0">
                       {entry.provider}
                     </span>
+                    {retired && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--danger)]/10 text-[var(--danger)] font-medium uppercase tracking-wide shrink-0"
+                        title="The provider no longer serves this model id"
+                      >
+                        retired
+                      </span>
+                    )}
                   </div>
                   {entry.base_url && (
                     <p className="text-[11px] font-mono text-muted-foreground mt-0.5 truncate">
                       {entry.base_url}
                     </p>
                   )}
+                  {successor && (
+                    <p className="text-[11px] mt-0.5 flex items-center gap-2 min-w-0">
+                      <span className="text-[var(--warning)] font-mono truncate">{`newer: ${successor}`}</span>
+                      {rowStatus?.onApplyUpdate && (
+                        <button
+                          type="button"
+                          onClick={() => rowStatus.onApplyUpdate?.(entry, successor)}
+                          disabled={updating || isDirty}
+                          aria-label={updating ? `Updating ${entry.model}` : `Update ${entry.model} to ${successor}`}
+                          title={isDirty ? 'Save the cascade first' : `Replace ${entry.model} with ${successor} and restart`}
+                          className="text-[11px] text-[var(--accent)] hover:underline disabled:opacity-50 disabled:no-underline shrink-0"
+                        >
+                          {updating ? 'Updating…' : 'Update'}
+                        </button>
+                      )}
+                    </p>
+                  )}
                 </div>
+                {trackable && (
+                  <label
+                    className="flex items-center gap-1.5 text-[11px] text-muted-foreground shrink-0"
+                    title={isDirty ? 'Save the cascade first' : 'Let the model-update scheduler follow the newest version of this model'}
+                  >
+                    <span className="hidden sm:inline">Track latest</span>
+                    <Switch
+                      checked={rowStatus?.tracking?.[key] === true}
+                      onCheckedChange={(v) => rowStatus?.onTrackingChange?.(entry, v)}
+                      disabled={isDirty}
+                      aria-label={`Track latest for ${entry.model}`}
+                      className="scale-75"
+                    />
+                  </label>
+                )}
                 <div className="flex gap-0.5 shrink-0">
                   <button
                     onClick={() => moveUp(i)}
@@ -211,7 +280,8 @@ export function ModelCascadeEditor({
                   </button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
 

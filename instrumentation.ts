@@ -10,4 +10,8 @@ export async function register() {
   startIntegrityScheduler()
   const { startDbSnapshotScheduler } = await import('@/lib/services/db-snapshot-scheduler')
   startDbSnapshotScheduler()
+  // Model freshness / "track newest version" check (off until
+  // settings.modelAutoUpdate.enabled; report-only unless mode is 'apply').
+  const { startModelUpdateScheduler } = await import('@/lib/services/model-update-scheduler')
+  await startModelUpdateScheduler()
 }

@@ -168,3 +168,77 @@ describe('ModelCascadeEditor — never clobber user edits', () => {
     expect(screen.queryByRole('button', { name: /save cascade/i })).toBeNull()
   })
 })
+
+describe('ModelCascadeEditor — row status (tracking, retired, successors)', () => {
+  const ROWS: FallbackProviderEntry[] = [
+    { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+    { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
+  ]
+  function statusProps() {
+    return { ...loadedProps(), provider: 'openrouter', models: ROWS.map((r) => r.model), fallbackProviders: ROWS }
+  }
+
+  it('renders nothing extra when no rowStatus is given', () => {
+    render(<ModelCascadeEditor {...statusProps()} />)
+    expect(screen.queryByRole('switch')).toBeNull()
+    expect(screen.queryByText(/retired/i)).toBeNull()
+    expect(screen.queryByText(/newer:/i)).toBeNull()
+  })
+
+  it('shows a Track latest toggle only for openrouter/anthropic/zai rows and reports the toggle', () => {
+    const onTrackingChange = vi.fn()
+    render(
+      <ModelCascadeEditor
+        {...statusProps()}
+        rowStatus={{ tracking: { 'openrouter/z-ai/glm-5.2': true }, onTrackingChange }}
+      />
+    )
+    const switches = screen.getAllByRole('switch')
+    expect(switches).toHaveLength(2)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('switch', { name: /track latest for claude-sonnet-4-6/i })).toHaveAttribute('aria-checked', 'false')
+    expect(screen.queryByRole('switch', { name: /qwen3:30b/i })).toBeNull()
+
+    fireEvent.click(screen.getByRole('switch', { name: /track latest for claude-sonnet-4-6/i }))
+    expect(onTrackingChange).toHaveBeenCalledWith({ provider: 'anthropic', model: 'claude-sonnet-4-6' }, true)
+    fireEvent.click(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i }))
+    expect(onTrackingChange).toHaveBeenCalledWith({ provider: 'openrouter', model: 'z-ai/glm-5.2' }, false)
+  })
+
+  it('disables the tracking toggles while the cascade has unsaved edits', () => {
+    render(<ModelCascadeEditor {...statusProps()} rowStatus={{ tracking: {}, onTrackingChange: vi.fn() }} />)
+    fireEvent.click(screen.getAllByTitle('Remove')[2])
+    for (const sw of screen.getAllByRole('switch')) expect(sw).toBeDisabled()
+  })
+
+  it('marks retired rows with a badge', () => {
+    render(<ModelCascadeEditor {...statusProps()} rowStatus={{ retiredKeys: new Set(['anthropic/claude-sonnet-4-6']) }} />)
+    const badges = screen.getAllByText('retired')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].closest('[data-row]')).toHaveTextContent('claude-sonnet-4-6')
+  })
+
+  it('shows a "newer" hint with an Update button that reports from → to', () => {
+    const onApplyUpdate = vi.fn()
+    render(
+      <ModelCascadeEditor
+        {...statusProps()}
+        rowStatus={{ successors: { 'openrouter/z-ai/glm-5.2': 'z-ai/glm-5.3' }, onApplyUpdate }}
+      />
+    )
+    expect(screen.getByText(/newer: z-ai\/glm-5\.3/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /update z-ai\/glm-5\.2 to z-ai\/glm-5\.3/i }))
+    expect(onApplyUpdate).toHaveBeenCalledWith({ provider: 'openrouter', model: 'z-ai/glm-5.2' }, 'z-ai/glm-5.3')
+  })
+
+  it('shows the Update button as busy for the row being applied', () => {
+    render(
+      <ModelCascadeEditor
+        {...statusProps()}
+        rowStatus={{ successors: { 'openrouter/z-ai/glm-5.2': 'z-ai/glm-5.3' }, onApplyUpdate: vi.fn(), updatingKey: 'openrouter/z-ai/glm-5.2' }}
+      />
+    )
+    expect(screen.getByRole('button', { name: /updating/i })).toBeDisabled()
+  })
+})

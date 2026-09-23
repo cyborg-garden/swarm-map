@@ -3,12 +3,14 @@
 import { useState, useEffect } from 'react'
 import { useApi } from '@/lib/hooks/use-api'
 import { Switch } from '@/components/ui/switch'
+import { ModelAutoUpdateControls, useModelAutoUpdate } from '@/components/fleet/model-auto-update-controls'
 import { toast } from 'sonner'
 import { Shield, Loader2 } from 'lucide-react'
 import type { Settings } from '@/lib/types'
 
 export default function SettingsPage() {
   const { data: settings, loading: sLoading, refetch } = useApi<Settings>('/api/settings')
+  const modelAutoUpdate = useModelAutoUpdate()
   const [saving, setSaving] = useState(false)
 
   async function updateSetting(partial: Partial<Settings>) {
@@ -130,6 +132,23 @@ export default function SettingsPage() {
           </div>
         </section>
       )}
+
+      {/* Model updates — same block as the dashboard card */}
+      <section>
+        <h3 className="text-base font-medium mb-3">Model updates</h3>
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4">
+          {modelAutoUpdate.error && <p className="text-xs text-[var(--danger)] mb-2">Could not load policy: {modelAutoUpdate.error}</p>}
+          <ModelAutoUpdateControls
+            settings={modelAutoUpdate.settings}
+            saving={modelAutoUpdate.saving}
+            update={modelAutoUpdate.update}
+            idPrefix="settings-model-auto-update"
+          />
+          <p className="text-xs text-muted-foreground mt-3">
+            Pending successors and &ldquo;Check now&rdquo; live on the Dashboard. Per-model &ldquo;Track latest&rdquo; is on each harness&rsquo;s Models tab.
+          </p>
+        </div>
+      </section>
 
       {/* Signal Security */}
       <section>

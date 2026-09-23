@@ -3,6 +3,8 @@
 import { useApi } from '@/lib/hooks/use-api'
 import { HarnessCard } from '@/components/harness/harness-card'
 import { DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
+import { FleetAnalytics } from '@/components/fleet/fleet-analytics'
+import { ModelUpdatesCard } from '@/components/fleet/model-updates-card'
 import { TIER_COLORS, TIER_ORDER } from '@/lib/constants'
 import type { Harness, AuditEntry } from '@/lib/types'
 
@@ -131,6 +133,12 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Fleet analytics (#206): its own cached endpoint, not the 5s harness poll. */}
+      <FleetAnalytics />
+
+      {/* Model updates: global policy + pending successors across the fleet. */}
+      <ModelUpdatesCard />
     </div>
   )
 }

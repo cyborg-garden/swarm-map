@@ -175,18 +175,24 @@ fallback_providers:
     ])
   })
 
-  it('handles fallback_providers with api_key (reads but includes it)', () => {
+  // Re-audit: the reader's rows go straight into GET/PUT /api/harnesses/:id/models
+  // responses and the editor echoes them back as expected_fallback_providers.
+  // An inline api_key must never leave the file through this reader.
+  it('never returns an inline api_key (it reaches the browser otherwise)', () => {
     const config = `fallback_providers:
   - provider: anthropic
     model: claude-sonnet-4-5
     api_key: sk-ant-secret
+  - {provider: custom, model: proxy, base_url: http://p:1/v1, api_key: sk-inline-flow}
 `
     fs.writeFileSync(path.join(tmpDir, 'config.yaml'), config)
 
     const result = readFallbackProviders(tmpDir)
     expect(result).toEqual([
-      { provider: 'anthropic', model: 'claude-sonnet-4-5', api_key: 'sk-ant-secret' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      { provider: 'custom', model: 'proxy', base_url: 'http://p:1/v1' },
     ])
+    expect(JSON.stringify(result)).not.toContain('sk-')
   })
 
   // Issue #149 — Trigger B. Hermes' own writer and hand edits both produce
@@ -245,6 +251,45 @@ auxiliary:
     const result = readFallbackProviders(tmpDir)
     expect(result).toEqual([
       { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+    ])
+  })
+})
+
+// --- r3 nits: trailing comments, flow-form headers ---------------------------
+describe('readers — trailing comments and flow-form headers', () => {
+  let tmpDir: string
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-config-nits-'))
+  })
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+  const write = (s: string) => fs.writeFileSync(path.join(tmpDir, 'config.yaml'), s)
+
+  it('readModelConfig / readModelProvider strip a trailing " # comment" but keep a # inside the value', () => {
+    write('model:\n  provider: openrouter  # routed\n  default: "z-ai/glm-5.2"  # pinned\n  fallback: qwen3:30b#q4 # tag\n')
+    expect(readModelConfig(tmpDir)).toEqual(['z-ai/glm-5.2', 'qwen3:30b#q4'])
+    expect(readModelProvider(tmpDir)).toBe('openrouter')
+  })
+
+  it('readFallbackProviders strips trailing comments from row values', () => {
+    write('fallback_providers:\n  - provider: openrouter # a\n    model: z-ai/glm-5.2  # b\n    base_url: http://x/v1 # c\n')
+    expect(readFallbackProviders(tmpDir)).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2', base_url: 'http://x/v1' }])
+  })
+
+  it('flow-form `model: {…}` is read by readModelConfig and readModelProvider', () => {
+    write('model: {provider: openrouter, default: "z-ai/glm-5.2", fallback: moonshotai/kimi-k3}  # flow\n')
+    expect(readModelConfig(tmpDir)).toEqual(['z-ai/glm-5.2', 'moonshotai/kimi-k3'])
+    expect(readModelProvider(tmpDir)).toBe('openrouter')
+  })
+
+  it('flow-form `fallback_providers: []` reads as no rows and does not fall through to a later block', () => {
+    write('fallback_providers: []\nauxiliary:\n  vision:\n    model: x\n')
+    expect(readFallbackProviders(tmpDir)).toEqual([])
+    write('fallback_providers: [{provider: openrouter, model: z-ai/glm-5.2}, {provider: ollama, model: "qwen3:30b", base_url: http://h/v1}]\n')
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'openrouter', model: 'z-ai/glm-5.2' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://h/v1' },
     ])
   })
 })

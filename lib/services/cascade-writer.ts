@@ -1,0 +1,562 @@
+import fs from 'fs'
+import path from 'path'
+import { services } from '@/lib/services'
+import { validateCascadeEntries, yamlPlainScalarError, type CascadeEntry } from '@/lib/model-catalog'
+import {
+  readFallbackProviders,
+  guessDataDir,
+  readAgentEnvVarNames,
+  FALLBACK_PROVIDERS_HEADER,
+  MODEL_HEADER,
+  FLOW_MAP,
+  FLOW_SEQ,
+  isTopLevelLine,
+  yamlScalar,
+  parseFlowPairs,
+  parseFlowMaps,
+} from '@/lib/services/harness'
+import type { FallbackProvider } from '@/lib/services/harness'
+
+/**
+ * applyCascadeToHarness — the ONE guarded path that writes a fallback_providers
+ * cascade into an agent's config.yaml.
+ *
+ * Every write to the model: / fallback_providers: sections goes through here:
+ * PUT /api/harnesses/:id/models (both body shapes), the cascade library's
+ * apply route, and the model-update scheduler (automatic and one-click). The
+ * model: section is derived from the entries (provider + default + base_url
+ * from entry 0, fallback from the rest), fallback_providers: is written at
+ * root level, and both sections are spliced by LINE, never via a YAML library.
+ *
+ * Round-trip contract (audit 2026-09): the writer only OWNS
+ * model.provider / model.default / model.fallback / model.base_url and each
+ * row's provider / model / base_url. Everything else it finds inside those two
+ * sections passes through verbatim — model.api_mode, a row's inline api_key or
+ * key_env — as long as the row (provider, model) survives the write, OR the
+ * entry names the row it replaces via `carryFrom` (a rotation changes the
+ * model by construction; without carryFrom every scheduler rotation dropped
+ * the row's key_env / api_mode and the agent came back authenticating with
+ * the provider's default var). Dropping them silently re-routed a local
+ * primary to OpenRouter and killed a proxy credential without a trace in the
+ * audit log.
+ *
+ * Primary guard (re-audit): model.default is derived from row 0. When the
+ * file's model.default is NOT fallback_providers[0] (the two sections
+ * drifted apart — matilde), any write that does not put that primary back at
+ * the top would silently switch the agent's primary. Refused with 409 unless
+ * the caller passes `allowPrimaryChange` (the cascade library's apply and the
+ * legacy `{ model }` body, where moving the primary IS the request).
+ *
+ * Guard: every entry is validated with validateCascadeEntries against the
+ * env-var NAMES present in the agent's .env BEFORE anything is written. A
+ * provider with no credential → { ok:false, status:400 } and config.yaml is
+ * untouched. A bad write crash-loops a live agent, so this is the property
+ * every caller relies on.
+ *
+ * File integrity (r3): a section spans from its header to the last indented
+ * (or column-0 list-item) line before the next top-level key. Blank lines and
+ * column-0 comments that trail it — the template's "# --- Context compression"
+ * banner — belong to the file and are re-emitted verbatim, so a no-op write
+ * over generateDefaultConfig() is byte-identical. Line endings follow the
+ * file's first line ending (CRLF stays CRLF), the output always ends in
+ * exactly one newline, and an appended block is separated by one blank line.
+ * Flow-form headers (`fallback_providers: []`, `model: {…}`) are sections too
+ * and are replaced in place. A section ends where the readers say it ends
+ * (isTopLevelLine, shared with harness.ts): any column-0 line that is not
+ * blank, a comment or a list item — not only a `word:` key (r4). A file with more than one top-level model: or
+ * fallback_providers: header is refused with 409 `duplicate-sections`: the
+ * readers see only the first, so nobody can say what the write would mean.
+ *
+ * Caller-supplied api_key is never written, whatever the caller passes.
+ */
+
+export type CascadeWriteInput = {
+  provider: string
+  model: string
+  base_url?: string
+  /**
+   * The row on disk whose unmanaged keys (key_env, api_mode, an inline
+   * api_key…) this entry inherits when its own (provider, model) is not on
+   * disk — set by the scheduler when it rotates a row to its successor.
+   * Lookup only; never written; ignored unless its provider is this entry's.
+   * Never accepted from an API body — see PUT /api/harnesses/:id/models.
+   */
+  carryFrom?: { provider: string; model: string }
+}
+
+export type CascadeWriteResult =
+  | {
+      ok: true
+      written: {
+        provider: string
+        primary: string
+        models: string[]
+        fallbackProviders: FallbackProvider[]
+      }
+    }
+  | { ok: false; status: 400 | 404 | 409; error: string }
+
+export type ApplyCascadeOptions = {
+  /** Actor for the audit trail ('api' | 'scheduler' | ...). */
+  who: string
+  /** When set, a successful write appends this audit entry (target = harness id). */
+  audit?: { what: string; meta?: Record<string, unknown> }
+  /**
+   * Optimistic precondition: the rows the caller last READ. When the rows on
+   * disk differ (another writer — the scheduler, another tab — got there
+   * first) the write is refused with 409 and nothing is touched. Without it a
+   * stale editor save silently reverted an applied update and orphaned its
+   * tracking key.
+   */
+  expected?: CascadeWriteInput[]
+  /**
+   * 'write' (default): fallback_providers is rewritten from `entries`.
+   * 'keep': only the model: section is rewritten; whatever fallback_providers
+   * block is on disk passes through untouched. For the legacy
+   * `{ provider, model | cascade }` body when the agent has no rows the
+   * cascade can be mapped onto — the writer must not invent a block.
+   */
+  fallbackProviders?: 'write' | 'keep'
+  /**
+   * Permit a write whose row 0 is not the file's current model.default when
+   * the two sections had drifted apart. Off by default: the editor's save
+   * must not move a primary it never showed.
+   */
+  allowPrimaryChange?: boolean
+}
+
+/** Keys of the model: section the writer derives from the entries. */
+const MANAGED_MODEL_KEYS = new Set(['provider', 'default', 'fallback', 'base_url'])
+/** Keys of a fallback_providers row the writer derives from an entry. */
+const MANAGED_ROW_KEYS = new Set(['provider', 'model', 'base_url'])
+/** Providers whose primary is addressed by model.base_url (the HSM template writes it for these). */
+const BASE_URL_PROVIDERS = new Set(['ollama', 'custom'])
+
+const COL0_COMMENT = /^#/
+const isBlank = (line: string): boolean => line.trim() === ''
+const indentOf = (line: string): number => line.length - line.trimStart().length
+
+/**
+ * Where a top-level section's BODY ends: one past the last indented or
+ * column-0 list-item line before the next top-level line (or EOF). The blank
+ * lines and column-0 comments that trail the body belong to the file, not to
+ * the section — the writer re-emits them and the parsers never see them. A
+ * blank or column-0 comment FOLLOWED by more body is inside the section.
+ * "Next top-level line" is the readers' isTopLevelLine, so a line the
+ * readers treat as the end of the section can never be swallowed into the
+ * body here and deleted on write (r4: `2fa: true`, `foo.bar: 1`, `...`).
+ */
+function sectionBodyEnd(lines: string[], header: number): number {
+  let end = header + 1
+  for (let i = header + 1; i < lines.length; i++) {
+    const line = lines[i]
+    if (isTopLevelLine(line)) break
+    if (isBlank(line) || COL0_COMMENT.test(line)) continue
+    end = i + 1
+  }
+  return end
+}
+
+type ExistingModelBlock = {
+  /** Indent of the block's keys ('  ' unless the file says otherwise). */
+  indent: string
+  provider: string
+  /** model.default as written, when the key is present with a value. */
+  default?: string
+  /** The verbatim `base_url:` line, if any. */
+  baseUrlLine?: string
+  /** Comment / blank lines between the header and the first key, verbatim. */
+  leading: string[]
+  /**
+   * Comment / blank lines that followed a managed key, by key. They are
+   * re-emitted under that key when it is written again (the template's
+   * `# fallback: <model>  # uncomment…` hint sits under `default:`), and go
+   * with the key when the key goes.
+   */
+  managedTrail: Record<string, string[]>
+  /** Every key the writer does not manage, verbatim, with its nested lines. */
+  passthrough: string[]
+}
+
+/**
+ * Read the model: block at lines[start] (body up to `end`); keys the writer
+ * does not own are kept verbatim. A flow-form header (`model: {…}`) is
+ * expanded to block form so its keys are handled the same way.
+ */
+function parseExistingModelBlock(lines: string[], start: number, end: number): ExistingModelBlock {
+  const flow = lines[start].match(FLOW_MAP)
+  const body = flow ? parseFlowPairs(flow[1]).map(([k, v]) => `  ${k}: ${v}`) : lines.slice(start + 1, end)
+  const firstKey = body.find((l) => l.trim() && !l.trim().startsWith('#') && indentOf(l) > 0)
+  const keyIndent = firstKey ? indentOf(firstKey) : 2
+  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', leading: [], managedTrail: {}, passthrough: [] }
+  let managed: boolean | null = null // null = before the first key
+  let managedKey = ''
+  for (const line of body) {
+    const trimmed = line.trim()
+    const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
+    if (isKey) {
+      const key = trimmed.slice(0, trimmed.indexOf(':'))
+      managed = MANAGED_MODEL_KEYS.has(key)
+      managedKey = managed ? key : ''
+      if (key === 'provider') out.provider = yamlScalar(trimmed.slice('provider:'.length))
+      if (key === 'default') {
+        const v = yamlScalar(trimmed.slice('default:'.length))
+        if (v) out.default = v
+      }
+      if (key === 'base_url') out.baseUrlLine = line
+      if (!managed) out.passthrough.push(line)
+      continue
+    }
+    if (managed === null) out.leading.push(line)
+    else if (managed === false) out.passthrough.push(line)
+    else if (!trimmed || trimmed.startsWith('#')) (out.managedTrail[managedKey] ??= []).push(line)
+  }
+  return out
+}
+
+type ExistingRow = { provider: string; model: string; extra: string[]; used: boolean }
+
+/**
+ * Read the rows of the fallback_providers: block at lines[start] (body up to
+ * `end`) with every line the reader does not model (api_key, key_env,
+ * api_mode, nested maps…) kept verbatim and re-indented to the shape this
+ * writer emits (4-space fields). A flow-form header carries its rows inline.
+ */
+function parseExistingRows(lines: string[], start: number, end: number): ExistingRow[] {
+  const rows: ExistingRow[] = []
+  const flow = lines[start].match(FLOW_SEQ)
+  if (flow) {
+    for (const pairs of parseFlowMaps(flow[1])) {
+      const get = (k: string) => pairs.find(([key]) => key === k)
+      const prov = get('provider')
+      const model = get('model')
+      if (!prov || !model) continue
+      const extra = pairs.filter(([key]) => !MANAGED_ROW_KEYS.has(key)).map(([key, raw]) => `    ${key}: ${raw}`)
+      rows.push({ provider: yamlScalar(prov[1]), model: yamlScalar(model[1]), extra, used: false })
+    }
+    return rows
+  }
+  let cur: { fields: Array<{ key: string; lines: string[] }>; fieldIndent: number } | null = null
+  const flush = () => {
+    if (!cur) return
+    const get = (k: string) => cur!.fields.find((f) => f.key === k)
+    const prov = get('provider')
+    const model = get('model')
+    if (prov && model) {
+      const delta = 4 - cur.fieldIndent
+      const reindent = (l: string): string => {
+        if (!l.trim()) return l
+        if (delta >= 0) return ' '.repeat(delta) + l
+        return l.slice(Math.min(-delta, indentOf(l)))
+      }
+      const extra = cur.fields.filter((f) => !MANAGED_ROW_KEYS.has(f.key)).flatMap((f) => f.lines.map(reindent))
+      rows.push({ provider: yamlScalar(prov.lines[0].trim().slice('provider:'.length)), model: yamlScalar(model.lines[0].trim().slice('model:'.length)), extra, used: false })
+    }
+    cur = null
+  }
+  for (let i = start + 1; i < end; i++) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    if (trimmed.startsWith('- ')) {
+      flush()
+      const dash = line.indexOf('-')
+      const rest = line.slice(dash + 1)
+      const fieldIndent = dash + 1 + (rest.length - rest.trimStart().length)
+      cur = { fields: [], fieldIndent }
+      const item = rest.trim()
+      const flowItem = item.match(/^\{(.*)\}$/)
+      if (flowItem) {
+        for (const [key, raw] of parseFlowPairs(flowItem[1])) {
+          cur.fields.push({ key, lines: [' '.repeat(fieldIndent) + `${key}: ${raw}`] })
+        }
+        continue
+      }
+      const kv = item.match(/^([\w-]+):/)
+      if (kv) cur.fields.push({ key: kv[1], lines: [' '.repeat(fieldIndent) + item] })
+      continue
+    }
+    if (!cur) continue
+    if (!trimmed || trimmed.startsWith('#')) {
+      // Blank/comment inside a row rides with the field above it.
+      if (cur.fields.length) cur.fields[cur.fields.length - 1].lines.push(line)
+      continue
+    }
+    const kv = indentOf(line) === cur.fieldIndent ? trimmed.match(/^([\w-]+):/) : null
+    if (kv) cur.fields.push({ key: kv[1], lines: [line] })
+    else if (cur.fields.length) cur.fields[cur.fields.length - 1].lines.push(line)
+  }
+  flush()
+  return rows
+}
+
+const sameRows = (a: CascadeWriteInput[], b: CascadeWriteInput[]): boolean =>
+  a.length === b.length &&
+  a.every((x, i) => {
+    const y = b[i]
+    return (
+      (x.provider ?? '').trim().toLowerCase() === (y.provider ?? '').trim().toLowerCase() &&
+      (x.model ?? '').trim() === (y.model ?? '').trim() &&
+      ((x.base_url ?? '').trim() || undefined) === ((y.base_url ?? '').trim() || undefined)
+    )
+  })
+
+export function applyCascadeToHarness(
+  harnessId: string,
+  entries: CascadeWriteInput[],
+  opts: ApplyCascadeOptions
+): CascadeWriteResult {
+  const harness = services.harness.get(harnessId)
+  if (!harness) {
+    return { ok: false, status: 404, error: 'Harness not found' }
+  }
+
+  const containerName = harness.serviceName
+    ? harness.name === 'personal'
+      ? 'hermes-personal'
+      : `hermes-${harness.name}`
+    : harness.name
+  const dataDir = guessDataDir(harness.serviceName ?? harness.name, containerName)
+  const configPath = path.join(dataDir, 'config.yaml')
+  const writeRows = opts.fallbackProviders !== 'keep'
+
+  // Whitelist-copy: provider/model/base_url only, trimmed. api_key never gets
+  // through. Trimming here keeps what is WRITTEN identical to what the
+  // validator CHECKS (it trims too) — a trailing "\r" must not slip past it.
+  const fallbackProvidersToWrite: CascadeWriteInput[] = (entries ?? []).map((fp) => {
+    const e: CascadeWriteInput = { provider: (fp.provider ?? '').trim(), model: (fp.model ?? '').trim() }
+    if (fp.base_url && fp.base_url.trim()) e.base_url = fp.base_url.trim()
+    if (fp.carryFrom?.provider && fp.carryFrom?.model) {
+      e.carryFrom = { provider: fp.carryFrom.provider.trim(), model: fp.carryFrom.model.trim() }
+    }
+    return e
+  })
+
+  // Primary model = first entry, provider from first entry
+  const entryProvider = fallbackProvidersToWrite[0]?.provider || ''
+  const cascade = fallbackProvidersToWrite.map((fp) => fp.model)
+  const primary = cascade[0] || ''
+
+  if (cascade.length === 0) {
+    return { ok: false, status: 400, error: 'At least one model is required' }
+  }
+
+  // Guard the write/restart path before touching config.yaml. Two checks:
+  //  1. Empty model id → always rejected (the unambiguous crash case).
+  //  2. Provider-credential presence → reject ONLY when a cascade entry's
+  //     provider is DEFINITIVELY un-serviceable for THIS agent (it needs a key,
+  //     we know which env var, and it's absent in the agent's .env). The
+  //     motivating case: pushing an openrouter model onto an agent with no
+  //     OPENROUTER_API_KEY → restart → crash-loop. All uncertainty fails open
+  //     (a valid config must never be blocked). See validateCascadeEntries.
+  let content: string | null
+  try {
+    content = fs.readFileSync(configPath, 'utf-8')
+  } catch {
+    content = null
+  }
+  // Line endings follow the file's first line ending; a CRLF file stays CRLF
+  // on every line the writer emits, and the readers (which split on '\n' and
+  // trim) never see the difference.
+  const firstNl = content?.indexOf('\n') ?? -1
+  const eol = firstNl > 0 && content![firstNl - 1] === '\r' ? '\r\n' : '\n'
+  const lines = content === null ? [] : content.split('\n').map((l) => (eol === '\r\n' && l.endsWith('\r') ? l.slice(0, -1) : l))
+
+  // Exactly one section of each kind, or none. The readers only ever see the
+  // first; silently picking one would rewrite a file whose effective cascade
+  // nobody can name.
+  const modelHeaders = lines.flatMap((l, i) => (MODEL_HEADER.test(l) ? [i] : []))
+  const fpHeaders = lines.flatMap((l, i) => (FALLBACK_PROVIDERS_HEADER.test(l) ? [i] : []))
+  if (modelHeaders.length > 1 || fpHeaders.length > 1) {
+    const dupes = [
+      ...(modelHeaders.length > 1 ? [`${modelHeaders.length}× top-level model: (lines ${modelHeaders.map((i) => i + 1).join(', ')})`] : []),
+      ...(fpHeaders.length > 1 ? [`${fpHeaders.length}× top-level fallback_providers: (lines ${fpHeaders.map((i) => i + 1).join(', ')})`] : []),
+    ]
+    return {
+      ok: false,
+      status: 409,
+      error: `duplicate-sections: config.yaml has ${dupes.join(' and ')}; remove the duplicate by hand before saving`,
+    }
+  }
+  const modelStart = modelHeaders[0] ?? -1
+  const fpStart = fpHeaders[0] ?? -1
+  const modelEnd = modelStart >= 0 ? sectionBodyEnd(lines, modelStart) : -1
+  const fpEnd = fpStart >= 0 ? sectionBodyEnd(lines, fpStart) : -1
+  const existingModel = modelStart >= 0 ? parseExistingModelBlock(lines, modelStart, modelEnd) : null
+  const existingRows = writeRows && fpStart >= 0 ? parseExistingRows(lines, fpStart, fpEnd) : []
+
+  // The row on disk each entry inherits its unmanaged keys from: the row
+  // `carryFrom` names when the entry has one (a rotation — looked up FIRST,
+  // else a rotation onto a model that is already a row stole that row's
+  // credential and dropped its own), else its own (provider, model). First
+  // come, first served — a row is carried at most once. carryFrom is honoured
+  // only within the entry's own provider: a row's key_env / api_mode never
+  // move onto another provider's row, whoever asks.
+  const sameKey = (r: ExistingRow, provider: string, model: string): boolean =>
+    !r.used && r.provider.toLowerCase() === provider.toLowerCase() && r.model === model
+  const carriedRows: Array<ExistingRow | undefined> = fallbackProvidersToWrite.map((fp) => {
+    const carry = fp.carryFrom && fp.carryFrom.provider.toLowerCase() === fp.provider.toLowerCase() ? fp.carryFrom : undefined
+    const row =
+      (carry ? existingRows.find((r) => sameKey(r, carry.provider, carry.model)) : undefined) ??
+      existingRows.find((r) => sameKey(r, fp.provider, fp.model))
+    if (row) row.used = true
+    return row
+  })
+
+  const presentEnvVars = readAgentEnvVarNames(dataDir)
+  // A row that carries its own credential (inline api_key, or a key_env whose
+  // var IS present) does not authenticate with the provider's default var —
+  // checking that var refused a perfectly serviceable rotation.
+  const hasOwnCredential = (row: ExistingRow | undefined): boolean =>
+    !!row &&
+    row.extra.some((l) => {
+      const m = l.match(/^\s*(api_key|key_env):\s*(\S.*)$/)
+      if (!m) return false
+      if (m[1] === 'api_key') return true
+      return presentEnvVars.has(yamlScalar(m[2]))
+    })
+  const entriesToValidate: CascadeEntry[] = fallbackProvidersToWrite.map((fp, i) => ({
+    provider: fp.provider,
+    model: fp.model,
+    ...(hasOwnCredential(carriedRows[i]) ? { ownCredential: true } : {}),
+  }))
+
+  const modelErrors = validateCascadeEntries(entriesToValidate, presentEnvVars)
+  // validateCascadeEntries covers provider/model; base_url is spliced unquoted
+  // too, so it gets the same plain-scalar check here.
+  for (const fp of fallbackProvidersToWrite) {
+    if (fp.base_url) {
+      const err = yamlPlainScalarError(fp.base_url, `base_url for "${fp.model}"`)
+      if (err) modelErrors.push(err)
+    }
+  }
+  if (modelErrors.length > 0) {
+    return { ok: false, status: 400, error: `Invalid model cascade: ${modelErrors.join('; ')}` }
+  }
+
+  // Optimistic precondition against what the caller last read.
+  if (opts.expected) {
+    const current = readFallbackProviders(dataDir)
+    if (!sameRows(current, opts.expected)) {
+      return { ok: false, status: 409, error: 'The model cascade changed since it was read; reload and try again' }
+    }
+  }
+
+  // Primary guard. model.default is derived from row 0; when the file's
+  // model.default is some OTHER model than fallback_providers[0], a write
+  // that does not put it back at the top switches the agent's primary
+  // without anyone having asked for that.
+  // Only a `default:` key that is actually present can disagree with row 0 —
+  // readModelConfig()[0] fell back to a `fallback:` or auxiliary model and
+  // refused writes over files that had no primary at all.
+  if (writeRows && !opts.allowPrimaryChange && existingModel?.default) {
+    const filePrimary = existingModel.default
+    const row0 = existingRows[0]?.model
+    if (row0 && filePrimary !== row0 && primary !== filePrimary) {
+      return {
+        ok: false,
+        status: 409,
+        error: `primary-mismatch: model.default is "${filePrimary}" but fallback_providers[0] is "${row0}"; put "${filePrimary}" at the top of the cascade before saving`,
+      }
+    }
+  }
+
+  // Effective model.provider: the primary row's, else whatever the file says
+  // (a legacy body with no provider must not delete the line).
+  const provider = entryProvider || existingModel?.provider || ''
+  const ind = existingModel?.indent ?? '  '
+
+  // Build the model section of config.yaml. Managed keys come from the
+  // entries; every other key of the existing block passes through verbatim.
+  // Comment / blank lines the file had under a managed key ride with it.
+  const trail = (key: string): string[] => existingModel?.managedTrail[key] ?? []
+  const modelLines = ['model:', ...(existingModel?.leading ?? [])]
+  if (provider) modelLines.push(`${ind}provider: ${provider}`, ...trail('provider'))
+  modelLines.push(`${ind}default: ${primary}`, ...trail('default'))
+  // model.base_url follows the primary row. With no base_url on that row, the
+  // existing line stays only while it can still be meant for this primary: the
+  // provider is unchanged / unspecified, or is one that is addressed by URL.
+  // A local ollama URL must not leak onto a cloud primary that replaced it.
+  const primaryBaseUrl = fallbackProvidersToWrite[0]?.base_url
+  if (primaryBaseUrl) {
+    modelLines.push(`${ind}base_url: ${primaryBaseUrl}`, ...trail('base_url'))
+  } else if (existingModel?.baseUrlLine) {
+    const p = provider.toLowerCase()
+    const keep = !entryProvider || p === existingModel.provider.toLowerCase() || BASE_URL_PROVIDERS.has(p)
+    if (keep) modelLines.push(existingModel.baseUrlLine, ...trail('base_url'))
+  }
+  if (cascade.length > 1) {
+    modelLines.push(`${ind}fallback:`)
+    for (const m of cascade.slice(1)) {
+      modelLines.push(`${ind}${ind}- ${m}`)
+    }
+    modelLines.push(...trail('fallback'))
+  }
+  if (existingModel) modelLines.push(...existingModel.passthrough)
+
+  // Build fallback_providers YAML section (root level). A row that survives
+  // the write (same provider + model), or that an entry names via carryFrom,
+  // carries its unmanaged keys along.
+  const fpLines: string[] = []
+  if (writeRows) {
+    fpLines.push('fallback_providers:')
+    fallbackProvidersToWrite.forEach((fp, i) => {
+      fpLines.push(`  - provider: ${fp.provider}`)
+      fpLines.push(`    model: ${fp.model}`)
+      if (fp.base_url) {
+        fpLines.push(`    base_url: ${fp.base_url}`)
+      }
+      // Do NOT write api_key from the caller (security). An api_key already in
+      // the file for THIS row is the operator's and rides along below.
+      const row = carriedRows[i]
+      if (row) fpLines.push(...row.extra)
+    })
+  }
+
+  const finish = (): CascadeWriteResult => {
+    services.harness.updateConfig(harnessId, { models: cascade })
+    if (opts.audit) {
+      services.audit.append({
+        who: opts.who,
+        what: opts.audit.what,
+        target: harnessId,
+        meta: opts.audit.meta,
+      })
+    }
+    const respFp = readFallbackProviders(dataDir)
+    return { ok: true, written: { provider, primary, models: cascade, fallbackProviders: respFp } }
+  }
+
+  // Replace each section in place: header through the end of its body. What
+  // trails the body (blank lines, column-0 comments) and everything outside
+  // the two sections is copied through verbatim. In 'keep' mode the
+  // fallback_providers block on disk is one of those verbatim runs.
+  const splices = [
+    ...(modelStart >= 0 ? [{ start: modelStart, end: modelEnd, lines: modelLines }] : []),
+    ...(fpStart >= 0 && fpLines.length > 0 ? [{ start: fpStart, end: fpEnd, lines: fpLines }] : []),
+  ].sort((a, b) => a.start - b.start)
+  const updated: string[] = []
+  let cursor = 0
+  for (const sp of splices) {
+    updated.push(...lines.slice(cursor, sp.start), ...sp.lines)
+    cursor = sp.end
+  }
+  updated.push(...lines.slice(cursor))
+
+  // A section the file did not have is appended after ONE blank line; the
+  // file always ends in exactly one newline (an appended block after a file
+  // that already ended in a blank line used to land two blank lines deep).
+  const trimTrailingBlanks = () => {
+    while (updated.length && isBlank(updated[updated.length - 1])) updated.pop()
+  }
+  const append = (block: string[]) => {
+    trimTrailingBlanks()
+    if (updated.length) updated.push('')
+    updated.push(...block)
+  }
+  if (modelStart < 0) append(modelLines)
+  if (fpStart < 0 && fpLines.length > 0) append(fpLines)
+  trimTrailingBlanks()
+
+  fs.writeFileSync(configPath, updated.join(eol) + eol, 'utf-8')
+  return finish()
+}

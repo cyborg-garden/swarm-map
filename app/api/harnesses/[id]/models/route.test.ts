@@ -30,19 +30,32 @@ const mockEnvVars = vi.fn(() => new Set<string>(['ANTHROPIC_API_KEY']))
 const mockExistingFp = vi.fn((): Array<{ provider: string; model: string; base_url?: string }> => [])
 const mockModelProvider = vi.fn(() => '')
 
-vi.mock('@/lib/services/harness', async (importOriginal) => ({
-  // The writer shares the reader's header regex; use the real one so the
-  // route test exercises the same header form the reader accepts.
-  FALLBACK_PROVIDERS_HEADER: (await importOriginal<typeof import('@/lib/services/harness')>()).FALLBACK_PROVIDERS_HEADER,
-  guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
-  readModelConfig: vi.fn(() => []),
-  readModelProvider: vi.fn(() => mockModelProvider()),
-  readFallbackProviders: vi.fn(() => mockExistingFp()),
-  readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
-}))
+vi.mock('@/lib/services/harness', async (importOriginal) => {
+  // The writer shares the readers' header regexes and scalar helpers; use
+  // the real ones so the route test exercises the same header forms the
+  // readers accept.
+  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, FLOW_MAP, FLOW_SEQ, isTopLevelLine, yamlScalar, parseFlowPairs, parseFlowMaps } =
+    await importOriginal<typeof import('@/lib/services/harness')>()
+  return {
+    FALLBACK_PROVIDERS_HEADER,
+    MODEL_HEADER,
+    FLOW_MAP,
+    FLOW_SEQ,
+    isTopLevelLine,
+    yamlScalar,
+    parseFlowPairs,
+    parseFlowMaps,
+    guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
+    readModelConfig: vi.fn(() => []),
+    readModelProvider: vi.fn(() => mockModelProvider()),
+    readFallbackProviders: vi.fn(() => mockExistingFp()),
+    readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
+  }
+})
 
 import { PUT } from './route'
 import { services } from '@/lib/services'
+import { readModelConfig } from '@/lib/services/harness'
 
 function makeParams(id: string) {
   return { params: Promise.resolve({ id }) }
@@ -348,5 +361,137 @@ describe('Models API — PUT validation', () => {
     expect((written.match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
     expect(written.indexOf('model: qwen3:30b')).toBeLessThan(written.indexOf('model: claude-sonnet-4-6'))
     expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
+  })
+})
+
+// --- Audit: the legacy body shape must go through the same guarded writer -----
+describe('Models API — legacy body through the shared writer (audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+    mockExistingFp.mockReturnValue([])
+    mockModelProvider.mockReturnValue('')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const capture = () => {
+    let written = ''
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
+    return () => written
+  }
+
+  it('{cascade} with no fallback_providers block keeps model.provider', async () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue('model:\n  provider: openrouter\n  default: z-ai/glm-5.2\nagent:\n  max_turns: 60\n' as never)
+    const get = capture()
+    const res = await PUT(makeRequest({ cascade: ['z-ai/glm-5.3'] }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(get()).toMatch(/^model:\n  provider: openrouter\n  default: z-ai\/glm-5\.3\n/m)
+    expect(get()).toContain('agent:\n  max_turns: 60')
+    expect(await res.json()).toMatchObject({ provider: 'openrouter', primary: 'z-ai/glm-5.3' })
+  })
+
+  it('{model} on a template custom primary keeps model.provider and model.base_url', async () => {
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      'model:\n  provider: custom\n  default: qwen3:30b\n  base_url: "http://host.docker.internal:11434/v1"\n\ncompression:\n  enabled: true\n' as never
+    )
+    const get = capture()
+    const res = await PUT(makeRequest({ model: 'glm4:9b' }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(get()).toMatch(/^model:\n  provider: custom\n  default: glm4:9b\n  base_url: "http:\/\/host\.docker\.internal:11434\/v1"\n/m)
+    expect(get()).toContain('compression:\n  enabled: true')
+  })
+
+  it('{cascade} with duplicate ids writes each row once and never lists the primary under fallback:', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n' as never
+    )
+    const get = capture()
+    const res = await PUT(makeRequest({ cascade: ['claude-sonnet-4-6', 'claude-sonnet-4-6'] }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect((get().match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
+    expect(get()).not.toContain('fallback:')
+    expect((await res.json()).models).toEqual(['claude-sonnet-4-6'])
+  })
+
+  it('legacy body rejects an unsafe base_url carried on an existing row (same scalar check as the fallback_providers shape)', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'ollama', model: 'qwen3:30b', base_url: 'http://x\nevil: true' }])
+    const res = await PUT(makeRequest({ cascade: ['qwen3:30b'] }), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+
+  // Re-audit: matilde-shaped file — model.default is kimi-k3 while row 0 is
+  // glm-5.3. The writer derives model.default from row 0, so an editor save
+  // that only touched another row silently switched the agent's primary.
+  const DRIFTED =
+    'model:\n  provider: openrouter\n  default: moonshotai/kimi-k3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n  - provider: anthropic\n    model: claude-sonnet-5\n'
+  const DRIFTED_ROWS = [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5' }]
+
+  it('fallback_providers shape on a drifted file (model.default ≠ row 0) → 409 primary-mismatch, nothing written', async () => {
+    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
+    mockExistingFp.mockReturnValue(DRIFTED_ROWS)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
+      expected_fallback_providers: DRIFTED_ROWS,
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/primary-mismatch.*moonshotai\/kimi-k3/)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('legacy {model} on a drifted file may move the primary — that IS the request', async () => {
+    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
+    mockExistingFp.mockReturnValue(DRIFTED_ROWS)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+    const written = capture()
+    const res = await PUT(makeRequest({ model: 'z-ai/glm-5.3' }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written()).toContain('  default: z-ai/glm-5.3')
+  })
+
+  it('fallback_providers shape with a stale expected_fallback_providers → 409, nothing written', async () => {
+    mockExistingFp.mockReturnValue([{ provider: 'openrouter', model: 'z-ai/glm-5.3' }])
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+      expected_fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(409)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+})
+
+describe('Models API — carryFrom never enters from the API (round-3 audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockExistingFp.mockReturnValue([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+    mockModelProvider.mockReturnValue('openrouter')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a body row carrying carryFrom does not inherit the named row\'s key_env: the row is validated bare (400, nothing written)', async () => {
+    // The agent authenticates OpenRouter only through the row's key_env; there
+    // is no OPENROUTER_API_KEY. A body that names that row as carryFrom would
+    // otherwise ride its credential onto any model it likes.
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_KEY_B']))
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      ['model:', '  provider: openrouter', '  default: z-ai/glm-5.2', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.2', '    key_env: OPENROUTER_KEY_B', ''].join('\n') as never
+    )
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'moonshotai/kimi-k3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }],
+      expected_fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error).toContain('moonshotai/kimi-k3')
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
   })
 })

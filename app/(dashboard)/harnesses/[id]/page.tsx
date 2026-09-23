@@ -23,6 +23,7 @@ import { SlackSetupDialog } from '@/components/surfaces/slack-setup-dialog'
 import { EditSurfaceDialog } from '@/components/surfaces/edit-surface-dialog'
 import { SignalPinManager } from '@/components/surfaces/signal-pin-manager'
 import { SettingsTab } from '@/components/harness/settings-tab'
+import { AnalyticsTab } from '@/components/harness/analytics-tab'
 import { toast } from 'sonner'
 import { Globe, Bot, Pencil, ChevronDown, ChevronRight, Shield, Loader2, Save, RotateCw, Users, X } from 'lucide-react'
 import { SURFACE_SLUGS } from '@/lib/surfaces/registry'
@@ -31,7 +32,8 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
-import { ModelCascadeEditor, type FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
+import type { FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
+import { ModelsTab, cascadeSaveConflict } from '@/components/harness/models-tab'
 
 type PairingUser = {
   userId: string
@@ -182,6 +184,8 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
   const [modelProvider, setModelProvider] = useState('')
   const [modelName, setModelName] = useState('')
   const [modelSaving, setModelSaving] = useState(false)
+  // Bumped after a 409 so the editor remounts on the freshly fetched rows.
+  const [cascadeEditorGen, setCascadeEditorGen] = useState(0)
 
   // Surface settings state
   const [surfaceSettings, setSurfaceSettings] = useState<Settings | null>(null)
@@ -722,6 +726,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="usage">Usage</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="models">Models</TabsTrigger>
           <TabsTrigger value="tools">Tools ({allToolsEnabled ? allTools.length : harnessTools.length}/{allTools.length})</TabsTrigger>
           <TabsTrigger value="surfaces">Surfaces ({connectedSurfaces.length})</TabsTrigger>
@@ -748,7 +753,7 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               <Row label="Cost this week" value={fmtUsd(usageData?.costWeek, usageData?.costStatus)} />
               <Row label="Cost this month" value={fmtUsd(usageData?.costMonth, usageData?.costStatus)} />
               <Row label="CPU" value={`${harness.cpu}%`} />
-              <Row label="Memory" value={`${harness.mem}%`} />
+              <Row label="Memory" value={`${harness.mem} MiB`} />
             </div>
             {harness.health.errors > 0 && (
               <div className="col-span-2 rounded-xl border border-[var(--danger)] bg-[var(--danger)]/5 p-4">
@@ -878,6 +883,10 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
           </div>
         </TabsContent>
 
+        <TabsContent value="analytics" className="mt-4">
+          <AnalyticsTab harnessId={harness.id} />
+        </TabsContent>
+
         <TabsContent value="models" className="mt-4">
           {/* Only mount the editor once GET /models has resolved. Mounting it
               earlier seeded rows from harness.models with no provider and no
@@ -890,24 +899,58 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
               </p>
             </div>
           ) : (
-          <ModelCascadeEditor
-            // key forces a remount per harness — the editor seeds its cascade
-            // into local state once, so without this an in-app A→B nav keeps A's
-            // cascade and saving B's Models tab could persist A's cascade (D6).
-            key={id}
-            models={modelConfig.models ?? harness.models ?? []}
-            provider={modelConfig.provider ?? ''}
-            fallbackProviders={modelConfig.fallbackProviders ?? []}
+          <ModelsTab
             harnessId={id}
+            modelConfig={{ ...modelConfig, models: modelConfig.models ?? harness.models ?? [] }}
+            modelTracking={harness.modelTracking}
+            // editorKey forces a remount per harness — the editor seeds its
+            // cascade into local state once, so without this an in-app A→B nav
+            // keeps A's cascade and saving B's Models tab could persist A's
+            // cascade (D6). The generation bumps after a 409 reload.
+            editorKey={`${id}:${cascadeEditorGen}`}
+            // A saved-cascade apply or a successor update rewrote config.yaml
+            // (and restarted) server-side — reload rows + tracking, remount.
+            onCascadeChanged={() => {
+              refetchModels()
+              refetch()
+              setCascadeEditorGen((g) => g + 1)
+            }}
             onSave={async (entries) => {
               setModelSaving(true)
               try {
                 const res = await fetch(`/api/harnesses/${id}/models`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ fallback_providers: entries }),
+                  // What this editor was seeded from. The server refuses (409)
+                  // when the rows on disk no longer match — the model-update
+                  // scheduler or another tab wrote since — so a stale save
+                  // cannot silently undo an applied update.
+                  body: JSON.stringify({
+                    fallback_providers: entries,
+                    expected_fallback_providers: modelConfig.fallbackProviders ?? [],
+                  }),
                 })
-                if (!res.ok) { toast.error('Failed to save'); return }
+                if (res.status === 409) {
+                  // Three conflicts share the status. primary-mismatch (move
+                  // the file's primary to the top) and duplicate-sections
+                  // (hand-edit config.yaml) are the operator's to fix — show
+                  // the writer's message and keep the edit. Only the
+                  // stale-rows conflict reloads and remounts.
+                  const conflict = cascadeSaveConflict(await res.json().catch(() => null))
+                  if (conflict.kind !== 'stale') {
+                    toast.error(conflict.message)
+                    return
+                  }
+                  toast.error('The cascade changed since you opened it — reloaded; please re-apply your edit')
+                  await refetchModels()
+                  setCascadeEditorGen((g) => g + 1)
+                  return
+                }
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}))
+                  toast.error(err.error ?? 'Failed to save')
+                  return
+                }
                 toast.success('Model cascade saved')
                 refetchModels()
                 // Auto-restart to pick up cascade changes

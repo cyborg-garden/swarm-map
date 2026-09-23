@@ -4,6 +4,14 @@ export type ModelEntry = {
   id: string
   name: string
   tier: 'primary' | 'fallback' | 'local'
+  // The provider has retired (or announced the retirement of) this id. Kept in
+  // the catalog so live cascades that still reference it stay readable — the
+  // picker should flag it, not offer it. Deleting the row would make an
+  // existing cascade look like free text. (#136)
+  retired?: boolean
+  // ISO date after which the provider retires this id (OpenRouter
+  // expiration_date). Flag as "deprecating" before, "retired" after. (#136)
+  deprecates?: string
 }
 
 export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
@@ -43,7 +51,9 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
     { id: 'anthropic/claude-fable-5', name: 'Claude Fable 5 (OR)', tier: 'primary' },
     { id: 'anthropic/claude-opus-4-8', name: 'Claude Opus 4.8 (OR)', tier: 'primary' },
     { id: 'anthropic/claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (OR)', tier: 'primary' },
-    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OR)', tier: 'fallback' },
+    // OpenRouter lists expiration_date 2026-10-20 for every google/gemini-2.5-*
+    // row (verified 2026-09-22). Flagged, not removed. (#136)
+    { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (OR)', tier: 'fallback', deprecates: '2026-10-20' },
     // Fleet chat primary — GLM-5.3 (1M ctx, released 2026-08) replaced Kimi K3
     // across the fleet on 2026-08-20 (~2x cheaper input, ~3.4x cheaper output,
     // Terminal-Bench parity). Text-only; vision stays on the auxiliary router.
@@ -69,14 +79,48 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
     // OpenRouter (TB 61.8) — always pin -0731. V3.2 stays listed while live
     // cascades still reference it.
     { id: 'deepseek/deepseek-v4-flash-0731', name: 'DeepSeek V4 Flash 0731 (OR, cheap)', tier: 'fallback' },
-    { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2 (OR, cheap, legacy)', tier: 'fallback' },
+    // OpenRouter expiration_date 2026-09-28 (verified 2026-09-22): retired,
+    // kept so cascades still pointing at it stay readable. (#136)
+    { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2 (OR, cheap, legacy)', tier: 'fallback', retired: true, deprecates: '2026-09-28' },
   ],
   bedrock: [
     { id: 'us.anthropic.claude-sonnet-4-6-20250527-v1:0', name: 'Claude Sonnet 4.6 (Bedrock)', tier: 'primary' },
   ],
 }
 
-export type CascadeEntry = { provider: string; model: string }
+export type CascadeEntry = {
+  provider: string
+  model: string
+  /**
+   * The row carries its own credential in config.yaml (an inline api_key, or
+   * a key_env naming a var that IS present), so the provider's default env
+   * var is not what it authenticates with — skip that presence check.
+   */
+  ownCredential?: boolean
+}
+
+/**
+ * Cascade values (provider / model / base_url) are written into config.yaml
+ * UNQUOTED by line splicing — there is no YAML library on that path. So every
+ * value must be a safe YAML plain scalar on one line. Anything else can inject
+ * top-level keys (a newline), break the mapping (": ", " #", trailing ":") or
+ * change the node's type (a leading indicator such as "-", "[", "@", "\"").
+ *
+ * Returns a human-readable error for an unsafe value, or null when it is safe.
+ * Real ids like `qwen3:30b`, `us.anthropic.…-v1:0` and `org/model` are fine.
+ */
+export function yamlPlainScalarError(value: string, label: string): string | null {
+  if (/[\x00-\x1f\x7f]/.test(value)) {
+    return `${label} "${value.replace(/[\x00-\x1f\x7f]/g, '⏎')}" contains a line break or control character and cannot be written to config.yaml`
+  }
+  if (/^[-?:,\[\]{}#&*!|>'"%@\`]/.test(value)) {
+    return `${label} "${value}" starts with a character YAML reserves ("${value[0]}") and cannot be written unquoted to config.yaml`
+  }
+  if (value.includes(': ') || value.includes(' #') || value.endsWith(':')) {
+    return `${label} "${value}" contains ": ", " #" or a trailing ":" and cannot be written unquoted to config.yaml`
+  }
+  return null
+}
 
 // Map env var name → provider, used by the /suggest route to detect which
 // providers an agent has credentials for (read-only; suggestion building only).
@@ -210,7 +254,16 @@ export function validateCascadeEntries(
       continue
     }
 
-    if (credCheckActive && isProviderUnserviceable(provider, presentEnvVars)) {
+    // Both values are spliced into config.yaml unquoted. A value that is not a
+    // safe one-line plain scalar can inject keys or break the file → reject.
+    const scalarError =
+      yamlPlainScalarError(model, 'Model') ?? (provider ? yamlPlainScalarError(provider, 'Provider') : null)
+    if (scalarError) {
+      errors.push(scalarError)
+      continue
+    }
+
+    if (credCheckActive && !entry.ownCredential && isProviderUnserviceable(provider, presentEnvVars)) {
       const vars = REQUIRED_KEY_BY_PROVIDER[provider.toLowerCase()]?.join(' or ')
       errors.push(
         `Model "${model}" uses provider "${provider}", but this agent has no ` +
