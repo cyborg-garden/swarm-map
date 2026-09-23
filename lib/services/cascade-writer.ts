@@ -169,8 +169,17 @@ type ExistingModelBlock = {
   /** Indent of the block's keys ('  ' unless the file says otherwise). */
   indent: string
   provider: string
-  /** model.default as written, when the key is present with a value. */
+  /** The primary as written (model.default, else model.model, else the scalar `model: <id>`), when present with a value. */
   default?: string
+  /**
+   * The key the primary is written under. `default` unless the block has a
+   * `model:` key and NO `default:` — hermes promotes model.model to
+   * model.default at load, so that key IS the primary and is rewritten in
+   * place; adding a `default:` beside it would shadow the operator's key.
+   */
+  primaryKey: 'default' | 'model'
+  /** The verbatim header when it was the scalar form (`model: <id>`) — re-emitted as such while nothing else needs the block form. */
+  scalarLine?: string
   /** The verbatim `base_url:` line, if any. */
   baseUrlLine?: string
   /** The block had a `fallback:` key. The runtime never reads it; the writer rewrites it only when it was there. */
@@ -198,19 +207,32 @@ function parseExistingModelBlock(lines: string[], start: number, end: number): E
   const body = flow ? parseFlowPairs(flow[1]).map(([k, v]) => `  ${k}: ${v}`) : lines.slice(start + 1, end)
   const firstKey = body.find((l) => l.trim() && !l.trim().startsWith('#') && indentOf(l) > 0)
   const keyIndent = firstKey ? indentOf(firstKey) : 2
-  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', hasFallbackKey: false, leading: [], managedTrail: {}, passthrough: [] }
+  const out: ExistingModelBlock = { indent: ' '.repeat(keyIndent), provider: '', primaryKey: 'default', hasFallbackKey: false, leading: [], managedTrail: {}, passthrough: [] }
+  // The scalar form: `model: <id>` — the whole section is the header line.
+  const scalar = flow ? '' : yamlScalar(lines[start].slice('model:'.length))
+  if (scalar) {
+    out.scalarLine = lines[start]
+    out.default = scalar
+  }
+  const keyOf = (line: string): string | null => {
+    const trimmed = line.trim()
+    const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
+    return isKey ? trimmed.slice(0, trimmed.indexOf(':')) : null
+  }
+  // model.model is the primary's key only when there is no model.default (as hermes resolves it).
+  const keys = body.map(keyOf)
+  if (!keys.includes('default') && keys.includes('model')) out.primaryKey = 'model'
   let managed: boolean | null = null // null = before the first key
   let managedKey = ''
   for (const line of body) {
     const trimmed = line.trim()
-    const isKey = trimmed && !trimmed.startsWith('#') && indentOf(line) === keyIndent && /^[\w-]+:/.test(trimmed)
-    if (isKey) {
-      const key = trimmed.slice(0, trimmed.indexOf(':'))
-      managed = MANAGED_MODEL_KEYS.has(key)
+    const key = keyOf(line)
+    if (key !== null) {
+      managed = MANAGED_MODEL_KEYS.has(key) || key === out.primaryKey
       managedKey = managed ? key : ''
       if (key === 'provider') out.provider = yamlScalar(trimmed.slice('provider:'.length))
-      if (key === 'default') {
-        const v = yamlScalar(trimmed.slice('default:'.length))
+      if (key === out.primaryKey) {
+        const v = yamlScalar(trimmed.slice(key.length + 1))
         if (v) out.default = v
       }
       if (key === 'base_url') out.baseUrlLine = line
@@ -472,7 +494,10 @@ export function applyCascadeToHarness(
   const trail = (key: string): string[] => existingModel?.managedTrail[key] ?? []
   const modelLines = ['model:', ...(existingModel?.leading ?? [])]
   if (provider) modelLines.push(`${ind}provider: ${provider}`, ...trail('provider'))
-  modelLines.push(`${ind}default: ${primary}`, ...trail('default'))
+  // The primary goes under the key the file already uses for it (model.model
+  // when the block has that and no default — see ExistingModelBlock.primaryKey).
+  const primaryKey = existingModel?.primaryKey ?? 'default'
+  modelLines.push(`${ind}${primaryKey}: ${primary}`, ...trail(primaryKey))
   // model.base_url follows the primary. With no base_url on it, the existing
   // line stays only while it can still be meant for this primary: the
   // provider is unchanged / unspecified, or is one that is addressed by URL.
@@ -496,6 +521,13 @@ export function applyCascadeToHarness(
     modelLines.push(...trail('fallback'))
   }
   if (existingModel) modelLines.push(...existingModel.passthrough)
+  // The scalar form (`model: <id>`) stays scalar while the block would hold
+  // nothing but the primary: an unchanged primary re-emits the header
+  // verbatim, a rotated one keeps the shape. A provider or base_url on the
+  // primary needs the block form, so the section upgrades to it.
+  if (existingModel?.scalarLine !== undefined && modelLines.length === 2 && modelLines[1] === `${ind}default: ${primary}`) {
+    modelLines.splice(0, 2, primary === existingModel.default ? existingModel.scalarLine : `model: ${primary}`)
+  }
 
   // Build the fallback_providers YAML section (root level): chain[1..], with
   // the primary repeated as row 0 only when the file already did that. A row

@@ -731,12 +731,17 @@ export function sameCascadeRow(a: { provider: string; model: string }, b: { prov
 }
 
 /**
- * The model: block's managed keys, `default:` ONLY for the model (a
- * `fallback:` or auxiliary model is never promoted to primary). Values are
- * comment-stripped and unquoted like every other reader here.
+ * The model: block's managed keys, read the way hermes loads them (cli.py):
+ * the primary is `model.default`; when that key is absent, `model.model`
+ * (promoted to default at load); and a scalar `model: <id>` — the "new
+ * format" — is the default with no provider. A `fallback:` or auxiliary
+ * model is never promoted to primary. Values are comment-stripped and
+ * unquoted like every other reader here.
  */
 function readModelBlock(dataDir: string): { provider: string; default: string; base_url: string } {
   const out = { provider: '', default: '', base_url: '' }
+  // model.model, applied only when model.default is absent (default wins at runtime).
+  let modelKey = ''
   try {
     const content = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf-8')
     const lines = content.split('\n')
@@ -748,9 +753,15 @@ function readModelBlock(dataDir: string): { provider: string; default: string; b
           for (const [key, raw] of parseFlowPairs(flow[1])) {
             if (key === 'provider' && !out.provider) out.provider = yamlScalar(raw)
             else if (key === 'default' && !out.default) out.default = yamlScalar(raw)
+            else if (key === 'model' && !modelKey) modelKey = yamlScalar(raw)
             else if (key === 'base_url' && !out.base_url) out.base_url = yamlScalar(raw)
           }
-          return out
+          break
+        }
+        const scalar = yamlScalar(line.slice('model:'.length))
+        if (scalar) {
+          out.default = scalar
+          break
         }
         inModelSection = true
         continue
@@ -761,14 +772,19 @@ function readModelBlock(dataDir: string): { provider: string; default: string; b
       }
       if (!inModelSection) continue
       const trimmed = line.trim()
-      const kv = trimmed.match(/^(provider|default|base_url):\s*(.+)$/)
+      const kv = trimmed.match(/^(provider|default|model|base_url):\s*(.+)$/)
       if (!kv) continue
+      if (kv[1] === 'model') {
+        if (!modelKey) modelKey = yamlScalar(kv[2])
+        continue
+      }
       const key = kv[1] as 'provider' | 'default' | 'base_url'
       if (!out[key]) out[key] = yamlScalar(kv[2])
     }
   } catch {
     // unreadable → empty block
   }
+  if (!out.default && modelKey) out.default = modelKey
   return out
 }
 

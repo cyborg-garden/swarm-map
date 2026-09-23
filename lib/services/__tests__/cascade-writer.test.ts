@@ -1228,3 +1228,66 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
     expect(fs.readFileSync(configPath(), 'utf-8')).toBe(bare.replace('claude-sonnet-4-6', 'claude-opus-4-8'))
   })
 })
+
+describe('applyCascadeToHarness — the hermes "new format" model: forms', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-cascade-writer-newformat-'))
+    mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+  })
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
+
+  const SCALAR = 'model: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\nplatforms:\n  discord:\n    enabled: true\n'
+  const MODEL_KEY = 'model:\n  provider: openrouter\n  model: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
+
+  it('scalar `model: <id>`: an untouched editor save (chain == expected) is byte-identical', () => {
+    fs.writeFileSync(configPath(), SCALAR)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(SCALAR)
+  })
+
+  it('scalar `model: <id>`: rotating the primary keeps the scalar form', () => {
+    fs.writeFileSync(configPath(), SCALAR)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'z-ai/glm-5.4' }, ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(SCALAR.replace('model: z-ai/glm-5.3', 'model: z-ai/glm-5.4'))
+    expect(readCascade(tmpDir).primary).toEqual({ provider: '', model: 'z-ai/glm-5.4' })
+  })
+
+  it('scalar `model: <id>`: a primary that carries a provider upgrades the section to block form', () => {
+    fs.writeFileSync(configPath(), SCALAR)
+    const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(SCALAR.replace('model: z-ai/glm-5.3\n', 'model:\n  provider: openrouter\n  default: z-ai/glm-5.3\n'))
+  })
+
+  it('model.model (no default): an untouched save is byte-identical — no `default:` is added', () => {
+    fs.writeFileSync(configPath(), MODEL_KEY)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', chain, { who: 'api', expected: chain })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(MODEL_KEY)
+  })
+
+  it('model.model (no default): a rotation writes the new primary under the SAME key', () => {
+    fs.writeFileSync(configPath(), MODEL_KEY)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'z-ai/glm-5.4' }, ...chain.slice(1)], { who: 'api' })
+    expect(res.ok).toBe(true)
+    const after = fs.readFileSync(configPath(), 'utf-8')
+    expect(after).toBe(MODEL_KEY.replace('  model: z-ai/glm-5.3', '  model: z-ai/glm-5.4'))
+    expect(after).not.toContain('default:')
+  })
+
+  it('model.model AND model.default: default is the managed key, model passes through verbatim', () => {
+    const both = 'model:\n  provider: openrouter\n  model: moonshotai/kimi-k3\n  default: z-ai/glm-5.3\n'
+    fs.writeFileSync(configPath(), both)
+    const chain = cascadeChain(readCascade(tmpDir))
+    const res = applyCascadeToHarness('h_test', [{ ...chain[0], model: 'z-ai/glm-5.4' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe('model:\n  provider: openrouter\n  default: z-ai/glm-5.4\n  model: moonshotai/kimi-k3\n')
+  })
+})

@@ -109,3 +109,38 @@ describe('readCascade', () => {
     expect(cascadeChain(readCascade(dir))).toEqual([])
   })
 })
+
+describe('readCascade — the hermes "new format" model: forms', () => {
+  // hermes normalises both at load (cli.py: a scalar `model:` becomes
+  // model.default; model.model is promoted to model.default when default is
+  // absent). Read them the same way, or the chain is the rows alone and any
+  // save promotes fallbacks[0] to a brand-new model.default.
+  it('a scalar `model: <id>` is the primary (no provider)', () => {
+    write('model: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
+    const c = readCascade(dir)
+    expect(c.primary).toEqual({ provider: '', model: 'z-ai/glm-5.3' })
+    expect(cascadeChain(c).map((e) => e.model)).toEqual(['z-ai/glm-5.3', 'claude-sonnet-4-6'])
+  })
+
+  it('a scalar `model:` with a trailing comment is comment-stripped like every other scalar', () => {
+    write('model: z-ai/glm-5.3  # pinned\n')
+    expect(readCascade(dir).primary).toEqual({ provider: '', model: 'z-ai/glm-5.3' })
+  })
+
+  it('model.model without model.default is the primary (block form)', () => {
+    write('model:\n  provider: openrouter\n  model: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
+    const c = readCascade(dir)
+    expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+    expect(cascadeChain(c)).toHaveLength(2)
+  })
+
+  it('model.model without model.default is the primary (flow form)', () => {
+    write('model: {provider: openrouter, model: z-ai/glm-5.3}\n')
+    expect(readCascade(dir).primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+  })
+
+  it('model.default wins over model.model when both are present (as at runtime)', () => {
+    write('model:\n  provider: openrouter\n  model: moonshotai/kimi-k3\n  default: z-ai/glm-5.3\n')
+    expect(readCascade(dir).primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+  })
+})
