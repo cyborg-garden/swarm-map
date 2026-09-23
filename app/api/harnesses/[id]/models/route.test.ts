@@ -465,3 +465,32 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     expect(services.harness.updateConfig).not.toHaveBeenCalled()
   })
 })
+
+describe('Models API — carryFrom never enters from the API (round-3 audit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockExistingFp.mockReturnValue([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
+    mockModelProvider.mockReturnValue('openrouter')
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('a body row carrying carryFrom does not inherit the named row\'s key_env: the row is validated bare (400, nothing written)', async () => {
+    // The agent authenticates OpenRouter only through the row's key_env; there
+    // is no OPENROUTER_API_KEY. A body that names that row as carryFrom would
+    // otherwise ride its credential onto any model it likes.
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_KEY_B']))
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      ['model:', '  provider: openrouter', '  default: z-ai/glm-5.2', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.2', '    key_env: OPENROUTER_KEY_B', ''].join('\n') as never
+    )
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'moonshotai/kimi-k3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } }],
+      expected_fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }],
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error).toContain('moonshotai/kimi-k3')
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+})

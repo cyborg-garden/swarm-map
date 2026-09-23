@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { ModelsTab } from './models-tab'
+import { ModelsTab, cascadeSaveConflict } from './models-tab'
 import { toast } from 'sonner'
 
 vi.mock('sonner', () => ({
@@ -199,5 +199,18 @@ describe('ModelsTab', () => {
     expect(screen.getByText('z-ai/glm-5.2')).toBeInTheDocument()
     expect(screen.queryByText(/newer:/)).toBeNull()
     expect(screen.queryByText('retired')).toBeNull()
+  })
+})
+
+describe('cascadeSaveConflict — how the page reads a 409 from PUT /models (round-3 audit)', () => {
+  it('a primary-mismatch 409 carries the writer\'s message and keeps the edit', () => {
+    const body = { error: 'primary-mismatch: model.default is "X" but fallback_providers[0] is "A"; put "X" at the top of the cascade before saving' }
+    expect(cascadeSaveConflict(body)).toEqual({ kind: 'primary-mismatch', message: body.error })
+  })
+
+  it('any other 409 (expected_fallback_providers no longer matches) means reload', () => {
+    expect(cascadeSaveConflict({ error: 'The model cascade changed since it was read; reload and try again' })).toEqual({ kind: 'stale' })
+    expect(cascadeSaveConflict({})).toEqual({ kind: 'stale' })
+    expect(cascadeSaveConflict(null)).toEqual({ kind: 'stale' })
   })
 })

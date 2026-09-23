@@ -667,7 +667,14 @@ describe('re-audit: rotations, retired rows, the persisted report', () => {
 
   it('a retired-by-absence row with no known pricing is blocked with a DISTINCT reason, not "price-unknown"', async () => {
     makeHarness('rb', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]), tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    // Run 1 (notify): glm-5.2 is listed without pricing, so the report records
+    // its release date but no price. (With NO previous report the row's date is
+    // unknown too and the finder reports no successor at all — round-3 audit.)
+    liveLists.openrouter = { ...OR_LIVE, models: OR_LIVE.models.map((m) => (m.id === 'z-ai/glm-5.2' ? { ...m, pricing: null } : m)) }
+    settings = { ...settings, mode: 'notify' }
+    await checkModelUpdates(deps)
     liveLists.openrouter = { ...OR_LIVE, models: OR_LIVE.models.filter((m) => m.id !== 'z-ai/glm-5.2') }
+    settings = { ...settings, mode: 'apply' }
     const report = await checkModelUpdates(deps)
     const e = entryFor(report, 'h_rb', 'z-ai/glm-5.2')!
     expect(e.retired).toBe(true)
@@ -756,5 +763,116 @@ describe('duplicate top-level sections (r3)', () => {
     }
     expect(readConfig('dup2')).toBe(cfg)
     expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+})
+
+describe('round-3 audit: substitutions keyed by provider + model; successor already a row; retired row with no date', () => {
+  beforeEach(() => {
+    settings = { ...settings, mode: 'apply' }
+  })
+
+  it('two tracked rows with the same model under different providers are BOTH rotated, each on its own row', async () => {
+    liveLists.anthropic = { ...OR_LIVE, provider: 'anthropic' }
+    const h = makeHarness('dup', {
+      config: fpConfig([
+        ['openrouter', 'z-ai/glm-5.2'],
+        ['anthropic', 'z-ai/glm-5.2'],
+      ]),
+      tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true, [trackingKey('anthropic', 'z-ai/glm-5.2')]: true },
+    })
+    const report = await checkModelUpdates(deps)
+    const entries = report.harnesses.find((x) => x.id === 'h_dup')!.entries
+    expect(entries.map((e) => [e.provider, e.applied])).toEqual([
+      ['openrouter', true],
+      ['anthropic', true],
+    ])
+    const cfg = readConfig('dup')
+    expect(cfg).toContain('  - provider: openrouter\n    model: z-ai/glm-5.3\n  - provider: anthropic\n    model: z-ai/glm-5.3\n')
+    expect(cfg).not.toContain('glm-5.2')
+    expect(h.modelTracking).toEqual({ [trackingKey('openrouter', 'z-ai/glm-5.3')]: true, [trackingKey('anthropic', 'z-ai/glm-5.3')]: true })
+    const applied = (deps.audit.append as ReturnType<typeof vi.fn>).mock.calls.filter(([e]) => e.what === 'cascade:auto-update')
+    expect(applied.map(([e]) => e.meta.provider).sort()).toEqual(['anthropic', 'openrouter'])
+  })
+
+  const twoRowCfg = [
+    'model:',
+    '  provider: openrouter',
+    '  default: z-ai/glm-5.2',
+    'fallback_providers:',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.2',
+    '    key_env: OPENROUTER_KEY_B',
+    '  - provider: openrouter',
+    '    model: z-ai/glm-5.3',
+    '    key_env: OPENROUTER_KEY_C',
+    '',
+  ].join('\n')
+  const twoRowEnv = 'OPENROUTER_API_KEY=sk-or\nOPENROUTER_KEY_B=sk-b\nOPENROUTER_KEY_C=sk-c\n'
+
+  it('a tracked row whose successor is already a row of the same provider is blocked, not duplicated', async () => {
+    makeHarness('dupsucc', { config: twoRowCfg, env: twoRowEnv, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_dupsucc', 'z-ai/glm-5.2')!
+    expect(e.successor).toBe('z-ai/glm-5.3')
+    expect(e.blocked).toBe('successor-already-in-cascade')
+    expect(e.applied).toBeUndefined()
+    expect(readConfig('dupsucc')).toBe(twoRowCfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('manual apply is refused on the same successor-already-a-row condition, nothing written', async () => {
+    makeHarness('dupsucc2', { config: twoRowCfg, env: twoRowEnv })
+    const res = await applyModelUpdate({ harnessId: 'h_dupsucc2', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toBe('Blocked: successor-already-in-cascade')
+    expect(readConfig('dupsucc2')).toBe(twoRowCfg)
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('a retired-by-absence row whose release date is unknown gets NO version successor: an older higher tuple is a near miss, blocked retired-current-no-date', async () => {
+    liveLists.openrouter = {
+      ...OR_LIVE,
+      models: [
+        { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200, expiration: null, pricing: p(0.00000234, 0.0000117) },
+        { id: 'x-ai/grok-4.6', canonical: 'x-ai/grok-4.6-20260801', created: 1785542400, expiration: null, pricing: p(0.000003, 0.000015) },
+      ],
+    }
+    makeHarness('nodate', { config: fpConfig([['openrouter', 'x-ai/grok-4.7']]), tracking: { [trackingKey('openrouter', 'x-ai/grok-4.7')]: true } })
+    const report = await checkModelUpdates(deps)
+    const e = entryFor(report, 'h_nodate', 'x-ai/grok-4.7')!
+    expect(e.retired).toBe(true)
+    expect(e.successor).toBeUndefined()
+    expect(e.nearMisses).toContain('x-ai/grok-4.20')
+    expect(e.blocked).toBe('retired-current-no-date')
+    expect(readConfig('nodate')).toContain('model: x-ai/grok-4.7')
+    expect(deps.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('the previous report carries the current row\'s release date, so a later retired-by-absence run keeps the date guard', async () => {
+    const grok = (extra: LiveModelList['models']): LiveModelList => ({
+      ...OR_LIVE,
+      models: [
+        { id: 'x-ai/grok-4.20', canonical: 'x-ai/grok-4.20-20260309', created: 1774915200, expiration: null, pricing: p(0.00000234, 0.0000117) },
+        ...extra,
+      ],
+    })
+    const g47 = { id: 'x-ai/grok-4.7', canonical: 'x-ai/grok-4.7-20260916', created: 1789948800, expiration: null, pricing: p(0.000003, 0.000015) }
+    const g49 = { id: 'x-ai/grok-4.9', canonical: 'x-ai/grok-4.9-20260920', created: 1790294400, expiration: null, pricing: p(0.000003, 0.000015) }
+    makeHarness('dated', { config: fpConfig([['openrouter', 'x-ai/grok-4.7']]), tracking: { [trackingKey('openrouter', 'x-ai/grok-4.7')]: true } })
+    // Run 1 (notify): 4.7 is listed; its date lands in the report.
+    liveLists.openrouter = grok([g47])
+    settings = { ...settings, mode: 'notify' }
+    const first = await checkModelUpdates(deps)
+    expect(entryFor(first, 'h_dated', 'x-ai/grok-4.7')!.released).toBe('20260916')
+    // Run 2 (apply): 4.7 is gone; 4.20 (older) and 4.9 (newer) are live.
+    liveLists.openrouter = grok([g49])
+    settings = { ...settings, mode: 'apply' }
+    const second = await checkModelUpdates(deps)
+    const e = entryFor(second, 'h_dated', 'x-ai/grok-4.7')!
+    expect(e.retired).toBe(true)
+    expect(e.successor).toBe('x-ai/grok-4.9')
+    expect(e.nearMisses).toContain('x-ai/grok-4.20')
+    expect(e.applied).toBe(true)
+    expect(readConfig('dated')).toContain('model: x-ai/grok-4.9')
   })
 })

@@ -84,8 +84,17 @@ export async function PUT(
   }
 
   if (body.fallback_providers && body.fallback_providers.length > 0) {
+    // Whitelist-copy each row. `carryFrom` is the scheduler's lookup key for
+    // moving a row's key_env / api_mode onto its successor; from an API body
+    // it would move a credential onto any row the caller names and skip the
+    // credential check for that row. It never enters from here.
+    const rows: CascadeWriteInput[] = body.fallback_providers.map((r) => ({
+      provider: r?.provider ?? '',
+      model: r?.model ?? '',
+      ...(r?.base_url ? { base_url: r.base_url } : {}),
+    }))
     const expected = Array.isArray(body.expected_fallback_providers) ? body.expected_fallback_providers : undefined
-    const result = applyCascadeToHarness(id, body.fallback_providers, { who: 'api', expected })
+    const result = applyCascadeToHarness(id, rows, { who: 'api', expected })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
     }

@@ -29,7 +29,14 @@
  * exists for) has no live pricing to check the ceiling against. Its last
  * known pricing is taken from the previous persisted report instead; with
  * none on record the block reason is 'retired-current-no-pricing', distinct
- * from a pricing outage, so the UI can surface it as urgent.
+ * from a pricing outage, so the UI can surface it as urgent. Its last known
+ * release date travels the same way (`released`): a bare id carries none,
+ * and without one the finder cannot tell a newer version from an older,
+ * numerically higher one — so it reports no successor at all and the entry
+ * is blocked 'retired-current-no-date'.
+ *
+ * A successor that is already a row of the same provider is never applied
+ * ('successor-already-in-cascade'): the rotation would write that row twice.
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
@@ -66,6 +73,10 @@ export type ModelUpdateEntry = {
   priceRatio?: number
   /** The current row's pricing (live, or last known when the row is gone). */
   pricing?: LiveModelPricing
+  /** The current row's release-date key (YYYYMMDD; live, or last known when
+   *  the row is gone) — what keeps the "older than current" guard active
+   *  once the provider removes a bare-id row. */
+  released?: string
   nearMisses?: string[]
   /** Set in apply mode: the entry was rotated to `successor` this run. */
   applied?: boolean
@@ -140,17 +151,22 @@ type Candidate = {
   unstable: boolean
 }
 
-type PriorPricing = (harnessId: string, provider: string, model: string) => LiveModelPricing | undefined
+type PriorEntry = (harnessId: string, provider: string, model: string) => Pick<ModelUpdateEntry, 'pricing' | 'released'> | undefined
 
 const sameId = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
 
-/** Last known pricing per (harness, provider, model) from the previous persisted report. */
-function priorPricingFrom(deps: SchedulerDeps): PriorPricing {
+/** Last known pricing + release date per (harness, provider, model) from the previous persisted report. */
+function priorEntryFrom(deps: SchedulerDeps): PriorEntry {
   const prev = readModelUpdateReport(deps.storage)
   return (harnessId, provider, model) =>
     prev?.harnesses
       .find((h) => h.id === harnessId)
-      ?.entries.find((e) => sameId(e.provider, provider) && sameId(e.model, model))?.pricing
+      ?.entries.find((e) => sameId(e.provider, provider) && sameId(e.model, model))
+}
+
+/** Is `entry`'s successor already a row of the same provider in `fps`? Rotating would duplicate that row. */
+function successorInCascade(fps: FallbackProvider[], entry: ModelUpdateEntry): boolean {
+  return !!entry.successor && fps.some((fp) => sameId(fp.provider, entry.provider) && sameId(fp.model, entry.successor!))
 }
 
 async function evaluateEntry(
@@ -158,7 +174,7 @@ async function evaluateEntry(
   fp: FallbackProvider,
   getLive: (provider: string) => Promise<LiveModelList | null>,
   deps: SchedulerDeps,
-  prior: PriorPricing,
+  prior: PriorEntry,
 ): Promise<Candidate> {
   const provider = fp.provider.trim().toLowerCase()
   const entry: ModelUpdateEntry = {
@@ -177,9 +193,14 @@ async function evaluateEntry(
   // report's. Recorded on every entry so a later run can still price a row
   // the provider has since removed.
   const curRow = live.models.find((m) => sameId(m.id, fp.model))
-  const curPricing = curRow ? curRow.pricing ?? undefined : prior(h.id, fp.provider, fp.model)
+  const last = curRow ? undefined : prior(h.id, fp.provider, fp.model)
+  const curPricing = curRow ? curRow.pricing ?? undefined : last?.pricing
   if (curPricing) entry.pricing = curPricing
-  const found = findSuccessor({ provider, model: fp.model }, live.models, deps.today)
+  // The row's release date rides along the same way: recorded while the
+  // provider lists it, handed back once it is gone so the finder's
+  // "older than current" guard stays active for a bare id.
+  const found = findSuccessor({ provider, model: fp.model }, live.models, deps.today, { currentDate: last?.released })
+  if (found.currentDate) entry.released = found.currentDate
   if (found.nearMisses.length) entry.nearMisses = found.nearMisses
   if (!found.successor || !found.kind) return { entry, unstable: false }
   entry.successor = found.successor.model
@@ -198,6 +219,8 @@ export type ApplyGuardInput = {
   /** true for the scheduler (tracked + version-only); false for a human's one-click apply. */
   automatic: boolean
   isRestarting: (id: string) => boolean
+  /** The successor is already a row of the same provider in this cascade — rotating would duplicate it. */
+  successorInCascade?: boolean
 }
 
 /** The guard list. Returns the reason an apply is declined, or null when it may proceed. */
@@ -205,6 +228,7 @@ export function evaluateApply(input: ApplyGuardInput): string | null {
   const { harness, entry, unstable, settings, automatic } = input
   const provider = entry.provider.trim().toLowerCase()
   if (!entry.successor || !entry.kind) return 'no-successor'
+  if (input.successorInCascade) return 'successor-already-in-cascade'
   if (NEVER_APPLY_PROVIDERS.has(provider)) return `provider-not-auto-updatable:${provider}`
   if (automatic && !entry.tracked) return 'untracked'
   if (automatic && entry.kind !== 'version') return `notify-only:${entry.kind}`
@@ -254,13 +278,23 @@ function performSubstitutions(
   // changes the model by construction. The writer's primary-mismatch guard
   // (model.default ≠ fallback_providers[0]) refuses the whole write with
   // 409; that lands in the blocked-audit path below.
-  const byFrom = new Map(subs.map((s) => [s.from, s]))
+  // Substitutions are keyed by (provider, model) — the tracking key. Keyed by
+  // model alone, two rows with the same id under different providers
+  // collapsed onto one substitution: one row rotated, the other was reported
+  // applied and its tracking key rotated to a model not on disk.
+  const subKey = (provider: string, model: string): string => trackingKey(provider.trim().toLowerCase(), model)
+  const bySub = new Map(subs.map((s) => [subKey(s.provider, s.from), s]))
+  const matched = new Set<string>()
   const next: CascadeWriteInput[] = current.map((fp) => {
-    const s = byFrom.get(fp.model)
-    if (!s || fp.provider.trim().toLowerCase() !== s.provider.trim().toLowerCase()) return { provider: fp.provider, model: fp.model, base_url: fp.base_url }
+    const key = subKey(fp.provider, fp.model)
+    const s = bySub.get(key)
+    if (!s) return { provider: fp.provider, model: fp.model, base_url: fp.base_url }
+    matched.add(key)
     return { provider: fp.provider, model: s.to, base_url: fp.base_url, carryFrom: { provider: fp.provider, model: fp.model } }
   })
-  if (next.every((fp, i) => fp.model === current[i]?.model)) {
+  // Every substitution must name a row that is actually on disk; a write that
+  // rotated only some of them would still report — and audit — all of them.
+  if (subs.some((s) => !matched.has(subKey(s.provider, s.from)))) {
     return { ok: false, status: 404, error: 'entry not present in fallback_providers' }
   }
   const result = applyCascadeToHarness(h.id, next, { who })
@@ -319,7 +353,7 @@ export async function checkModelUpdates(
   const settings = deps.config.getModelAutoUpdate()
   const applyMode = opts.apply ?? (settings.enabled && settings.mode === 'apply')
   const getLive = liveCache(deps)
-  const prior = priorPricingFrom(deps)
+  const prior = priorEntryFrom(deps)
   const report: ModelUpdateReport = { checkedAt: Date.now(), enabled: settings.enabled, mode: settings.mode, harnesses: [] }
 
   for (const h of eligibleHarnesses(deps)) {
@@ -332,8 +366,22 @@ export async function checkModelUpdates(
       const subs: Substitution[] = []
       const subCandidates: Candidate[] = []
       for (const c of candidates) {
-        if (!c.entry.successor) continue
-        const reason = evaluateApply({ harness: h, entry: c.entry, unstable: c.unstable, settings, automatic: true, isRestarting: deps.isRestarting })
+        if (!c.entry.successor) {
+          // The provider removed the row and nothing dates it (bare id, no
+          // previous report): the finder reports only near misses. Named so
+          // the operator can tell "gone, cannot vet a successor" from "fine".
+          if (c.entry.retired && !c.entry.released) c.entry.blocked = 'retired-current-no-date'
+          continue
+        }
+        const reason = evaluateApply({
+          harness: h,
+          entry: c.entry,
+          unstable: c.unstable,
+          settings,
+          automatic: true,
+          isRestarting: deps.isRestarting,
+          successorInCascade: successorInCascade(fps, c.entry),
+        })
         if (reason) {
           c.entry.blocked = reason
           continue
@@ -410,12 +458,20 @@ export async function applyModelUpdate(
   if (matches.length > 1) return { ok: false, status: 400, error: `"${input.from}" appears under more than one provider; pass provider` }
   const fp = matches[0]
   const settings = deps.config.getModelAutoUpdate()
-  const c = await evaluateEntry(h, fp, liveCache(deps), deps, priorPricingFrom(deps))
+  const c = await evaluateEntry(h, fp, liveCache(deps), deps, priorEntryFrom(deps))
   if (!c.entry.successor) return { ok: false, status: 409, error: `No live successor for "${input.from}"` }
   if (c.entry.successor !== input.to) {
     return { ok: false, status: 409, error: `Live successor for "${input.from}" is "${c.entry.successor}", not "${input.to}"` }
   }
-  const reason = evaluateApply({ harness: h, entry: c.entry, unstable: c.unstable, settings, automatic: false, isRestarting: deps.isRestarting })
+  const reason = evaluateApply({
+    harness: h,
+    entry: c.entry,
+    unstable: c.unstable,
+    settings,
+    automatic: false,
+    isRestarting: deps.isRestarting,
+    successorInCascade: successorInCascade(fps, c.entry),
+  })
   if (reason) return { ok: false, status: reason === 'restart-in-flight' ? 409 : 400, error: `Blocked: ${reason}` }
   const done = performSubstitutions(h, [{ from: fp.model, to: input.to, provider: fp.provider, priceRatio: c.entry.priceRatio }], 'api', deps)
   if (!done.ok) return { ok: false, status: done.status, error: done.status === 409 ? `Blocked: ${done.error}` : done.error }

@@ -33,7 +33,7 @@ import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
 import type { FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
-import { ModelsTab } from '@/components/harness/models-tab'
+import { ModelsTab, cascadeSaveConflict } from '@/components/harness/models-tab'
 
 type PairingUser = {
   userId: string
@@ -931,6 +931,15 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                   }),
                 })
                 if (res.status === 409) {
+                  // Two conflicts share the status. primary-mismatch is the
+                  // operator's to fix (move the file's primary to the top and
+                  // save again) — show the writer's message and keep the
+                  // edit. Only the stale-rows conflict reloads and remounts.
+                  const conflict = cascadeSaveConflict(await res.json().catch(() => null))
+                  if (conflict.kind === 'primary-mismatch') {
+                    toast.error(conflict.message)
+                    return
+                  }
                   toast.error('The cascade changed since you opened it — reloaded; please re-apply your edit')
                   await refetchModels()
                   setCascadeEditorGen((g) => g + 1)

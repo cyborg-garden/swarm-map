@@ -223,8 +223,13 @@ export type SuccessorResult = {
   successor?: { model: string; canonical?: string; created?: number; pricing?: LiveModelPricing | null }
   kind: SuccessorKind | null
   /** Same family, higher version, but a different tag set — or an older
-   *  release than the current row. Shown, never applied. */
+   *  release than the current row, or a higher version the date guard could
+   *  not vet because the current row's date is unknown. Shown, never applied. */
   nearMisses: string[]
+  /** The current row's release-date key (YYYYMMDD) when one could be
+   *  established — from its live row, the id itself, or the caller's hint.
+   *  Absent = the date guard had nothing to compare against. */
+  currentDate?: string
 }
 
 function sameRouting(a: Set<string>, b: Set<string>): boolean {
@@ -244,6 +249,12 @@ export function findSuccessor(
   current: { provider: string; model: string },
   live: LiveModel[],
   today: string = new Date().toISOString().slice(0, 10),
+  opts: {
+    /** The current row's release date (YYYYMMDD or YYYY-MM-DD) as last seen
+     *  by the caller — used only when the provider no longer lists the row
+     *  and the id carries no full date itself. */
+    currentDate?: string
+  } = {},
 ): SuccessorResult {
   const cur = normalizeModelId(current.provider, current.model)
   const rows = live.map((r) => ({ r, n: normalizeModelId(current.provider, r.id) }))
@@ -276,7 +287,9 @@ export function findSuccessor(
   // must not switch itself off just because the row is gone.
   const curId = current.model.trim().toLowerCase()
   const curRow = rows.find((x) => x.r.id.trim().toLowerCase() === curId)
-  const curDate = curRow ? dateKeyOf(curRow) : dateKeyOf({ r: { id: current.model }, n: cur })
+  const hint = opts.currentDate?.replace(/-/g, '')
+  const curDate =
+    (curRow ? dateKeyOf(curRow) : dateKeyOf({ r: { id: current.model }, n: cur })) ?? (hint && /^20\d{6}$/.test(hint) ? hint : null)
   // A version number is not a timeline: live OpenRouter has x-ai/grok-4.20
   // (2026-03) beside x-ai/grok-4.7 (2026-09). A higher version with an OLDER
   // release date than the current row is a near miss, never a successor —
@@ -286,8 +299,15 @@ export function findSuccessor(
     const d = dateKeyOf(x)
     return d !== null && d < curDate
   }
+  // Round-3 audit: a bare id (the common case) carries no date, so once the
+  // provider removes the row there is nothing to compare against unless the
+  // caller passes what it last saw. With no date at all the guard must not
+  // fall open — every higher version is a near miss and no version successor
+  // is reported. A row the provider still lists keeps its previous behaviour
+  // (some providers publish no dates at all; that is not the retired case).
+  const guardInert = !curRow && curDate === null
   const versionBumps = same
-    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && !olderThanCurrent(x))
+    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && !guardInert && !olderThanCurrent(x))
     .sort(
       (a, b) =>
         cmpDate(dateKeyOf(b), dateKeyOf(a)) ||
@@ -298,7 +318,7 @@ export function findSuccessor(
     .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) === 0 && curDate !== null && cmpDate(dateKeyOf(x), curDate) > 0)
     .sort((a, b) => cmpDate(dateKeyOf(b), dateKeyOf(a)))
   const olderVersionBumps = same
-    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && olderThanCurrent(x))
+    .filter((x) => compareVersions(x.n.version ?? [], cur.version ?? []) > 0 && (guardInert || olderThanCurrent(x)))
     .map((x) => x.r.id)
   // A LOWER version released AFTER the current row (grok-4.20 → grok-4.7) is
   // never applied, but the operator has to be able to see it: once rotated
@@ -327,7 +347,7 @@ export function findSuccessor(
 
   const pick = versionBumps[0] ?? snapBumps[0]
   const kind: SuccessorKind | null = versionBumps[0] ? 'version' : snapBumps[0] ? 'snapshot' : null
-  const result: SuccessorResult = { current, parsed: cur, kind, nearMisses }
+  const result: SuccessorResult = { current, parsed: cur, kind, nearMisses, ...(curDate ? { currentDate: curDate } : {}) }
   if (pick) {
     result.successor = {
       model: pick.r.id,
