@@ -32,8 +32,7 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
-import type { FallbackProviderEntry } from '@/components/harness/model-cascade-editor'
-import { ModelsTab, cascadeSaveConflict } from '@/components/harness/models-tab'
+import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
 
 type PairingUser = {
   userId: string
@@ -81,7 +80,6 @@ const SURFACE_STATUS_STYLES: Record<Surface['status'], string> = {
   planned: 'bg-[var(--warning)]/10 text-[var(--warning)]',
 }
 
-type ModelConfig = { provider: string; primary: string; models: string[]; fallbackProviders?: FallbackProviderEntry[] }
 
 type LogsResponse = { logs: string; lines: number }
 
