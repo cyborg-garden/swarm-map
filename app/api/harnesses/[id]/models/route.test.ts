@@ -116,7 +116,13 @@ describe('Models API — PUT validation', () => {
     expect(services.harness.updateConfig).not.toHaveBeenCalled()
   })
 
+  // The { fallback_providers } body is fallback-only: the primary on disk
+  // (model.default, as the mocked readCascade reports it) stays and the rows
+  // become the block. These tests seed the primary the fixture file has.
+  const seedPrimary = () => mockPrimary.mockReturnValue({ provider: 'anthropic', model: 'claude-sonnet-4-6' })
+
   it('rejects an un-serviceable provider in the fallback_providers shape (400)', async () => {
+    seedPrimary()
     mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY'])) // no OPENAI_API_KEY
     const body = {
       fallback_providers: [
@@ -132,6 +138,7 @@ describe('Models API — PUT validation', () => {
   })
 
   it('accepts ollama with no key (local provider, 200)', async () => {
+    seedPrimary()
     mockEnvVars.mockReturnValue(new Set<string>()) // no keys at all
     const body = {
       fallback_providers: [{ provider: 'ollama', model: 'my-local-build:latest', base_url: 'http://host.docker.internal:11434/v1' }],
@@ -157,6 +164,7 @@ describe('Models API — PUT validation', () => {
   })
 
   it('rejects an empty model id even when the provider has a key (400)', async () => {
+    seedPrimary()
     const body = { fallback_providers: [{ provider: 'anthropic', model: '' }] }
     const res = await PUT(makeRequest(body), makeParams('h_test'))
     expect(res.status).toBe(400)
@@ -187,6 +195,8 @@ describe('Models API — PUT validation', () => {
       '',
     ].join('\n')
     vi.spyOn(fs, 'readFileSync').mockReturnValue(existing as never)
+    seedPrimary()
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' }])
     let written = ''
     vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
 
@@ -359,9 +369,13 @@ describe('Models API — PUT validation', () => {
       '',
     ].join('\n')
     vi.spyOn(fs, 'readFileSync').mockReturnValue(existing as never)
+    seedPrimary()
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }, { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' }])
     let written = ''
     vi.spyOn(fs, 'writeFileSync').mockImplementation((_p, data) => { written = String(data) })
 
+    // The file repeats its primary as row 0, so the primary's row is the
+    // writer's: it stays at row 0 and the body's copy is not written twice.
     const body = {
       fallback_providers: [
         { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
@@ -373,7 +387,9 @@ describe('Models API — PUT validation', () => {
     expect((written.match(/^fallback_providers:/gm) ?? []).length).toBe(1)
     expect((written.match(/model: qwen3:30b/g) ?? []).length).toBe(1)
     expect((written.match(/model: claude-sonnet-4-6/g) ?? []).length).toBe(1)
-    expect(written.indexOf('model: qwen3:30b')).toBeLessThan(written.indexOf('model: claude-sonnet-4-6'))
+    // Fallback-only body: the primary is untouched and its duplicate row keeps row 0; qwen follows.
+    expect(written).toMatch(/^model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n/m)
+    expect(written.indexOf('model: claude-sonnet-4-6\n', written.indexOf('fallback_providers:'))).toBeLessThan(written.indexOf('model: qwen3:30b'))
     expect((written.match(/^credential_pool_strategies:/gm) ?? []).length).toBe(1)
   })
 })
@@ -495,7 +511,7 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     expect(fs.writeFileSync).not.toHaveBeenCalled()
   })
 
-  it('the pre-chain { fallback_providers } body still works: row 0 is taken as the primary', async () => {
+  it('the pre-chain { fallback_providers } body is fallback-only: the rows are rewritten, model.default (kimi-k3) is untouched', async () => {
     seedDrifted()
     const written = capture()
     const body = {
@@ -504,7 +520,8 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     }
     const res = await PUT(makeRequest(body), makeParams('h_test'))
     expect(res.status).toBe(200)
-    expect(written()).toBe('model:\n  provider: openrouter\n  default: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-5.1\n')
+    expect(written()).toBe(DRIFTED.replace('claude-sonnet-5\n', 'claude-sonnet-5.1\n'))
+    expect((await res.json()).chain[0]).toEqual(DRIFTED_PRIMARY)
   })
 
   it('legacy {model} on the same file moves the primary and empties the rows in place', async () => {
@@ -542,6 +559,7 @@ describe('Models API — carryFrom never enters from the API (round-3 audit)', (
     // is no OPENROUTER_API_KEY. A body that names that row as carryFrom would
     // otherwise ride its credential onto any model it likes.
     mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_KEY_B']))
+    mockPrimary.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.2' })
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       ['model:', '  provider: openrouter', '  default: z-ai/glm-5.2', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.2', '    key_env: OPENROUTER_KEY_B', ''].join('\n') as never
     )

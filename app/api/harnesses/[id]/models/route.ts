@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { readModelConfig, readModelProvider, readFallbackProviders, readCascade, cascadeChain, guessDataDir } from '@/lib/services/harness'
+import { readModelConfig, readModelProvider, readFallbackProviders, readCascade, cascadeChain, sameCascadeRow, guessDataDir } from '@/lib/services/harness'
 // The ONE guarded writer for model: / fallback_providers: (also used by the
 // cascade library and the model-update scheduler). Every body shape goes
 // through it — validate → render → splice → write → overlay.
@@ -86,8 +86,17 @@ const whitelist = (rows: RowInput[]): CascadeWriteInput[] =>
  *    rotated an entry, or another tab saved) the write is refused with 409
  *    and nothing changes.
  *  - `{ fallback_providers: Row[], expected_fallback_providers?: Row[] }` —
- *    the pre-chain editor / API shape. The rows are taken as a chain (row 0
- *    = primary, as that shape always meant) and `expected_fallback_providers`
+ *    the pre-chain editor / API shape. It names the section it rewrites: the
+ *    rows become the fallback_providers block and the primary (model:) is
+ *    NOT touched — GET's `fallbackProviders` is the raw block, so a GET → PUT
+ *    round trip is a no-op on every file. (Taking row 0 as the primary,
+ *    which is what this body once meant, rewrote model.default to the first
+ *    fallback on every file that does not repeat its primary as row 0 — 3 of
+ *    5 fleet agents — and the real primary vanished.) On a file that repeats
+ *    the primary as row 0 the writer owns that row: any row equal to the
+ *    primary is dropped from the body and the duplicate is re-emitted at row
+ *    0, so the primary is never written twice. A file with no primary at all
+ *    cannot take this body (409: send `{ chain }`). `expected_fallback_providers`
  *    is compared against the raw rows on disk.
  *  - `{ provider?, model? | cascade?: string[] }` — the legacy string shape
  *    (README, API callers). Each id is mapped onto its existing chain entry
@@ -142,7 +151,17 @@ export async function PUT(
         return NextResponse.json({ error: 'The model cascade changed since it was read; reload and try again' }, { status: 409 })
       }
     }
-    const result = applyCascadeToHarness(id, whitelist(body.fallback_providers), { who: 'api' })
+    const onDisk = readCascade(dataDir)
+    if (!onDisk.primary) {
+      return NextResponse.json(
+        { error: 'This agent has no primary model (model.default) on disk; { fallback_providers } cannot set one — send { chain } with the primary as row 0' },
+        { status: 409 }
+      )
+    }
+    const primary = onDisk.primary
+    const rows = whitelist(body.fallback_providers)
+    const fallbacks = onDisk.primaryDuplicatedAsRow0 ? rows.filter((r) => !sameCascadeRow(r, primary)) : rows
+    const result = applyCascadeToHarness(id, [{ provider: primary.provider, model: primary.model, ...(primary.base_url ? { base_url: primary.base_url } : {}) }, ...fallbacks], { who: 'api' })
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status })
     }

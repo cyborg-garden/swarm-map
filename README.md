@@ -175,7 +175,7 @@ Any AI agent (Claude Code, Hermes, etc.) can orchestrate your fleet via the REST
 | `POST` | `/api/harnesses/restart-running` | Bulk quick-restart all running |
 | `GET` | `/api/harnesses/:id/logs` | Container logs (`?lines=100`) |
 | `GET` | `/api/harnesses/:id/models` | Model cascade: `chain` (primary from `model:` first, then the `fallback_providers` rows), `primaryEntry`, `primaryDuplicatedAsRow0`, raw `fallbackProviders` |
-| `PUT` | `/api/harnesses/:id/models` | Update the cascade (`{ chain: [...], expected_chain?: [...] }`; `{ cascade: [...] }` and `{ fallback_providers: [...] }` still accepted) |
+| `PUT` | `/api/harnesses/:id/models` | Update the cascade (`{ chain: [...], expected_chain?: [...] }`, `chain[0]` = primary; `{ cascade: [...] }` still accepted; `{ fallback_providers: [...] }` rewrites the fallback rows only and never touches the primary — 409 on a file with no primary) |
 | `POST` | `/api/harnesses/:id/duplicate` | Clone harness config (`{ name }`) |
 | `POST` | `/api/harnesses/:id/cascade/save-as` | Snapshot the harness's current chain (primary + fallbacks) into the cascade library (`{ name, overwrite? }`) |
 | `GET` | `/api/cascades` | Named cascade library (saved, portable chains: `chain[0]` is the primary) |
