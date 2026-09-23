@@ -19,8 +19,8 @@ let calls: Call[]
 let responders: Array<(url: string, init?: RequestInit) => { status: number; body?: unknown } | undefined>
 
 const LIB = [
-  { name: 'Cheap', entries: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, { provider: 'ollama', model: 'qwen3:8b', base_url: 'http://x' }], createdAt: 1, updatedAt: 1 },
-  { name: 'Frontier', entries: [{ provider: 'anthropic', model: 'claude-opus-4-7' }], createdAt: 2, updatedAt: 2, sourceHarness: 'h_iris' },
+  { name: 'Cheap', chain: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, { provider: 'ollama', model: 'qwen3:8b', base_url: 'http://x' }], createdAt: 1, updatedAt: 1 },
+  { name: 'Frontier', chain: [{ provider: 'anthropic', model: 'claude-opus-4-7' }], createdAt: 2, updatedAt: 2, sourceHarness: 'h_iris' },
 ]
 
 function installFetch() {
@@ -47,7 +47,7 @@ beforeEach(() => { installFetch() })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.clearAllMocks() })
 
 describe('SavedCascades', () => {
-  it('lists library entries compactly', async () => {
+  it('lists library chain compactly', async () => {
     render(<SavedCascades harnessId="h_test" />)
     const list = await screen.findByRole('list', { name: /saved cascades/i })
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
@@ -88,7 +88,7 @@ describe('SavedCascades', () => {
 
   it('Save as… prompts for a name and posts to save-as', async () => {
     vi.spyOn(window, 'prompt').mockReturnValue('  Nightly ')
-    responders.push((url, init) => (url === '/api/harnesses/h_test/cascade/save-as' && init?.method === 'POST' ? { status: 201, body: { name: 'Nightly', entries: [], createdAt: 3, updatedAt: 3 } } : undefined))
+    responders.push((url, init) => (url === '/api/harnesses/h_test/cascade/save-as' && init?.method === 'POST' ? { status: 201, body: { name: 'Nightly', chain: [], createdAt: 3, updatedAt: 3 } } : undefined))
     render(<SavedCascades harnessId="h_test" />)
     await screen.findByText('Cheap')
     fireEvent.click(screen.getByRole('button', { name: /save as/i }))
@@ -107,7 +107,7 @@ describe('SavedCascades', () => {
       if (url !== '/api/harnesses/h_test/cascade/save-as' || init?.method !== 'POST') return undefined
       n += 1
       if (n === 1) return { status: 409, body: { error: 'A cascade named "Cheap" already exists' } }
-      return { status: 201, body: { name: 'Cheap', entries: [], createdAt: 1, updatedAt: 9 } }
+      return { status: 201, body: { name: 'Cheap', chain: [], createdAt: 1, updatedAt: 9 } }
     })
     render(<SavedCascades harnessId="h_test" />)
     await screen.findByText('Cheap')
@@ -162,7 +162,7 @@ describe('SavedCascades', () => {
   })
 
   it('URL-encodes cascade names with spaces or slashes', async () => {
-    responders.push((url, init) => (url === '/api/cascades' && !init?.method ? { status: 200, body: [{ name: 'my cascade/v2', entries: [{ provider: 'zai', model: 'glm-5' }], createdAt: 1, updatedAt: 1 }] } : undefined))
+    responders.push((url, init) => (url === '/api/cascades' && !init?.method ? { status: 200, body: [{ name: 'my cascade/v2', chain: [{ provider: 'zai', model: 'glm-5' }], createdAt: 1, updatedAt: 1 }] } : undefined))
     render(<SavedCascades harnessId="h_test" />)
     await screen.findByText('my cascade/v2')
     fireEvent.click(screen.getByRole('button', { name: /apply my cascade\/v2/i }))

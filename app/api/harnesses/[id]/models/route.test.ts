@@ -29,12 +29,15 @@ const mockEnvVars = vi.fn(() => new Set<string>(['ANTHROPIC_API_KEY']))
 // Default: nothing. Legacy-body tests override it to prove rows are preserved.
 const mockExistingFp = vi.fn((): Array<{ provider: string; model: string; base_url?: string }> => [])
 const mockModelProvider = vi.fn(() => '')
+// The primary as readCascade reports it (model.provider / model.default).
+// Default: none — a chain is then the rows alone.
+const mockPrimary = vi.fn((): { provider: string; model: string; base_url?: string } | null => null)
 
 vi.mock('@/lib/services/harness', async (importOriginal) => {
   // The writer shares the readers' header regexes and scalar helpers; use
   // the real ones so the route test exercises the same header forms the
   // readers accept.
-  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, FLOW_MAP, FLOW_SEQ, isTopLevelLine, yamlScalar, parseFlowPairs, parseFlowMaps } =
+  const { FALLBACK_PROVIDERS_HEADER, MODEL_HEADER, FLOW_MAP, FLOW_SEQ, isTopLevelLine, yamlScalar, parseFlowPairs, parseFlowMaps, cascadeChain, sameCascadeRow } =
     await importOriginal<typeof import('@/lib/services/harness')>()
   return {
     FALLBACK_PROVIDERS_HEADER,
@@ -45,15 +48,23 @@ vi.mock('@/lib/services/harness', async (importOriginal) => {
     yamlScalar,
     parseFlowPairs,
     parseFlowMaps,
+    cascadeChain,
+    sameCascadeRow,
     guessDataDir: vi.fn(() => '/tmp/hermes-test-data'),
     readModelConfig: vi.fn(() => []),
     readModelProvider: vi.fn(() => mockModelProvider()),
     readFallbackProviders: vi.fn(() => mockExistingFp()),
+    // Built from the same fixtures the readers above serve.
+    readCascade: vi.fn(() => {
+      const primary = mockPrimary()
+      const fallbacks = mockExistingFp()
+      return { primary, fallbacks, primaryDuplicatedAsRow0: !!primary && fallbacks.length > 0 && sameCascadeRow(fallbacks[0], primary) }
+    }),
     readAgentEnvVarNames: vi.fn(() => mockEnvVars()),
   }
 })
 
-import { PUT } from './route'
+import { GET, PUT } from './route'
 import { services } from '@/lib/services'
 import { readModelConfig } from '@/lib/services/harness'
 
@@ -75,6 +86,7 @@ describe('Models API — PUT validation', () => {
     mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY']))
     mockExistingFp.mockReturnValue([])
     mockModelProvider.mockReturnValue('')
+    mockPrimary.mockReturnValue(null)
     // Pretend config.yaml exists and is writable; capture writes in-memory.
     vi.spyOn(fs, 'readFileSync').mockReturnValue(
       'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n' as never
@@ -215,6 +227,7 @@ describe('Models API — PUT validation', () => {
     const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
     mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY']))
     mockModelProvider.mockReturnValue('anthropic')
+    mockPrimary.mockReturnValue({ provider: 'anthropic', model: 'claude-sonnet-4-6' })
     mockExistingFp.mockReturnValue([
       { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       { provider: 'ollama', model: 'qwen3:30b', base_url: OLLAMA_URL },
@@ -267,6 +280,7 @@ describe('Models API — PUT validation', () => {
     // and model.fallback silently diverge.
     const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
     mockModelProvider.mockReturnValue('anthropic')
+    mockPrimary.mockReturnValue({ provider: 'anthropic', model: 'claude-sonnet-4-6' })
     mockExistingFp.mockReturnValue([
       { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       { provider: 'ollama', model: 'qwen3:8b', base_url: OLLAMA_URL },
@@ -371,6 +385,7 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     mockEnvVars.mockReturnValue(new Set<string>(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
     mockExistingFp.mockReturnValue([])
     mockModelProvider.mockReturnValue('')
+    mockPrimary.mockReturnValue(null)
     vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
   })
   afterEach(() => vi.restoreAllMocks())
@@ -422,36 +437,82 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     expect(fs.writeFileSync).not.toHaveBeenCalled()
   })
 
-  // Re-audit: matilde-shaped file — model.default is kimi-k3 while row 0 is
-  // glm-5.3. The writer derives model.default from row 0, so an editor save
-  // that only touched another row silently switched the agent's primary.
+  // matilde-shaped file — model.default is kimi-k3 and row 0 is glm-5.3. The
+  // runtime tries kimi-k3 first, then glm-5.3: that IS the chain. PR #243
+  // refused this with 409 primary-mismatch on the wrong premise (row 0 ==
+  // primary).
   const DRIFTED =
     'model:\n  provider: openrouter\n  default: moonshotai/kimi-k3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n  - provider: anthropic\n    model: claude-sonnet-5\n'
   const DRIFTED_ROWS = [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5' }]
-
-  it('fallback_providers shape on a drifted file (model.default ≠ row 0) → 409 primary-mismatch, nothing written', async () => {
-    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
+  const DRIFTED_PRIMARY = { provider: 'openrouter', model: 'moonshotai/kimi-k3' }
+  const DRIFTED_CHAIN = [DRIFTED_PRIMARY, ...DRIFTED_ROWS]
+  const seedDrifted = () => {
+    mockPrimary.mockReturnValue(DRIFTED_PRIMARY)
     mockExistingFp.mockReturnValue(DRIFTED_ROWS)
     vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+  }
+
+  it('{ chain, expected_chain } on a file whose primary is not row 0 edits a fallback and keeps model.default (no 409)', async () => {
+    seedDrifted()
+    const written = capture()
+    const body = {
+      chain: [DRIFTED_PRIMARY, DRIFTED_ROWS[0], { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
+      expected_chain: DRIFTED_CHAIN,
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written()).toBe(DRIFTED.replace('claude-sonnet-5\n', 'claude-sonnet-5.1\n'))
+    expect(services.harness.updateConfig).toHaveBeenCalledWith('h_test', { models: ['moonshotai/kimi-k3', 'z-ai/glm-5.3', 'claude-sonnet-5.1'] })
+  })
+
+  it('{ chain } may change the primary outright: chain[0] goes to model:, no duplicate row is invented', async () => {
+    seedDrifted()
+    const written = capture()
+    const res = await PUT(makeRequest({ chain: [DRIFTED_ROWS[0], DRIFTED_PRIMARY, DRIFTED_ROWS[1]], expected_chain: DRIFTED_CHAIN }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written()).toBe(
+      'model:\n  provider: openrouter\n  default: z-ai/glm-5.3\nfallback_providers:\n  - provider: openrouter\n    model: moonshotai/kimi-k3\n  - provider: anthropic\n    model: claude-sonnet-5\n'
+    )
+  })
+
+  it('{ chain } with a stale expected_chain → 409, nothing written', async () => {
+    seedDrifted()
+    const stale = [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, ...DRIFTED_ROWS]
+    const res = await PUT(makeRequest({ chain: stale, expected_chain: stale }), makeParams('h_test'))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/changed since it was read/)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('{ chain } strips carryFrom from the body: the row is validated bare', async () => {
+    seedDrifted()
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_KEY_B']))
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED.replace('    model: z-ai/glm-5.3\n', '    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n') as never)
+    const body = { chain: [{ provider: 'openrouter', model: 'moonshotai/kimi-k3.1', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.3' } }] }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(400)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+
+  it('the pre-chain { fallback_providers } body still works: row 0 is taken as the primary', async () => {
+    seedDrifted()
+    const written = capture()
     const body = {
       fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
       expected_fallback_providers: DRIFTED_ROWS,
     }
     const res = await PUT(makeRequest(body), makeParams('h_test'))
-    expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/primary-mismatch.*moonshotai\/kimi-k3/)
-    expect(fs.writeFileSync).not.toHaveBeenCalled()
-    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+    expect(res.status).toBe(200)
+    expect(written()).toBe('model:\n  provider: openrouter\n  default: z-ai/glm-5.3\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-5.1\n')
   })
 
-  it('legacy {model} on a drifted file may move the primary — that IS the request', async () => {
-    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
-    mockExistingFp.mockReturnValue(DRIFTED_ROWS)
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+  it('legacy {model} on the same file moves the primary and empties the rows in place', async () => {
+    seedDrifted()
     const written = capture()
     const res = await PUT(makeRequest({ model: 'z-ai/glm-5.3' }), makeParams('h_test'))
     expect(res.status).toBe(200)
-    expect(written()).toContain('  default: z-ai/glm-5.3')
+    expect(written()).toBe('model:\n  provider: openrouter\n  default: z-ai/glm-5.3\nfallback_providers: []\n')
   })
 
   it('fallback_providers shape with a stale expected_fallback_providers → 409, nothing written', async () => {
@@ -493,5 +554,45 @@ describe('Models API — carryFrom never enters from the API (round-3 audit)', (
     const json = await res.json()
     expect(json.error).toContain('moonshotai/kimi-k3')
     expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+})
+
+describe('Models API — GET returns the chain the editor shows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockModelProvider.mockReturnValue('openrouter')
+    vi.mocked(readModelConfig).mockReturnValue(['z-ai/glm-5.3'])
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const get = () => GET(new Request('http://localhost/api/harnesses/h_test/models'), makeParams('h_test'))
+
+  it('cyborg-shaped (primary not in the rows): chain = [primary, ...rows], flag false, raw rows kept', async () => {
+    mockPrimary.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    const json = await (await get()).json()
+    expect(json.chain).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    expect(json.primaryEntry).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+    expect(json.primaryDuplicatedAsRow0).toBe(false)
+    expect(json.fallbackProviders).toEqual([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    // Compatibility fields.
+    expect(json).toMatchObject({ provider: 'openrouter', primary: 'z-ai/glm-5.3', models: ['z-ai/glm-5.3'] })
+  })
+
+  it('HSM-saved (primary repeated as row 0): the duplicate is folded out of the chain and reported by the flag', async () => {
+    mockPrimary.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
+    mockExistingFp.mockReturnValue([{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    const json = await (await get()).json()
+    expect(json.chain.map((e: { model: string }) => e.model)).toEqual(['z-ai/glm-5.3', 'claude-sonnet-4-6'])
+    expect(json.primaryDuplicatedAsRow0).toBe(true)
+    expect(json.fallbackProviders).toHaveLength(2)
+  })
+
+  it('no primary: the chain is the rows alone and primaryEntry is null', async () => {
+    mockPrimary.mockReturnValue(null)
+    mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    const json = await (await get()).json()
+    expect(json.chain).toEqual([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+    expect(json.primaryEntry).toBeNull()
   })
 })

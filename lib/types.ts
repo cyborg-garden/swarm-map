@@ -195,7 +195,7 @@ export type CascadeLibraryEntry = {
 
 export type CascadeRecord = {
   name: string
-  entries: CascadeLibraryEntry[]
+  chain: CascadeLibraryEntry[]
   createdAt: number
   updatedAt: number
   sourceHarness?: string

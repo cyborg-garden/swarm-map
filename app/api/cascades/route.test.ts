@@ -64,11 +64,11 @@ describe('Cascades API — collection', () => {
   })
 
   it('POST creates a cascade (201) and GET lists it', async () => {
-    const res = await POST(post({ name: 'fleet', entries: ENTRIES, sourceHarness: 'h_a' }))
+    const res = await POST(post({ name: 'fleet', chain: ENTRIES, sourceHarness: 'h_a' }))
     expect(res.status).toBe(201)
     const rec = await res.json()
     expect(rec.name).toBe('fleet')
-    expect(rec.entries).toEqual(ENTRIES)
+    expect(rec.chain).toEqual(ENTRIES)
     expect(rec.sourceHarness).toBe('h_a')
 
     const list = await (await GET()).json()
@@ -77,28 +77,28 @@ describe('Cascades API — collection', () => {
   })
 
   it('POST with an existing name is 409 unless overwrite:true', async () => {
-    await POST(post({ name: 'fleet', entries: ENTRIES }))
-    const dup = await POST(post({ name: 'FLEET', entries: ENTRIES }))
+    await POST(post({ name: 'fleet', chain: ENTRIES }))
+    const dup = await POST(post({ name: 'FLEET', chain: ENTRIES }))
     expect(dup.status).toBe(409)
     expect((await dup.json()).error).toMatch(/already exists/)
 
     const next = [{ provider: 'openai', model: 'gpt-5' }]
-    const ow = await POST(post({ name: 'FLEET', entries: next, overwrite: true }))
+    const ow = await POST(post({ name: 'FLEET', chain: next, overwrite: true }))
     expect(ow.status).toBe(201)
-    expect((await ow.json()).entries).toEqual(next)
+    expect((await ow.json()).chain).toEqual(next)
     expect(await (await GET()).json()).toHaveLength(1)
   })
 
-  it('POST rejects an invalid body (400): bad JSON, missing name, empty entries', async () => {
+  it('POST rejects an invalid body (400): bad JSON, missing name, empty chain', async () => {
     expect((await POST(post('{not json', true))).status).toBe(400)
-    expect((await POST(post({ entries: ENTRIES }))).status).toBe(400)
-    expect((await POST(post({ name: 'x', entries: [] }))).status).toBe(400)
+    expect((await POST(post({ chain: ENTRIES }))).status).toBe(400)
+    expect((await POST(post({ name: 'x', chain: [] }))).status).toBe(400)
     expect(await (await GET()).json()).toEqual([])
   })
 
   it('POST rejects a model id containing a newline (config.yaml injection) with 400 and stores nothing', async () => {
     const res = await POST(
-      post({ name: 'x', entries: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }] })
+      post({ name: 'x', chain: [{ provider: 'anthropic', model: 'claude-sonnet-4-6\nmodel: injected\ntoolsets: [oops]' }] })
     )
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/config\.yaml/)
@@ -107,15 +107,21 @@ describe('Cascades API — collection', () => {
 
   it('POST never stores api_key', async () => {
     const res = await POST(
-      post({ name: 'leak', entries: [{ provider: 'anthropic', model: 'm', api_key: 'sk-ant-SECRET' }] })
+      post({ name: 'leak', chain: [{ provider: 'anthropic', model: 'm', api_key: 'sk-ant-SECRET' }] })
     )
     expect(res.status).toBe(201)
     expect(JSON.stringify(await res.json())).not.toContain('SECRET')
     expect(fs.readFileSync(path.join(tmpDir, 'cascades.json'), 'utf-8')).not.toContain('SECRET')
   })
 
+  it('POST still accepts the pre-chain `entries` key as an alias for `chain`', async () => {
+    const res = await POST(post({ name: 'alias', entries: ENTRIES }))
+    expect(res.status).toBe(201)
+    expect((await res.json()).chain).toEqual(ENTRIES)
+  })
+
   it('POST audits cascade:save', async () => {
-    await POST(post({ name: 'fleet', entries: ENTRIES, sourceHarness: 'h_a' }))
+    await POST(post({ name: 'fleet', chain: ENTRIES, sourceHarness: 'h_a' }))
     const log = services.audit.query({ what: 'cascade:save' })
     expect(log.length).toBeGreaterThanOrEqual(1)
     expect(log[0].meta).toMatchObject({ name: 'fleet', harness: 'h_a' })

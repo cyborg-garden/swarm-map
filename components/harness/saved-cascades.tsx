@@ -147,14 +147,14 @@ export function SavedCascades({ harnessId, onApplied }: { harnessId: string; onA
       {cascades && cascades.length > 0 && (
         <ul aria-label="Saved cascades" className="divide-y divide-[var(--border)]">
           {cascades.map((c) => {
-            const first = c.entries[0]
-            const rest = c.entries.length - 1
+            const first = c.chain[0]
+            const rest = c.chain.length - 1
             return (
               <li key={c.name} className="flex items-center gap-2 py-1.5">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{c.name}</p>
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {c.entries.length} model{c.entries.length === 1 ? '' : 's'}
+                    {c.chain.length} model{c.chain.length === 1 ? '' : 's'}
                     {first && <> · <span className="font-mono">{first.model}</span>{rest > 0 ? ` +${rest}` : ''}</>}
                     {c.sourceHarness && <> · from {c.sourceHarness}</>}
                   </p>

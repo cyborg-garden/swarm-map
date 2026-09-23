@@ -1,7 +1,8 @@
 // @vitest-environment node
 /**
  * Tests for POST /api/harnesses/:id/cascade/save-as — snapshot a harness's
- * current fallback_providers into the named cascade library.
+ * current cascade (primary from model:, then the fallback_providers rows)
+ * into the named cascade library.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
@@ -93,7 +94,7 @@ describe('Harness cascade save-as', () => {
     const rec = await res.json()
     expect(rec.name).toBe('from-test')
     expect(rec.sourceHarness).toBe('h_test')
-    expect(rec.entries).toEqual([
+    expect(rec.chain).toEqual([
       { provider: 'anthropic', model: 'claude-sonnet-4-6' },
       { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
     ])
@@ -103,20 +104,40 @@ describe('Harness cascade save-as', () => {
   })
 
   it('409 on an existing name unless overwrite:true', async () => {
-    services.cascades.save({ name: 'from-test', entries: [{ provider: 'openai', model: 'gpt-5' }] })
+    services.cascades.save({ name: 'from-test', chain: [{ provider: 'openai', model: 'gpt-5' }] })
     expect((await POST(post({ name: 'from-test' }), makeParams('h_test'))).status).toBe(409)
-    expect(services.cascades.get('from-test')?.entries[0].provider).toBe('openai')
+    expect(services.cascades.get('from-test')?.chain[0].provider).toBe('openai')
 
     const ow = await POST(post({ name: 'from-test', overwrite: true }), makeParams('h_test'))
     expect(ow.status).toBe(201)
-    expect(services.cascades.get('from-test')?.entries[0].provider).toBe('anthropic')
+    expect(services.cascades.get('from-test')?.chain[0].provider).toBe('anthropic')
   })
 
-  it('400 when the harness has no fallback_providers cascade', async () => {
+  it('a bare primary (no fallback_providers) is a one-entry chain and saves', async () => {
     fs.writeFileSync(configPath, 'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n')
+    const res = await POST(post({ name: 'bare' }), makeParams('h_test'))
+    expect(res.status).toBe(201)
+    expect((await res.json()).chain).toEqual([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
+  })
+
+  it('the snapshot starts with the primary even when the file does not repeat it as row 0 (cyborg-shaped)', async () => {
+    fs.writeFileSync(
+      configPath,
+      ['model:', '  provider: openrouter', '  default: z-ai/glm-5.3', 'fallback_providers:', '  - provider: anthropic', '    model: claude-sonnet-4-6', ''].join('\n')
+    )
+    const res = await POST(post({ name: 'cyborg' }), makeParams('h_test'))
+    expect(res.status).toBe(201)
+    expect((await res.json()).chain).toEqual([
+      { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    ])
+  })
+
+  it('400 when the harness has neither a primary nor fallback_providers', async () => {
+    fs.writeFileSync(configPath, 'platforms: {}\n')
     const res = await POST(post({ name: 'empty' }), makeParams('h_test'))
     expect(res.status).toBe(400)
-    expect((await res.json()).error).toMatch(/no fallback_providers/i)
+    expect((await res.json()).error).toMatch(/no model cascade/i)
     expect(services.cascades.list()).toEqual([])
   })
 

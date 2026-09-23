@@ -4,7 +4,7 @@ import { CascadeLibraryError } from '@/lib/services/cascades'
 
 // Named cascade library — one record.
 //   GET    /api/cascades/:name                       → CascadeRecord | 404
-//   PUT    /api/cascades/:name { name?, entries? }   → rename and/or replace entries
+//   PUT    /api/cascades/:name { name?, chain? }   → rename and/or replace chain
 //   DELETE /api/cascades/:name                       → { ok: true } | 404
 // Name lookup is case-insensitive.
 
@@ -28,6 +28,8 @@ export async function PUT(
 
   let body: {
     name?: string
+    chain?: Array<{ provider: string; model: string; base_url?: string }>
+    /** Pre-chain alias for `chain`. */
     entries?: Array<{ provider: string; model: string; base_url?: string }>
   }
   try {
@@ -36,11 +38,12 @@ export async function PUT(
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
   }
 
+  if (body.chain === undefined && body.entries !== undefined) body.chain = body.entries
   const wantsRename = typeof body.name === 'string'
-  const wantsEntries = body.entries !== undefined
+  const wantsEntries = body.chain !== undefined
   if (!wantsRename && !wantsEntries) {
     return NextResponse.json(
-      { error: 'Provide "name" (rename) and/or "entries" (replace entries)' },
+      { error: 'Provide "name" (rename) and/or "chain" (replace chain)' },
       { status: 400 }
     )
   }
@@ -50,11 +53,11 @@ export async function PUT(
   }
 
   try {
-    // One validated write: a 409 on the rename (or a 400 on the entries)
+    // One validated write: a 409 on the rename (or a 400 on the chain)
     // leaves the record exactly as it was — never half-applied.
     const record = services.cascades.edit(name, {
       ...(wantsRename ? { name: body.name as string } : {}),
-      ...(wantsEntries ? { entries: body.entries ?? [] } : {}),
+      ...(wantsEntries ? { chain: body.chain ?? [] } : {}),
     })
     return NextResponse.json(record)
   } catch (err) {
