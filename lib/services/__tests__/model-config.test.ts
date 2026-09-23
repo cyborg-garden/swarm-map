@@ -189,6 +189,48 @@ fallback_providers:
     ])
   })
 
+  // Issue #149 — Trigger B. Hermes' own writer and hand edits both produce
+  // shapes the line parser did not recognise, so the editor saw [] and seeded
+  // every row from the OLD primary's provider (dropping ollama's base_url).
+  it('parses flow-style list items `- {provider: ..., model: ..., base_url: ...}`', () => {
+    const config = `model:
+  provider: anthropic
+  default: claude-sonnet-4-6
+
+fallback_providers:
+  - {provider: anthropic, model: claude-sonnet-4-6}
+  - { provider: ollama, model: qwen3:30b, base_url: http://host.docker.internal:11434/v1 }
+  - {provider: "custom", model: 'gemini-2.5-flash', base_url: "http://vertex-proxy:8080/v1"}
+`
+    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), config)
+
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+      { provider: 'custom', model: 'gemini-2.5-flash', base_url: 'http://vertex-proxy:8080/v1' },
+    ])
+  })
+
+  it('accepts a section header with a trailing comment', () => {
+    const config = `model:
+  provider: anthropic
+  default: claude-sonnet-4-6
+
+fallback_providers:  # ordered; first entry is primary
+  - provider: anthropic
+    model: claude-sonnet-4-6
+  - provider: ollama
+    model: qwen3:30b
+    base_url: http://host.docker.internal:11434/v1
+`
+    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), config)
+
+    expect(readFallbackProviders(tmpDir)).toEqual([
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'ollama', model: 'qwen3:30b', base_url: 'http://host.docker.internal:11434/v1' },
+    ])
+  })
+
   it('stops reading fallback_providers when a new top-level key appears', () => {
     const config = `fallback_providers:
   - provider: anthropic
