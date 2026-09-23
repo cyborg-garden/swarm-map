@@ -162,4 +162,19 @@ describe('discovered harness projection carries overlay host access (#222)', () 
     expect(iris.lastKnownDigest).toBe('sha256:aaaa')
     expect(iris.apiPort).toBe(8642)
   })
+
+  // The model-update scheduler decides whether it may rotate a RUNNING agent's
+  // cascade from get(id).modelTracking. Dropped here, no tracked entry is ever
+  // applied — and an empty map must not become a key (parity with the rest).
+  it('carries modelTracking onto the discovered literal; an empty map is omitted', () => {
+    storage.write('harnesses.json', [
+      { id: 'h_iris', name: 'iris', modelTracking: { 'openrouter/z-ai/glm-5.2': true } },
+    ])
+    const iris = service.get('h_iris')!
+    expect(iris.status).toBe('running')
+    expect(iris.modelTracking).toEqual({ 'openrouter/z-ai/glm-5.2': true })
+
+    storage.write('harnesses.json', [{ id: 'h_iris', name: 'iris', modelTracking: {} }])
+    expect('modelTracking' in service.get('h_iris')!).toBe(false)
+  })
 })

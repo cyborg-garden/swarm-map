@@ -76,6 +76,20 @@ export type Harness = {
   // often committed alongside deploy config. Secrets belong in the agent's
   // .env (env_file), which this never touches.
   extraEnv?: Record<string, string>
+  // "Track the newest version of this model" — keyed by "provider/model"
+  // exactly as the entry appears in the agent's fallback_providers (e.g.
+  // "openrouter/z-ai/glm-5.2"). true = the model-update scheduler may rotate
+  // this entry to its version successor (in 'apply' mode) and the key is
+  // rotated with it. Absent/false = report only. Never set for ollama.
+  modelTracking?: Record<string, boolean>
+}
+
+/** Global policy for the model-update scheduler (Settings.modelAutoUpdate). */
+export type ModelAutoUpdateSettings = {
+  enabled: boolean // default false — no background checks until switched on
+  mode: 'notify' | 'apply' // 'notify' = report only; 'apply' = rewrite tracked cascades
+  intervalHours: number // default 24
+  maxPriceMultiplier: number // default 1.5 — a successor costing more than this × current is never applied
 }
 
 /**
@@ -199,4 +213,5 @@ export type Settings = {
   localApiPort?: number  // Port for the local API (default 8600)
   vncBindHost?: string  // Host interface for the VPN-mode VNC port (default '127.0.0.1'); set to a Tailscale address for remote human CAPTCHA escalation
   controlBindHost?: string  // Host interface for the VPN-mode Camofox control port 9377 (default '127.0.0.1', unauthenticated browser control); set to a Tailscale address only for remote control
+  modelAutoUpdate?: ModelAutoUpdateSettings  // model freshness / "track newest version" policy (see lib/services/model-update-scheduler.ts)
 }

@@ -78,3 +78,33 @@ describe('HarnessService', () => {
     expect(updated!.tier).toBe('team')
   })
 })
+
+describe('HarnessService — modelTracking overlay', () => {
+  let tmpDir: string
+  let storage: Storage
+  let service: HarnessService
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-tracking-'))
+    storage = new Storage(tmpDir)
+    service = new HarnessService(storage, new DockerService(), new AuditService(storage))
+  })
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
+
+  it('a stored overlay carries modelTracking through normalizeStored; a legacy overlay gains no key', () => {
+    storage.write('harnesses.json', [
+      { id: 'h_tracked', name: 'tracked', modelTracking: { 'openrouter/z-ai/glm-5.2': true } },
+      { id: 'h_legacy', name: 'legacy' },
+    ])
+    const list = service.list()
+    expect(list.find((h) => h.id === 'h_tracked')!.modelTracking).toEqual({ 'openrouter/z-ai/glm-5.2': true })
+    expect('modelTracking' in list.find((h) => h.id === 'h_legacy')!).toBe(false)
+  })
+
+  it('updateConfig persists a modelTracking rotation', () => {
+    storage.write('harnesses.json', [{ id: 'h_t', name: 't', modelTracking: { 'openrouter/z-ai/glm-5.2': true } }])
+    service.updateConfig('h_t', { modelTracking: { 'openrouter/z-ai/glm-5.3': true } })
+    expect(storage.read<Array<{ modelTracking?: Record<string, boolean> }>>('harnesses.json', [])[0].modelTracking).toEqual({ 'openrouter/z-ai/glm-5.3': true })
+    expect(service.get('h_t')!.modelTracking).toEqual({ 'openrouter/z-ai/glm-5.3': true })
+  })
+})

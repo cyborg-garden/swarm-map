@@ -259,6 +259,87 @@ describe('applyCascadeToHarness', () => {
     expect(readFallbackProviders(tmpDir)).toEqual(entries)
   })
 
+  // Byte-for-byte pin of the splice. The model-update scheduler rewrites a
+  // RUNNING agent's config.yaml through this writer with no human in the loop,
+  // so a refactor must not be able to silently change what lands on disk:
+  // both sections replaced in place, every other line untouched, blank lines
+  // inside a replaced section consumed, trailing newline preserved.
+  it('replaces both sections in place and leaves every other line byte-identical', () => {
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_API_KEY']))
+    fs.writeFileSync(
+      configPath(),
+      [
+        '# agent config',
+        'model:',
+        '  provider: openrouter',
+        '  default: z-ai/glm-5.2',
+        '  fallback:',
+        '    - moonshotai/kimi-k2.7-code',
+        '',
+        'auxiliary:',
+        '  vision:',
+        '    model: google/gemini-2.5-flash',
+        'fallback_providers:',
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.2',
+        '  - provider: openrouter',
+        '    model: moonshotai/kimi-k2.7-code',
+        '',
+        'platforms:',
+        '  telegram:',
+        '    enabled: true',
+        '',
+      ].join('\n')
+    )
+    const res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'openrouter', model: 'z-ai/glm-5.3' },
+        { provider: 'openrouter', model: 'moonshotai/kimi-k2.7-code' },
+      ],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+      [
+        '# agent config',
+        'model:',
+        '  provider: openrouter',
+        '  default: z-ai/glm-5.3',
+        '  fallback:',
+        '    - moonshotai/kimi-k2.7-code',
+        'auxiliary:',
+        '  vision:',
+        '    model: google/gemini-2.5-flash',
+        'fallback_providers:',
+        '  - provider: openrouter',
+        '    model: z-ai/glm-5.3',
+        '  - provider: openrouter',
+        '    model: moonshotai/kimi-k2.7-code',
+        'platforms:',
+        '  telegram:',
+        '    enabled: true',
+        '',
+      ].join('\n')
+    )
+  })
+
+  it('creates config.yaml with exactly the two sections when none exists', () => {
+    const res = applyCascadeToHarness(
+      'h_test',
+      [
+        { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      ],
+      { who: 'scheduler' }
+    )
+    expect(res.ok).toBe(true)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
+      'model:\n  provider: anthropic\n  default: claude-sonnet-4-6\n  fallback:\n    - claude-haiku-4-5-20251001\n' +
+        '\nfallback_providers:\n  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: anthropic\n    model: claude-haiku-4-5-20251001\n'
+    )
+  })
+
   it('appends an audit entry only when asked, with the caller-supplied who/what/meta', () => {
     applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
     expect(services.audit.append).not.toHaveBeenCalled()
