@@ -54,12 +54,20 @@ export function ModelUpdatesCard() {
         toast.error(typeof body.error === 'string' ? body.error : 'Model update check failed')
         return
       }
-      const n = (body.harnesses ?? []).reduce(
-        (s: number, h: { entries?: Array<{ successor?: string; applied?: boolean }> }) =>
-          s + (h.entries ?? []).filter((e) => e.successor && !e.applied).length,
-        0,
-      )
-      toast.success(n === 0 ? 'Checked — every model is current' : `Checked — ${n} update${n === 1 ? '' : 's'} available`)
+      // In apply mode the check ALSO rotates tracked successors and restarts
+      // those harnesses — say so, never "every model is current".
+      type H = { name?: string; entries?: Array<{ successor?: string; applied?: boolean }> }
+      const harnesses: H[] = body.harnesses ?? []
+      const n = harnesses.reduce((s, h) => s + (h.entries ?? []).filter((e) => e.successor && !e.applied).length, 0)
+      const appliedNames = harnesses.filter((h) => (h.entries ?? []).some((e) => e.applied)).map((h) => h.name ?? '?')
+      const applied = harnesses.reduce((s, h) => s + (h.entries ?? []).filter((e) => e.applied).length, 0)
+      const plural = (k: number, w: string) => `${k} ${w}${k === 1 ? '' : 's'}`
+      if (applied > 0) {
+        const more = n > 0 ? `, ${n} more available` : ''
+        toast.success(`Checked — ${plural(applied, 'update')} applied, ${appliedNames.join(', ')} restarting${more}`)
+      } else {
+        toast.success(n === 0 ? 'Checked — every model is current' : `Checked — ${plural(n, 'update')} available`)
+      }
       refetchReport()
     } catch {
       toast.error('Model update check failed')

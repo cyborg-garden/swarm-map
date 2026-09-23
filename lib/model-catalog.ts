@@ -88,7 +88,16 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   ],
 }
 
-export type CascadeEntry = { provider: string; model: string }
+export type CascadeEntry = {
+  provider: string
+  model: string
+  /**
+   * The row carries its own credential in config.yaml (an inline api_key, or
+   * a key_env naming a var that IS present), so the provider's default env
+   * var is not what it authenticates with — skip that presence check.
+   */
+  ownCredential?: boolean
+}
 
 /**
  * Cascade values (provider / model / base_url) are written into config.yaml
@@ -254,7 +263,7 @@ export function validateCascadeEntries(
       continue
     }
 
-    if (credCheckActive && isProviderUnserviceable(provider, presentEnvVars)) {
+    if (credCheckActive && !entry.ownCredential && isProviderUnserviceable(provider, presentEnvVars)) {
       const vars = REQUIRED_KEY_BY_PROVIDER[provider.toLowerCase()]?.join(' or ')
       errors.push(
         `Model "${model}" uses provider "${provider}", but this agent has no ` +

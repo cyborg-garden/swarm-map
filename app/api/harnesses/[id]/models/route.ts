@@ -49,6 +49,9 @@ type RowInput = { provider: string; model: string; base_url?: string }
  *    the cascade editor. `expected_fallback_providers` is what the editor
  *    last read; when the rows on disk differ (the scheduler rotated one, or
  *    another tab saved) the write is refused with 409 and nothing changes.
+ *    Also 409 when the file's model.default is not fallback_providers[0] and
+ *    the new row 0 is not that primary either: the editor never showed the
+ *    real primary, so it must not move it (primary-mismatch).
  *  - `{ provider?, model? | cascade?: string[] }` — the legacy string shape
  *    (README, API callers). Each id is mapped onto its existing
  *    fallback_providers row so provider + base_url survive a reorder; an id
@@ -129,7 +132,9 @@ export async function PUT(
     mode = 'keep'
   }
 
-  const result = applyCascadeToHarness(id, entries, { who: 'api', fallbackProviders: mode })
+  // A `{ model }` / `{ cascade }` body names the primary outright, so moving
+  // it is the request — the writer's primary-mismatch guard does not apply.
+  const result = applyCascadeToHarness(id, entries, { who: 'api', fallbackProviders: mode, allowPrimaryChange: true })
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status })
   }

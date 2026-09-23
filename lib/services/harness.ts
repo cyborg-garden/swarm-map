@@ -494,7 +494,6 @@ export type FallbackProvider = {
   provider: string
   model: string
   base_url?: string
-  api_key?: string
 }
 
 /**
@@ -505,6 +504,14 @@ export type FallbackProvider = {
  */
 export const FALLBACK_PROVIDERS_HEADER = /^fallback_providers:\s*(#.*)?$/
 
+/**
+ * Rows of the first fallback_providers: block — provider / model / base_url
+ * ONLY. An inline `api_key:` is read past and never returned: these rows go
+ * straight into GET/PUT /api/harnesses/:id/models responses and the editor
+ * echoes them back as expected_fallback_providers, so returning it put proxy
+ * credentials in front of every dashboard viewer. The cascade writer carries
+ * the key inside the file by line, without ever reading its value here.
+ */
 export function readFallbackProviders(dataDir: string): FallbackProvider[] {
   try {
     const configPath = path.join(dataDir, 'config.yaml')
@@ -532,7 +539,6 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
         if (current?.provider && current?.model) {
           const entry: FallbackProvider = { provider: current.provider, model: current.model }
           if (current.base_url) entry.base_url = current.base_url
-          if (current.api_key) entry.api_key = current.api_key
           providers.push(entry)
         }
         current = null
@@ -547,7 +553,6 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
         if (current?.provider && current?.model) {
           const entry: FallbackProvider = { provider: current.provider, model: current.model }
           if (current.base_url) entry.base_url = current.base_url
-          if (current.api_key) entry.api_key = current.api_key
           providers.push(entry)
         }
         current = {}
@@ -587,7 +592,6 @@ export function readFallbackProviders(dataDir: string): FallbackProvider[] {
     if (current?.provider && current?.model) {
       const entry: FallbackProvider = { provider: current.provider, model: current.model }
       if (current.base_url) entry.base_url = current.base_url
-      if (current.api_key) entry.api_key = current.api_key
       providers.push(entry)
     }
 

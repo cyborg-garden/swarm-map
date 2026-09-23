@@ -22,12 +22,19 @@
  * snapshot-only bumps (notify only); unstable successors; anything over the
  * price ceiling, or with no pricing to check it against; a harness with a
  * restart already in flight; a config whose model.default is not
- * fallback_providers[0] (the rewrite would switch the primary).
+ * fallback_providers[0] (the writer refuses: the rewrite would switch the
+ * primary).
+ *
+ * A row the provider has REMOVED (retired by absence — the case auto-update
+ * exists for) has no live pricing to check the ceiling against. Its last
+ * known pricing is taken from the previous persisted report instead; with
+ * none on record the block reason is 'retired-current-no-pricing', distinct
+ * from a pricing outage, so the UI can surface it as urgent.
  */
 import type { Harness, ModelAutoUpdateSettings, RestartMode } from '@/lib/types'
 import { findSuccessor, normalizeModelId, priceRatio, type SuccessorKind, type LiveModelPricing } from '@/lib/model-versions'
-import { readFallbackProviders, readModelConfig, guessDataDir, type FallbackProvider } from './harness'
-import { applyCascadeToHarness } from './cascade-writer'
+import { readFallbackProviders, guessDataDir, type FallbackProvider } from './harness'
+import { applyCascadeToHarness, type CascadeWriteInput } from './cascade-writer'
 import { isRestarting as trackerIsRestarting } from './restart-tracker'
 import { isLiveProvider, type LiveModelList, type LiveProvider } from './model-freshness'
 
@@ -57,6 +64,8 @@ export type ModelUpdateEntry = {
   successor?: string
   kind?: SuccessorKind
   priceRatio?: number
+  /** The current row's pricing (live, or last known when the row is gone). */
+  pricing?: LiveModelPricing
   nearMisses?: string[]
   /** Set in apply mode: the entry was rotated to `successor` this run. */
   applied?: boolean
@@ -131,11 +140,25 @@ type Candidate = {
   unstable: boolean
 }
 
+type PriorPricing = (harnessId: string, provider: string, model: string) => LiveModelPricing | undefined
+
+const sameId = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
+
+/** Last known pricing per (harness, provider, model) from the previous persisted report. */
+function priorPricingFrom(deps: SchedulerDeps): PriorPricing {
+  const prev = readModelUpdateReport(deps.storage)
+  return (harnessId, provider, model) =>
+    prev?.harnesses
+      .find((h) => h.id === harnessId)
+      ?.entries.find((e) => sameId(e.provider, provider) && sameId(e.model, model))?.pricing
+}
+
 async function evaluateEntry(
   h: Harness,
   fp: FallbackProvider,
   getLive: (provider: string) => Promise<LiveModelList | null>,
   deps: SchedulerDeps,
+  prior: PriorPricing,
 ): Promise<Candidate> {
   const provider = fp.provider.trim().toLowerCase()
   const entry: ModelUpdateEntry = {
@@ -149,13 +172,19 @@ async function evaluateEntry(
   const live = await getLive(provider)
   if (!live) return { entry, unstable: false }
   entry.retired = deps.freshness.isRetired(fp.model, live, deps.today)
+  // The current row's pricing: live when the provider still lists it (looked
+  // up the way ids are normalized — trimmed, case-insensitive), else the last
+  // report's. Recorded on every entry so a later run can still price a row
+  // the provider has since removed.
+  const curRow = live.models.find((m) => sameId(m.id, fp.model))
+  const curPricing = curRow ? curRow.pricing ?? undefined : prior(h.id, fp.provider, fp.model)
+  if (curPricing) entry.pricing = curPricing
   const found = findSuccessor({ provider, model: fp.model }, live.models, deps.today)
   if (found.nearMisses.length) entry.nearMisses = found.nearMisses
   if (!found.successor || !found.kind) return { entry, unstable: false }
   entry.successor = found.successor.model
   entry.kind = found.kind
-  const curRow = live.models.find((m) => m.id === fp.model)
-  const ratio = priceRatio(curRow?.pricing, found.successor.pricing)
+  const ratio = priceRatio(curPricing, found.successor.pricing)
   if (ratio !== undefined) entry.priceRatio = ratio
   const unstable = normalizeModelId(provider, found.successor.model).unstable
   return { entry, successorPricing: found.successor.pricing, unstable }
@@ -182,8 +211,10 @@ export function evaluateApply(input: ApplyGuardInput): string | null {
   if (unstable) return 'unstable-successor'
   // No pricing (direct Anthropic / Z.ai publish none) → the ceiling cannot be
   // checked, so the scheduler never rotates unattended. A human's one-click
-  // apply has seen the report and may proceed.
-  if (automatic && entry.priceRatio === undefined) return 'price-unknown'
+  // apply has seen the report and may proceed. A current row the provider
+  // has removed, with no last-known pricing either, gets its own reason:
+  // "your model is gone" is not a pricing outage.
+  if (automatic && entry.priceRatio === undefined) return entry.retired && !entry.pricing ? 'retired-current-no-pricing' : 'price-unknown'
   if (entry.priceRatio !== undefined && entry.priceRatio > settings.maxPriceMultiplier) {
     return `price-ceiling:${entry.priceRatio.toFixed(2)}>${settings.maxPriceMultiplier}`
   }
@@ -209,28 +240,17 @@ function performSubstitutions(
 ): { ok: true } | { ok: false; status: number; error: string } {
   const dataDir = deps.dataDirFor(h)
   const current = readFallbackProviders(dataDir)
-  // The writer derives model.default from row 0. When the file's primary is
-  // some OTHER model (model: and fallback_providers: drifted apart), any
-  // rewrite — even of a fallback row — would silently switch the agent's
-  // primary. Refuse instead; a human has to reconcile the two sections.
-  const filePrimary = readModelConfig(dataDir)[0]
-  if (filePrimary && current[0] && filePrimary !== current[0].model) {
-    const reason = `primary-mismatch: model.default is "${filePrimary}" but fallback_providers[0] is "${current[0].model}"`
-    for (const s of subs) {
-      deps.audit.append({
-        who,
-        what: 'cascade:auto-update:blocked',
-        target: h.name,
-        meta: { harness: h.id, from: s.from, to: s.to, provider: s.provider, reason },
-      })
-    }
-    return { ok: false, status: 409, error: reason }
-  }
+  // A rotated row names the row it replaces (carryFrom) so its key_env /
+  // api_mode / inline api_key ride along onto the successor — the writer
+  // only matches extras by (provider, model) otherwise, and a rotation
+  // changes the model by construction. The writer's primary-mismatch guard
+  // (model.default ≠ fallback_providers[0]) refuses the whole write with
+  // 409; that lands in the blocked-audit path below.
   const byFrom = new Map(subs.map((s) => [s.from, s]))
-  const next = current.map((fp) => {
+  const next: CascadeWriteInput[] = current.map((fp) => {
     const s = byFrom.get(fp.model)
     if (!s || fp.provider.trim().toLowerCase() !== s.provider.trim().toLowerCase()) return { provider: fp.provider, model: fp.model, base_url: fp.base_url }
-    return { provider: fp.provider, model: s.to, base_url: fp.base_url }
+    return { provider: fp.provider, model: s.to, base_url: fp.base_url, carryFrom: { provider: fp.provider, model: fp.model } }
   })
   if (next.every((fp, i) => fp.model === current[i]?.model)) {
     return { ok: false, status: 404, error: 'entry not present in fallback_providers' }
@@ -291,13 +311,14 @@ export async function checkModelUpdates(
   const settings = deps.config.getModelAutoUpdate()
   const applyMode = opts.apply ?? (settings.enabled && settings.mode === 'apply')
   const getLive = liveCache(deps)
+  const prior = priorPricingFrom(deps)
   const report: ModelUpdateReport = { checkedAt: Date.now(), enabled: settings.enabled, mode: settings.mode, harnesses: [] }
 
   for (const h of eligibleHarnesses(deps)) {
     const fps = readFallbackProviders(deps.dataDirFor(h))
     if (fps.length === 0) continue
     const candidates: Candidate[] = []
-    for (const fp of fps) candidates.push(await evaluateEntry(h, fp, getLive, deps))
+    for (const fp of fps) candidates.push(await evaluateEntry(h, fp, getLive, deps, prior))
 
     if (applyMode) {
       const subs: Substitution[] = []
@@ -339,6 +360,25 @@ export function readModelUpdateReport(storage: SchedulerDeps['storage']): ModelU
   return storage.read<ModelUpdateReport | null>(MODEL_UPDATES_FILE, null)
 }
 
+/**
+ * A manual apply rewrote config.yaml but nothing rewrites the persisted
+ * report until the next check — so the fleet card re-listed the just-applied
+ * row with a live Update button (second click → 404). Mark it applied.
+ */
+function markReportApplied(storage: SchedulerDeps['storage'], harnessId: string, provider: string, model: string): void {
+  const report = readModelUpdateReport(storage)
+  const h = report?.harnesses.find((x) => x.id === harnessId)
+  if (!report || !h) return
+  let changed = false
+  for (const e of h.entries) {
+    if (e.successor && sameId(e.provider, provider) && sameId(e.model, model) && !e.applied) {
+      e.applied = true
+      changed = true
+    }
+  }
+  if (changed) storage.write(MODEL_UPDATES_FILE, report)
+}
+
 export type ApplyResult = { ok: true; harnessId: string; from: string; to: string; priceRatio?: number } | { ok: false; status: number; error: string }
 
 /**
@@ -362,7 +402,7 @@ export async function applyModelUpdate(
   if (matches.length > 1) return { ok: false, status: 400, error: `"${input.from}" appears under more than one provider; pass provider` }
   const fp = matches[0]
   const settings = deps.config.getModelAutoUpdate()
-  const c = await evaluateEntry(h, fp, liveCache(deps), deps)
+  const c = await evaluateEntry(h, fp, liveCache(deps), deps, priorPricingFrom(deps))
   if (!c.entry.successor) return { ok: false, status: 409, error: `No live successor for "${input.from}"` }
   if (c.entry.successor !== input.to) {
     return { ok: false, status: 409, error: `Live successor for "${input.from}" is "${c.entry.successor}", not "${input.to}"` }
@@ -371,6 +411,7 @@ export async function applyModelUpdate(
   if (reason) return { ok: false, status: reason === 'restart-in-flight' ? 409 : 400, error: `Blocked: ${reason}` }
   const done = performSubstitutions(h, [{ from: fp.model, to: input.to, provider: fp.provider, priceRatio: c.entry.priceRatio }], 'api', deps)
   if (!done.ok) return { ok: false, status: done.status, error: done.status === 409 ? `Blocked: ${done.error}` : done.error }
+  markReportApplied(deps.storage, h.id, fp.provider, fp.model)
   return { ok: true, harnessId: h.id, from: fp.model, to: input.to, priceRatio: c.entry.priceRatio }
 }
 

@@ -43,6 +43,7 @@ vi.mock('@/lib/services/harness', async (importOriginal) => ({
 
 import { PUT } from './route'
 import { services } from '@/lib/services'
+import { readModelConfig } from '@/lib/services/harness'
 
 function makeParams(id: string) {
   return { params: Promise.resolve({ id }) }
@@ -407,6 +408,38 @@ describe('Models API — legacy body through the shared writer (audit)', () => {
     const res = await PUT(makeRequest({ cascade: ['qwen3:30b'] }), makeParams('h_test'))
     expect(res.status).toBe(400)
     expect(fs.writeFileSync).not.toHaveBeenCalled()
+  })
+
+  // Re-audit: matilde-shaped file — model.default is kimi-k3 while row 0 is
+  // glm-5.3. The writer derives model.default from row 0, so an editor save
+  // that only touched another row silently switched the agent's primary.
+  const DRIFTED =
+    'model:\n  provider: openrouter\n  default: moonshotai/kimi-k3\nfallback_providers:\n  - provider: openrouter\n    model: z-ai/glm-5.3\n  - provider: anthropic\n    model: claude-sonnet-5\n'
+  const DRIFTED_ROWS = [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5' }]
+
+  it('fallback_providers shape on a drifted file (model.default ≠ row 0) → 409 primary-mismatch, nothing written', async () => {
+    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
+    mockExistingFp.mockReturnValue(DRIFTED_ROWS)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+    const body = {
+      fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
+      expected_fallback_providers: DRIFTED_ROWS,
+    }
+    const res = await PUT(makeRequest(body), makeParams('h_test'))
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/primary-mismatch.*moonshotai\/kimi-k3/)
+    expect(fs.writeFileSync).not.toHaveBeenCalled()
+    expect(services.harness.updateConfig).not.toHaveBeenCalled()
+  })
+
+  it('legacy {model} on a drifted file may move the primary — that IS the request', async () => {
+    vi.mocked(readModelConfig).mockReturnValueOnce(['moonshotai/kimi-k3', 'z-ai/glm-5.3'])
+    mockExistingFp.mockReturnValue(DRIFTED_ROWS)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(DRIFTED as never)
+    const written = capture()
+    const res = await PUT(makeRequest({ model: 'z-ai/glm-5.3' }), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written()).toContain('  default: z-ai/glm-5.3')
   })
 
   it('fallback_providers shape with a stale expected_fallback_providers → 409, nothing written', async () => {

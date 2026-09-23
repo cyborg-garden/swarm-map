@@ -501,9 +501,10 @@ describe('applyCascadeToHarness — round-trip and preconditions (audit)', () =>
     const customIdx = written.indexOf('model: some-proxy-model')
     expect(written.indexOf('api_key: sk-proxy-inline')).toBeGreaterThan(customIdx)
     expect(written.indexOf('api_key: sk-proxy-inline')).toBeLessThan(written.indexOf('platforms:'))
+    // The reader never surfaces the inline key (it would reach the browser).
     expect(readFallbackProviders(tmpDir)).toEqual([
       { provider: 'openrouter', model: 'z-ai/glm-5.3' },
-      { provider: 'custom', model: 'some-proxy-model', base_url: 'http://proxy:4000/v1', api_key: 'sk-proxy-inline' },
+      { provider: 'custom', model: 'some-proxy-model', base_url: 'http://proxy:4000/v1' },
     ])
   })
 
@@ -562,5 +563,151 @@ describe('applyCascadeToHarness — round-trip and preconditions (audit)', () =>
     expect(written).toMatch(/^model:\n  provider: custom\n  default: glm4:9b\n  base_url: "http:\/\/host\.docker\.internal:11434\/v1"\n/m)
     expect(written).toContain(fpBlock)
     expect(written).toContain('agent:\n  max_turns: 60')
+  })
+
+  // --- Re-audit -------------------------------------------------------------
+
+  describe('primary-mismatch guard (re-audit)', () => {
+    // matilde-shaped: model.default is kimi-k3 while fallback_providers[0] is
+    // glm-5.3. The writer derives model.default from row 0, so an editor save
+    // that only touched row 2 silently switched the agent's primary.
+    const drifted = [
+      'model:',
+      '  provider: openrouter',
+      '  default: moonshotai/kimi-k3',
+      'fallback_providers:',
+      '  - provider: openrouter',
+      '    model: z-ai/glm-5.3',
+      '  - provider: anthropic',
+      '    model: claude-sonnet-5',
+      '',
+    ].join('\n')
+
+    it('refuses (409) a save whose row 0 is not the file\'s primary, and writes nothing', () => {
+      fs.writeFileSync(configPath(), drifted)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5.1' }],
+        { who: 'api', expected: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'anthropic', model: 'claude-sonnet-5' }] }
+      )
+      expect(res.ok).toBe(false)
+      if (!res.ok) {
+        expect(res.status).toBe(409)
+        expect(res.error).toMatch(/primary-mismatch/)
+        expect(res.error).toContain('moonshotai/kimi-k3')
+      }
+      expect(fs.readFileSync(configPath(), 'utf-8')).toBe(drifted)
+      expect(services.harness.updateConfig).not.toHaveBeenCalled()
+    })
+
+    it('allows the save that puts the file\'s primary back at the top (reconciliation)', () => {
+      fs.writeFileSync(configPath(), drifted)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [{ provider: 'openrouter', model: 'moonshotai/kimi-k3' }, { provider: 'openrouter', model: 'z-ai/glm-5.3' }],
+        { who: 'api' }
+      )
+      expect(res.ok).toBe(true)
+      expect(readModelConfig(tmpDir)[0]).toBe('moonshotai/kimi-k3')
+    })
+
+    it('allowPrimaryChange (cascade library apply, legacy {model} body) may move the primary', () => {
+      fs.writeFileSync(configPath(), drifted)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-5' }], { who: 'api', allowPrimaryChange: true })
+      expect(res.ok).toBe(true)
+      expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-5')
+    })
+
+    it('no drift (model.default == row 0) → a reorder is an ordinary edit', () => {
+      fs.writeFileSync(configPath(), drifted.replace('default: moonshotai/kimi-k3', 'default: z-ai/glm-5.3'))
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [{ provider: 'anthropic', model: 'claude-sonnet-5' }, { provider: 'openrouter', model: 'z-ai/glm-5.3' }],
+        { who: 'api' }
+      )
+      expect(res.ok).toBe(true)
+      expect(readModelConfig(tmpDir)[0]).toBe('claude-sonnet-5')
+    })
+  })
+
+  describe('row extras across a rotation (re-audit)', () => {
+    const cfg = [
+      'model:',
+      '  provider: openrouter',
+      '  default: z-ai/glm-5.2',
+      'fallback_providers:',
+      '  - provider: openrouter',
+      '    model: z-ai/glm-5.2',
+      '    key_env: OPENROUTER_KEY_B',
+      '    api_mode: chat_completions',
+      '  - provider: anthropic',
+      '    model: claude-sonnet-4-6',
+      '',
+    ].join('\n')
+
+    it('carryFrom moves the old row\'s key_env / api_mode onto the successor row', () => {
+      fs.writeFileSync(configPath(), cfg)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_KEY_B']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [
+          { provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } },
+          { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        ],
+        { who: 'scheduler' }
+      )
+      expect(res.ok).toBe(true)
+      const written = fs.readFileSync(configPath(), 'utf-8')
+      expect(written).toContain('  - provider: openrouter\n    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n    api_mode: chat_completions\n  - provider: anthropic')
+      expect(written).not.toContain('glm-5.2')
+      expect(written).not.toContain('carryFrom')
+    })
+
+    it('a row whose carried key_env names a present var is not refused for the provider\'s default var', () => {
+      fs.writeFileSync(configPath(), cfg)
+      // No OPENROUTER_API_KEY at all — the row authenticates with OPENROUTER_KEY_B.
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_KEY_B']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [
+          { provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'z-ai/glm-5.2' } },
+          { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        ],
+        { who: 'scheduler' }
+      )
+      expect(res.ok).toBe(true)
+      expect(fs.readFileSync(configPath(), 'utf-8')).toContain('    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B')
+      // …but an openrouter row with NO own credential is still refused.
+      const bare = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, { provider: 'openrouter', model: 'moonshotai/kimi-k3' }], { who: 'api' })
+      expect(bare.ok).toBe(false)
+    })
+
+    it('a stale carryFrom (row not on disk) is ignored, never an error', () => {
+      fs.writeFileSync(configPath(), cfg)
+      mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY']))
+      const res = applyCascadeToHarness(
+        'h_test',
+        [{ provider: 'openrouter', model: 'z-ai/glm-5.3', carryFrom: { provider: 'openrouter', model: 'nope' } }, { provider: 'anthropic', model: 'claude-sonnet-4-6' }],
+        { who: 'scheduler' }
+      )
+      expect(res.ok).toBe(true)
+      expect(fs.readFileSync(configPath(), 'utf-8')).not.toContain('key_env')
+    })
+  })
+
+  it('the write result never carries an inline api_key (re-audit)', () => {
+    fs.writeFileSync(
+      configPath(),
+      ['model:', '  provider: anthropic', '  default: claude-sonnet-4-6', 'fallback_providers:', '  - provider: anthropic', '    model: claude-sonnet-4-6', '    api_key: sk-inline-secret', ''].join('\n')
+    )
+    const res = applyCascadeToHarness('h_test', [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api' })
+    expect(res.ok).toBe(true)
+    expect(JSON.stringify(res)).not.toContain('sk-inline-secret')
+    // The operator's key still rides along inside the file.
+    expect(fs.readFileSync(configPath(), 'utf-8')).toContain('    api_key: sk-inline-secret')
   })
 })

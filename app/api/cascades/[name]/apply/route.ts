@@ -36,6 +36,8 @@ export async function POST(
   const result = applyCascadeToHarness(harnessId, cascade.entries, {
     who: 'api',
     audit: { what: 'cascade:apply', meta: { name: cascade.name, harness: harnessId } },
+    // A saved cascade replaces the whole cascade, primary included.
+    allowPrimaryChange: true,
   })
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status })

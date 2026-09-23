@@ -62,7 +62,7 @@ vi.mock('@/lib/services/harness', async () => {
 
 import { POST } from './route'
 import { services } from '@/lib/services'
-import { readFallbackProviders } from '@/lib/services/harness'
+import { readFallbackProviders, readModelConfig } from '@/lib/services/harness'
 
 const configPath = path.join(agentDir, 'config.yaml')
 const GOOD = [
@@ -162,6 +162,19 @@ describe('Cascades API — apply', () => {
     expect(log[0].who).toBe('api')
     expect(log[0].target).toBe('h_test')
     expect(log[0].meta).toMatchObject({ name: 'good', harness: 'h_test' })
+  })
+
+  // Re-audit: applying a saved cascade replaces the whole cascade, primary
+  // included — the writer's primary-mismatch guard must not refuse it.
+  it('applies over a drifted file (model.default ≠ fallback_providers[0]) — the library apply owns the primary', async () => {
+    fs.writeFileSync(
+      configPath,
+      ['model:', '  provider: openrouter', '  default: moonshotai/kimi-k3', 'fallback_providers:', '  - provider: openrouter', '    model: z-ai/glm-5.3', '  - provider: openrouter', '    model: moonshotai/kimi-k3', ''].join('\n')
+    )
+    const res = await POST(post({ harnessId: 'h_test' }), makeParams('good'))
+    expect(res.status).toBe(200)
+    expect(readModelConfig(agentDir)[0]).toBe('claude-sonnet-4-6')
+    expect(readFallbackProviders(agentDir)).toEqual(GOOD)
   })
 
   it('restart:false writes but does not restart', async () => {

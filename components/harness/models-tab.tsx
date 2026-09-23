@@ -48,8 +48,21 @@ export function ModelsTab({
 }) {
   const rows = useMemo(() => modelConfig.fallbackProviders ?? [], [modelConfig.fallbackProviders])
 
+  // --- primary drift -------------------------------------------------------
+  // The writer derives model.default from row 0 and refuses (409) a save that
+  // would move a primary the editor never showed. Show the file's primary
+  // when it is not row 0 so the operator can put it back at the top.
+  const primary = (modelConfig.primary ?? '').trim()
+  const primaryMismatch = !!primary && rows.length > 0 && rows[0].model.trim() !== primary
+
   // --- tracking ------------------------------------------------------------
-  const [tracking, setTracking] = useState<Record<string, boolean>>(modelTracking ?? {})
+  // Derived from the prop, with a local override that lives only as long as
+  // the prop it was made against. An apply moves the tracking key
+  // server-side and the page refetches the harness, and an in-app harness
+  // switch reuses this mounted tab — a once-only useState seed kept showing
+  // the pre-rotation (or the previous harness's) toggles.
+  const [override, setOverride] = useState<{ harnessId: string; base: Record<string, boolean> | undefined; value: Record<string, boolean> } | null>(null)
+  const tracking = override && override.harnessId === harnessId && override.base === modelTracking ? override.value : modelTracking ?? {}
   async function changeTracking(entry: FallbackProviderEntry, tracked: boolean) {
     const key = rowKey(entry)
     try {
@@ -63,7 +76,7 @@ export function ModelsTab({
         toast.error(typeof data.error === 'string' ? data.error : 'Failed to update tracking')
         return
       }
-      setTracking(data.modelTracking ?? {})
+      setOverride({ harnessId, base: modelTracking, value: data.modelTracking ?? {} })
     } catch {
       toast.error('Failed to update tracking')
     }
@@ -139,6 +152,15 @@ export function ModelsTab({
 
   return (
     <div className="space-y-4">
+      {primaryMismatch && (
+        <div role="alert" className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/10 p-3 text-xs">
+          <p>
+            <span className="font-medium">The agent&apos;s primary is not the first row.</span>{' '}
+            <code>model.default</code> in config.yaml is <span className="font-mono">{primary}</span>, but the cascade below starts with{' '}
+            <span className="font-mono">{rows[0].model}</span>. Saving is refused until <span className="font-mono">{primary}</span> is back at the top — move it up, or add it as the first row.
+          </p>
+        </div>
+      )}
       <ModelCascadeEditor
         key={editorKey}
         models={modelConfig.models ?? []}

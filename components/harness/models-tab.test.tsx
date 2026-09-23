@@ -150,6 +150,47 @@ describe('ModelsTab', () => {
     expect(props.onCascadeChanged).not.toHaveBeenCalled()
   })
 
+  // --- Re-audit -----------------------------------------------------------
+
+  it('warns when config.yaml\'s primary (model.default) is not the first cascade row', async () => {
+    render(<ModelsTab {...baseProps()} modelConfig={{ ...CONFIG, primary: 'moonshotai/kimi-k3' }} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('moonshotai/kimi-k3')
+    expect(alert).toHaveTextContent('z-ai/glm-5.2')
+    expect(alert).toHaveTextContent(/model\.default/)
+  })
+
+  it('no warning when model.default is row 0', async () => {
+    render(<ModelsTab {...baseProps()} />)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('Track latest follows the modelTracking prop after the cascade was rotated server-side', async () => {
+    const props = baseProps()
+    const { rerender } = render(<ModelsTab {...props} />)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toHaveAttribute('aria-checked', 'true')
+    // The apply route rotated glm-5.2 → 5.3 and moved the tracking key; the page refetched.
+    const rotated = {
+      ...CONFIG,
+      primary: 'z-ai/glm-5.3',
+      models: ['z-ai/glm-5.3', 'claude-sonnet-4-6', 'qwen3:30b'],
+      fallbackProviders: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, ...CONFIG.fallbackProviders.slice(1)],
+    }
+    rerender(<ModelsTab {...props} modelConfig={rotated} modelTracking={{ 'openrouter/z-ai/glm-5.3': true }} editorKey="h_test:1" />)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.3/i })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('an in-app switch to another harness does not inherit the previous harness\'s tracking', async () => {
+    const props = baseProps()
+    const { rerender } = render(<ModelsTab {...props} />)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toHaveAttribute('aria-checked', 'true')
+    rerender(<ModelsTab {...props} harnessId="h_b" modelTracking={{}} editorKey="h_b:0" />)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toHaveAttribute('aria-checked', 'false')
+    // …and a harness with no modelTracking at all (undefined) resets too.
+    rerender(<ModelsTab {...props} harnessId="h_c" modelTracking={undefined} editorKey="h_c:0" />)
+    expect(screen.getByRole('switch', { name: /track latest for z-ai\/glm-5\.2/i })).toHaveAttribute('aria-checked', 'false')
+  })
+
   it('no report / no live data → editor still renders, without hints or badges', async () => {
     routes['GET /api/fleet/model-updates'] = { status: 500, body: { error: 'boom' } }
     routes['GET /api/models/live?provider=openrouter'] = { status: 204 }
