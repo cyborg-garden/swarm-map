@@ -155,7 +155,7 @@ const indentOf = (line: string): number => line.length - line.trimStart().length
  * readers treat as the end of the section can never be swallowed into the
  * body here and deleted on write (r4: `2fa: true`, `foo.bar: 1`, `...`).
  */
-function sectionBodyEnd(lines: string[], header: number): number {
+export function sectionBodyEnd(lines: string[], header: number): number {
   let end = header + 1
   for (let i = header + 1; i < lines.length; i++) {
     const line = lines[i]
