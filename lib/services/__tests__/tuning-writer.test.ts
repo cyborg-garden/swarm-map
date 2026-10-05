@@ -205,6 +205,38 @@ describe('spliceTuning', () => {
     expect(spliceTuning(src, { userCharLimit: null })).toEqual({ ok: true, text: src })
   })
 
+  // Audit round 2: an empty `memory:` loads as None and silently disables
+  // hermes memory, so removing a section's last key removes the section.
+  it('removing the last key of a section removes the section', () => {
+    const src = 'model: x\n\nmemory:\n  # tuned 2026-10\n  memory_char_limit: 3000\n\nagent:\n  verbose: false\n'
+    expect(spliceTuning(src, { memoryCharLimit: null })).toEqual({ ok: true, text: 'model: x\n\nagent:\n  verbose: false\n' })
+  })
+
+  it('set then clear round-trips to the original file', () => {
+    const src = 'model:\n  default: x\n'
+    const set = spliceTuning(src, { maxTurns: 120 })
+    expect(set.ok).toBe(true)
+    if (!set.ok) return
+    expect(spliceTuning(set.text, { maxTurns: null })).toEqual({ ok: true, text: src })
+  })
+
+  it('refuses a quoted value that continues onto later lines', () => {
+    const src = 'agent:\n  system_prompt: "be brief\n  max_turns: 7"\n  foo: 1\n'
+    const r = spliceTuning(src, { maxTurns: 10 })
+    expect(r.ok).toBe(false)
+  })
+
+  it('accepts closed quoted values, including escapes', () => {
+    const src = 'agent:\n  a: "x \\" y"\n  b: \'it\'\'s\'\n  max_turns: 7\n'
+    expect(spliceTuning(src, { maxTurns: 10 })).toEqual({ ok: true, text: src.replace('max_turns: 7', 'max_turns: 10') })
+  })
+
+  it('finds a key written with a space before the colon', () => {
+    const src = 'agent:\n  max_turns : 5\n'
+    expect(readTuning(src).maxTurns).toBe(5)
+    expect(spliceTuning(src, { maxTurns: 9 })).toEqual({ ok: true, text: 'agent:\n  max_turns: 9\n' })
+  })
+
   it('rounds float noise before writing', () => {
     const r = spliceTuning(LIVE, { compressionThreshold: 0.1 + 0.2 })
     expect(r.ok && r.text).toContain('  threshold: 0.3   # fraction of context')

@@ -105,7 +105,7 @@ function findSection(lines: string[], section: string): Section | null | Fail {
 /** Every line index of `key:` directly inside the section (at the section's own indent). */
 function findKeys(lines: string[], sec: Section, key: string): number[] {
   if (sec.indent === null || sec.indent === '') return []
-  const re = new RegExp(`^${esc(sec.indent)}${esc(key)}:(\\s|$)`)
+  const re = new RegExp(`^${esc(sec.indent)}${esc(key)}\\s*:(\\s|$)`)
   const out: number[] = []
   for (let i = sec.header + 1; i < sec.end; i++) if (re.test(lines[i])) out.push(i)
   return out
@@ -133,6 +133,12 @@ function checkSection(lines: string[], sec: Section, section: string, key: strin
     if (indentOf(l) !== sec.indent || !/^[^\s#-][^:]*:(\s|$)/.test(l.trimStart())) {
       return refuse(i, 'is not a `key: value` line')
     }
+    // A quoted value left open runs onto the following lines, which can then
+    // look like sibling keys; splicing one of them breaks the string.
+    const value = l.trimStart().replace(/^[^:]*:\s*/, '')
+    if ((value.startsWith('"') && !/^"(?:[^"\\]|\\.)*"/.test(value)) || (value.startsWith("'") && !/^'(?:[^']|'')*'/.test(value))) {
+      return refuse(i, 'opens a quoted string that continues onto later lines')
+    }
   }
   const at = findKeys(lines, sec, key)
   if (at.length > 1) {
@@ -154,7 +160,8 @@ function checkSection(lines: string[], sec: Section, section: string, key: strin
 const formatValue = (s: TuningSpec, v: number): string => (s.integer ? String(v) : String(Math.round(v * 1e4) / 1e4))
 
 function parseNumber(line: string, key: string): number | null {
-  const raw = yamlScalar(line.trimStart().slice(key.length + 1))
+  const t = line.trimStart()
+  const raw = yamlScalar(t.slice(t.indexOf(':', key.length) + 1))
   if (raw === '') return null
   const n = Number(raw)
   return Number.isFinite(n) ? n : null
@@ -205,7 +212,17 @@ export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text
     }
     const at = sec ? findKeys(lines, sec, s.key)[0] ?? -1 : -1
     if (v === null) {
-      if (at >= 0) lines.splice(at, 1)
+      if (at < 0 || !sec) continue
+      lines.splice(at, 1)
+      // An empty `memory:` loads as memory: None, which replaces hermes's
+      // whole default dict and silently disables memory. The section goes
+      // when its last key goes (indented comments under it go with it).
+      const end = sec.end - 1
+      const rest = lines.slice(sec.header + 1, end).filter((l) => !isBlank(l) && !l.trimStart().startsWith('#'))
+      if (rest.length === 0) {
+        lines.splice(sec.header, end - sec.header)
+        while (sec.header < lines.length && sec.header > 0 && isBlank(lines[sec.header]) && isBlank(lines[sec.header - 1])) lines.splice(sec.header, 1)
+      }
       continue
     }
     const value = formatValue(s, v)
