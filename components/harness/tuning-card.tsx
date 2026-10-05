@@ -45,12 +45,13 @@ export function TuningCard({ harnessId }: Props) {
   if (error) return null
   if (!loaded) return null
 
-  // Only fields the operator actually changed are sent; a blank field means
-  // "leave it to the runtime default" and is never written.
+  // Only fields the operator actually changed are sent. Clearing a field
+  // that has a value in the file sends null: the key is removed and the
+  // runtime default applies — what the "(default)" placeholder promises.
   const edits = Object.fromEntries(
-    spec.flatMap(s => {
+    spec.flatMap((s): Array<[TuningKey, number | null]> => {
       const raw = (draft[s.id] ?? '').trim()
-      if (raw === '') return []
+      if (raw === '') return loaded[s.id] === null ? [] : [[s.id, null]]
       const n = Number(raw)
       return n === loaded[s.id] ? [] : [[s.id, n]]
     })

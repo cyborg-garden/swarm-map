@@ -172,6 +172,44 @@ describe('spliceTuning', () => {
     if (!r.ok) expect(r.status).toBe(400)
   })
 
+  // Audit 2026-10-05: each of these used to "succeed" while the runtime read
+  // something else, or produced YAML the agent cannot load.
+  it.each([
+    ['a duplicated key (YAML keeps the last copy)', 'memory:\n  memory_char_limit: 2200\n  memory_char_limit: 4000\n'],
+    ['a list body', 'memory:\n  - memory_char_limit\n'],
+    ['a key with no space after the colon', 'memory:\n  memory_char_limit:5000\n'],
+    ['a value on the next line', 'memory:\n  memory_char_limit:\n    5000\n'],
+    ['a quoted header beside the plain one', 'memory:\n  memory_enabled: true\n"memory":\n  user_char_limit: 1\n'],
+    ['a quoted header alone', '"memory":\n  memory_enabled: true\n'],
+    ['a byte-order mark', '﻿memory:\n  memory_enabled: true\n'],
+  ])('refuses %s with 409 instead of writing', (_label, src) => {
+    const r = spliceTuning(src, { memoryCharLimit: 3000 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.status).toBe(409)
+  })
+
+  it('reads the last copy of a duplicated key, as YAML does', () => {
+    expect(readTuning('memory:\n  memory_char_limit: 2200\n  memory_char_limit: 4000\n').memoryCharLimit).toBe(4000)
+  })
+
+  it('null removes the key so the runtime default applies', () => {
+    const r = spliceTuning(LIVE, { userCharLimit: null })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.text).toBe(LIVE.replace('  user_char_limit: 1375\n', ''))
+    expect(readTuning(r.text).userCharLimit).toBeNull()
+  })
+
+  it('null on an absent key is a no-op', () => {
+    const src = 'memory:\n  memory_enabled: true\n'
+    expect(spliceTuning(src, { userCharLimit: null })).toEqual({ ok: true, text: src })
+  })
+
+  it('rounds float noise before writing', () => {
+    const r = spliceTuning(LIVE, { compressionThreshold: 0.1 + 0.2 })
+    expect(r.ok && r.text).toContain('  threshold: 0.3   # fraction of context')
+  })
+
   it('rejects an unknown key', () => {
     const r = spliceTuning(LIVE, { approvals: 1 } as never)
     expect(r.ok).toBe(false)

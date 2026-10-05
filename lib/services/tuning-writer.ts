@@ -49,7 +49,8 @@ export const TUNING_SPEC: TuningSpec[] = [
 ]
 
 export type TuningValues = Record<TuningKey, number | null>
-export type TuningEdits = Partial<Record<TuningKey, number>>
+/** A number sets the key; null removes it (the runtime default applies). */
+export type TuningEdits = Partial<Record<TuningKey, number | null>>
 
 type Fail = { ok: false; status: 400 | 404 | 409; error: string }
 
@@ -71,6 +72,13 @@ type Section = { header: number; end: number; indent: string | null }
 function findSection(lines: string[], section: string): Section | null | Fail {
   const re = headerRe(section)
   const headers = lines.flatMap((l, i) => (re.test(l) ? [i] : []))
+  // A quoted spelling of the same key is the same section to a YAML parser;
+  // adding an unquoted one beside it would shadow it (last key wins).
+  const quoted = new RegExp(`^["']${esc(section)}["']\\s*:`)
+  const q = lines.findIndex((l) => quoted.test(l))
+  if (q >= 0) {
+    return { ok: false, status: 409, error: `duplicate-sections: config.yaml spells ${section}: quoted on line ${q + 1}; unquote it by hand before saving` }
+  }
   if (headers.length === 0) return null
   if (headers.length > 1) {
     return {
@@ -94,13 +102,56 @@ function findSection(lines: string[], section: string): Section | null | Fail {
   return { header, end, indent }
 }
 
-/** The line index of `key:` directly inside the section (at the section's own indent), or -1. */
-function findKey(lines: string[], sec: Section, key: string): number {
-  if (sec.indent === null || sec.indent === '') return -1
+/** Every line index of `key:` directly inside the section (at the section's own indent). */
+function findKeys(lines: string[], sec: Section, key: string): number[] {
+  if (sec.indent === null || sec.indent === '') return []
   const re = new RegExp(`^${esc(sec.indent)}${esc(key)}:(\\s|$)`)
-  for (let i = sec.header + 1; i < sec.end; i++) if (re.test(lines[i])) return i
-  return -1
+  const out: number[] = []
+  for (let i = sec.header + 1; i < sec.end; i++) if (re.test(lines[i])) out.push(i)
+  return out
 }
+
+/**
+ * Refuse a section whose shape this line editor cannot edit safely: every
+ * line at the section's indent must be a `key: value` / `key:` mapping line,
+ * the target key must appear at most once (YAML keeps the LAST copy, so
+ * editing the first is a silent no-op), and its value must sit on its own
+ * line (a value continued on deeper lines would be glued onto the new one).
+ */
+function checkSection(lines: string[], sec: Section, section: string, key: string): Fail | null {
+  const refuse = (i: number, why: string): Fail => ({
+    ok: false,
+    status: 409,
+    error: `unsupported-shape: ${section}: line ${i + 1} ${why}; edit it by hand`,
+  })
+  if (sec.indent === null) return null
+  if (sec.indent === '') return refuse(sec.header + 1, 'is a list, not a mapping')
+  for (let i = sec.header + 1; i < sec.end; i++) {
+    const l = lines[i]
+    if (isBlank(l) || l.trimStart().startsWith('#')) continue
+    if (indentOf(l).length > sec.indent.length) continue
+    if (indentOf(l) !== sec.indent || !/^[^\s#-][^:]*:(\s|$)/.test(l.trimStart())) {
+      return refuse(i, 'is not a `key: value` line')
+    }
+  }
+  const at = findKeys(lines, sec, key)
+  if (at.length > 1) {
+    return {
+      ok: false,
+      status: 409,
+      error: `duplicate-keys: ${section}.${key} appears ${at.length}× (lines ${at.map((i) => i + 1).join(', ')}); remove the duplicate by hand before saving`,
+    }
+  }
+  if (at.length === 1) {
+    const next = lines.slice(at[0] + 1, sec.end).find((l) => !isBlank(l) && !l.trimStart().startsWith('#'))
+    if (next !== undefined && indentOf(next).length > sec.indent.length) {
+      return refuse(at[0], `has a value spread over several lines`)
+    }
+  }
+  return null
+}
+
+const formatValue = (s: TuningSpec, v: number): string => (s.integer ? String(v) : String(Math.round(v * 1e4) / 1e4))
 
 function parseNumber(line: string, key: string): number | null {
   const raw = yamlScalar(line.trimStart().slice(key.length + 1))
@@ -114,7 +165,8 @@ export function readTuning(text: string): TuningValues {
   const out = {} as TuningValues
   for (const s of TUNING_SPEC) {
     const sec = findSection(lines, s.section)
-    const at = sec && !('ok' in sec) ? findKey(lines, sec, s.key) : -1
+    // The LAST copy of a duplicated key is the one a YAML parser keeps.
+    const at = sec && !('ok' in sec) ? findKeys(lines, sec, s.key).at(-1) ?? -1 : -1
     out[s.id] = at >= 0 ? parseNumber(lines[at], s.key) : null
   }
   return out
@@ -125,6 +177,7 @@ export function validateTuning(edits: TuningEdits): Fail | null {
   for (const [id, v] of Object.entries(edits)) {
     const s = TUNING_SPEC.find((x) => x.id === id)
     if (!s) return { ok: false, status: 400, error: `Unknown tuning key: ${id}` }
+    if (v === null) continue
     if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, status: 400, error: `${id} must be a number` }
     if (s.integer && !Number.isInteger(v)) return { ok: false, status: 400, error: `${id} must be a whole number` }
     if (v < s.min || v > s.max) return { ok: false, status: 400, error: `${id} must be between ${s.min} and ${s.max}` }
@@ -135,6 +188,9 @@ export function validateTuning(edits: TuningEdits): Fail | null {
 export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text: string } | Fail {
   const bad = validateTuning(edits)
   if (bad) return bad
+  if (text.startsWith('\uFEFF')) {
+    return { ok: false, status: 409, error: 'unsupported-shape: config.yaml starts with a byte-order mark; edit it by hand' }
+  }
   const { lines, eol } = splitLines(text)
   const hadTrailingNewline = text.endsWith('\n')
 
@@ -143,16 +199,24 @@ export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text
     if (v === undefined) continue
     const sec = findSection(lines, s.section)
     if (sec && 'ok' in sec) return sec
-    const value = String(v)
+    if (sec) {
+      const shape = checkSection(lines, sec, s.section, s.key)
+      if (shape) return shape
+    }
+    const at = sec ? findKeys(lines, sec, s.key)[0] ?? -1 : -1
+    if (v === null) {
+      if (at >= 0) lines.splice(at, 1)
+      continue
+    }
+    const value = formatValue(s, v)
     if (!sec) {
       while (lines.length && isBlank(lines[lines.length - 1])) lines.pop()
       if (lines.length) lines.push('')
       lines.push(`${s.section}:`, `  ${s.key}: ${value}`, '')
       continue
     }
-    const at = findKey(lines, sec, s.key)
     if (at >= 0) {
-      if (parseNumber(lines[at], s.key) === v) continue
+      if (parseNumber(lines[at], s.key) === Number(value)) continue
       const indent = indentOf(lines[at])
       const rest = lines[at].slice(indent.length + s.key.length + 1)
       const comment = rest.match(/(\s+#.*)$/)?.[1] ?? ''
