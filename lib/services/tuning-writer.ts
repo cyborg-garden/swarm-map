@@ -57,7 +57,7 @@ type Fail = { ok: false; status: 400 | 404 | 409; error: string }
 const isBlank = (line: string): boolean => line.trim() === ''
 const indentOf = (line: string): string => line.slice(0, line.length - line.trimStart().length)
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const headerRe = (section: string) => new RegExp(`^${esc(section)}:(\\s|$)`)
+const headerRe = (section: string) => new RegExp(`^${esc(section)}\\s*:(\\s|$)`)
 
 function splitLines(text: string): { lines: string[]; eol: string } {
   const firstNl = text.indexOf('\n')
@@ -88,7 +88,7 @@ function findSection(lines: string[], section: string): Section | null | Fail {
     }
   }
   const header = headers[0]
-  if (yamlScalar(lines[header].slice(section.length + 1)) !== '') {
+  if (yamlScalar(lines[header].slice(lines[header].indexOf(':', section.length) + 1)) !== '') {
     return { ok: false, status: 409, error: `inline-section: ${section}: is written inline on line ${header + 1}; edit it by hand` }
   }
   const end = sectionBodyEnd(lines, header)

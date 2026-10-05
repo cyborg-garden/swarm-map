@@ -237,6 +237,11 @@ describe('spliceTuning', () => {
     expect(spliceTuning(src, { maxTurns: 9 })).toEqual({ ok: true, text: 'agent:\n  max_turns: 9\n' })
   })
 
+  it('finds a section header written with a space before the colon', () => {
+    const src = 'memory :\n  provider: honcho\n  memory_char_limit: 2200\n'
+    expect(spliceTuning(src, { memoryCharLimit: 4000 })).toEqual({ ok: true, text: src.replace('2200', '4000') })
+  })
+
   it('rounds float noise before writing', () => {
     const r = spliceTuning(LIVE, { compressionThreshold: 0.1 + 0.2 })
     expect(r.ok && r.text).toContain('  threshold: 0.3   # fraction of context')
