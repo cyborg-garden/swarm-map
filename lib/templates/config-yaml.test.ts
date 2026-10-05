@@ -37,7 +37,8 @@ describe('generateDefaultConfig', () => {
     expect(result).toContain('memory:')
     expect(result).toContain('memory_enabled: true')
     expect(result).toContain('user_profile_enabled: true')
-    expect(result).toContain('memory_char_limit: 2200')
+    expect(result).toContain('memory_char_limit: 5000')
+    expect(result).toContain('user_char_limit: 2000')
     expect(result).toContain('nudge_interval: 10')
   })
 

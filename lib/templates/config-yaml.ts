@@ -112,8 +112,8 @@ compression:
 memory:
   memory_enabled: true
   user_profile_enabled: true
-  memory_char_limit: 2200
-  user_char_limit: 1375
+  memory_char_limit: 5000
+  user_char_limit: 2000
   nudge_interval: 10
   flush_min_turns: 6
 
