@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react'
 import { Shield, Loader2, Save, RotateCw } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Surface } from '@/lib/types'
+import { TuningCard } from './tuning-card'
 
 type SurfaceSettings = {
   allowedUsers: string[]
@@ -400,6 +401,9 @@ if (loading) {
             : 'All memory is shared globally across channels. Any user in any group can read/write the same memory pool.'}
         </p>
       </div>
+
+      {/* Memory length, turn budget, compression (config.yaml) */}
+      <TuningCard harnessId={harnessId} />
 
       {/* VPN (WireGuard Sidecar) */}
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
