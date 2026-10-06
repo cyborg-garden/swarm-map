@@ -23,6 +23,7 @@ import type { ContainerRuntimeAdapter } from './runtime-adapter'
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
 import { PLATFORM_ENV_KEYS as SURFACE_STRIP_BY_PLATFORM, MENTION_GATING_VARS } from '@/lib/surfaces/derive'
+import { ensureDiscordThreadGate } from './discord-thread-gate'
 
 const HARNESSES_FILE = 'harnesses.json'
 
@@ -2135,7 +2136,9 @@ export class HarnessService {
     // they read as false at runtime despite HSM's require-mention default, so a
     // bare line would silently un-gate the agent. (Append-missing below only
     // covers absent keys, not present-but-empty ones.)
-    const healedEnv = normalizeEmptyMentionGating(envContent)
+    // Same pass adds DISCORD_THREAD_REQUIRE_MENTION=true to a Discord agent
+    // that lacks it (fleet default 2026-10-06; explicit values are kept).
+    const healedEnv = ensureDiscordThreadGate(normalizeEmptyMentionGating(envContent))
     const mentionGatingHealed = healedEnv !== envContent
     envContent = healedEnv
 

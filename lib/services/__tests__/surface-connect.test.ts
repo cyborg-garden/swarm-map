@@ -273,6 +273,68 @@ describe('ensurePolicyDefaults — Discord deny sentinel (drift D1)', () => {
   })
 })
 
+describe('ensurePolicyDefaults — Discord thread mention gate (2026-10-06)', () => {
+  it('seeds DISCORD_THREAD_REQUIRE_MENTION=true (mention required in threads too)', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    const out = ensurePolicyDefaults('DISCORD_BOT_TOKEN=tok\n', 'discord')
+    expect(out).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('seeds DISCORD_REQUIRE_MENTION=true, never empty (empty reads as false at runtime)', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    const out = ensurePolicyDefaults('DISCORD_BOT_TOKEN=tok\n', 'discord')
+    expect(out).toMatch(/^DISCORD_REQUIRE_MENTION=true$/m)
+    expect(out).not.toMatch(/^DISCORD_REQUIRE_MENTION=$/m)
+  })
+
+  it('seeds every surface\'s REQUIRE_MENTION as true, matching the deploy template', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    for (const [platform, v] of [
+      ['signal', 'SIGNAL_REQUIRE_MENTION'],
+      ['telegram', 'TELEGRAM_REQUIRE_MENTION'],
+      ['mattermost', 'MATTERMOST_REQUIRE_MENTION'],
+      ['slack', 'SLACK_REQUIRE_MENTION'],
+    ] as const) {
+      expect(ensurePolicyDefaults('', platform)).toMatch(new RegExp(`^${v}=true$`, 'm'))
+    }
+  })
+
+  it('never overwrites an explicit thread gate value (deliberate opt-out)', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    const out = ensurePolicyDefaults('DISCORD_THREAD_REQUIRE_MENTION=false\nDISCORD_REQUIRE_MENTION=false\n', 'discord')
+    expect(out).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=false$/m)
+    expect(out).toMatch(/^DISCORD_REQUIRE_MENTION=false$/m)
+    expect(out).not.toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('does not seed the thread gate on non-discord platforms', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    expect(ensurePolicyDefaults('SIGNAL_ACCOUNT=+1555\n', 'signal')).not.toContain('DISCORD_THREAD_REQUIRE_MENTION')
+  })
+})
+
+describe('Discord seed parity — deploy template vs connect (the D1 lesson)', () => {
+  it('both creation paths seed the same value for every Discord posture var', async () => {
+    const { ensurePolicyDefaults } = await import('@/lib/env-helpers')
+    const { generateEnvContent } = await import('@/lib/services/agent-deploy-templates')
+    const deploy = generateEnvContent({
+      name: 'parity', port: 8642, provider: 'anthropic', primaryModel: 'claude-opus-4-6', discordToken: 'tok',
+    })
+    const connect = ensurePolicyDefaults('DISCORD_BOT_TOKEN=tok\n', 'discord')
+    const val = (env: string, k: string) => env.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1]
+    for (const k of [
+      'DISCORD_ALLOWED_CHANNELS',
+      'DISCORD_REQUIRE_MENTION',
+      'DISCORD_THREAD_REQUIRE_MENTION',
+      'DISCORD_BOTS_REQUIRE_INLINE_MENTION',
+    ]) {
+      expect(val(deploy, k), `deploy ${k}`).toBeDefined()
+      expect(val(connect, k), `connect ${k}`).toBe(val(deploy, k))
+    }
+    expect(val(connect, 'DISCORD_THREAD_REQUIRE_MENTION')).toBe('true')
+  })
+})
+
 describe('buildConnectEnvVars parity with the replaced switch', () => {
   it('signal: url default applied when config.url is falsy', () => {
     expect(buildConnectEnvVars('signal', { phone: '+15551112222' })).toEqual({

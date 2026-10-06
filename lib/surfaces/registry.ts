@@ -66,6 +66,7 @@ export type SurfaceSpec = {
     observeUnmentioned?: string // signal / mattermost / telegram / slack / discord
     allowBots?: string // Discord only — tri-state, evaluated before the allowlist
     botsRequireInlineMention?: string // Discord only — bot senders must carry a literal inline @mention (reply-pings don't count)
+    threadRequireMention?: string // Discord only — @mention required inside threads the bot has joined too (adapter default is false = answer everything there)
     groupInvitePolicy?: string // signal / slack / telegram — who may add the bot
     channelScopedAccess?: string // Discord only — approved-channel admission
     profileName?: string // Signal only — display-name preference, re-applied on connect
@@ -170,6 +171,12 @@ export const SURFACES: Record<SurfaceSlug, SurfaceSpec> = {
       observeUnmentioned: 'DISCORD_OBSERVE_UNMENTIONED',
       allowBots: 'DISCORD_ALLOW_BOTS',
       botsRequireInlineMention: 'DISCORD_BOTS_REQUIRE_INLINE_MENTION',
+      // Org default 2026-10-06 (#bounties-work incident): without it, once a
+      // bot has "participated" in a thread it answers every message there,
+      // mentioned or not. .env is the only place HSM writes it —
+      // platforms.discord.extra.thread_require_mention would OUTRANK .env, so
+      // nothing here may render it into config.yaml.
+      threadRequireMention: 'DISCORD_THREAD_REQUIRE_MENTION',
       channelScopedAccess: 'DISCORD_CHANNEL_SCOPED_ACCESS',
     },
     identity: {

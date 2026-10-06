@@ -1,11 +1,16 @@
 // Next.js instrumentation hook — runs once per server start.
 // Registers the fleet SQLite integrity sweep scheduler (#204, PR1) and the
-// state.db snapshot exporter for volume-migrated harnesses (#204, PR2).
+// state.db snapshot exporter for volume-migrated harnesses (#204, PR2), and
+// runs the one-shot .env heals (legacy image refs, Discord thread gate).
 export async function register() {
   // Only the Node.js server runtime can touch better-sqlite3 / the filesystem.
   if (process.env.NEXT_RUNTIME !== 'nodejs') return
   const { migrateLegacyImageRefs } = await import('@/lib/services/image-migration')
   migrateLegacyImageRefs()
+  // Discord thread mention gate (2026-10-06): add DISCORD_THREAD_REQUIRE_MENTION
+  // =true to Discord agents whose .env lacks it. Never overrides a value.
+  const { healFleetDiscordThreadGatesAtStartup } = await import('@/lib/services/discord-thread-gate-fleet')
+  healFleetDiscordThreadGatesAtStartup()
   const { startIntegrityScheduler } = await import('@/lib/services/integrity-scheduler')
   startIntegrityScheduler()
   const { startDbSnapshotScheduler } = await import('@/lib/services/db-snapshot-scheduler')

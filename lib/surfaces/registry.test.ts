@@ -191,7 +191,10 @@ describe('registry structural invariants', () => {
     // +2: SLACK_OBSERVE_UNMENTIONED + DISCORD_OBSERVE_UNMENTIONED (observe parity)
     expect(ALL_SURFACE_VARS.has('SLACK_OBSERVE_UNMENTIONED')).toBe(true)
     expect(ALL_SURFACE_VARS.has('DISCORD_OBSERVE_UNMENTIONED')).toBe(true)
-    expect(ALL_SURFACE_VARS.size).toBe(38)
+    // +1: DISCORD_THREAD_REQUIRE_MENTION (mention required in threads, 2026-10-06)
+    expect(ALL_SURFACE_VARS.has('DISCORD_THREAD_REQUIRE_MENTION')).toBe(true)
+    expect(SURFACES.discord.behavior.threadRequireMention).toBe('DISCORD_THREAD_REQUIRE_MENTION')
+    expect(ALL_SURFACE_VARS.size).toBe(39)
   })
 
   it('isSurfaceSlug / surfaceSpec agree with the SURFACES keys', () => {

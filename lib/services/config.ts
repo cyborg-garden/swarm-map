@@ -54,6 +54,13 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
       case 'modelAutoUpdate':
         out.modelAutoUpdate = validateModelAutoUpdate(value)
         break
+      case 'discordThreadMentionOptOuts':
+        // Harness slugs only (toHarnessSlug output): lowercase, digits, dashes.
+        if (!Array.isArray(value) || !value.every((v) => typeof v === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(v))) {
+          throw new Error('discordThreadMentionOptOuts must be an array of harness names (lowercase slugs)')
+        }
+        out.discordThreadMentionOptOuts = value as string[]
+        break
       default:
         throw new Error(`unknown settings key: ${key}`)
     }

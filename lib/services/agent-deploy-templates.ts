@@ -136,6 +136,11 @@ export function generateEnvContent(params: {
     // does not trigger the agent. Inert while ALLOW_BOTS=none; seeded here so
     // opening bot access later inherits the strict posture by default.
     lines.push(`DISCORD_BOTS_REQUIRE_INLINE_MENTION=true`)
+    // Org policy (2026-10-06): @mention required inside threads too. The
+    // adapter default (false) lets a bot answer every message in any thread it
+    // has joined — the #bounties-work incident. Seeded on BOTH creation paths
+    // (ensurePolicyDefaults mirrors it) so they cannot drift.
+    lines.push(`DISCORD_THREAD_REQUIRE_MENTION=true`)
   } else {
     lines.push(`# DISCORD_BOT_TOKEN=`)
     lines.push(`# DISCORD_ALLOWED_USERS=`)

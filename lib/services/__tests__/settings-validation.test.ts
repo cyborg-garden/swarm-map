@@ -49,3 +49,21 @@ describe('validateSettingsPatch (P3/F6)', () => {
     })
   })
 })
+
+describe('validateSettingsPatch — discordThreadMentionOptOuts', () => {
+  it('accepts a list of harness names', () => {
+    expect(validateSettingsPatch({ discordThreadMentionOptOuts: ['blackhouse', 'cyborg-public'] }))
+      .toEqual({ discordThreadMentionOptOuts: ['blackhouse', 'cyborg-public'] })
+  })
+
+  it('accepts an empty list (no opt-outs)', () => {
+    expect(validateSettingsPatch({ discordThreadMentionOptOuts: [] })).toEqual({ discordThreadMentionOptOuts: [] })
+  })
+
+  it('rejects a non-array, a non-string entry, or a name that is not a harness slug', () => {
+    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: 'blackhouse' })).toThrow()
+    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: [1] })).toThrow()
+    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: ['Black House'] })).toThrow()
+    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: ['x\ny'] })).toThrow()
+  })
+})
