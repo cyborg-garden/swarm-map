@@ -12,6 +12,12 @@ import {
   type PlatformVarNames as DerivedPlatformVarNames,
 } from '@/lib/surfaces/derive'
 import { services } from '@/lib/services'
+import {
+  DISCORD_THREAD_GATE_VAR,
+  effectiveDiscordThreadGate,
+  hasDiscordSurface,
+  type ThreadGateSource,
+} from '@/lib/services/discord-thread-gate'
 import { adapterForRuntime } from '@/lib/services/harness'
 import { isDeployBornCompose, validateExtraMounts, validateExtraEnv } from '@/lib/services/harness-compose'
 
@@ -137,6 +143,22 @@ type SettingsResponse = {
   // Read-only in GET: whether DISCORD_CHANNEL_SCOPED_ACCESS is enabled on the
   // agent. Env-managed; the PUT loop never writes it.
   discordChannelScopedAccess?: boolean
+  // Discord agents only: whether @mention is required inside threads the bot
+  // has joined (DISCORD_THREAD_REQUIRE_MENTION). GET reports the EFFECTIVE
+  // value the adapter will apply (config.yaml layers included) and which layer
+  // decided it. PUT writes the .env var only when the value differs from what
+  // GET would report — an echo never pins an implicit value. Separate from
+  // `mentionGating`, whose global toggle never touches it.
+  discordThreadMentionGating?: boolean
+  discordThreadMentionSource?: ThreadGateSource // read-only
+}
+
+// The thread gate as the adapter will apply it. Reads config.yaml because two
+// of the four layers live there (and one of them outranks .env).
+function readDiscordThreadGate(dataDir: string, envContent: string) {
+  let configYaml: string | null = null
+  try { configYaml = fs.readFileSync(path.join(dataDir, 'config.yaml'), 'utf-8') } catch {}
+  return effectiveDiscordThreadGate({ env: envContent, configYaml })
 }
 
 // Version token for optimistic concurrency: covers BOTH stores this route
@@ -329,6 +351,15 @@ export async function GET(
     resources,
     surfaces,
     version: settingsVersion(envPath, id),
+  }
+
+  {
+    const envContent = fs.readFileSync(envPath, 'utf-8')
+    if (hasDiscordSurface(envContent)) {
+      const gate = readDiscordThreadGate(dataDir, envContent)
+      response.discordThreadMentionGating = gate.requireMention
+      response.discordThreadMentionSource = gate.source
+    }
   }
 
   // Read-only surfacing of the channel-scoped access posture (set via env, not
@@ -647,6 +678,21 @@ export async function PUT(
       content = content.replace(regex, `${varName}=${mentionGatingValue}`)
     } else {
       content = content.trimEnd() + `\n${varName}=${mentionGatingValue}\n`
+    }
+  }
+
+  // Discord thread gate — written only on a real change. GET reports the
+  // effective value (yaml layers included); both clients PUT the document back,
+  // so writing on every save would turn an implicit yaml `false` into an
+  // explicit .env opt-out that the fleet heal must then respect forever.
+  if (typeof body.discordThreadMentionGating === 'boolean' && hasDiscordSurface(content)) {
+    const current = readDiscordThreadGate(dataDir, content).requireMention
+    if (body.discordThreadMentionGating !== current) {
+      const v = body.discordThreadMentionGating ? 'true' : 'false'
+      const regex = new RegExp(`^${DISCORD_THREAD_GATE_VAR}=.*$`, 'm')
+      content = regex.test(content)
+        ? content.replace(regex, `${DISCORD_THREAD_GATE_VAR}=${v}`)
+        : content.trimEnd() + `\n${DISCORD_THREAD_GATE_VAR}=${v}\n`
     }
   }
 

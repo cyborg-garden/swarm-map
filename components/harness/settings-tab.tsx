@@ -27,6 +27,9 @@ type Settings = {
   surfaces: Record<string, SurfaceSettings>
   // Optimistic-concurrency token from GET; round-tripped in PUT.
   version?: string
+  // Discord agents only (absent otherwise): @mention required inside threads.
+  discordThreadMentionGating?: boolean
+  discordThreadMentionSource?: string // read-only: which config layer decided it
 }
 
 type Props = {
@@ -69,6 +72,13 @@ function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
   function updateMentionGating(enabled: boolean) {
     if (!settings) return
     setSettings({ ...settings, mentionGating: enabled })
+    setDirty(true)
+    setSaved(false)
+  }
+
+  function updateThreadMentionGating(enabled: boolean) {
+    if (!settings) return
+    setSettings({ ...settings, discordThreadMentionGating: enabled })
     setDirty(true)
     setSaved(false)
   }
@@ -119,7 +129,7 @@ function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
       // revert any allowlist edit made in the Surfaces tab since this tab's
       // GET — the two tabs mount together and each held its own stale copy.
       // An omitted platform is preserved verbatim by the PUT handler.
-      const { surfaces: _omitted, capsolverConfigured: _ro, ...policyOnly } = settings
+      const { surfaces: _omitted, capsolverConfigured: _ro, discordThreadMentionSource: _src, ...policyOnly } = settings
       const res = await fetch(`/api/harnesses/${harnessId}/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -296,6 +306,48 @@ if (loading) {
             : 'Agent responds to all messages in approved groups.'}
         </p>
       </div>
+
+      {/* Discord thread mention-gating — only for agents with a Discord surface */}
+      {settings.discordThreadMentionGating !== undefined && (
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-medium text-sm">Discord Threads</h3>
+          </div>
+          <div className="flex gap-3">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="discordThreadMentionGating"
+                checked={settings.discordThreadMentionGating === true}
+                onChange={() => updateThreadMentionGating(true)}
+                className="accent-[var(--accent)]"
+              />
+              Require @mention in threads
+            </label>
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="radio"
+                name="discordThreadMentionGating"
+                checked={settings.discordThreadMentionGating === false}
+                onChange={() => updateThreadMentionGating(false)}
+                className="accent-[var(--accent)]"
+              />
+              Answer everything in threads it joined
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {settings.discordThreadMentionGating
+              ? 'Agent needs an @mention inside threads too (fleet default).'
+              : 'Once the agent has joined a thread it answers every message there, mentioned or not. Add it to the opt-out list in global settings, or the posture check will flag it.'}
+          </p>
+          {settings.discordThreadMentionSource === 'platforms.discord.extra' && (
+            <p className="text-xs text-[var(--warning)]">
+              config.yaml sets platforms.discord.extra.thread_require_mention, which overrides this setting. Remove it there for this toggle to take effect.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Observe-Unmentioned */}
       <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
