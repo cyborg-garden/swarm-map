@@ -110,7 +110,9 @@
     },
     "public": {
       "env": {
-        "DISCORD_ALLOW_ALL_USERS": "false"
+        "DISCORD_ALLOW_ALL_USERS": "false",
+        "GATEWAY_ALLOW_ALL_USERS": "false",
+        "DISCORD_CHANNEL_SCOPED_ACCESS": "true"
       },
       "disabledToolsets": [
         "terminal",
@@ -118,8 +120,7 @@
         "file",
         "discord",
         "discord_admin",
-        "computer_use",
-        "browser"
+        "computer_use"
       ],
       "disabledSkills": [
         "apple-notes",
