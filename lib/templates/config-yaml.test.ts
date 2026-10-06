@@ -301,3 +301,19 @@ describe('generateDefaultConfig platforms enablement', () => {
     expect(() => generateDefaultConfig({ ...baseParams, enabledPlatforms: ['discord:\n  privileged'] })).toThrow(/Unknown platform/)
   })
 })
+
+describe('generateDefaultConfig never renders the Discord thread gate', () => {
+  // platforms.discord.extra.thread_require_mention outranks .env in the adapter
+  // and the top-level `discord:` block is the fallback .env already beats. The
+  // policy lives in .env (DISCORD_THREAD_REQUIRE_MENTION), so the generator
+  // must never write the key into config.yaml at any level.
+  it('omits thread_require_mention even with Discord enabled', () => {
+    const yaml = generateDefaultConfig({
+      provider: 'anthropic',
+      primaryModel: 'claude-opus-4-6',
+      enabledPlatforms: ['discord', 'signal'],
+    })
+    expect(yaml).toContain('discord')
+    expect(yaml).not.toContain('thread_require_mention')
+  })
+})

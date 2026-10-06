@@ -70,6 +70,17 @@ describe('generateEnvContent', () => {
     expect(env).toMatch(/^DISCORD_BOTS_REQUIRE_INLINE_MENTION=true$/m)
   })
 
+  it('seeds mention-required in threads (2026-10-06 #bounties-work incident)', () => {
+    const env = generateEnvContent({ ...base, discordToken: 'discord.bot.token' })
+    // Without it the adapter default (false) lets a bot answer every message in
+    // any thread it has "participated" in, mentioned or not.
+    expect(env).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('does not emit the thread gate for a non-discord agent', () => {
+    expect(generateEnvContent({ ...base })).not.toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=/m)
+  })
+
   it('seeds channel-scoped access on (inert until channels are approved)', () => {
     const env = generateEnvContent({ ...base, discordToken: 'discord.bot.token' })
     // Org policy: anyone in an admin-approved channel may talk to the bot.

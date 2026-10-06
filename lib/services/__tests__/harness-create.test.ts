@@ -159,6 +159,26 @@ describe('HarnessService.importFromDir', () => {
     expect(fs.existsSync(credPath)).toBe(false)
   })
 
+  it('adds DISCORD_THREAD_REQUIRE_MENTION=true to an imported Discord agent', async () => {
+    storage.write('harnesses.json', [])
+    fs.writeFileSync(path.join(hermesDir, '.env'), 'ANTHROPIC_API_KEY=sk-ant-test123\nDISCORD_BOT_TOKEN=tok\n')
+    const result = await service.importFromDir(hermesDir, 'discord-import')
+    const env = fs.readFileSync(path.join(result.destDir, '.env'), 'utf-8')
+    expect(env).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('keeps an imported agent\'s explicit thread gate value', async () => {
+    storage.write('harnesses.json', [])
+    fs.writeFileSync(
+      path.join(hermesDir, '.env'),
+      'ANTHROPIC_API_KEY=sk-ant-test123\nDISCORD_BOT_TOKEN=tok\nDISCORD_THREAD_REQUIRE_MENTION=false\n',
+    )
+    const result = await service.importFromDir(hermesDir, 'discord-optout')
+    const env = fs.readFileSync(path.join(result.destDir, '.env'), 'utf-8')
+    expect(env).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=false$/m)
+    expect(env).not.toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
   it('detects persona from SOUL.md', async () => {
     storage.write('harnesses.json', [])
     const result = await service.importFromDir(hermesDir, 'soul-test')

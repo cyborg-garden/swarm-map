@@ -76,7 +76,7 @@ export function mergeEnvVars(
 /**
  * Ensure policy defaults exist in .env content for a given platform.
  * Only writes if the key doesn't already exist (preserves user settings).
- * Default is empty string = "no one allowed" (secure default).
+ * Admission lists default to empty = "no one allowed"; mention gates to 'true'.
  */
 export function ensurePolicyDefaults(
   content: string,
@@ -85,23 +85,34 @@ export function ensurePolicyDefaults(
   const basePolicyKeys = POLICY_VARS[platform]
   if (!basePolicyKeys) return content
 
-  // Discord also seeds the inline-mention bot gate (org default 2026-08-05):
-  // bot senders must carry a literal inline @mention — a reply-ping alone does
-  // not trigger the agent. Seeded on BOTH creation paths (deploy template and
-  // here) so they cannot drift into opposite postures (the D1 lesson below).
+  // Discord also seeds two mention gates beyond the per-surface three:
+  //  - the inline-mention bot gate (org default 2026-08-05): bot senders must
+  //    carry a literal inline @mention — a reply-ping alone does not trigger;
+  //  - the thread gate (org default 2026-10-06): @mention required inside
+  //    threads too, not just channels.
+  // Seeded on BOTH creation paths (deploy template and here) so they cannot
+  // drift into opposite postures (the D1 lesson below).
+  const discord = SURFACES.discord.behavior
   const policyKeys = platform === 'discord'
-    ? [...basePolicyKeys, SURFACES.discord.behavior.botsRequireInlineMention!]
+    ? [...basePolicyKeys, discord.botsRequireInlineMention!, discord.threadRequireMention!]
     : basePolicyKeys
 
-  // Non-empty seed values. Everything else defaults to the secure empty string
+  // Non-empty seed values. Admission lists default to the secure empty string
   // ("no one allowed") — EXCEPT Discord's channel allowlist, where the adapter
   // reads empty as "no channel gate at all". Seed the '0' deny sentinel instead
   // (no snowflake can be '0'), matching the deploy template. Before this, the
   // connect path and the deploy path seeded OPPOSITE Discord postures (drift
   // D1): a Discord surface connected to an existing agent was born fail-open.
+  //
+  // Every REQUIRE_MENTION var seeds 'true', never empty: the runtime reads an
+  // empty value as false (that is what normalizeEmptyMentionGating heals on
+  // import), so an empty seed was a connect-path agent born answering
+  // everything while the deploy template wrote 'true'.
   const SEED_VALUES: Record<string, string> = {
     DISCORD_ALLOWED_CHANNELS: '0',
     DISCORD_BOTS_REQUIRE_INLINE_MENTION: 'true',
+    [discord.threadRequireMention!]: 'true',
+    ...Object.fromEntries(Object.values(SURFACES).map((s) => [s.behavior.requireMention, 'true'])),
   }
 
   let result = content

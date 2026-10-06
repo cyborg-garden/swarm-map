@@ -249,6 +249,26 @@ describe('surface connect — enables the platform in config.yaml', () => {
     expect(configWrite()).toBeUndefined()
   })
 
+  it('seeds DISCORD_THREAD_REQUIRE_MENTION=true in .env and never writes it into config.yaml', async () => {
+    // platforms.discord.extra.thread_require_mention OUTRANKS .env in the
+    // adapter, so a generator writing it there would silently defeat the
+    // .env policy. The value belongs in .env only.
+    readSpy.mockImplementation((p: fs.PathOrFileDescriptor) => {
+      if (String(p).endsWith('config.yaml')) {
+        return 'platforms:\n  discord:\n    enabled: false\n'
+      }
+      return 'DISCORD_BOT_TOKEN=old\n'
+    })
+
+    const res = await connectDiscord()
+    expect(res.status).toBe(200)
+
+    const envWrite = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
+    expect(envWrite?.[1] as string).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+    expect(envWrite?.[1] as string).toMatch(/^DISCORD_REQUIRE_MENTION=true$/m)
+    expect(configWrite()?.[1] as string).not.toContain('thread_require_mention')
+  })
+
   it('skips config.yaml gracefully when it does not exist (agent not deployed)', async () => {
     vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => !String(p).endsWith('config.yaml'))
 

@@ -1224,3 +1224,88 @@ describe('Settings API — discord parity (username expansion + overlay-covered 
     expect(services.harness.restart).not.toHaveBeenCalled()
   })
 })
+
+describe('Settings API — Discord thread mention gate (2026-10-06)', () => {
+  let written = ''
+  let files: Record<string, string> = {}
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    written = ''
+    files = {}
+    vi.spyOn(os, 'homedir').mockReturnValue('/home/test')
+    vi.spyOn(fs, 'existsSync').mockImplementation(((p: fs.PathLike) =>
+      String(p).endsWith('.env') || String(p) in files) as never)
+    vi.spyOn(fs, 'statSync').mockReturnValue({ mtimeMs: 1111.0 } as unknown as fs.Stats)
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      const key = String(p)
+      if (key in files) return files[key]
+      if (key.endsWith('.env')) return files['.env'] ?? ''
+      throw new Error('ENOENT')
+    }) as never)
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(((p: unknown, data: unknown) => {
+      if (typeof data === 'string' && String(p).endsWith('.env')) written = data
+    }) as never)
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  const policyBody = (extra: Record<string, unknown> = {}) => ({
+    dmPolicy: 'approved-only',
+    groupInvitePolicy: 'approved-only',
+    mentionGating: true,
+    commandApprovalAdminOnly: true,
+    memoryScope: 'channel',
+    ...extra,
+  })
+
+  async function get() {
+    const res = await GET(makeRequest({}) as Request, makeParams('h_test'))
+    return res.json() as Promise<{ discordThreadMentionGating?: boolean; discordThreadMentionSource?: string }>
+  }
+
+  it('GET omits the field for an agent with no Discord surface', async () => {
+    files['.env'] = 'SIGNAL_ACCOUNT=+1\n'
+    expect((await get()).discordThreadMentionGating).toBeUndefined()
+  })
+
+  it('GET reports the .env value and its source', async () => {
+    files['.env'] = 'DISCORD_BOT_TOKEN=t\nDISCORD_THREAD_REQUIRE_MENTION=true\n'
+    expect(await get()).toMatchObject({ discordThreadMentionGating: true, discordThreadMentionSource: 'env' })
+  })
+
+  it('GET reports the yaml fallback the adapter would actually use (not a flattering default)', async () => {
+    files['.env'] = 'DISCORD_BOT_TOKEN=t\n'
+    files['/home/test/.hermes-test/config.yaml'] = 'discord:\n  thread_require_mention: false\n'
+    expect(await get()).toMatchObject({ discordThreadMentionGating: false, discordThreadMentionSource: 'yaml discord:' })
+  })
+
+  it('PUT writes the thread gate when the operator changes it', async () => {
+    files['.env'] = 'DISCORD_BOT_TOKEN=t\nDISCORD_THREAD_REQUIRE_MENTION=true\n'
+    const res = await PUT(makeRequest(policyBody({ discordThreadMentionGating: false })), makeParams('h_test'))
+    expect(res.status).toBe(200)
+    expect(written).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=false$/m)
+  })
+
+  it('PUT echoing an unchanged implicit value does NOT pin it into .env (would block the heal)', async () => {
+    // GET reported false from the yaml fallback; a save of some other setting
+    // echoes it back. Writing an explicit false would turn an un-healed agent
+    // into a deliberate opt-out that the heal must then respect forever.
+    files['.env'] = 'DISCORD_BOT_TOKEN=t\n'
+    files['/home/test/.hermes-test/config.yaml'] = 'discord:\n  thread_require_mention: false\n'
+    await PUT(makeRequest(policyBody({ discordThreadMentionGating: false, memoryScope: 'global' })), makeParams('h_test'))
+    expect(written).not.toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=/m)
+  })
+
+  it('the global mention-gating toggle never touches the thread gate', async () => {
+    files['.env'] = 'DISCORD_BOT_TOKEN=t\nDISCORD_THREAD_REQUIRE_MENTION=true\n'
+    await PUT(makeRequest(policyBody({ mentionGating: false })), makeParams('h_test'))
+    expect(written).toMatch(/^DISCORD_REQUIRE_MENTION=false$/m)
+    expect(written).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('PUT ignores the field for an agent with no Discord surface', async () => {
+    files['.env'] = 'SIGNAL_ACCOUNT=+1\n'
+    await PUT(makeRequest(policyBody({ discordThreadMentionGating: false })), makeParams('h_test'))
+    expect(written).not.toContain('DISCORD_THREAD_REQUIRE_MENTION')
+  })
+})

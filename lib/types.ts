@@ -214,4 +214,5 @@ export type Settings = {
   vncBindHost?: string  // Host interface for the VPN-mode VNC port (default '127.0.0.1'); set to a Tailscale address for remote human CAPTCHA escalation
   controlBindHost?: string  // Host interface for the VPN-mode Camofox control port 9377 (default '127.0.0.1', unauthenticated browser control); set to a Tailscale address only for remote control
   modelAutoUpdate?: ModelAutoUpdateSettings  // model freshness / "track newest version" policy (see lib/services/model-update-scheduler.ts)
+  discordThreadMentionOptOuts?: string[]  // harness names allowed to answer un-mentioned messages in threads (DISCORD_THREAD_REQUIRE_MENTION=false). Fleet default is mention-required; the heal skips these and the posture check reports them as opted-out, not open. See lib/services/discord-thread-gate.ts
 }
