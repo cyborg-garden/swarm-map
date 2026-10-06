@@ -5,6 +5,19 @@ import { installBaselineTemplates } from '@/lib/services/templates'
 import { defaultEnabledPlugins } from '@/lib/services/artifacts-manifest'
 import { getUseCaseTemplate, installUseCaseTemplate, templateEnabledPlugins } from '@/lib/services/usecase-templates'
 import { generateDefaultConfig, type McpServerConfig } from '@/lib/templates/config-yaml'
+import { defaultSoulContent } from '@/lib/templates/soul'
+import {
+  loadBasePackage,
+  validateSelection,
+  applyBasePackageToDir,
+  assignBasePackageKeys,
+  searchBackendFor,
+  storeHasProvider,
+  isSurface,
+  DEFAULT_SURFACE,
+  type KeyAssignmentResult,
+  type Selection,
+} from '@/lib/services/base-package'
 import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 import { deployLettaAgent, serverKeyVarForModel, LETTA_DEFAULT_PORT } from '@/lib/services/letta-deploy-templates'
 import fs from 'fs'
@@ -43,9 +56,9 @@ function nextAvailablePort(): number {
   return port
 }
 
-function generateConfigYaml(provider: string, primaryModel: string, fallbackModel?: string, browserEnabled?: boolean, mcpServers?: Record<string, McpServerConfig>, extraEnabledPlugins: string[] = [], enabledPlatforms: string[] = []): string {
+function generateConfigYaml(provider: string, primaryModel: string, fallbackModel?: string, browserEnabled?: boolean, mcpServers?: Record<string, McpServerConfig>, extraEnabledPlugins: string[] = [], enabledPlatforms: string[] = [], searchBackend?: string): string {
   const enabledPlugins = Array.from(new Set([...defaultEnabledPlugins(), ...extraEnabledPlugins]))
-  return generateDefaultConfig({ provider, primaryModel, fallbackModel, browserEnabled, mcpServers, enabledPlugins, enabledPlatforms })
+  return generateDefaultConfig({ provider, primaryModel, fallbackModel, browserEnabled, mcpServers, enabledPlugins, enabledPlatforms, searchBackend })
 }
 
 export async function POST(request: Request) {
@@ -56,6 +69,17 @@ export async function POST(request: Request) {
   // Linked-pair deploy state — hoisted so the catch can clean up a brain
   // agent orphaned by a door-phase failure (see catch below).
   let lettaBrainResult: { brainAgentId: string; brainHarnessId: string; baseUrl: string } | undefined
+  // Research keys assigned from the key store before the container starts —
+  // rolled back (registry only; the agent dir is deleted) if the deploy fails.
+  let assignedKeys: KeyAssignmentResult[] = []
+  const rollbackKeys = () => {
+    for (const k of assignedKeys) {
+      // Registry-only on purpose: the agent dir is being deleted, so there is
+      // no .env to keep in step (setAssignment would recreate it).
+      if (k.action === 'assigned' && k.keyId) services.keys.update(k.keyId, { assignedTo: k.previous ?? [] })
+    }
+    assignedKeys = []
+  }
   try {
     const body = await request.json()
     const { name, fallbackModel, persona, tier,
@@ -75,6 +99,29 @@ export async function POST(request: Request) {
     const useCaseTemplate = templateId ? getUseCaseTemplate(templateId) : undefined
     if (templateId && !useCaseTemplate) {
       return NextResponse.json({ ok: false, error: `Unknown use-case template "${templateId}".` }, { status: 400 })
+    }
+
+    // Base package selection: surface profile + opt-in packs. Browser tools
+    // imply the browser-ops pack (captcha), which a public surface refuses.
+    // Validated before any side effect.
+    const basePackage = loadBasePackage()
+    if (body.surface !== undefined && !isSurface(body.surface)) {
+      return NextResponse.json({ ok: false, error: `Invalid surface "${body.surface}" (private | team | public).` }, { status: 400 })
+    }
+    const requestedPacks: string[] = Array.isArray(body.packs) ? body.packs.filter((p: unknown): p is string => typeof p === 'string') : []
+    const selection: Selection = {
+      surface: isSurface(body.surface) ? body.surface : DEFAULT_SURFACE,
+      packs: Array.from(new Set([...requestedPacks, ...(body.browserEnabled === true ? ['browser-ops'] : [])])),
+    }
+    try {
+      validateSelection(basePackage, selection)
+    } catch (e) {
+      return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 400 })
+    }
+    // A public bot (anyone can talk to it) never carries GitHub or Google
+    // credentials — spec §6.
+    if (selection.surface === 'public' && (body.googleEnabled === true || body.githubMcpEnabled === true || body.githubToken)) {
+      return NextResponse.json({ ok: false, error: 'A public surface cannot have GitHub or Google credentials.' }, { status: 400 })
     }
 
     // Letta deploys carry a single `lettaModel` handle instead of provider +
@@ -397,7 +444,11 @@ export async function POST(request: Request) {
       mattermostEnabled && 'mattermost',
       signalEnabled && 'signal',
     ].filter((p): p is string => typeof p === 'string')
-    const configContent = generateConfigYaml(provider, primaryModel, fallbackModel, body.browserEnabled === true, Object.keys(mcpServers).length > 0 ? mcpServers : undefined, extraEnabledPlugins, enabledPlatforms)
+    // Research: brave-free when a Brave key will be present (pasted, or the
+    // fleet key from the store), the no-key fallback otherwise — never a
+    // backend that silently returns nothing.
+    const hasBrave = !!braveKey || storeHasProvider(services.keys, 'brave')
+    const configContent = generateConfigYaml(provider, primaryModel, fallbackModel, body.browserEnabled === true, Object.keys(mcpServers).length > 0 ? mcpServers : undefined, extraEnabledPlugins, enabledPlatforms, searchBackendFor(basePackage, hasBrave))
     fs.writeFileSync(path.join(agentDataDir, 'config.yaml'), configContent, 'utf-8')
 
     // Write the Google permission config the MCP server reads via --config.
@@ -468,47 +519,8 @@ google:
       fs.mkdirSync(path.join(agentDataDir, 'google-tokens'), { recursive: true })
     }
 
-    // Write SOUL.md
-    const personalitySection = persona
-      ? `## Personality\n\n${persona}`
-      : `## Personality\n\nCustomize this section to give ${name} a distinct voice, tone, and purpose.\nWhat kind of assistant should ${name} be? Formal? Casual? Technical? Creative?`
-    const soulContent = `# ${name}
-
-You are **${name}**, a Hermes agent in a multi-tenant deployment managed by Swarm Map.
-
-## How You Work
-
-**Multi-platform:** You serve users across Signal, Telegram, Mattermost, and other platforms simultaneously. Each platform connection is independent.
-
-**Memory isolation:** Your memory is scoped per-context. What you learn in one group chat stays in that group. You maintain separate context for each conversation thread. If someone asks "what did we talk about last time?" — you recall only what happened in THAT specific chat.
-
-**Session lifecycle:** Your conversations reset after 24 hours of inactivity or at 4 AM daily. This keeps you fast and prevents runaway costs. Important context is preserved in your per-context memory.
-
-**Skills are global:** Skills you learn or create are available across all your conversations. A skill learned in one group benefits everyone.
-
-**Group approval:** You only respond in groups that your admin has approved. If you're added to a new group, you'll check with HSM before engaging.
-
-## Behavioral Defaults
-
-- Be helpful, direct, and honest
-- When you don't know something, say so clearly
-- Never reference or leak information between different conversations
-- You can share that you run on Hermes if asked about your system
-- Use \\\`/model\\\` to check or switch your AI model
-- Use \\\`/memory\\\` to review what you remember about this conversation
-- If you're unsure whether something is appropriate to share across contexts, don't
-
-## Your Admin
-
-Your admin manages you through HSM. They can:
-- Approve/deny groups you can participate in
-- Monitor your usage and costs
-- Update your configuration and model
-- Manage your API keys and budget
-
-${personalitySection}
-`
-    fs.writeFileSync(path.join(agentDataDir, 'SOUL.md'), soulContent, 'utf-8')
+    // Write SOUL.md — the same default every creation path uses.
+    fs.writeFileSync(path.join(agentDataDir, 'SOUL.md'), defaultSoulContent(name, persona), 'utf-8')
 
     // Write BOOT.md
     const bootContent = `# Boot Checklist
@@ -527,8 +539,9 @@ If this is your very first startup ever, introduce yourself briefly in your home
     // Create memories directory
     fs.mkdirSync(path.join(agentDataDir, 'memories'), { recursive: true })
 
-    // Install baseline plugins and hooks from templates
-    await installBaselineTemplates(agentDataDir)
+    // Inject the base package (artifacts, plugins.enabled, surface profile,
+    // SOUL orientation, stamp) — the same call every creation path makes.
+    await installBaselineTemplates(agentDataDir, selection)
 
     // Install the chosen use-case template (gated git artifacts + SOUL overlay).
     // Runs after the default SOUL.md write so a template SOUL takes precedence.
@@ -536,6 +549,24 @@ If this is your very first startup ever, introduce yourself briefly in your home
     // refuses any fetched content — a poisoned template must never deploy.
     if (useCaseTemplate) {
       await installUseCaseTemplate(agentDataDir, useCaseTemplate)
+      // A template SOUL replaces the default one; put the orientation block
+      // (and anything else the template displaced) back. Add-only.
+      applyBasePackageToDir(agentDataDir, basePackage, selection)
+    }
+
+    // Research keys from the key store, written into .env BEFORE the
+    // container starts (env_file is read at creation). setAssignment with the
+    // full list keeps keys.json and .env in step. A pasted Brave key wins.
+    // The harness id is deterministic (createOverlay: h_<slug, - → _>).
+    if (body.runtime !== 'letta') {
+      const predictedHarnessId = 'h_' + slug.replace(/-/g, '_')
+      try {
+        assignedKeys = assignBasePackageKeys(services.keys, predictedHarnessId, basePackage, {
+          skipProviders: braveKey ? ['brave'] : [],
+        })
+      } catch (e) {
+        console.error('[deploy] base-package key assignment failed (continuing without):', e)
+      }
     }
 
     // Generate standalone compose
@@ -561,6 +592,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
       execSync(`docker compose -f ${composePath} up -d`, { stdio: 'pipe', timeout: 120000 })
     } catch (err) {
       if (createdAgentDir) fs.rmSync(createdAgentDir, { recursive: true, force: true })
+      rollbackKeys()
       return NextResponse.json({
         ok: false,
         error: `Failed to start container: ${err instanceof Error ? err.message : String(err)}`,
@@ -608,9 +640,16 @@ If this is your very first startup ever, introduce yourself briefly in your home
       harnessId: overlay.id,
       port,
       healthy,
+      basePackage: {
+        version: basePackage.version,
+        surface: selection.surface,
+        packs: selection.packs,
+        keys: assignedKeys.map(({ provider, keyId, action }) => ({ provider, keyId, action })),
+      },
     })
   } catch (err) {
     if (createdAgentDir) fs.rmSync(createdAgentDir, { recursive: true, force: true })
+    rollbackKeys()
     // Linked-pair deploy: the brain agent was created before the door phase
     // threw. Delete it (best-effort) so the orphaned name doesn't 409-block
     // a retry of the same deploy.

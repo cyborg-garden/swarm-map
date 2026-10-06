@@ -7,6 +7,7 @@ import {
   ArtifactEntry,
   enabledPluginNames,
 } from './artifacts-manifest'
+import { ensureBlockList } from '../yaml-block-list'
 
 // Issue #82: installBaselineTemplates runs only at agent create/duplicate, so
 // existing agents never receive new artifacts added to infra/artifacts.json.
@@ -32,7 +33,7 @@ export interface SyncPlanItem {
   type: ArtifactType
   name: string
   action: SyncAction
-  // install: 'missing'; update: 'pristine' | 'forced'; skip: 'user-modified' | 'untracked' | 'source-missing'
+  // install: 'missing'; update: 'pristine' | 'forced'; skip: 'up-to-date' | 'user-modified' | 'untracked' | 'source-missing'
   reason: string
 }
 
@@ -139,7 +140,13 @@ export function planArtifactSync(
         if (locked === null) {
           item = { type, name: entry.name, action: 'skip', reason: 'untracked' }
         } else if (hashArtifactTree(dest) === locked) {
-          item = { type, name: entry.name, action: 'update', reason: 'pristine' }
+          // Pristine, but only an update if the shipped copy actually moved —
+          // otherwise a re-run would rewrite identical bytes, report a change
+          // and bounce the container every time (base package: apply must be
+          // idempotent).
+          item = hashArtifactTree(src) === locked
+            ? { type, name: entry.name, action: 'skip', reason: 'up-to-date' }
+            : { type, name: entry.name, action: 'update', reason: 'pristine' }
         } else {
           item = { type, name: entry.name, action: 'skip', reason: 'user-modified' }
         }
@@ -205,6 +212,18 @@ export function applyArtifactSync(
  * partial/failed write can never be locked as a clean shipped hash — which
  * would otherwise strand the artifact as permanently "user-modified".
  */
+/**
+ * Record freshly-installed artifacts in the lock (create path: installArtifacts
+ * copies but keeps no history). Without this a create-time artifact is
+ * "untracked" forever and never receives a pristine update.
+ */
+export function lockInstalled(agentDataDir: string, items: { type: ArtifactType; name: string }[]) {
+  writeLockForApplied(
+    agentDataDir,
+    items.map((i) => ({ ...i, action: 'install' as const, reason: 'missing', applied: true })),
+  )
+}
+
 function writeLockForApplied(agentDataDir: string, results: SyncResult[]) {
   const existing = readLock(agentDataDir)
   const byKey = new Map<string, LockEntry>()
@@ -223,65 +242,20 @@ function writeLockForApplied(agentDataDir: string, results: SyncResult[]) {
  * rest of the file. Text-based (HSM writes config.yaml as a string, no YAML
  * dep). Returns the new content + which names were added (idempotent).
  *
- * Safety: only two shapes are edited — (a) an existing block-style
- * `plugins:` → `enabled:` list (items appended at its real indentation), or
- * (b) NO `plugins:` key at all (a fresh block is appended). Any other shape
- * (a `plugins:` block with an inline `enabled: [...]`, or with no recognizable
- * block-style `enabled:` child) is left UNTOUCHED and reported as added: [] —
- * bailing beats risking a duplicate key or a mis-nested list in a hand-edited
- * config.
+ * Always leaves a BLOCK list behind: an inline `enabled: []` / `[a, b]` is
+ * rewritten in place with the same entries (base package v1 — inline `[]` is
+ * why cyborg-public loaded none of its plugins and why sync used to give up).
+ * A `plugins:` block without an `enabled:` child gains one. Shapes that can't
+ * be edited safely (nested flow lists, `plugins: {..}`) are left untouched and
+ * reported as added: []. See lib/yaml-block-list.ts.
  */
 export function ensurePluginsEnabled(
   configYaml: string,
   names: string[],
-): { content: string; added: string[] } {
-  if (names.length === 0) return { content: configYaml, added: [] }
-  const lines = configYaml.split('\n')
-
-  let pluginsIdx = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (/^plugins:\s*$/.test(lines[i])) { pluginsIdx = i; break }
-  }
-
-  // (b) No plugins key anywhere → safe to append a fresh, well-formed block.
-  if (pluginsIdx < 0) {
-    // Bail if there's a `plugins:` with inline content (e.g. `plugins: {...}`)
-    // we didn't recognize above — don't risk a duplicate key.
-    if (lines.some((l) => /^plugins:\s*\S/.test(l))) return { content: configYaml, added: [] }
-    const fresh = ['', '# --- Plugins (added by Swarm Map artifacts sync) ---', 'plugins:', '  enabled:', ...names.map((n) => `    - ${n}`), '']
-    const base = configYaml.endsWith('\n') ? configYaml.slice(0, -1) : configYaml
-    return { content: [base, ...fresh].join('\n'), added: [...names] }
-  }
-
-  // (a) Scan the plugins block for a BLOCK-STYLE `enabled:` child.
-  let enabledIdx = -1
-  let enabledIndent = ''
-  let itemIndent = ''
-  const already = new Set<string>()
-  for (let i = pluginsIdx + 1; i < lines.length; i++) {
-    if (/^\S/.test(lines[i])) break // dedented out of the plugins block
-    const blockEnabled = lines[i].match(/^(\s+)enabled:\s*$/)
-    if (blockEnabled) { enabledIdx = i; enabledIndent = blockEnabled[1]; continue }
-    // An inline `enabled: [..]` or `enabled: x` is a shape we won't edit.
-    if (enabledIdx < 0 && /^\s+enabled:\s*\S/.test(lines[i])) return { content: configYaml, added: [] }
-    if (enabledIdx >= 0) {
-      const item = lines[i].match(/^(\s+)-\s+(\S+)\s*$/)
-      if (item) { already.add(item[2]); if (!itemIndent) itemIndent = item[1] }
-      else if (/^\s*\S/.test(lines[i]) && !/^\s+#/.test(lines[i])) break // next key in block
-    }
-  }
-
-  // plugins: block with no usable block-style enabled: → bail (don't duplicate).
-  if (enabledIdx < 0) return { content: configYaml, added: [] }
-
-  const toAdd = names.filter((n) => !already.has(n))
-  if (toAdd.length === 0) return { content: configYaml, added: [] }
-
-  const indent = itemIndent || enabledIndent + '  '
-  let insertAt = enabledIdx + 1
-  for (; insertAt < lines.length; insertAt++) {
-    if (!/^\s+-\s+\S+/.test(lines[insertAt])) break
-  }
-  lines.splice(insertAt, 0, ...toAdd.map((n) => `${indent}- ${n}`))
-  return { content: lines.join('\n'), added: toAdd }
+): { content: string; added: string[]; converted: boolean } {
+  if (names.length === 0) return { content: configYaml, added: [], converted: false }
+  const r = ensureBlockList(configYaml, 'plugins', 'enabled', names, {
+    comment: '--- Plugins (added by Swarm Map artifacts sync) ---',
+  })
+  return { content: r.content, added: r.added, converted: r.converted }
 }

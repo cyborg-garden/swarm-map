@@ -129,6 +129,7 @@ describe('enabledPluginNames', () => {
 })
 
 import { installBaselineTemplates } from '../templates'
+import { loadBasePackage, selectArtifacts } from '../base-package'
 
 describe('pluginsInstalled reflects reality', () => {
   it('lists only plugin artifacts that were actually installed', async () => {
@@ -137,18 +138,20 @@ describe('pluginsInstalled reflects reality', () => {
     const plugins = results.filter(r => r.type === 'plugins' && r.installed).map(r => r.name)
     expect(plugins).toContain('swarm_map_policy')
     expect(plugins).toContain('boot_md')
-    expect(plugins).toContain('captcha_cascade')
-    expect(plugins).not.toContain('ocr-and-documents')
+    expect(plugins).toContain('credential_redactor')
+    expect(plugins).not.toContain('captcha_cascade') // browser-ops pack, not core
+    expect(plugins).not.toContain('session-handoff')
     fs.rmSync(agentDir, { recursive: true, force: true })
   })
 })
 
 describe('installBaselineTemplates (golden output vs infra/templates)', () => {
-  it('installs every artifact listed in infra/artifacts.json with identical bytes', async () => {
+  it('installs every artifact the selection includes with identical bytes', async () => {
     const repoRoot = process.cwd()
-    const manifest = loadManifest(path.join(repoRoot, 'infra', 'artifacts.json'))
+    // Packs included so every shipped template is byte-checked.
+    const manifest = selectArtifacts(loadBasePackage(repoRoot), { surface: 'private', packs: ['browser-ops'] })
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-golden-'))
-    const results = await installBaselineTemplates(agentDir)
+    const results = await installBaselineTemplates(agentDir, { surface: 'private', packs: ['browser-ops'] })
 
     for (const type of ['plugins', 'skills', 'hooks'] as const) {
       for (const entry of manifest[type]) {

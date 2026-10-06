@@ -10,9 +10,21 @@ import type { AuditService } from './audit'
 import type { ConfigService } from './config'
 import { getCostToday, getInvocationsToday } from './usage'
 import { markRestarting, isRestarting, clearRestarting } from './restart-tracker'
-import { installBaselineTemplates } from './templates'
-import { defaultEnabledPlugins, loadManifest, type InstallResult } from './artifacts-manifest'
-import { planArtifactSync, applyArtifactSync, ensurePluginsEnabled, SyncResult } from './artifacts-sync'
+import { installBaselineTemplates, provisionBasePackage } from './templates'
+import { defaultEnabledPlugins, type InstallResult } from './artifacts-manifest'
+import type { SyncResult } from './artifacts-sync'
+import { defaultSoulContent } from '@/lib/templates/soul'
+import {
+  loadBasePackage,
+  applyBasePackageToDir,
+  resolveSelection,
+  validateSelection,
+  assignBasePackageKeys,
+  type ApplyReport,
+  type KeyAssignmentResult,
+  type Selection,
+} from './base-package'
+import { checkBasePackageDrift, type DriftReport } from './base-package-drift'
 import { getUseCaseTemplate, reapplyUseCaseTemplate as reapplyTemplateToDataDir } from './usecase-templates'
 import type { ToolsService } from './tools'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
@@ -261,52 +273,16 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
-// Write scaffold files for a brand-new agent data directory
-// Standard SOUL.md content for a fresh agent identity. Shared by scaffold (create)
-// and duplicate so a duplicated agent gets its own identity rather than the source's.
-function defaultSoulContent(name: string): string {
-  return `# ${name}
-
-You are **${name}**, a Hermes agent in a multi-tenant deployment managed by Swarm Map.
-
-## How You Work
-
-**Multi-platform:** You serve users across Signal, Telegram, Mattermost, and other platforms simultaneously. Each platform connection is independent.
-
-**Memory isolation:** Your memory is scoped per-context. What you learn in one group chat stays in that group. You maintain separate context for each conversation thread. If someone asks "what did we talk about last time?" — you recall only what happened in THAT specific chat.
-
-**Session lifecycle:** Your conversations reset after 24 hours of inactivity or at 4 AM daily. This keeps you fast and prevents runaway costs. Important context is preserved in your per-context memory.
-
-**Skills are global:** Skills you learn or create are available across all your conversations. A skill learned in one group benefits everyone.
-
-**Group approval:** You only respond in groups that your admin has approved. If you're added to a new group, you'll check with HSM before engaging.
-
-## Behavioral Defaults
-
-- Be helpful, direct, and honest
-- When you don't know something, say so clearly
-- Never reference or leak information between different conversations
-- You can share that you run on Hermes if asked about your system
-- Use \`/model\` to check or switch your AI model
-- Use \`/memory\` to review what you remember about this conversation
-- If you're unsure whether something is appropriate to share across contexts, don't
-
-## Your Admin
-
-Your admin manages you through HSM. They can:
-- Approve/deny groups you can participate in
-- Monitor your usage and costs
-- Update your configuration and model
-- Manage your API keys and budget
-
-## Personality
-
-Customize this section to give ${name} a distinct voice, tone, and purpose.
-What kind of assistant should ${name} be? Formal? Casual? Technical? Creative?
-`
+// Write scaffold files for a brand-new agent data directory.
+// SOUL content comes from lib/templates/soul.ts (shared with duplicate + deploy).
+export interface ScaffoldOptions {
+  /** Base-package selection (surface + packs). Defaults to team, no packs. */
+  selection?: Selection
+  /** web.search_backend — 'brave-free' when a Brave key will be assigned, else the no-key fallback. */
+  searchBackend?: string
 }
 
-async function scaffoldAgentDir(dataDir: string, name: string, port: number): Promise<void> {
+async function scaffoldAgentDir(dataDir: string, name: string, port: number, opts: ScaffoldOptions = {}): Promise<void> {
   fs.mkdirSync(dataDir, { recursive: true })
 
   // .env with placeholder API key section
@@ -321,8 +297,7 @@ API_SERVER_PORT=${port}
 HSM_URL=${hsmUrl}
 SWARM_MAP_POLICY_URL=${hsmUrl}
 
-# Agent identity & memory
-HERMES_MEMORY_SCOPE=channel
+# Agent identity
 HERMES_AGENT_NAME=${name}
 HERMES_HOME_CHANNEL=
 
@@ -337,8 +312,6 @@ FIRECRAWL_API_URL=http://host.docker.internal:3002
 # TELEGRAM_BOT_TOKEN=
 
 # Policy defaults (secure by default)
-HERMES_DM_POLICY=approved-only
-HERMES_APPROVAL_ADMIN_ONLY=true
 SIGNAL_REQUIRE_MENTION=true
 TELEGRAM_REQUIRE_MENTION=true
 MATTERMOST_REQUIRE_MENTION=true
@@ -354,6 +327,7 @@ SIGNAL_GROUP_INVITE_POLICY=approved-only
     provider: 'anthropic',
     primaryModel: 'claude-sonnet-4-5',
     enabledPlugins: defaultEnabledPlugins(),
+    searchBackend: opts.searchBackend,
   })
   const configPath = path.join(dataDir, 'config.yaml')
   if (!fs.existsSync(configPath)) {
@@ -389,8 +363,9 @@ If this is your very first startup ever, introduce yourself briefly in your home
   // memories directory
   fs.mkdirSync(path.join(dataDir, 'memories'), { recursive: true })
 
-  // Install baseline plugins and hooks from templates
-  await installBaselineTemplates(dataDir)
+  // Inject the base package (artifacts, plugins.enabled, surface profile,
+  // SOUL orientation, stamp) — the same call every creation path makes.
+  await installBaselineTemplates(dataDir, opts.selection)
 }
 
 function expandPath(p: string): string {
@@ -908,7 +883,7 @@ export const hermesAdapter: ContainerRuntimeAdapter = {
   serviceName: (name) => `hermes-${name}`,
   generateCompose: (name, port, dataDir, options) =>
     generateStandaloneCompose(name, port, dataDir, options),
-  scaffold: (dataDir, name, port) => scaffoldAgentDir(dataDir, name, port),
+  scaffold: (dataDir, name, port, opts) => scaffoldAgentDir(dataDir, name, port, opts),
   readImageRef: (compose) => readComposeImage(compose),
   setImageRef: (compose, ref) => setComposeImage(compose, ref),
   defaultImageRepo: DEFAULT_IMAGE_REPO,
@@ -1461,71 +1436,87 @@ export class HarnessService {
   }
 
   /**
-   * Sync an already-created agent's artifacts (plugins/skills/hooks) against the
-   * repo manifest — the missing lifecycle path (#82). installBaselineTemplates
-   * only runs at create/duplicate, so existing agents never gain artifacts added
-   * to infra/artifacts.json later. This installs MISSING artifacts and updates
-   * provably-unmodified ones (see artifacts-sync.ts no-clobber model), enables
-   * any newly-installed plugins in config.yaml, then recreates the container so
-   * the runtime loads them. dryRun returns the plan without writing or restarting.
+   * Adopt / update the base package on an already-created agent (#82 + base
+   * package v1). installBaselineTemplates only runs at create, so this is how
+   * existing agents receive core items added later. ADD-ONLY and idempotent
+   * (see base-package.applyBasePackageToDir): installs missing core/pack
+   * artifacts, pristine-updates unmodified ones, unions plugins.enabled (inline
+   * lists become block lists), applies the surface profile, adds/refreshes the
+   * marked SOUL orientation block and writes the stamp. Never removes anything
+   * and never touches MEMORY/USER/people.
+   *
+   * With `keys`, the package's required research keys are assigned from the
+   * key store first (setAssignment, full list) so they land in .env together.
+   * The container is recreated only when .env, config or artifacts changed.
+   * dryRun returns the plan without writing, assigning or restarting.
    */
   syncArtifacts(
     id: string,
-    opts: { dryRun?: boolean; force?: boolean } = {},
-  ): { ok: boolean; serviceName: string; dryRun: boolean; results: SyncResult[]; pluginsEnabled: string[]; restarted: boolean } {
+    opts: {
+      dryRun?: boolean
+      force?: boolean
+      surface?: unknown
+      packs?: unknown
+      keys?: Parameters<typeof assignBasePackageKeys>[0]
+      includeVision?: boolean
+    } = {},
+  ): {
+    ok: boolean
+    serviceName: string
+    dryRun: boolean
+    results: SyncResult[]
+    pluginsEnabled: string[]
+    restarted: boolean
+    basePackage: ApplyReport
+    keys: KeyAssignmentResult[]
+  } {
     const harness = this.get(id)
     if (!harness?.serviceName) {
       throw new Error(`Harness ${id} not found`)
     }
     const dataDir = guessDataDir(harness.serviceName, harness.serviceName)
     const repoRoot = process.cwd()
-    const manifest = loadManifest(path.join(repoRoot, 'infra', 'artifacts.json'))
-    const plan = planArtifactSync(dataDir, manifest, repoRoot, { force: opts.force })
+    const pkg = loadBasePackage(repoRoot)
+    const selection = resolveSelection(dataDir, { surface: opts.surface, packs: opts.packs })
+    validateSelection(pkg, selection)
 
-    if (opts.dryRun) {
-      return {
-        ok: true,
-        serviceName: harness.serviceName,
-        dryRun: true,
-        results: plan.items.map((i) => ({ ...i, applied: false })),
-        pluginsEnabled: plan.enablePlugins,
-        restarted: false,
-      }
-    }
+    const keys = opts.keys
+      ? assignBasePackageKeys(opts.keys, id, pkg, { dryRun: opts.dryRun, includeVision: opts.includeVision })
+      : []
+    const keysChanged = keys.some((k) => k.action === 'assigned')
 
-    const results = applyArtifactSync(dataDir, plan, repoRoot)
-    const changed = results.some((r) => r.applied)
+    const report = applyBasePackageToDir(dataDir, pkg, selection, repoRoot, { dryRun: opts.dryRun, force: opts.force })
+    const pluginsEnabled = report.steps
+      .filter((st) => st.kind === 'plugins')
+      .flatMap((st) => (st.detail.match(/^\+ ([^;]+)/)?.[1] ?? '').split(', ').filter(Boolean))
 
-    // Enable any newly-installed/updated plugins in config.yaml so the runtime loads them.
-    let pluginsEnabled: string[] = []
-    const toEnable = plan.enablePlugins.filter((n) =>
-      results.some((r) => r.name === n && r.applied),
-    )
-    if (toEnable.length > 0) {
-      const configPath = path.join(dataDir, 'config.yaml')
-      try {
-        const current = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : ''
-        const { content, added } = ensurePluginsEnabled(current, toEnable)
-        if (added.length > 0) {
-          fs.writeFileSync(configPath, content)
-          pluginsEnabled = added
-        }
-      } catch {
-        // config.yaml unwritable — artifacts are still installed; surface nothing fatal.
-      }
-    }
-
-    // Only bounce the container if something actually changed.
-    if (changed) this.restart(id, 'recreate')
-    this.audit.append({ who: 'admin', what: 'artifacts:sync', target: harness.name })
+    // Only bounce the container if something the runtime reads actually changed.
+    const needsRestart = !opts.dryRun && (keysChanged || report.envChanged || report.configChanged || report.artifacts.some((r) => r.applied) || report.steps.some((st) => st.kind === 'soul'))
+    if (needsRestart) this.restart(id, 'recreate')
+    if (!opts.dryRun) this.audit.append({ who: 'admin', what: `base-package:apply:v${pkg.version}:${selection.surface}`, target: harness.name })
     return {
       ok: true,
       serviceName: harness.serviceName,
-      dryRun: false,
-      results,
+      dryRun: opts.dryRun === true,
+      results: report.artifacts,
       pluginsEnabled,
-      restarted: changed,
+      restarted: needsRestart,
+      basePackage: report,
+      keys,
     }
+  }
+
+  /**
+   * Report-only drift between an agent and the base package. Fixes nothing —
+   * a human runs sync. See base-package-drift.ts for the checks.
+   */
+  basePackageDrift(id: string, keys?: { list(): import('@/lib/types').Key[] }): DriftReport {
+    const harness = this.get(id)
+    if (!harness?.serviceName) {
+      throw new Error(`Harness ${id} not found`)
+    }
+    const dataDir = guessDataDir(harness.serviceName, harness.serviceName)
+    return checkBasePackageDrift(dataDir, loadBasePackage(), { harnessId: id, keys: keys?.list() })
   }
 
   /**
@@ -1757,6 +1748,9 @@ export class HarnessService {
       // Reset SOUL.md so the duplicate has its own identity, not the source's
       // persona/name. A duplicate is a new agent; persona is customized afterward.
       fs.writeFileSync(path.join(newDataDir, 'SOUL.md'), defaultSoulContent(newName), 'utf-8')
+      // The fresh SOUL has no orientation block, and the source may predate
+      // the base package — apply it (add-only) with the source's selection.
+      await provisionBasePackage(newDataDir, resolveSelection(newDataDir, {}))
       // Migrated source (#204 PR2): the copy above reproduced DB symlinks, not
       // DBs — replace them with real copies of the source's data (see helper).
       await this.hydrateMigratedDbCopies(sourceName, sourceDataDir, newDataDir, source)
@@ -1994,7 +1988,7 @@ export class HarnessService {
     return { removed: true, stopped, filesDeleted, volumeRemoved }
   }
 
-  async createOverlay(input: { name: string; tier?: HabitatTier; platform?: string; channel?: string; models?: string[]; tools?: string[] }): Promise<Partial<Harness>> {
+  async createOverlay(input: { name: string; tier?: HabitatTier; platform?: string; channel?: string; models?: string[]; tools?: string[]; selection?: Selection; searchBackend?: string }): Promise<Partial<Harness>> {
     // Force a lowercase slug so all docker identifiers + data/compose dirs are
     // consistent (see toHarnessSlug — capital names break docker on case-
     // insensitive filesystems). Creation-time only: existing overlays keep
@@ -2034,7 +2028,7 @@ export class HarnessService {
 
     // Scaffold agent data directory if it doesn't exist
     if (!fs.existsSync(agentDir)) {
-      await adapter.scaffold(agentDir, input.name, port)
+      await adapter.scaffold(agentDir, input.name, port, { selection: input.selection, searchBackend: input.searchBackend })
     }
 
     // Git auth is provisioned by the agent runtime at container boot (a
@@ -2069,7 +2063,7 @@ export class HarnessService {
     return overlay
   }
 
-  async importFromDir(sourceDir: string, name: string): Promise<{
+  async importFromDir(sourceDir: string, name: string, selection?: Selection): Promise<{
     id?: string
     name: string
     sourceDir: string
@@ -2082,7 +2076,9 @@ export class HarnessService {
       composeGenerated: boolean
     }
   }> {
-    // 1. Validate source directory
+    // 1. Validate source directory (and the base-package selection, before
+    //    anything is copied)
+    if (selection) validateSelection(loadBasePackage(), selection)
     const expandedSource = expandPath(sourceDir)
     if (!fs.existsSync(expandedSource)) {
       throw new Error(`Source directory not found: ${expandedSource}`)
@@ -2117,9 +2113,6 @@ export class HarnessService {
       HSM_URL: hsmUrl,
       SWARM_MAP_POLICY_URL: hsmUrl,
       HERMES_AGENT_NAME: slug,
-      HERMES_MEMORY_SCOPE: 'channel',
-      HERMES_DM_POLICY: 'approved-only',
-      HERMES_APPROVAL_ADMIN_ONLY: 'true',
       // Mention-only is the secure default for groups, matching newly-created
       // and deployed agents. Only applied when absent, so an imported agent that
       // explicitly set these stays as configured.
@@ -2165,8 +2158,9 @@ export class HarnessService {
       fs.writeFileSync(envPath, envContent, { mode: 0o600 })
     }
 
-    // 5. Install baseline plugins
-    const installResults = await installBaselineTemplates(workDir)
+    // 5. Inject the base package (add-only: an imported agent keeps its own
+    //    plugins, skills, SOUL persona and memory).
+    const installResults = await installBaselineTemplates(workDir, selection)
     const pluginsInstalled = installResults
       .filter((r) => r.type === 'plugins' && r.installed)
       .map((r) => r.name)

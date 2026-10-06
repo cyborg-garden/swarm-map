@@ -139,14 +139,16 @@ describe('applyArtifactSync', () => {
     expect(readLock(dataDir)?.artifacts.find((x) => x.name === 'a')).toBeFalsy()
   })
 
-  it('is idempotent — a second sync re-plans the now-locked artifact as a pristine no-op-or-update', () => {
+  it('is idempotent — a second sync with an unchanged ship is a no-op, not a re-copy', () => {
     writeTemplate('plugins', 'a', { 'p.py': 'v1' })
     const m = manifest({ plugins: [{ name: 'a', source: 'local' }] })
     applyArtifactSync(dataDir, planArtifactSync(dataDir, m, repoRoot), repoRoot)
     const plan2 = planArtifactSync(dataDir, m, repoRoot)
-    // unchanged ship → pristine update (a safe re-copy of identical bytes), never skip-untracked
-    expect(plan2.items[0].action).toBe('update')
-    expect(plan2.items[0].reason).toBe('pristine')
+    // unchanged ship → skip up-to-date (a re-copy would report a change and
+    // recreate the container on every run), never skip-untracked
+    expect(plan2.items[0]).toMatchObject({ action: 'skip', reason: 'up-to-date' })
+    const results = applyArtifactSync(dataDir, plan2, repoRoot)
+    expect(results.some((r) => r.applied)).toBe(false)
   })
 })
 
@@ -185,12 +187,36 @@ describe('ensurePluginsEnabled', () => {
     expect(content).toMatch(/  enabled:\n    - swarm_map_policy\n    - captcha_cascade/)
   })
 
-  it('BAILS (no duplicate plugins key) on an inline enabled: [] list', () => {
-    const inline = `plugins:\n  enabled: []\n`
+  // Inline `enabled: []` is why cyborg-public loaded 0 of its 4 plugins and
+  // why sync used to refuse to touch it (base package v1, spec §2). It is now
+  // rewritten as a block list in place — never a second plugins key.
+  it('converts an inline enabled: [] into a block list (no duplicate plugins key)', () => {
+    const inline = `plugins:\n  enabled: []\nmemory:\n  x: 1\n`
     const { content, added } = ensurePluginsEnabled(inline, ['p1'])
+    expect(added).toEqual(['p1'])
+    expect(content).toBe(`plugins:\n  enabled:\n    - p1\nmemory:\n  x: 1\n`)
+    expect(content.match(/^plugins:/gm)?.length).toBe(1)
+  })
+
+  it('converts a non-empty inline list to a block list keeping every entry', () => {
+    const inline = `plugins:\n  enabled: [a, "b"]\n`
+    const { content, added } = ensurePluginsEnabled(inline, ['b', 'c'])
+    expect(added).toEqual(['c'])
+    expect(content).toBe(`plugins:\n  enabled:\n    - a\n    - b\n    - c\n`)
+  })
+
+  it('converts an inline list even when no names are new (shape fix alone)', () => {
+    const inline = `plugins:\n  enabled: [a]\n`
+    const { content, added } = ensurePluginsEnabled(inline, ['a'])
     expect(added).toEqual([])
-    expect(content).toBe(inline)
-    expect(content.match(/^plugins:/gm)?.length).toBe(1) // no second plugins block
+    expect(content).toBe(`plugins:\n  enabled:\n    - a\n`)
+  })
+
+  it('still BAILS on an inline value it cannot parse safely', () => {
+    const odd = `plugins:\n  enabled: [a, [b]]\n`
+    const { content, added } = ensurePluginsEnabled(odd, ['p1'])
+    expect(added).toEqual([])
+    expect(content).toBe(odd)
   })
 
   it('respects deeper item indentation instead of mis-nesting at 4 spaces', () => {
@@ -200,10 +226,24 @@ describe('ensurePluginsEnabled', () => {
     expect(content).toMatch(/        - a\n        - b/) // 8-space items preserved
   })
 
-  it('BAILS on a plugins block with no block-style enabled child', () => {
+  it('adds an enabled child to a plugins block that has none (no duplicate key)', () => {
     const odd = `plugins:\n  disabled:\n    - x\n`
     const { content, added } = ensurePluginsEnabled(odd, ['p1'])
-    expect(added).toEqual([])
-    expect(content).toBe(odd)
+    expect(added).toEqual(['p1'])
+    expect(content).toBe(`plugins:\n  enabled:\n    - p1\n  disabled:\n    - x\n`)
+  })
+
+  it('ignores an indented plugins: nested under another key (anchors column 0)', () => {
+    const nested = `discord:\n  plugins:\n    enabled: []\n`
+    const { content, added } = ensurePluginsEnabled(nested, ['p1'])
+    expect(added).toEqual(['p1'])
+    expect(content).toContain(`discord:\n  plugins:\n    enabled: []\n`)
+    expect(content.match(/^plugins:/gm)?.length).toBe(1)
+  })
+
+  it('preserves CRLF line endings', () => {
+    const crlf = `plugins:\r\n  enabled: []\r\n`
+    const { content } = ensurePluginsEnabled(crlf, ['p1'])
+    expect(content).toBe(`plugins:\r\n  enabled:\r\n    - p1\r\n`)
   })
 })
