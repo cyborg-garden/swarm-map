@@ -101,3 +101,43 @@ describe('checkBasePackageDrift', () => {
     expect(r.ok).toBe(true)
   })
 })
+
+describe('public reachability + dead top-level toolsets (review fixes)', () => {
+  it('flags a public Discord agent that the public cannot reach, and a top-level disabled_toolsets', () => {
+    seed({
+      'config.yaml': 'disabled_toolsets:\n  - discord_admin\nplugins:\n  enabled: []\n',
+      // cyborg-public shape: allow-all was its only grant; no channel-scoped access.
+      '.env': 'DISCORD_BOT_TOKEN=x\nDISCORD_ALLOW_ALL_USERS=false\nDISCORD_ALLOWED_USERS=\nDISCORD_ALLOWED_CHANNELS=111,222\n',
+      '.hsm-base-package': JSON.stringify({ version: pkg.version, surface: 'public', packs: [] }),
+    })
+    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_pub' })
+    const unreachable = r.findings.filter((f) => f.id === 'public-unreachable')
+    expect(unreachable.map((f) => f.message).join('\n')).toMatch(/DISCORD_CHANNEL_SCOPED_ACCESS/)
+    expect(ids(r)).toContain('dead-toplevel-disabled-toolsets')
+    // names keys, never values
+    expect(JSON.stringify(r)).not.toMatch(/111|222/)
+  })
+
+  it('is quiet when channel-scoped access and real channel ids are set', () => {
+    seed({
+      'config.yaml': 'plugins:\n  enabled:\n    - person_memory\n',
+      '.env': 'DISCORD_BOT_TOKEN=x\nDISCORD_ALLOW_ALL_USERS=false\nDISCORD_CHANNEL_SCOPED_ACCESS=true\nDISCORD_ALLOWED_CHANNELS=111\n',
+      '.hsm-base-package': JSON.stringify({ version: pkg.version, surface: 'public', packs: [] }),
+    })
+    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_pub' })
+    expect(ids(r)).not.toContain('public-unreachable')
+    expect(ids(r)).not.toContain('dead-toplevel-disabled-toolsets')
+  })
+
+  it('apply warns (does not silently ship) a public agent nobody can talk to', () => {
+    seed({
+      'config.yaml': 'plugins:\n  enabled: []\n',
+      '.env': 'DISCORD_BOT_TOKEN=x\nDISCORD_ALLOW_ALL_USERS=true\nDISCORD_ALLOWED_CHANNELS=0\nDISCORD_ALLOWED_USERS=*\n',
+      'SOUL.md': '# p\n',
+    })
+    const rep = applyBasePackageToDir(dataDir, pkg, { surface: 'public', packs: [] }, repoRoot, { dryRun: true })
+    const w = rep.warnings.join('\n')
+    expect(w).toMatch(/DISCORD_ALLOWED_CHANNELS has no real channel ids/)
+    expect(w).toMatch(/re-opens DMs/)
+  })
+})

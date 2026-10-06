@@ -9,7 +9,7 @@ import fs from 'fs'
 import path from 'path'
 import { hashArtifactTree } from './artifacts-sync'
 import { readBlockList } from '../yaml-block-list'
-import { basePluginNames, selectArtifacts, readStamp, DEFAULT_SURFACE, type BasePackage, type Surface } from './base-package'
+import { basePluginNames, selectArtifacts, readStamp, publicReachabilityWarnings, DEFAULT_SURFACE, type BasePackage, type Surface } from './base-package'
 import type { Key } from '@/lib/types'
 
 export type DriftSeverity = 'error' | 'warn' | 'info'
@@ -180,6 +180,14 @@ export function checkBasePackageDrift(
       add(surface === 'public' && k === 'DISCORD_ALLOW_ALL_USERS' ? 'public-dms-reachable' : 'surface-env', 'error',
         `${surface} surface requires ${k}=${v}.`)
     }
+  }
+  if (surface === 'public' && /^DISCORD_BOT_TOKEN=./m.test(env)) {
+    for (const w of publicReachabilityWarnings(env)) add('public-unreachable', 'error', w)
+  }
+  // The runtime reads agent.disabled_toolsets only; a column-0
+  // `disabled_toolsets:` looks like a guard and disables nothing.
+  if (/^disabled_toolsets:/m.test(config)) {
+    add('dead-toplevel-disabled-toolsets', 'warn', 'Top-level disabled_toolsets is ignored by the runtime (only agent.disabled_toolsets is read); those toolsets are still enabled.')
   }
   if (profile.disabledToolsets.length) {
     const disabled = new Set(readBlockList(config, 'agent', 'disabled_toolsets') ?? [])

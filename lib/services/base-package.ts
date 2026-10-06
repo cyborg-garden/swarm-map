@@ -211,6 +211,30 @@ export interface ApplyReport {
 function readIf(p: string): string | null {
   try { return fs.readFileSync(p, 'utf-8') } catch { return null }
 }
+
+/**
+ * Public-surface reachability, from the hermes-agent-mt auth chain
+ * (discord adapter _is_allowed_user + gateway authz_mixin): with
+ * DISCORD_ALLOW_ALL_USERS=false, a member of the public is admitted only when
+ * DISCORD_CHANNEL_SCOPED_ACCESS=true AND DISCORD_ALLOWED_CHANNELS lists real
+ * channel ids ('*' and '0' are never grants). A '*' user allowlist re-opens
+ * DMs. Names keys only — never values.
+ */
+export function publicReachabilityWarnings(env: string): string[] {
+  const out: string[] = []
+  const val = (k: string) => (env.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1] ?? '').trim()
+  const channels = val('DISCORD_ALLOWED_CHANNELS').split(',').map((c) => c.trim()).filter((c) => c && c !== '*' && c !== '0')
+  if (!['true', '1', 'yes'].includes(val('DISCORD_CHANNEL_SCOPED_ACCESS').toLowerCase())) {
+    out.push('public surface: DISCORD_CHANNEL_SCOPED_ACCESS is not true, so with DISCORD_ALLOW_ALL_USERS=false the bot answers nobody outside DISCORD_ALLOWED_USERS/ROLES')
+  }
+  if (channels.length === 0) {
+    out.push('public surface: DISCORD_ALLOWED_CHANNELS has no real channel ids, so channel-scoped access admits nobody')
+  }
+  if (val('DISCORD_ALLOWED_USERS').split(',').some((u) => u.trim() === '*')) {
+    out.push('public surface: DISCORD_ALLOWED_USERS contains "*", which re-opens DMs to everyone')
+  }
+  return out
+}
 function envValue(env: string, key: string): string | undefined {
   const m = env.match(new RegExp(`^${key}=(.*)$`, 'm'))
   return m ? m[1].trim() : undefined
@@ -312,6 +336,12 @@ export function applyBasePackageToDir(
       steps.push({ kind: 'env', target: `.env ${k}`, detail: `= ${val} (${sel.surface} surface)` })
     }
     if (envChanged) write(envPath, env, 0o600)
+    // With DISCORD_ALLOW_ALL_USERS=false and no user/role allowlist, guild
+    // traffic is admitted only via channel-scoped access (adapter AND gateway
+    // both check it). Without it the bot goes silent for everyone — say so.
+    if (sel.surface === 'public' && /^DISCORD_BOT_TOKEN=./m.test(env)) {
+      warnings.push(...publicReachabilityWarnings(env))
+    }
   }
 
   // 5. Stamp (no timestamp — a re-run must be byte-identical).
