@@ -449,17 +449,21 @@ export class KeysService {
     return `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`
   }
 
-  writeKeyToEnv(harnessIdOrName: string, provider: string, value: string, hints?: EnvVarHints): void {
+  // Returns whether the .env changed. An already-correct .env is not rewritten.
+  writeKeyToEnv(harnessIdOrName: string, provider: string, value: string, hints?: EnvVarHints): boolean {
     const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
     const dataDir = agentDataDir(name)
     const envPath = path.join(dataDir, '.env')
 
     let content = ''
+    let exists = true
     try {
       content = fs.readFileSync(envPath, 'utf-8')
     } catch {
       // .env doesn't exist yet — will create
+      exists = false
     }
+    const original = content
 
     const varName = this.resolveEnvVar(provider, value, hints)
     content = upsertEnvVar(content, varName, value)
@@ -480,8 +484,10 @@ export class KeysService {
       content = upsertEnvVar(content, 'BLUESKY_IDENTIFIER', hints.identifier.trim())
     }
 
+    if (exists && content === original) return false
     fs.mkdirSync(dataDir, { recursive: true })
     fs.writeFileSync(envPath, content, { mode: 0o600 })
+    return true
   }
 
   removeKeyFromEnv(harnessIdOrName: string, provider: string, hints?: EnvVarHints): void {
@@ -601,6 +607,34 @@ export class KeysService {
     for (const h of removed) this.removeKeyFromEnv(h, before.provider, hints)
 
     return [...added, ...removed]
+  }
+
+  // Rewrite an assigned key's value into its agents' .env files. setAssignment
+  // syncs only the diff of an assignment, so it cannot repair an agent that is
+  // assigned on paper but never received the var (e.g. capsolver on personal,
+  // written as CUSTOM_API_KEY before #151 and never rewritten). This can.
+  //
+  // `harnessIds` narrows the resync; ids the key is not assigned to are
+  // reported in `notAssigned` and never written. Legacy misnamed vars are left
+  // in place. Returns undefined for an unknown key. `changed` lists the
+  // harnesses whose .env changed, so the caller recreates only those.
+  resync(id: string, harnessIds?: string[]): { changed: string[]; notAssigned: string[]; noValue: boolean } | undefined {
+    const key = this.list().find((k) => k.id === id)
+    if (!key) return undefined
+    const assigned = key.assignedTo ?? []
+    const targets = harnessIds ? harnessIds.filter((h) => assigned.includes(h)) : assigned
+    const notAssigned = harnessIds ? harnessIds.filter((h) => !assigned.includes(h)) : []
+
+    const value = this.getDecryptedValue(id)
+    const changed: string[] = []
+    if (value) {
+      const hints: EnvVarHints = { name: key.name, envVar: key.envVar, identifier: key.identifier }
+      for (const h of targets) {
+        if (this.writeKeyToEnv(h, key.provider, value, hints)) changed.push(h)
+      }
+    }
+    this.audit.append({ who: 'admin', what: 'key:resync', target: key.provider, meta: { changed } })
+    return { changed, notAssigned, noValue: !value }
   }
 
   rotateValue(id: string, newValue: string, updates?: Partial<Key>): Key | undefined {
