@@ -8,7 +8,7 @@ Integrates with Swarm Map (formerly HSM) to enforce:
 
 Configuration via environment variables:
 - HSM_URL: URL of the HSM API (e.g., http://localhost:3002)
-- HERMES_AGENT_NAME: Agent identifier in HSM (e.g., hermes-personal)
+- HERMES_AGENT_NAME: Agent identifier in HSM (e.g., hermes-researcher)
 
 Security model:
 - Group checks: FAIL-CLOSED (deny if HSM unreachable)

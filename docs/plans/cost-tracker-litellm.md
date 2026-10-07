@@ -26,9 +26,9 @@ ended_at REAL,
 model TEXT,
 ```
 
-**Current problem:** All agents show `estimated_cost_usd = 0.0` and `cost_status = "unknown"`. This is because agents route through LiteLLM proxy (`http://litellm-proxy:4000/v1`), and `usage_pricing.py` can't resolve pricing for the proxied model names. The proxy obscures the real provider — `resolve_billing_route` sees `base_url=litellm-proxy:4000` and falls back to "unknown" billing mode.
+**Known problem:** agents that route through a LiteLLM proxy show `estimated_cost_usd = 0.0` and `cost_status = "unknown"`. This is because they call the proxy (`http://litellm-proxy:4000/v1`), and `usage_pricing.py` can't resolve pricing for the proxied model names. The proxy obscures the real provider — `resolve_billing_route` sees `base_url=litellm-proxy:4000` and falls back to "unknown" billing mode.
 
-Token counts ARE populated and accurate (e.g., `seraph-doer` has 40M+ total tokens across 171 sessions).
+Token counts ARE populated and accurate — `SUM(input_tokens + output_tokens)` over `sessions` returns real totals even while every `estimated_cost_usd` is `0.0`.
 
 ### 2. Hermes usage_pricing.py (COMPUTATION ENGINE)
 
@@ -47,7 +47,7 @@ This runs per API call inside `run_agent.py` (line ~8594) and accumulates into `
 
 ### 4. LiteLLM Proxy
 
-Config at `litellm-config.yaml` — routes `claude-sonnet-4` to Bedrock, `gemini-flash` to Vertex AI. LiteLLM has a `/spend` API but it requires database configuration (PostgreSQL or SQLite) which is NOT currently enabled. Without `database_url` in the config, LiteLLM does not track spend.
+A `litellm-config.yaml` maps model aliases to providers (illustratively, `claude-sonnet-4` → Bedrock, `gemini-flash` → Vertex AI). LiteLLM has a `/spend` API but it requires database configuration (PostgreSQL or SQLite), which a default proxy setup does not enable. Without `database_url` in the config, LiteLLM does not track spend.
 
 ### 5. HSM UI (PLACEHOLDER)
 
@@ -74,7 +74,7 @@ state.db (per agent)  -->  /api/harnesses/[id]/usage  -->  UI components
 | Option | Pros | Cons |
 |--------|------|------|
 | **state.db** (recommended) | Already has token counts; structured SQL; per-session granularity; works now | Cost estimates are $0 due to proxy routing (fixable) |
-| LiteLLM /spend API | Would capture actual provider costs | Requires PostgreSQL setup; not currently enabled; adds infra dependency |
+| LiteLLM /spend API | Would capture actual provider costs | Requires PostgreSQL setup; off by default; adds infra dependency |
 | Log parsing | No setup needed | Unstructured; fragile; no cost data in logs currently |
 | Agent socket/API | Real-time | Agents don't expose a cost endpoint; would need upstream changes |
 

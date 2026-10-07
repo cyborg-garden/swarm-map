@@ -18,8 +18,8 @@ allowlist "Admins") caused a real silent-bot incident:
   threads. Discord channel lists (`DISCORD_ALLOWED_CHANNELS`,
   `DISCORD_IGNORED_CHANNELS`, free-response) also accept **category**
   snowflakes: a category id matches every channel in the category, evaluated
-  by the adapter at message time (hermes-agent-mt#160) — so a ring like
-  "the Greenhouse" is one entry, and channels created inside it later are
+  by the adapter at message time (hermes-agent-mt#160) — so a category like
+  "Members" is one entry, and channels created inside it later are
   covered without a re-render. ID-only; category names are never matched.
 - **Privilege** — who can approve gated tools (`is_platform_admin`). Lives in
   the `surfaceAdmins` overlay (`harnesses.json`), served live by

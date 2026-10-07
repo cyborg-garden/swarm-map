@@ -42,7 +42,7 @@ else:
     params["recipient"] = [chat_id]
 ```
 
-If `SIGNAL_HOME_CHANNEL` is set to a display name like `"NimbleCo"`, the send call treats it as a phone number recipient, which fails.
+If `SIGNAL_HOME_CHANNEL` is set to a display name like `"My Team"`, the send call treats it as a phone number recipient, which fails.
 
 ### Incoming message format (`gateway/platforms/signal.py:587-605`)
 

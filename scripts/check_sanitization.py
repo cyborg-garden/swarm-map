@@ -257,7 +257,8 @@ NOT particulars — do NOT flag (this is the publisher describing its own platfo
   and the former org names it was published under, which still appear throughout \
   historical content: NimbleCo / NimbleCoAI / NimbleCoOrg / nimbleco.ai; \
   Hermes, Swarm Map / SM / swarm-map, the former names Hermes Swarm Map / HSM / \
-  hermes-swarm-map, hermes-agent, this repo's own name and its GitHub URLs;
+  hermes-swarm-map, hermes-agent and its published multi-tenant fork hermes-agent-mt, \
+  this repo's own name and its GitHub URLs;
 - the platform's own architecture, design, roadmap, plans, and contributor docs;
 - generic tool / API / platform / model / provider names and public reference material;
 - clearly fictional placeholders (Subject A, <case>, example.com, <host>).
