@@ -28,11 +28,11 @@ Swarm Map (SM) — formerly Hermes Swarm Map — is an open-source admin GUI + R
 
 **Data at `~/.hermes-swarm-map/`** (configurable via `DATA_DIR`). Holds configs, encryption key, audit logs, and standalone compose files for new agents. Not in the repo.
 
-**Agents discovered from Docker.** Scans running containers and compose files for Hermes markers. Existing compose files (e.g. `hermes-agent-mt/docker-compose.yml`) are read-only — never modified.
+**Agents discovered from Docker.** Scans running containers and compose files for Hermes markers. Pre-existing compose files that Swarm Map did not create (e.g. a `docker-compose.yml` inside a Hermes source checkout) are read-only — never modified.
 
 **New agents get standalone compose.** Created via wizard or API, each gets `~/.hermes-swarm-map/compose/{name}/docker-compose.yml`. This is the only compose file Swarm Map writes.
 
-**Designed for headless operation.** Runs on a Mac Mini or Linux server, accessible over the network via `--hostname 0.0.0.0`. The smart dev script (`bin/dev.sh`) auto-detects free ports and kills zombie processes.
+**Designed for headless operation.** Runs on a small always-on macOS or Linux host, accessible over the network via `--hostname 0.0.0.0`. The smart dev script (`bin/dev.sh`) auto-detects free ports and kills zombie processes.
 
 ## Key Patterns
 
@@ -59,7 +59,7 @@ Never hardcode agent ports. The deploy service queries Docker directly (`docker 
 
 ### Image Fallback
 
-New agents try `nousresearch/hermes-agent:latest` from Docker Hub first. If pull fails (auth, network), falls back to a locally-built image (prefers one with `personal` in the name as the most generic base). Handled in the deploy route.
+New agents try `nousresearch/hermes-agent:latest` from Docker Hub first. If pull fails (auth, network), falls back to a locally-built `hermes*` image, preferring the base build over agent-specific ones (name heuristic in `app/api/setup/deploy/route.ts`).
 
 ### Key Encryption
 
@@ -158,7 +158,7 @@ The API is designed for programmatic access. An AI agent can:
 curl http://host:3002/api/harnesses
 
 # Quick-restart an agent
-curl -X POST http://host:3002/api/harnesses/h_personal/restart \
+curl -X POST http://host:3002/api/harnesses/h_example/restart \
   -H "Content-Type: application/json" -d '{"mode":"quick"}'
 
 # Deploy a new agent
@@ -167,10 +167,10 @@ curl -X POST http://host:3002/api/setup/deploy \
   -d '{"name":"researcher","provider":"anthropic","primaryModel":"claude-sonnet-4-6","llmKey":"sk-ant-..."}'
 
 # Read logs
-curl http://host:3002/api/harnesses/h_personal/logs?lines=50
+curl http://host:3002/api/harnesses/h_example/logs?lines=50
 
 # Update model cascade
-curl -X PUT http://host:3002/api/harnesses/h_personal/models \
+curl -X PUT http://host:3002/api/harnesses/h_example/models \
   -H "Content-Type: application/json" \
   -d '{"cascade":["claude-sonnet-4-6","claude-haiku-4-5","qwen3:8b"]}'
 ```
@@ -185,7 +185,7 @@ pnpm seed        # first run only — writes settings + tier overlays
 pnpm dev         # starts at http://localhost:3000 (or next free port)
 ```
 
-## Running on Remote (Mac Mini)
+## Running on a Remote Host
 
 ```bash
 pnpm build
@@ -204,7 +204,7 @@ All 176 tests must pass before committing. Tests mock Docker and filesystem — 
 
 ## What NOT To Do
 
-- **Never modify shared compose files** — `hermes-agent-mt/docker-compose.yml` and similar are read-only. Swarm Map only writes to `~/.hermes-swarm-map/compose/{name}/`.
+- **Never modify shared compose files** — compose files Swarm Map did not create (e.g. one in a Hermes source checkout) are read-only. Swarm Map only writes to `~/.hermes-swarm-map/compose/{name}/`.
 - **Never expose raw key values** — API responses return masked values only. `Encryption` handles all at-rest secrets.
 - **Never hardcode ports** — always use the port scanning logic. Hardcoded ports cause conflicts.
 - **Never write directly to `~/.hermes-{name}/`** — go through the service layer. Direct writes bypass encryption and audit.

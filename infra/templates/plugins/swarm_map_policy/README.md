@@ -8,7 +8,7 @@ Set these environment variables in your agent's `.env`:
 
 ```
 HSM_URL=http://localhost:3002
-HERMES_AGENT_NAME=hermes-personal
+HERMES_AGENT_NAME=hermes-<agent>
 ```
 
 ## Security Model
