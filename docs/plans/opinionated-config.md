@@ -2,7 +2,7 @@
 
 **Status:** Research / RFC
 **Date:** 2026-05-20
-**Author:** Juniper (via research agent)
+**Author:** maintainers (via research agent)
 **See also:** [Image vs HSM Boundary](../architecture/image-vs-hsm-boundary.md) — decision framework for what belongs in the Docker image vs HSM scaffolding
 
 ## Problem

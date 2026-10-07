@@ -1,9 +1,9 @@
 # Design: Hermes Artifact Commons + HSM Manifest Loader
 
 **Date:** 2026-06-03
-**Author:** Juniper (with Claude)
+**Author:** maintainers (with Claude)
 **Status:** Phase 1 merged (manifest loader). Phase 2 `git:` fetch + install-time
-trust gate implemented 2026-06-09 (branch `dev/juniper/artifact-git-source-trust-gate`);
+trust gate implemented 2026-06-09 (artifact git-source trust-gate branch);
 see the implementation-status note under Phase 2.
 
 ## Problem & Driver
@@ -131,7 +131,7 @@ reflect reality. Update behavior-pinning tests.
   `GITHUB_TOKEN`), a resolved-artifact cache, and loud failure on fetch error.
 - Every step is a revertable PR.
 
-**Implementation status — 2026-06-09 (`dev/juniper/artifact-git-source-trust-gate`):**
+**Implementation status — 2026-06-09 (artifact git-source trust-gate branch):**
 the `git:` fetch is **built**, and Phase 2 gained a **trust gate** that was not in
 the original design — the security boundary that makes third-party sourcing safe:
 
