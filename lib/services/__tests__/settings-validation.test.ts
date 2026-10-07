@@ -67,3 +67,20 @@ describe('validateSettingsPatch — discordThreadMentionOptOuts', () => {
     expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: ['x\ny'] })).toThrow()
   })
 })
+
+describe('validateSettingsPatch — discordApproverRoles', () => {
+  it('accepts Discord role IDs, an empty list (nobody by role) and null (unmanaged)', () => {
+    expect(validateSettingsPatch({ discordApproverRoles: ['1533670688001495051'] }))
+      .toEqual({ discordApproverRoles: ['1533670688001495051'] })
+    expect(validateSettingsPatch({ discordApproverRoles: [] })).toEqual({ discordApproverRoles: [] })
+    expect(validateSettingsPatch({ discordApproverRoles: null })).toEqual({ discordApproverRoles: null })
+  })
+
+  it('rejects names, non-IDs and anything that could break the yaml line', () => {
+    expect(() => validateSettingsPatch({ discordApproverRoles: '1533670688001495051' })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ['approver'] })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ['123'] })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ["1533670688001495051'\nx: y"] })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ['1533670688001495051,1'] })).toThrow()
+  })
+})

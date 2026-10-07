@@ -61,6 +61,19 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         }
         out.discordThreadMentionOptOuts = value as string[]
         break
+      case 'discordApproverRoles':
+        // Discord role IDs (snowflakes) only — names can be renamed or
+        // duplicated, and each value lands verbatim in config.yaml.
+        // [] = nobody approves by role; null = swarm-map leaves the key alone.
+        if (value === null) {
+          out.discordApproverRoles = null
+          break
+        }
+        if (!Array.isArray(value) || !value.every((v) => typeof v === 'string' && /^[0-9]{15,21}$/.test(v))) {
+          throw new Error('discordApproverRoles must be an array of Discord role IDs, or null')
+        }
+        out.discordApproverRoles = [...new Set(value as string[])]
+        break
       default:
         throw new Error(`unknown settings key: ${key}`)
     }
