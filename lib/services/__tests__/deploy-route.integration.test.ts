@@ -133,6 +133,13 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(baseline.install).toHaveBeenCalledWith(path.join(h.tmpHome, '.hermes-pub'), { surface: 'public', packs: [] })
   })
 
+  it('base package: a public agent still gets the browser config (browser is base research)', async () => {
+    const res = await deploy({ name: 'pubbrw', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', surface: 'public' })
+    expect((await res.json()).ok).toBe(true)
+    const config = fs.readFileSync(path.join(h.tmpHome, '.hermes-pubbrw', 'config.yaml'), 'utf-8')
+    expect(config).toMatch(/^browser:\n/m)
+  })
+
   it('base package: browser tools imply the browser-ops pack', async () => {
     baseline.install.mockClear()
     await deploy({ name: 'brw', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', browserEnabled: true })

@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "plugins": [
     {
       "name": "swarm_map_policy",
@@ -64,7 +64,7 @@
   ],
   "packs": {
     "browser-ops": {
-      "description": "Camofox browser, captcha solving and browser login. Never on a public surface.",
+      "description": "Captcha solving and browser login on top of the base browser. Never on a public surface.",
       "public": false
     },
     "community-member": {
@@ -91,6 +91,12 @@
       "envVar": "OPENROUTER_API_KEY",
       "provider": "openrouter",
       "model": "google/gemini-2.5-flash"
+    },
+    "browser": {
+      "toolset": "browser",
+      "backend": "camofox",
+      "envVar": "CAMOFOX_URL",
+      "defaultUrl": "http://host.docker.internal:9377"
     }
   },
   "surfaces": {
@@ -112,7 +118,8 @@
       "env": {
         "DISCORD_ALLOW_ALL_USERS": "false",
         "GATEWAY_ALLOW_ALL_USERS": "false",
-        "DISCORD_CHANNEL_SCOPED_ACCESS": "true"
+        "DISCORD_CHANNEL_SCOPED_ACCESS": "true",
+        "SWARM_MAP_SURFACE": "public"
       },
       "disabledToolsets": [
         "terminal",
@@ -152,7 +159,8 @@
       ],
       "forbiddenEnv": [
         "CAPSOLVER_API_KEY",
-        "CAMOFOX_URL",
+        "BROWSER_LOGIN_DESCRIPTORS",
+        "CAMOFOX_USER_ID",
         "GITHUB_TOKEN",
         "GITHUB_PERSONAL_ACCESS_TOKEN",
         "GOOGLE_CLIENT_ID",

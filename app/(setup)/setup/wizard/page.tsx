@@ -978,7 +978,7 @@ export default function WizardPage() {
                 value={state.surface}
                 onChange={(e) => {
                   const surface = e.target.value as WizardState['surface']
-                  // A public agent never gets browser/captcha, GitHub or Google.
+                  // A public agent never gets captcha/browser login, GitHub or Google.
                   update(surface === 'public'
                     ? { surface, browserEnabled: false, githubMcpEnabled: false, googleEnabled: false }
                     : { surface })
@@ -991,7 +991,7 @@ export default function WizardPage() {
               </select>
               {state.surface === 'public' && (
                 <p className="text-xs text-muted-foreground">
-                  Public agents get web search and page reading, but DMs, terminal, file access and Discord history tools are off, and browser, GitHub and Google can&apos;t be added.
+                  Public agents get web search, page reading and a browser limited to public websites, but DMs, terminal, file access and Discord history tools are off, and captcha solving, browser login, GitHub and Google can&apos;t be added.
                 </p>
               )}
             </div>
@@ -1007,8 +1007,8 @@ export default function WizardPage() {
                   className="accent-[var(--accent)]"
                 />
                 <div>
-                  <div className="font-medium text-sm">Browser Tools</div>
-                  <div className="text-xs text-muted-foreground">Web browsing via Camofox (requires Camofox container running on host)</div>
+                  <div className="font-medium text-sm">Captcha + browser login (browser-ops)</div>
+                  <div className="text-xs text-muted-foreground">Every agent already browses via Camofox. This adds captcha solving and logged-in browsing. Not for public agents.</div>
                 </div>
               </label>
 

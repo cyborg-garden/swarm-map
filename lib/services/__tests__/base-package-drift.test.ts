@@ -102,6 +102,32 @@ describe('checkBasePackageDrift', () => {
   })
 })
 
+describe('browser in the research layer', () => {
+  it('flags a missing browser backend and a disabled browser toolset', () => {
+    seed({
+      'config.yaml': 'model:\n  provider: zai\nagent:\n  disabled_toolsets:\n    - browser\n',
+      '.env': 'GLM_API_KEY=x\n',
+      '.hsm-base-package': JSON.stringify({ version: pkg.version, surface: 'team', packs: [] }),
+    })
+    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_x' })
+    expect(ids(r)).toEqual(expect.arrayContaining(['browser-backend-missing', 'browser-toolset-disabled']))
+  })
+
+  it('a public agent with a shared browser profile or browser login is flagged', () => {
+    seed({
+      'config.yaml': 'model:\n  provider: zai\n',
+      '.env': 'CAMOFOX_URL=http://x:9377\nCAMOFOX_USER_ID=shared\nBROWSER_LOGIN_DESCRIPTORS=x\n',
+      '.hsm-base-package': JSON.stringify({ version: pkg.version, surface: 'public', packs: [] }),
+    })
+    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_x' })
+    const forbidden = r.findings.filter((f) => f.id === 'public-forbidden-env').map((f) => f.message).join('\n')
+    expect(forbidden).toContain('CAMOFOX_USER_ID')
+    expect(forbidden).toContain('BROWSER_LOGIN_DESCRIPTORS')
+    expect(forbidden).not.toContain('CAMOFOX_URL')
+    expect(ids(r)).not.toContain('browser-backend-missing')
+  })
+})
+
 describe('public reachability + dead top-level toolsets (review fixes)', () => {
   it('flags a public Discord agent that the public cannot reach, and a top-level disabled_toolsets', () => {
     seed({

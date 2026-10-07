@@ -69,6 +69,14 @@ the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
 - **Public surface:** DMs off (`DISCORD_ALLOW_ALL_USERS=false`), terminal,
   code execution, file and Discord-history toolsets off, a pruned skill list,
   and no browser-ops / GitHub / Google.
+- **Browser (v1.1):** plain browsing is base research for every agent, public
+  included: create and sync add `CAMOFOX_URL` when an agent has none (an
+  existing URL is kept; no `CAMOFOX_USER_ID`, so sessions use ephemeral
+  profiles). `browser-ops` is now only captcha solving + browser login. On a
+  public surface `SWARM_MAP_SURFACE=public` turns on the swarm-map-policy
+  browser guard: navigation only to public http(s) hosts, no page JavaScript,
+  no CDP. Hermes skips its own SSRF check for camofox, so this guard is the
+  barrier; it does not cover redirects or a page's own requests.
 
 ## Choosing
 
