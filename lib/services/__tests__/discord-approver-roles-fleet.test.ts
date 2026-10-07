@@ -53,6 +53,16 @@ describe('syncFleetDiscordApproverRolesAtStartup', () => {
     expect(yamlOf('iris')).toContain("allow_admin_from: '111111111111111111'")
   })
 
+  it('ignores a hand-edited setting that is not a list of role IDs, writing nothing', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    for (const bad of [["1'\n      require_admin_for_exec_approval: false"], ['operator'], 'x', [123]]) {
+      getSettingsMock.mockReturnValue({ discordApproverRoles: bad })
+      expect(syncFleetDiscordApproverRolesAtStartup()).toBeNull()
+    }
+    expect(yamlOf('iris')).toBe(YAML)
+    expect(yamlOf('mare')).toBe(YAML)
+  })
+
   it('does nothing when the setting is unset or null (unmanaged)', () => {
     getSettingsMock.mockReturnValue({})
     expect(syncFleetDiscordApproverRolesAtStartup()).toBeNull()

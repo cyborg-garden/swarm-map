@@ -6,12 +6,22 @@
 
 import { services } from '@/lib/services'
 import { fleetThreadGateTargets } from './discord-thread-gate-fleet'
-import { syncDiscordApproverRoles, type ApproverSyncResult } from './discord-approver-roles'
+import { isApproverRoleList, syncDiscordApproverRoles, type ApproverSyncResult } from './discord-approver-roles'
 
-/** The configured approver role IDs, or null when swarm-map does not manage them. */
+/**
+ * The configured approver role IDs, or null when swarm-map does not manage
+ * them. settings.json is read back without the PUT validation, so a hand-edited
+ * value that is not a list of role IDs is treated as unmanaged (nothing is
+ * written) and logged, rather than written into every agent's config.yaml.
+ */
 export function desiredApproverRoles(): string[] | null {
   const v = services.config.getSettings()?.discordApproverRoles
-  return Array.isArray(v) ? v : null
+  if (v === undefined || v === null) return null
+  if (!isApproverRoleList(v)) {
+    console.error('[discord-approver-roles] discordApproverRoles in settings is not a list of role IDs — ignoring it')
+    return null
+  }
+  return [...new Set(v)]
 }
 
 /** Same agents the thread gate looks at: every Hermes agent HSM manages. */

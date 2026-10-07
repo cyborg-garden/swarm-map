@@ -35,6 +35,14 @@ import { hasDiscordSurface, readYamlScalar } from './discord-thread-gate'
 
 export const APPROVER_ROLES_KEY = 'approver_roles'
 
+/** A Discord snowflake. Each role lands verbatim inside a quoted YAML scalar. */
+export const ROLE_ID_RE = /^[0-9]{15,21}$/
+
+/** True when `v` is a list of role IDs safe to write (the settings patch rule, rechecked at write time). */
+export function isApproverRoleList(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((r) => typeof r === 'string' && ROLE_ID_RE.test(r))
+}
+
 export type ApproverWriteStatus = 'updated' | 'unchanged' | 'no-extra-block' | 'shadowed' | 'unsupported'
 
 // ── YAML locating (text-only, exact key paths; see readYamlScalar) ───────────
@@ -140,6 +148,8 @@ export function readApproverRoles(yaml: string): { found: boolean; roles: string
  * `platforms:` block real configs carry under display:, is left as is.
  */
 export function setApproverRolesYaml(yaml: string, roles: readonly string[]): { status: ApproverWriteStatus; yaml: string } {
+  // settings.json is read back unvalidated; a hand edit must not inject YAML.
+  if (!isApproverRoleList(roles)) throw new Error('approver roles must be Discord role IDs')
   const eol = yaml.includes('\r\n') ? '\r\n' : '\n'
   const lines = yaml.split(/\r?\n/)
 

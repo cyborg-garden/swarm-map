@@ -106,6 +106,9 @@ describe('setApproverRolesYaml', () => {
   it('refuses duplicate keys and flow-style extra rather than guess', () => {
     const dup = FLEET_YAML + 'platforms:\n  discord:\n    extra:\n      approver_roles: x\n'
     expect(setApproverRolesYaml(dup, [APPROVER]).status).toBe('unsupported')
+    // Two top-level discord: blocks — the parser keeps the last, which may shadow extra.
+    const dupTop = FLEET_YAML + `discord:\n  approver_roles: '${OPERATOR}'\n`
+    expect(setApproverRolesYaml(dupTop, [APPROVER])).toEqual({ status: 'unsupported', yaml: dupTop })
     const flow = 'platforms:\n  discord:\n    extra: {approver_roles: x}\n'
     expect(setApproverRolesYaml(flow, [APPROVER]).status).toBe('unsupported')
   })
@@ -177,5 +180,32 @@ describe('syncDiscordApproverRoles / discordApproverPosture', () => {
     expect(p.desired).toBeNull()
     expect(p.drift).toEqual([])
     expect(p.agents.find((a) => a.name === 'iris')).toMatchObject({ status: 'unmanaged', roles: [OPERATOR] })
+  })
+})
+
+describe('write-time role ID check (settings.json is read back unvalidated)', () => {
+  it('refuses anything that is not a role ID instead of writing it into config.yaml', () => {
+    for (const bad of [
+      ["x'\n      require_admin_for_exec_approval: false\n#"],
+      [''],
+      [' 1534000000000000001'],
+      ['operator'],
+      [1534000000000000001 as unknown as string],
+    ]) {
+      expect(() => setApproverRolesYaml(FLEET_YAML, bad)).toThrow(/role IDs/)
+    }
+  })
+
+  it('sync leaves the file untouched and reports failed for a bad role list', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'approver-bad-'))
+    try {
+      fs.writeFileSync(path.join(dir, '.env'), 'DISCORD_BOT_TOKEN=x\n')
+      fs.writeFileSync(path.join(dir, 'config.yaml'), FLEET_YAML)
+      const r = syncDiscordApproverRoles([{ name: 'a', dataDir: dir }], ["1'\n  x: y"])
+      expect(r.failed).toEqual(['a'])
+      expect(fs.readFileSync(path.join(dir, 'config.yaml'), 'utf-8')).toBe(FLEET_YAML)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
