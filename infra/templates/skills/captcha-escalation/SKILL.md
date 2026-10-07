@@ -12,7 +12,7 @@ When `browser_navigate` or `browser_click` returns a `bot_detection_warning`, ca
    - Include the VNC link from `captcha_escalation.vnc_url`
    - If a screenshot is available in `captcha_escalation.screenshot`, describe what you see
    - Explain what you were trying to do and what blocked you
-   - Example: "I'm trying to buy tickets on Moshtix but hit a CAPTCHA I can't solve. You can take over the browser here: [VNC link]. Let me know when you're done."
+   - Example: "I'm trying to finish a checkout on example.com but hit a CAPTCHA I can't solve. You can take over the browser here: [VNC link]. Let me know when you're done."
 
 4. **Wait for the user** to reply "done", "finished", "ok", or similar confirmation.
 
