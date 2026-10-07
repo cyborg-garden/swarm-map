@@ -7,8 +7,8 @@ Profiles are image-only markdown files at::
 with a small frontmatter header the injector reads::
 
     ---
-    display_name: Kathryn
-    role: org-coherence lead (non-technical)
+    display_name: Alex
+    role: community organiser (non-technical)
     technical_level: concept
     comm_style: warm, narrative, analogy-first; avoid jargon
     last_updated: 2026-07-17
@@ -117,7 +117,7 @@ def load_alias_ids(data_dir: str, platform: str, user_id: str) -> List[str]:
 
         {"signal": [{"display": "+<E.164 phone number>",
                      "nativeId": "<ACI UUID>",
-                     "profileName": "Kathryn"}]}
+                     "profileName": "Alex"}]}
 
     Signal is the motivating case: an envelope carries ``sourceNumber`` OR
     ``sourceUuid`` depending on the sender, so a profile keyed by one form

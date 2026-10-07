@@ -54,11 +54,11 @@ jobs:
           fi
       - name: Secrets & PII gate (deterministic — always enforced, no key needed)
         run: python scripts/check_sanitization.py ${{ steps.scope.outputs.mode }} --deterministic-only
-      - name: Particulars gate (semantic — needs ANTHROPIC_API_KEY, fails closed)
+      - name: Particulars gate (semantic — needs OPENROUTER_API_KEY, fails closed)
         # Catches use-case-specific names / orgs / case IDs. Until the repo secret
-        # ANTHROPIC_API_KEY is set, this step fails closed (the message says so) —
+        # OPENROUTER_API_KEY is set, this step fails closed (the message says so) —
         # distinct from the deterministic step above, so a red here means "set the
         # key", a red above means "a secret/PII leak was found".
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python scripts/check_sanitization.py ${{ steps.scope.outputs.mode }}

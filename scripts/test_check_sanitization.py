@@ -176,6 +176,38 @@ class TestLLMLayer:
         assert "BEGIN UNTRUSTED" in user
 
 
+class TestOpenRouterClient:
+    def test_translates_to_chat_completions(self, monkeypatch):
+        import io
+        import json as _json
+        import urllib.request
+        seen = {}
+
+        def fake_urlopen(req, timeout):
+            seen["url"] = req.full_url
+            seen["headers"] = dict(req.header_items())
+            seen["body"] = _json.loads(req.data)
+            reply = {"choices": [{"message": {"content": '{"flagged": false, "reasons": []}'}}]}
+            return io.BytesIO(_json.dumps(reply).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.delenv("SANITIZE_MODEL", raising=False)
+        v = cs.assess("generic methodology", cs._OpenRouterClient("k"), "SKILL.md")
+        assert v == {"flagged": False, "reasons": []}
+        assert seen["url"] == cs.OPENROUTER_URL
+        assert seen["body"]["model"] == cs.DEFAULT_MODEL
+        assert seen["body"]["messages"][0]["role"] == "system"
+        assert "BEGIN UNTRUSTED" in seen["body"]["messages"][1]["content"]
+        assert seen["headers"]["Authorization"] == "Bearer k"
+        assert "urllib" not in seen["headers"]["User-agent"].lower()
+
+    def test_missing_key_raises(self, monkeypatch):
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        import pytest
+        with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+            cs._make_client()
+
+
 class TestSelectFiles:
     def test_hsm_sensitive_prefixes(self):
         sel = cs.select_sensitive_files([
@@ -295,7 +327,7 @@ class TestMainFailClosed:
         rel = self._write(tmp_path, "infra/templates/skills/x/SKILL.md", "clean text")
 
         def boom():
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
+            raise RuntimeError("OPENROUTER_API_KEY not set")
 
         rc = cs.main([rel], root=str(tmp_path), client_factory=boom, require_llm=True)
         assert rc == 1
@@ -316,7 +348,7 @@ class TestCLIDeterministicOnly:
         import os
         import subprocess
         env = dict(os.environ)
-        env.pop("ANTHROPIC_API_KEY", None)  # prove it needs no key
+        env.pop("OPENROUTER_API_KEY", None)  # prove it needs no key
         env["SANITIZE_ROOT"] = str(tmp_path)
         return subprocess.run(
             [sys.executable, self.SCRIPT, "--all", "--deterministic-only"],

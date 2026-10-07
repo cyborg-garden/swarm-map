@@ -320,8 +320,8 @@ def assess(content, client, filename):
         f"BEGIN UNTRUSTED CONTENT [{nonce}]\n{content}\nEND UNTRUSTED CONTENT [{nonce}]"
     )
     msg = client.messages.create(
-        model="claude-opus-4-8",
-        max_tokens=1024,
+        model=os.environ.get("SANITIZE_MODEL", DEFAULT_MODEL),
+        max_tokens=4096,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user}],
     )
@@ -334,14 +334,45 @@ def assess(content, client, filename):
     return {"flagged": bool(verdict["flagged"]), "reasons": list(reasons)}
 
 
+DEFAULT_MODEL = "moonshotai/kimi-k3"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+class _OpenRouterClient:
+    """Minimal OpenRouter chat client exposing the ``messages.create`` shape
+    ``assess`` uses (``.content[0].text`` on the reply), so tests can keep
+    injecting a fake. Plain urllib with an explicit User-Agent: Cloudflare
+    rejects urllib's default one."""
+
+    def __init__(self, key):
+        self._key = key
+        self.messages = self
+
+    def create(self, model, max_tokens, system, messages):
+        import urllib.request
+        body = json.dumps({
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": [{"role": "system", "content": system}, *messages],
+        }).encode()
+        req = urllib.request.Request(OPENROUTER_URL, data=body, headers={
+            "Authorization": f"Bearer {self._key}",
+            "Content-Type": "application/json",
+            "User-Agent": "swarm-map-sanitization/1.0",
+        })
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.load(resp)
+        text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        block = type("B", (), {"text": text})()
+        return type("M", (), {"content": [block]})()
+
+
 def _make_client():  # pragma: no cover - thin wrapper, injected in tests
-    import anthropic
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
-        # Empty/absent secret → raise so main() fails closed with a clear message
-        # rather than letting the SDK emit an opaque auth traceback.
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
-    return anthropic.Anthropic(api_key=key)
+        # Empty/absent secret → raise so main() fails closed with a clear message.
+        raise RuntimeError("OPENROUTER_API_KEY is not set")
+    return _OpenRouterClient(key)
 
 
 def _read(path):
@@ -403,7 +434,7 @@ def main(argv, root=".", client_factory=_make_client, require_llm=True):
 if __name__ == "__main__":  # pragma: no cover
     argv = sys.argv[1:]
     # --deterministic-only: run just the secrets/PII layer (no API key needed).
-    # Used as an always-on CI gate that's meaningful before ANTHROPIC_API_KEY is
+    # Used as an always-on CI gate that's meaningful before OPENROUTER_API_KEY is
     # set; the semantic (particulars) layer runs as a separate key-gated step.
     det_only = "--deterministic-only" in argv
     argv = [a for a in argv if a != "--deterministic-only"]
