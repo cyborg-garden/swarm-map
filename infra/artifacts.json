@@ -1,16 +1,169 @@
 {
+  "version": "1.0.0",
   "plugins": [
-    { "name": "swarm_map_policy", "source": "local", "enabled": true },
-    { "name": "boot_md", "source": "local", "enabled": false },
-    { "name": "captcha_cascade", "source": "local", "enabled": true },
-    { "name": "person_memory", "source": "local", "enabled": true }
+    {
+      "name": "swarm_map_policy",
+      "source": "local",
+      "enabled": true,
+      "tier": "core"
+    },
+    {
+      "name": "person_memory",
+      "source": "local",
+      "enabled": true,
+      "tier": "core"
+    },
+    {
+      "name": "credential_redactor",
+      "source": "local",
+      "enabled": true,
+      "tier": "core"
+    },
+    {
+      "name": "boot_md",
+      "source": "local",
+      "enabled": false,
+      "tier": "core"
+    },
+    {
+      "name": "captcha_cascade",
+      "source": "local",
+      "enabled": true,
+      "tier": "pack",
+      "pack": "browser-ops"
+    }
+  ],
+  "imagePlugins": [
+    "observability",
+    "intelligent_routing"
   ],
   "skills": [
-    { "name": "ocr-and-documents", "source": "local" },
-    { "name": "session-handoff", "source": "local" },
-    { "name": "captcha-escalation", "source": "local" }
+    {
+      "name": "session-handoff",
+      "source": "local",
+      "tier": "core"
+    },
+    {
+      "name": "garden-orientation",
+      "source": "local",
+      "tier": "core"
+    },
+    {
+      "name": "captcha-escalation",
+      "source": "local",
+      "tier": "pack",
+      "pack": "browser-ops"
+    }
   ],
   "hooks": [
-    { "name": "lifecycle-notify", "source": "local" }
+    {
+      "name": "lifecycle-notify",
+      "source": "local",
+      "tier": "core"
+    }
+  ],
+  "packs": {
+    "browser-ops": {
+      "description": "Camofox browser, captcha solving and browser login. Never on a public surface.",
+      "public": false
+    },
+    "community-member": {
+      "description": "Public-safe community seed (orientation + community MEMORY). Ships via the use-case template path.",
+      "public": true
+    }
+  },
+  "research": {
+    "requiredKeys": [
+      {
+        "provider": "brave",
+        "envVar": "BRAVE_SEARCH_API_KEY"
+      }
+    ],
+    "searchBackendWithKey": "brave-free",
+    "searchBackendWithoutKey": "ddgs",
+    "extractBackend": "firecrawl",
+    "imagePackages": [
+      "firecrawl-py",
+      "ddgs"
+    ],
+    "vision": {
+      "keyProvider": "openrouter",
+      "envVar": "OPENROUTER_API_KEY",
+      "provider": "openrouter",
+      "model": "google/gemini-2.5-flash"
+    }
+  },
+  "surfaces": {
+    "private": {
+      "env": {},
+      "disabledToolsets": [],
+      "disabledSkills": [],
+      "forbiddenPacks": [],
+      "forbiddenEnv": []
+    },
+    "team": {
+      "env": {},
+      "disabledToolsets": [],
+      "disabledSkills": [],
+      "forbiddenPacks": [],
+      "forbiddenEnv": []
+    },
+    "public": {
+      "env": {
+        "DISCORD_ALLOW_ALL_USERS": "false",
+        "GATEWAY_ALLOW_ALL_USERS": "false",
+        "DISCORD_CHANNEL_SCOPED_ACCESS": "true"
+      },
+      "disabledToolsets": [
+        "terminal",
+        "code_execution",
+        "file",
+        "discord",
+        "discord_admin",
+        "computer_use"
+      ],
+      "disabledSkills": [
+        "apple-notes",
+        "apple-reminders",
+        "findmy",
+        "imessage",
+        "openhue",
+        "himalaya",
+        "yuanbao",
+        "evaluating-llms-harness",
+        "weights-and-biases",
+        "huggingface-hub",
+        "llama-cpp",
+        "serving-llms-vllm",
+        "audiocraft-audio-generation",
+        "segment-anything-model",
+        "computer-use",
+        "dogfood",
+        "captcha-escalation",
+        "codebase-inspection",
+        "github-auth",
+        "github-code-review",
+        "github-issues",
+        "github-pr-workflow",
+        "github-repo-management"
+      ],
+      "forbiddenPacks": [
+        "browser-ops"
+      ],
+      "forbiddenEnv": [
+        "CAPSOLVER_API_KEY",
+        "CAMOFOX_URL",
+        "GITHUB_TOKEN",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET"
+      ]
+    }
+  },
+  "deadEnvKeys": [
+    "HERMES_DM_POLICY",
+    "HERMES_APPROVAL_ADMIN_ONLY",
+    "HERMES_MEMORY_SCOPE",
+    "LLM_DAILY_COST_LIMIT"
   ]
 }

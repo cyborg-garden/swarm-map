@@ -182,17 +182,17 @@ export function generateEnvContent(params: {
 
   // Baseline agent identity & memory scoping
   lines.push('')
-  lines.push(`# Agent identity & memory`)
+  lines.push(`# Agent identity`)
   lines.push(`HOME=/opt/data`)
-  lines.push(`HERMES_MEMORY_SCOPE=channel`)
   lines.push(`HERMES_AGENT_NAME=${name}`)
   lines.push(`HERMES_HOME_CHANNEL=`)
 
   // Policy defaults (secure by default)
   lines.push('')
+  // (HERMES_DM_POLICY / HERMES_APPROVAL_ADMIN_ONLY / HERMES_MEMORY_SCOPE used
+  // to be written here. No runtime code reads them — base package v1 dropped
+  // them so nobody mistakes them for guards.)
   lines.push(`# Policy defaults (secure by default)`)
-  lines.push(`HERMES_DM_POLICY=approved-only`)
-  lines.push(`HERMES_APPROVAL_ADMIN_ONLY=true`)
   lines.push(`SIGNAL_REQUIRE_MENTION=true`)
   lines.push(`TELEGRAM_REQUIRE_MENTION=true`)
   lines.push(`MATTERMOST_REQUIRE_MENTION=true`)

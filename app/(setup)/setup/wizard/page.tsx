@@ -57,6 +57,8 @@ type WizardState = {
   notionEnabled: boolean
   notionKey: string
   browserEnabled: boolean
+  // Base package surface profile: who can talk to the agent
+  surface: 'private' | 'team' | 'public'
   // Step 4
   llmKey: string
   useExistingKey: boolean
@@ -94,6 +96,7 @@ const INITIAL_STATE: WizardState = {
   notionEnabled: false,
   notionKey: '',
   browserEnabled: false,
+  surface: 'team',
   llmKey: '',
   useExistingKey: false,
   existingKeyId: '',
@@ -312,6 +315,7 @@ export default function WizardPage() {
           slackAppToken: state.slackAppToken,
           signalEnabled: state.signalEnabled,
           signalPhone: signalCaptured?.phone || state.signalPhone,
+          surface: state.surface,
           googleEnabled: state.googleEnabled,
           githubMcpEnabled: state.githubMcpEnabled,
           notionEnabled: state.notionEnabled,
@@ -967,12 +971,38 @@ export default function WizardPage() {
               )}
             </div>
 
+            {/* Base package surface profile */}
+            <div className="rounded-lg border border-[var(--border)] p-4 space-y-2">
+              <FieldLabel>Who can talk to this agent?</FieldLabel>
+              <select
+                value={state.surface}
+                onChange={(e) => {
+                  const surface = e.target.value as WizardState['surface']
+                  // A public agent never gets browser/captcha, GitHub or Google.
+                  update(surface === 'public'
+                    ? { surface, browserEnabled: false, githubMcpEnabled: false, googleEnabled: false }
+                    : { surface })
+                }}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-base md:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="team">Team: allowlisted people and roles (default)</option>
+                <option value="private">Private: just me / a few allowlisted people</option>
+                <option value="public">Public: anyone in approved channels (no DMs, no shell)</option>
+              </select>
+              {state.surface === 'public' && (
+                <p className="text-xs text-muted-foreground">
+                  Public agents get web search and page reading, but DMs, terminal, file access and Discord history tools are off, and browser, GitHub and Google can&apos;t be added.
+                </p>
+              )}
+            </div>
+
             {/* Browser (Camofox) */}
             <div className="rounded-lg border border-[var(--border)] p-4 space-y-3">
               <label className="flex items-center gap-3 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={state.browserEnabled}
+                  disabled={state.surface === 'public'}
                   onChange={(e) => update({ browserEnabled: e.target.checked })}
                   className="accent-[var(--accent)]"
                 />

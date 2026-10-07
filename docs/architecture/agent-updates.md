@@ -44,6 +44,32 @@ the host. They are installed at **create/duplicate** from the manifest
     container only if something changed. `dryRun` returns the plan with no writes.
 - **Scope:** per-agent, immediate.
 
+### The base package (v1)
+
+`infra/artifacts.json` is also the **base package** definition (`version`,
+`tier: core | pack`, `imagePlugins`, `research`, `surfaces`, `deadEnvKeys`), with
+the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
+`lib/services/base-package.ts`.
+
+- **On create** (scaffold, duplicate, `/api/setup/deploy`, import): every path
+  calls `installBaselineTemplates(dataDir, { surface, packs })`, which installs
+  core + chosen packs, writes `plugins.enabled` as a block list, applies the
+  surface profile, adds the orientation block and writes `.hsm-base-package`
+  (`{version, surface, packs}`). Required research keys (Brave) are assigned
+  from the key store via `setAssignment`. Body fields: `surface`
+  (`private | team | public`, default `team`), `packs` (e.g. `browser-ops`).
+- **Existing agents:** the sync route above *is* the adopt route. It is
+  add-only and idempotent: missing core items are installed, missing names are
+  added to lists (inline `[]` becomes a block list), the surface profile is
+  applied, only the marked SOUL block is replaced, and nothing is removed.
+  Extra body fields: `surface`, `packs`, `assignKeys` (default true),
+  `includeVision` (assign the OpenRouter vision key).
+- **Drift (report only):** `GET /api/harnesses/:id/base-package/drift` lists
+  what an agent is missing or violating. It fixes nothing; run sync to adopt.
+- **Public surface:** DMs off (`DISCORD_ALLOW_ALL_USERS=false`), terminal,
+  code execution, file and Discord-history toolsets off, a pruned skill list,
+  and no browser-ops / GitHub / Google.
+
 ## Choosing
 
 - New plugin/skill added to the manifest → **sync** the agents that should get it.

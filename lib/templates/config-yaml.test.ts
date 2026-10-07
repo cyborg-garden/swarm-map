@@ -317,3 +317,22 @@ describe('generateDefaultConfig never renders the Discord thread gate', () => {
     expect(yaml).not.toContain('thread_require_mention')
   })
 })
+
+describe('generateDefaultConfig web.search_backend (base package research)', () => {
+  const baseParams = { provider: 'anthropic', primaryModel: 'claude-sonnet-4-6' }
+  it('defaults to brave-free', () => {
+    expect(generateDefaultConfig(baseParams)).toMatch(/^  search_backend: brave-free$/m)
+  })
+  it('writes the no-key fallback when asked (never silently drops to firecrawl search)', () => {
+    const out = generateDefaultConfig({ ...baseParams, searchBackend: 'ddgs' })
+    expect(out).toMatch(/^  search_backend: ddgs$/m)
+    expect(out).toMatch(/^  extract_backend: firecrawl$/m)
+  })
+  it('rejects a backend that would inject YAML', () => {
+    expect(() => generateDefaultConfig({ ...baseParams, searchBackend: 'x\nplugins:' })).toThrow(/Invalid search backend/)
+  })
+  it('always writes plugins.enabled as a block list, never inline', () => {
+    const out = generateDefaultConfig({ ...baseParams, enabledPlugins: ['a'] })
+    expect(out).not.toMatch(/enabled:\s*\[/)
+  })
+})

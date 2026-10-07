@@ -52,7 +52,12 @@ export interface ContainerRuntimeAdapter {
   generateCompose(name: string, port: number, dataDir: string, options?: ComposeOptions): string
 
   /** Write the scaffold files for a brand-new agent data directory. */
-  scaffold(dataDir: string, name: string, port: number): Promise<void>
+  scaffold(
+    dataDir: string,
+    name: string,
+    port: number,
+    opts?: { selection?: { surface: 'private' | 'team' | 'public'; packs: string[] }; searchBackend?: string },
+  ): Promise<void>
 
   // --- CD image-ref rewrite (Phase 2) ---
 

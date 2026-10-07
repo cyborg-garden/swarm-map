@@ -23,8 +23,15 @@ export function generateDefaultConfig(params: {
   /** Chat surfaces chosen at deploy time — emitted as `platforms.<p>.enabled: true`
    *  so the gateway actually starts them (it skips platforms without that flag). */
   enabledPlatforms?: string[]
+  /** web.search_backend. Base package: 'brave-free' when a Brave key is
+   *  assigned, the no-key fallback ('ddgs') otherwise. Defaults to brave-free. */
+  searchBackend?: string
 }): string {
   const { provider, primaryModel, fallbackModel, browserEnabled, mcpServers, enabledPlugins, enabledPlatforms } = params
+  const searchBackend = params.searchBackend ?? 'brave-free'
+  if (!/^[a-z][a-z0-9-]*$/.test(searchBackend)) {
+    throw new Error(`Invalid search backend: ${searchBackend}`)
+  }
 
   // Compression summary_model must be a VALID id served by THIS agent's provider,
   // emitted in litellm `provider/model` form — never a hardcoded foreign provider.
@@ -153,7 +160,7 @@ tts:
 # than a decision - and it changes silently when a key is added. Names must
 # match the runtime's provider registry exactly: brave-free, NOT brave.
 web:
-  search_backend: brave-free
+  search_backend: ${searchBackend}
   extract_backend: firecrawl
 
 # --- Terminal access ---

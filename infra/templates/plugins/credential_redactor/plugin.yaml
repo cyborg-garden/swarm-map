@@ -1,0 +1,5 @@
+name: credential_redactor
+version: 0.2.0
+description: Scrub API keys/tokens/secrets from inbound messages before model + persistence
+provides_hooks:
+  - pre_gateway_dispatch

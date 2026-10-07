@@ -37,7 +37,8 @@ vi.mock('os', async (importOriginal) => {
   return { ...actual, homedir, default: { ...actual, homedir } }
 })
 
-vi.mock('@/lib/services/templates', () => ({ installBaselineTemplates: vi.fn(async () => []) }))
+const baseline = vi.hoisted(() => ({ install: vi.fn(async () => []) }))
+vi.mock('@/lib/services/templates', () => ({ installBaselineTemplates: baseline.install }))
 
 const tmpl = vi.hoisted(() => ({ get: vi.fn(), install: vi.fn(async () => []) }))
 vi.mock('@/lib/services/usecase-templates', () => ({
@@ -122,6 +123,38 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     // this is the fix for cold first-time builds blowing the 60s start window.
     const buildOpts = calls[buildIdx][1] as { timeout?: number }
     expect(buildOpts?.timeout ?? 0).toBeGreaterThanOrEqual(600000)
+  })
+
+  // ── Base package (v1) ─────────────────────────────────────────────────────
+  it('base package: passes the surface + packs to the shared injection point', async () => {
+    baseline.install.mockClear()
+    const res = await deploy({ name: 'pub', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', surface: 'public' })
+    expect((await res.json()).ok).toBe(true)
+    expect(baseline.install).toHaveBeenCalledWith(path.join(h.tmpHome, '.hermes-pub'), { surface: 'public', packs: [] })
+  })
+
+  it('base package: browser tools imply the browser-ops pack', async () => {
+    baseline.install.mockClear()
+    await deploy({ name: 'brw', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', browserEnabled: true })
+    expect(baseline.install).toHaveBeenCalledWith(expect.any(String), { surface: 'team', packs: ['browser-ops'] })
+  })
+
+  it('base package: refuses a public agent with browser tools or GitHub, before writing anything', async () => {
+    for (const extra of [{ browserEnabled: true }, { githubToken: 'x' }, { packs: ['browser-ops'] }]) {
+      const res = await deploy({ name: 'bad', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', surface: 'public', ...extra })
+      expect(res.status).toBe(400)
+      expect(fs.existsSync(path.join(h.tmpHome, '.hermes-bad'))).toBe(false)
+    }
+    const res = await deploy({ name: 'bad', provider: 'anthropic', primaryModel: 'claude-opus-4-6', surface: 'galaxy' })
+    expect(res.status).toBe(400)
+  })
+
+  it('base package: SOUL is the shared default (no false per-group memory isolation claim)', async () => {
+    await deploy({ name: 'soul', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', persona: 'Warm and curious.' })
+    const soul = fs.readFileSync(path.join(h.tmpHome, '.hermes-soul', 'SOUL.md'), 'utf-8')
+    expect(soul).not.toMatch(/isolat/i)
+    expect(soul).not.toMatch(/Mattermost/)
+    expect(soul).toContain('Warm and curious.')
   })
 
   it('image mode (no local build) does not run a separate build step', async () => {

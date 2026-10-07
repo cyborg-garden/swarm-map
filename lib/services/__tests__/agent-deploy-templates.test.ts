@@ -4,6 +4,16 @@ import { generateEnvContent, generateAgentCompose } from '../agent-deploy-templa
 describe('generateEnvContent', () => {
   const base = { name: 'matilde', port: 8642, provider: 'anthropic', primaryModel: 'claude-opus-4-6' }
 
+  // Base package v1: these look like guards but nothing in the runtime reads
+  // them (0 readers in hermes-agent-mt). A guard nothing reads is worse than
+  // none, so new agents must not get them.
+  it('never writes the dead guard keys', () => {
+    const env = generateEnvContent({ ...base, discordToken: 'd', signalPhone: '+1' })
+    for (const k of ['HERMES_DM_POLICY', 'HERMES_APPROVAL_ADMIN_ONLY', 'HERMES_MEMORY_SCOPE', 'LLM_DAILY_COST_LIMIT']) {
+      expect(env).not.toContain(`${k}=`)
+    }
+  })
+
   it('writes a standard anthropic api key to ANTHROPIC_API_KEY', () => {
     const env = generateEnvContent({ ...base, llmKey: 'sk-ant-api-abc123' })
     expect(env).toContain('ANTHROPIC_API_KEY=sk-ant-api-abc123')

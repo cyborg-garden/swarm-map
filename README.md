@@ -182,7 +182,8 @@ Any AI agent (Claude Code, Hermes, etc.) can orchestrate your fleet via the REST
 | `POST` | `/api/cascades` | Save a cascade (`{ name, chain, sourceHarness?, overwrite? }`; `entries` accepted as an alias; existing name → 409 unless `overwrite`) |
 | `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read / rename+edit (`{ name?, chain? }`) / delete a cascade |
 | `POST` | `/api/cascades/:name/apply` | Port a cascade onto a harness (`{ harnessId, restart? }`); refuses (400, no write, no restart) if the harness lacks a provider's key |
-| `POST` | `/api/harnesses/:id/artifacts/sync` | Install missing manifest artifacts onto an existing agent, no-clobber (`{ dryRun?, force? }`) |
+| `POST` | `/api/harnesses/:id/artifacts/sync` | Adopt/update the base package on an existing agent, add-only (`{ dryRun?, force?, surface?, packs?, assignKeys?, includeVision? }`) |
+| `GET` | `/api/harnesses/:id/base-package/drift` | Report-only drift against the base package (fixes nothing) |
 | `POST` | `/api/setup/deploy` | Deploy new agent (full wizard payload) |
 | `POST` | `/api/setup/detect` | Scan for Hermes compose directories |
 | `GET` | `/api/keys` | List keys (masked, from agent .env files) |

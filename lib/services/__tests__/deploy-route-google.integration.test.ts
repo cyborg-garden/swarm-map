@@ -348,7 +348,7 @@ describe('POST /api/setup/deploy — Google MCP wiring', () => {
   })
 
   it('pins search_backend so it is not auto-detected from .env ordering', async () => {
-    await deploy({ ...BASE, name: 'gweb' })
+    await deploy({ ...BASE, name: 'gweb', braveKey: 'BSA-test' })
 
     const cfg = fs.readFileSync(path.join(agentDir('gweb'), 'config.yaml'), 'utf-8')
     expect(cfg).toContain('search_backend: brave-free')
@@ -356,5 +356,22 @@ describe('POST /api/setup/deploy — Google MCP wiring', () => {
     // 'brave' is not a registered provider name; it resolves to nothing and the
     // runtime silently falls back to a different provider.
     expect(cfg).not.toMatch(/search_backend:\s*brave\s*$/m)
+  })
+
+  // Base package research: with no Brave key anywhere, brave-free returns
+  // nothing — write the no-key backend instead of a silently empty search.
+  it('falls back to ddgs when neither the request nor the key store has a Brave key', async () => {
+    await deploy({ ...BASE, name: 'gnokey' })
+    const cfg = fs.readFileSync(path.join(agentDir('gnokey'), 'config.yaml'), 'utf-8')
+    expect(cfg).toMatch(/^  search_backend: ddgs$/m)
+  })
+
+  it('uses brave-free when the key store holds a Brave key, and assigns it before start', async () => {
+    h.list.mockReturnValue([{ id: 'k_brave', provider: 'brave', assignedTo: ['h_other'] }])
+    await deploy({ ...BASE, name: 'gstore' })
+    const cfg = fs.readFileSync(path.join(agentDir('gstore'), 'config.yaml'), 'utf-8')
+    expect(cfg).toMatch(/^  search_backend: brave-free$/m)
+    expect(h.setAssignment).toHaveBeenCalledWith('k_brave', ['h_other', 'h_gstore'])
+    h.list.mockReturnValue([])
   })
 })
