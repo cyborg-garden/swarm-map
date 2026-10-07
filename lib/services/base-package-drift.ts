@@ -162,6 +162,16 @@ export function checkBasePackageDrift(
     add('search-needs-image-package', 'info', `web.search_backend is ${search}; it works only if the image bakes the "${search}" package (lazy installs are off).`)
   }
 
+  const browser = pkg.research.browser
+  if (browser) {
+    if (!hasEnv(env, browser.envVar)) {
+      add('browser-backend-missing', 'warn', `${browser.envVar} is not in .env: the browser tools have no ${browser.backend} backend.`)
+    }
+    if ((readBlockList(config, 'agent', 'disabled_toolsets') ?? []).includes(browser.toolset)) {
+      add('browser-toolset-disabled', 'warn', `agent.disabled_toolsets has "${browser.toolset}": no browsing and no web_search.`)
+    }
+  }
+
   // ── dead keys, fallback rows ─────────────────────────────────────────────
   for (const k of pkg.deadEnvKeys) {
     if (new RegExp(`^${k}=`, 'm').test(env)) add('dead-env-key', 'warn', `${k} is set but no runtime code reads it — it is not a guard.`)

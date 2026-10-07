@@ -101,8 +101,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: `Unknown use-case template "${templateId}".` }, { status: 400 })
     }
 
-    // Base package selection: surface profile + opt-in packs. Browser tools
-    // imply the browser-ops pack (captcha), which a public surface refuses.
+    // Base package selection: surface profile + opt-in packs. Plain browsing
+    // is base research (every agent, public too); the wizard's browser-ops
+    // option adds captcha + browser login, which a public surface refuses.
     // Validated before any side effect.
     const basePackage = loadBasePackage()
     if (body.surface !== undefined && !isSurface(body.surface)) {
@@ -448,7 +449,7 @@ export async function POST(request: Request) {
     // fleet key from the store), the no-key fallback otherwise — never a
     // backend that silently returns nothing.
     const hasBrave = !!braveKey || storeHasProvider(services.keys, 'brave')
-    const configContent = generateConfigYaml(provider, primaryModel, fallbackModel, body.browserEnabled === true, Object.keys(mcpServers).length > 0 ? mcpServers : undefined, extraEnabledPlugins, enabledPlatforms, searchBackendFor(basePackage, hasBrave))
+    const configContent = generateConfigYaml(provider, primaryModel, fallbackModel, true /* browser is base research */, Object.keys(mcpServers).length > 0 ? mcpServers : undefined, extraEnabledPlugins, enabledPlatforms, searchBackendFor(basePackage, hasBrave))
     fs.writeFileSync(path.join(agentDataDir, 'config.yaml'), configContent, 'utf-8')
 
     // Write the Google permission config the MCP server reads via --config.

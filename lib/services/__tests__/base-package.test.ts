@@ -248,6 +248,31 @@ describe('applyBasePackageToDir — adopting an existing agent (idempotent, no c
     expect(fs.existsSync(path.join(dataDir, 'skills', 'captcha-escalation'))).toBe(false)
   })
 
+  it('wires the browser backend (research layer) on every surface, without a shared profile', () => {
+    for (const surface of ['team', 'public'] as const) {
+      fs.rmSync(dataDir, { recursive: true, force: true }); fs.mkdirSync(dataDir)
+      seedAgent()
+      const r = applyBasePackageToDir(dataDir, pkg, { surface, packs: [] }, repoRoot)
+      expect(read('.env')).toContain(`CAMOFOX_URL=${pkg.research.browser!.defaultUrl}\n`)
+      expect(read('.env')).not.toContain('CAMOFOX_USER_ID=')
+      expect(r.steps.some((s) => s.kind === 'browser')).toBe(true)
+    }
+  })
+
+  it('never overwrites an agent\'s own browser backend', () => {
+    seedAgent({ env: 'HERMES_AGENT_NAME=me\nCAMOFOX_URL=http://camofox-own:9380\n' })
+    applyBasePackageToDir(dataDir, pkg, { surface: 'team', packs: [] }, repoRoot)
+    expect(read('.env').match(/^CAMOFOX_URL=.*$/gm)).toEqual(['CAMOFOX_URL=http://camofox-own:9380'])
+  })
+
+  it('warns (does not silently ship) when the browser toolset is disabled', () => {
+    seedAgent({ config: 'model:\n  provider: zai\nagent:\n  disabled_toolsets:\n    - browser\n' })
+    const r = applyBasePackageToDir(dataDir, pkg, { surface: 'public', packs: [] }, repoRoot)
+    expect(r.warnings.join('\n')).toMatch(/browser toolset is disabled/)
+    // add-only: apply never re-enables it on its own
+    expect(readBlockList(read('config.yaml'), 'agent', 'disabled_toolsets')).toContain('browser')
+  })
+
   it('tightens a public agent that had DMs open (surface contract)', () => {
     seedAgent({ env: 'DISCORD_ALLOW_ALL_USERS=true\n' })
     applyBasePackageToDir(dataDir, pkg, { surface: 'public', packs: [] }, repoRoot)

@@ -4,9 +4,11 @@
  *
  * Definition lives in infra/artifacts.json (one versioned file):
  *   - core artifacts (plugins/skills/hooks, `tier: core`) — every agent
- *   - packs (`tier: pack`, `pack: <name>`) — opt-in, e.g. browser-ops (captcha)
+ *   - packs (`tier: pack`, `pack: <name>`) — opt-in, e.g. browser-ops (captcha +
+ *     browser login; plain browsing is base research, not a pack)
  *   - imagePlugins — shipped in the image, only need listing in plugins.enabled
  *   - research — required keys (from the HSM key store) + search/extract/vision
+ *     + browser (camofox backend env, every surface)
  *   - surfaces — private | team | public security posture
  *   - deadEnvKeys — keys that look like guards but no runtime code reads
  * plus infra/base-package/soul-orientation.md (the SOUL block).
@@ -28,7 +30,7 @@ import {
   type ArtifactType,
 } from './artifacts-manifest'
 import { planArtifactSync, applyArtifactSync, type SyncResult } from './artifacts-sync'
-import { ensureBlockList } from '../yaml-block-list'
+import { ensureBlockList, readBlockList } from '../yaml-block-list'
 import { upsertEnvVar } from './keys'
 import type { Key } from '@/lib/types'
 
@@ -66,6 +68,8 @@ export interface ResearchConfig {
   extractBackend: string
   imagePackages: string[]
   vision?: { keyProvider: string; envVar: string; provider: string; model: string }
+  /** Plain browsing (navigate/snapshot/click). The backend URL is wired into .env when missing. */
+  browser?: { toolset: string; backend: string; envVar: string; defaultUrl: string }
 }
 
 export interface BasePackage {
@@ -189,7 +193,7 @@ export function resolveSelection(dataDir: string, req: { surface?: unknown; pack
   return { surface, packs: Array.from(new Set([...(stamp?.packs ?? []), ...asked])) }
 }
 
-export type StepKind = 'artifact' | 'plugins' | 'toolsets' | 'skills' | 'vision' | 'soul' | 'env' | 'stamp'
+export type StepKind = 'artifact' | 'plugins' | 'toolsets' | 'skills' | 'vision' | 'browser' | 'soul' | 'env' | 'stamp'
 export interface ApplyStep {
   kind: StepKind
   target: string
@@ -307,6 +311,13 @@ export function applyBasePackageToDir(
       }
     }
     if (configChanged) write(configPath, config)
+
+    // Browser (research): add-only, so a disabled browser toolset is the
+    // owner's call — but it removes plain browsing AND web_search, so say so.
+    const b = pkg.research.browser
+    if (b && (readBlockList(config, 'agent', 'disabled_toolsets') ?? []).includes(b.toolset)) {
+      warnings.push(`config.yaml agent.disabled_toolsets has "${b.toolset}": the base package's browser toolset is disabled (no browsing, no web_search); remove it by hand`)
+    }
   }
 
   // 3. SOUL orientation block (between markers only).
@@ -334,6 +345,16 @@ export function applyBasePackageToDir(
       env = upsertEnvVar(env, k, val)
       envChanged = true
       steps.push({ kind: 'env', target: `.env ${k}`, detail: `= ${val} (${sel.surface} surface)` })
+    }
+    // Browser backend (research layer, every surface). Only when the agent has
+    // none: an existing URL (its own camofox) is kept. No CAMOFOX_USER_ID —
+    // without it every session gets an ephemeral profile, so no agent shares
+    // a logged-in browser profile (public forbids the key outright).
+    const b = pkg.research.browser
+    if (b && envValue(env, b.envVar) === undefined) {
+      env = upsertEnvVar(env, b.envVar, b.defaultUrl)
+      envChanged = true
+      steps.push({ kind: 'browser', target: `.env ${b.envVar}`, detail: `= ${b.defaultUrl} (${b.backend} backend)` })
     }
     if (envChanged) write(envPath, env, 0o600)
     // With DISCORD_ALLOW_ALL_USERS=false and no user/role allowlist, guild

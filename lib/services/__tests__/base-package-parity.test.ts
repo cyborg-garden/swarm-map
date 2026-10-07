@@ -60,6 +60,8 @@ function fingerprint(dir: string) {
     coreDirs: ['plugins/credential_redactor', 'plugins/person_memory', 'plugins/swarm_map_policy', 'skills/garden-orientation', 'skills/session-handoff', 'hooks/lifecycle-notify']
       .filter((d) => fs.existsSync(path.join(dir, d))),
     captcha: fs.existsSync(path.join(dir, 'plugins', 'captcha_cascade')),
+    browserBackend: /^CAMOFOX_URL=./m.test(env),
+    browserDisabled: (readBlockList(config, 'agent', 'disabled_toolsets') ?? []).includes('browser'),
   }
 }
 
@@ -101,6 +103,8 @@ describe('base package parity across creation paths', () => {
       expect(created.orientation).toBe(true)
       expect(created.deadKeys).toEqual([])
       expect(created.captcha).toBe(false)
+      expect(created.browserBackend).toBe(true)
+      expect(created.browserDisabled).toBe(false)
       expect(created.dmsOff).toBe(surface === 'public')
 
       expect(imported).toEqual(created)
