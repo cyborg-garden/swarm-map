@@ -13,10 +13,12 @@ import os from 'os'
 // Mock the services module — we assert harness.restart is invoked.
 const restartMock = vi.hoisted(() => vi.fn())
 const syncFromAllowlistMock = vi.hoisted(() => vi.fn())
+const getSettingsMock = vi.hoisted(() => vi.fn(() => ({})))
 vi.mock('@/lib/services', () => ({
   services: {
     harness: { restart: restartMock },
     surfaceAdmins: { syncFromAllowlist: syncFromAllowlistMock },
+    config: { getSettings: getSettingsMock },
   },
 }))
 // Use the real resolvers index (so resolveTelegramAdmins' strict logic is
@@ -267,6 +269,22 @@ describe('surface connect — enables the platform in config.yaml', () => {
     expect(envWrite?.[1] as string).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
     expect(envWrite?.[1] as string).toMatch(/^DISCORD_REQUIRE_MENTION=true$/m)
     expect(configWrite()?.[1] as string).not.toContain('thread_require_mention')
+  })
+
+  it('applies the fleet discordAllowedBotRoles setting to the new Discord agent', async () => {
+    getSettingsMock.mockReturnValueOnce({ discordAllowedBotRoles: ['1600000000000000001'] } as never)
+    readSpy.mockImplementation(() => 'DISCORD_BOT_TOKEN=old\n')
+    const res = await connectDiscord()
+    expect(res.status).toBe(200)
+    const envWrite = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
+    expect(envWrite?.[1] as string).toMatch(/^DISCORD_ALLOWED_BOT_ROLES=1600000000000000001$/m)
+  })
+
+  it('leaves DISCORD_ALLOWED_BOT_ROLES alone when the setting is unmanaged', async () => {
+    readSpy.mockImplementation(() => 'DISCORD_BOT_TOKEN=old\n')
+    await connectDiscord()
+    const envWrite = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
+    expect(envWrite?.[1] as string).not.toContain('DISCORD_ALLOWED_BOT_ROLES')
   })
 
   it('skips config.yaml gracefully when it does not exist (agent not deployed)', async () => {

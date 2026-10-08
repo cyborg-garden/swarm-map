@@ -216,4 +216,5 @@ export type Settings = {
   modelAutoUpdate?: ModelAutoUpdateSettings  // model freshness / "track newest version" policy (see lib/services/model-update-scheduler.ts)
   discordThreadMentionOptOuts?: string[]  // harness names allowed to answer un-mentioned messages in threads (DISCORD_THREAD_REQUIRE_MENTION=false). Fleet default is mention-required; the heal skips these and the posture check reports them as opted-out, not open. See lib/services/discord-thread-gate.ts
   discordApproverRoles?: string[] | null  // Discord role IDs whose holders can Allow/Deny dangerous commands on every Discord agent (written to platforms.discord.extra.approver_roles). [] = nobody by role; null/unset = not managed by swarm-map. See lib/services/discord-approver-roles.ts
+  discordAllowedBotRoles?: string[] | null  // Discord role IDs a BOT sender must hold for any Discord agent to accept it (written to each agent's .env as DISCORD_ALLOWED_BOT_ROLES; on top of DISCORD_ALLOW_BOTS). null/unset = not managed by swarm-map; [] is refused. See lib/services/discord-allowed-bot-roles.ts
 }

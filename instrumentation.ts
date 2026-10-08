@@ -31,6 +31,8 @@ export async function register() {
   healFleetDiscordThreadGatesAtStartup()
   const { syncFleetDiscordApproverRolesAtStartup } = await import('@/lib/services/discord-approver-roles-fleet')
   syncFleetDiscordApproverRolesAtStartup()
+  const { syncFleetDiscordAllowedBotRolesAtStartup } = await import('@/lib/services/discord-allowed-bot-roles-fleet')
+  syncFleetDiscordAllowedBotRolesAtStartup()
   const { startIntegrityScheduler } = await import('@/lib/services/integrity-scheduler')
   startIntegrityScheduler()
   const { startDbSnapshotScheduler } = await import('@/lib/services/db-snapshot-scheduler')
