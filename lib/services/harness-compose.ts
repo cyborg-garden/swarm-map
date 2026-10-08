@@ -203,6 +203,67 @@ export function renderExtraEnv(env?: Record<string, string>): string {
     .join('')
 }
 
+/** Debian package names: what HERMES_EXTRA_APT_PACKAGES' own check accepts. */
+const APT_PACKAGE_NAME = /^[a-z0-9][a-z0-9.+-]*$/
+const MAX_EXTRA_APT_PACKAGES = 64
+
+/** Validate an agent's `extraAptPackages`, or throw on the first bad entry. */
+function checkAptPackages(pkgs?: string[]): string[] {
+  if (pkgs === undefined || pkgs === null) return []
+  if (!Array.isArray(pkgs)) {
+    throw new Error('extraAptPackages must be an array of Debian package names')
+  }
+  if (pkgs.length > MAX_EXTRA_APT_PACKAGES) {
+    throw new Error(`extraAptPackages: at most ${MAX_EXTRA_APT_PACKAGES} packages`)
+  }
+  return pkgs.map((pkg, index) => {
+    const name = String(pkg ?? '')
+    // Rendered into a YAML scalar AND shell-split by the Dockerfile's apt
+    // step, so anything beyond a plain package name (a leading '-' that apt
+    // would read as an option, a space, a quote, a newline) is refused.
+    if (!APT_PACKAGE_NAME.test(name)) {
+      throw new Error(`extraAptPackages[${index}]: '${name}' is not a valid Debian package name`)
+    }
+    return name
+  })
+}
+
+/** `validateExtraMounts` for `extraAptPackages`. */
+export function validateExtraAptPackages(pkgs?: string[]): string | null {
+  try {
+    checkAptPackages(pkgs)
+    return null
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+}
+
+/**
+ * Render the hermes service's build source with the agent's extra apt
+ * packages as the HERMES_EXTRA_APT_PACKAGES build arg (hermes-agent-mt's
+ * Dockerfile installs them in a layer after the shared dependency layers).
+ * A registry image cannot carry per-agent packages, so asking for them on an
+ * image-mode agent fails loudly instead of rendering a compose that silently
+ * lacks them.
+ */
+export function renderHermesSourceBlock(
+  resolved: { image: string } | { build: string },
+  pkgs?: string[],
+): string {
+  const names = checkAptPackages(pkgs)
+  if ('image' in resolved) {
+    if (names.length) {
+      throw new Error(
+        'extraAptPackages needs a local build (useLocalBuild); a registry image cannot carry per-agent packages')
+    }
+    return `    image: ${resolved.image}`
+  }
+  const base = `    build:\n      context: ${resolved.build}\n      dockerfile: Dockerfile`
+  return names.length
+    ? `${base}\n      args:\n        HERMES_EXTRA_APT_PACKAGES: "${names.join(' ')}"`
+    : base
+}
+
 export interface ComposeOptions {
   imageOrBuild?: { image: string } | { build: string }
   defaultImage?: string
@@ -266,6 +327,11 @@ export interface ComposeOptions {
    * Non-secret only — secrets belong in the agent's .env (env_file).
    */
   extraEnv?: Record<string, string>
+  /**
+   * Extra Debian packages baked into this agent's image only, via the
+   * HERMES_EXTRA_APT_PACKAGES build arg on the hermes service.
+   */
+  extraAptPackages?: string[]
 }
 
 /** Model the bundled ollama sidecar pulls and serves on boot (tiny, CPU-friendly). */
@@ -438,7 +504,7 @@ export function generateStandaloneCompose(
   agentDataDir: string,
   options?: ComposeOptions,
 ): string {
-  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv } = options ?? {}
+  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages } = options ?? {}
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -448,12 +514,15 @@ export function generateStandaloneCompose(
   // fails generation identically in VPN and plain mode.
   const mountLines = renderExtraMounts(extraMounts)
   const envLines = renderExtraEnv(extraEnv)
+  // The state-init service keeps the plain source: it only runs a shell
+  // script, so it has no use for the extra packages.
+  const hermesSourceBlock = renderHermesSourceBlock(resolved, extraAptPackages)
 
   if (vpnEnabled) {
-    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines)
+    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
   }
 
-  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines)
+  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
 }
 
 /** Render the hermes service's `deploy.resources.limits` block (8-space indented). */
@@ -515,6 +584,7 @@ function generatePlainCompose(
   cpus?: string,
   extraMountLines: string = '',
   extraEnvLines: string = '',
+  hermesSourceBlock: string = sourceBlock,
 ): string {
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
@@ -532,7 +602,7 @@ function generatePlainCompose(
   return `# Generated by hermes-swarm-map — agent: ${agentName}
 services:
 ${initBlock}${ollamaBlock}  hermes-${agentName}:
-${sourceBlock}
+${hermesSourceBlock}
     container_name: hermes-${agentName}
     restart: unless-stopped
 ${hermesDepends}    extra_hosts:
@@ -583,6 +653,7 @@ function generateVpnCompose(
   cpus?: string,
   extraMountLines: string = '',
   extraEnvLines: string = '',
+  hermesSourceBlock: string = sourceBlock,
 ): string {
   const camofoxPort = port + 1000
   const vncPort = port + 2000
@@ -659,7 +730,7 @@ ${initBlock}  wireguard:
       - ${agentDataDir}/.camofox:/data
 ${ollamaBlock}
   hermes-${agentName}:
-${sourceBlock}
+${hermesSourceBlock}
     container_name: hermes-${agentName}
     restart: unless-stopped
     network_mode: "service:wireguard"

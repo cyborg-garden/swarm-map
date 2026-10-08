@@ -19,7 +19,7 @@ import {
   type ThreadGateSource,
 } from '@/lib/services/discord-thread-gate'
 import { adapterForRuntime } from '@/lib/services/harness'
-import { isDeployBornCompose, validateExtraMounts, validateExtraEnv } from '@/lib/services/harness-compose'
+import { isDeployBornCompose, validateExtraMounts, validateExtraEnv, validateExtraAptPackages } from '@/lib/services/harness-compose'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -424,6 +424,7 @@ export async function PUT(
     const configured = services.harness.get(id)
     const problem =
       validateExtraMounts(configured?.extraMounts) ?? validateExtraEnv(configured?.extraEnv)
+      ?? validateExtraAptPackages(configured?.extraAptPackages)
     if (problem) {
       return NextResponse.json(
         {
@@ -898,6 +899,7 @@ export async function PUT(
         // healthy with a capability silently missing.
         extraMounts: harness.extraMounts,
         extraEnv: harness.extraEnv,
+        extraAptPackages: harness.extraAptPackages,
       })
       fs.writeFileSync(harness.composeFile, compose, 'utf-8')
     }
