@@ -129,6 +129,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -656,7 +657,10 @@ function main() {
 
 // Only when run as a CLI — so the test suite can import the planner without
 // the module executing a run as a side effect of being imported.
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(new URL(import.meta.url).pathname)) {
+// fileURLToPath, not `new URL(import.meta.url).pathname`: the latter is
+// percent-encoded, so any checkout path containing a space (or other escaped
+// char) realpathSync'd to a nonexistent dir and the CLI guard threw on import.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
   main()
 }
 
