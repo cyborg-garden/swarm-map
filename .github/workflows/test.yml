@@ -1,0 +1,39 @@
+name: test
+
+# Unit tests (vitest) + typecheck on every PR and on push to main.
+#
+# Needs no secrets, Docker, or network beyond the npm registry, so it runs the
+# same for fork PRs as for same-repo PRs.
+#
+# Lint is deliberately NOT run here: main carries pre-existing eslint errors,
+# and a whole-tree lint gate would be permanently red. Add it back once the
+# tree is clean.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # No .nvmrc / engines field in the repo; Next 16 needs >=20.9.
+          node-version: '24'
+          cache: npm
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: npx vitest run
+      - name: Typecheck
+        run: npx tsc --noEmit
