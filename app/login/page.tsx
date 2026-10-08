@@ -5,10 +5,11 @@ import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { safeNextPath } from '@/lib/auth/safe-next'
 
 function LoginForm() {
   const searchParams = useSearchParams()
-  const next = searchParams.get('next') || '/'
+  const rawNext = searchParams.get('next')
   const [token, setToken] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -25,7 +26,8 @@ function LoginForm() {
       })
       if (res.ok) {
         // Full navigation so the freshly-set cookie is sent on the next load.
-        window.location.href = next
+        // Validated at navigation time: only same-origin paths, else `/`.
+        window.location.href = safeNextPath(rawNext, window.location.origin)
         return
       }
       setError(res.status === 401 ? 'Invalid operator token.' : `Login failed (${res.status}).`)
