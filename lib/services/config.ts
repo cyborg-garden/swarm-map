@@ -74,6 +74,28 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         }
         out.discordApproverRoles = [...new Set(value as string[])]
         break
+      case 'discordAllowedBotRoles':
+        // Role IDs a bot sender must hold (DISCORD_ALLOWED_BOT_ROLES, .env).
+        // null = swarm-map leaves the var alone. [] is refused: an empty var
+        // turns the adapter's gate OFF, so it must not be a fleet-wide default.
+        if (value === null) {
+          out.discordAllowedBotRoles = null
+          break
+        }
+        // Same rule as isAllowedBotRoleList (discord-allowed-bot-roles.ts),
+        // inlined to keep this module free of service imports; the writer
+        // re-checks it, and a test pins the two together.
+        if (
+          !Array.isArray(value) ||
+          value.length === 0 ||
+          !value.every((v) => typeof v === 'string' && /^[0-9]{15,21}$/.test(v) && v !== '1531068097719570432')
+        ) {
+          throw new Error(
+            'discordAllowedBotRoles must be a non-empty array of Discord role IDs (not the @everyone/guild id), or null',
+          )
+        }
+        out.discordAllowedBotRoles = [...new Set(value as string[])]
+        break
       default:
         throw new Error(`unknown settings key: ${key}`)
     }
