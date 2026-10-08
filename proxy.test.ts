@@ -39,7 +39,7 @@ describe('proxy auth gate — token SET', () => {
     expect(passedThrough(await proxy(req(AGENT_POLICY, 'GET')))).toBe(true)
   })
   it('GET /api/health/docker → passes ungated (pre-auth readiness probe)', async () => {
-    expect(passedThrough(await middleware(req('/api/health/docker', 'GET')))).toBe(true)
+    expect(passedThrough(await proxy(req('/api/health/docker', 'GET')))).toBe(true)
   })
 
   // --- all other reads are gated (they can leak operator-sensitive data) ---
@@ -125,9 +125,9 @@ describe('proxy auth gate — token UNSET (fail-closed)', () => {
     expect(passedThrough(await proxy(req(AGENT_GROUPS, 'POST')))).toBe(true)
   })
   it('GET /api/health/docker still passes — the wizard must check Docker before login', async () => {
-    expect(passedThrough(await middleware(req('/api/health/docker', 'GET')))).toBe(true)
+    expect(passedThrough(await proxy(req('/api/health/docker', 'GET')))).toBe(true)
   })
   it('GET /api/health/docker does NOT leak the gate to other health paths', async () => {
-    expect((await middleware(req('/api/health', 'GET'))).status).toBe(503)
+    expect((await proxy(req('/api/health', 'GET'))).status).toBe(503)
   })
 })
