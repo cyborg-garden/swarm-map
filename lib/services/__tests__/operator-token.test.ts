@@ -54,6 +54,17 @@ describe('ensureOperatorToken', () => {
     expect(fs.readFileSync(envPath, 'utf8')).toContain('OTHER=x')
   })
 
+  it('tightens a pre-existing, looser .env.local to 0600 when writing the token', () => {
+    fs.writeFileSync(envPath, 'OTHER=x\n', { mode: 0o644 })
+    fs.chmodSync(envPath, 0o644)
+    expect(ensureOperatorToken(envPath).status).toBe('generated')
+    expect(fs.statSync(envPath).mode & 0o777).toBe(0o600)
+  })
+
+  it('upsertEnvLine keeps a blank line above the replaced key', () => {
+    expect(upsertEnvLine('A=1\n\nB=\n', 'B', '2')).toBe('A=1\n\nB=2\n')
+  })
+
   it('upsertEnvLine preserves unrelated content and trailing newline shape', () => {
     expect(upsertEnvLine('A=1\n', 'B', '2')).toBe('A=1\nB=2\n')
     expect(upsertEnvLine('A=1', 'B', '2')).toBe('A=1\nB=2\n')

@@ -27,7 +27,9 @@ export type OperatorTokenResult =
 /** Replace (or append) a `KEY=value` line without disturbing the rest of the file. */
 export function upsertEnvLine(content: string, key: string, value: string): string {
   const line = `${key}=${value}`
-  const re = new RegExp(`^\\s*${key}=.*$`, 'm')
+  // [ \t]* not \s*: under the `m` flag \s also matches newlines, so a blank line
+  // above the key would be swallowed into the match and deleted.
+  const re = new RegExp(`^[ \\t]*${key}=.*$`, 'm')
   if (re.test(content)) return content.replace(re, line)
   const prefix = content === '' || content.endsWith('\n') ? content : `${content}\n`
   return `${prefix}${line}\n`
@@ -60,6 +62,10 @@ export function ensureOperatorToken(envPath = path.join(process.cwd(), ENV_FILE)
   const token = crypto.randomBytes(32).toString('hex')
   try {
     fs.writeFileSync(envPath, upsertEnvLine(existingFile, OPERATOR_TOKEN_ENV, token), { mode: 0o600 })
+    // `mode` only applies when the file is created. A pre-existing .env.local
+    // (e.g. 0644 from an editor) would otherwise keep its looser permissions
+    // while now holding the operator secret.
+    fs.chmodSync(envPath, 0o600)
   } catch (err) {
     // Can't persist (read-only checkout, no cwd write). The token still works for
     // this process, but the caller must print it — otherwise the operator can
