@@ -3,12 +3,12 @@
  *
  * The session cookie is a STATELESS HMAC — no session store. Its value is
  * HMAC-SHA256(key = HSM_OPERATOR_TOKEN, message = SESSION_MESSAGE), hex-encoded.
- * The middleware recomputes this from the server-only token and constant-time
+ * The proxy recomputes this from the server-only token and constant-time
  * compares it against the cookie, so verification needs nothing but the env var.
  *
  * Uses the Web Crypto API (globalThis.crypto.subtle) rather than node:crypto so
- * the exact same module runs in both the Next.js middleware runtime (edge) and
- * Node route handlers. All functions are async because subtle.sign is async.
+ * the exact same module runs in both the Next.js proxy runtime and Node route
+ * handlers. All functions are async because subtle.sign is async.
  *
  * SECURITY: HSM_OPERATOR_TOKEN is read from process.env by callers only. It is
  * never exposed to the client (no NEXT_PUBLIC_) and never logged.

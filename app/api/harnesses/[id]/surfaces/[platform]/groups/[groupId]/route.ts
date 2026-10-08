@@ -44,7 +44,7 @@ export async function GET(
  * Policy: allow-all → approve for anyone; approved-only/unset → approve only
  * when addedByUserId is an admin (SurfaceAdminService.isAdmin, fail-closed).
  *
- * Auth: exempted from the operator-cookie gate in middleware.ts (agents cannot
+ * Auth: exempted from the operator-cookie gate in proxy.ts (agents cannot
  * obtain the cookie) — see AGENT_CALLABLE_POST_PATHS there for the trust model.
  */
 export async function POST(

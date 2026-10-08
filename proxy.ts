@@ -83,7 +83,7 @@ function requiresAuth(method: string, pathname: string): boolean {
   return false // OPTIONS and other non-mutating verbs
 }
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const method = request.method.toUpperCase()
   const pathname = request.nextUrl.pathname
 

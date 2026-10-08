@@ -31,7 +31,7 @@ export async function GET(
  * Replace the explicit admin list for a surface.
  *
  * Auth: like every mutating /api route, this is transport-gated by the
- * operator-cookie middleware (middleware.ts, PR #139) — agent containers
+ * operator-cookie middleware (proxy.ts, PR #139) — agent containers
  * cannot obtain the cookie, so only a logged-in operator reaches this handler.
  * On top of that, `actor` must already be an admin for the surface (explicit
  * list, or the DM allowlist before any explicit list exists). The actor check

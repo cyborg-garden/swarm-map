@@ -13,7 +13,7 @@ import { useEffect } from 'react'
  * now also hits the gated API, redirects instead of silently failing.
  *
  * This is a UX convenience only — it is NOT a security control. The real
- * enforcement is server-side in middleware.ts.
+ * enforcement is server-side in proxy.ts.
  */
 export function AuthGuard() {
   useEffect(() => {
