@@ -107,7 +107,7 @@ export type AdminList = {
  * Security posture:
  * - isAdmin fails closed: unknown user / unreadable store / unsupported surface
  *   / wildcard allowlist → NOT admin.
- * - Mutations are transport-gated: root middleware.ts (PR #139) requires a
+ * - Mutations are transport-gated: root proxy.ts (PR #139) requires a
  *   valid operator-session cookie on every PUT/POST/PATCH/DELETE, and agent
  *   containers cannot obtain that cookie. That is the security boundary.
  * - setAdmins additionally checks `actor` against the CURRENT admin set
@@ -193,7 +193,7 @@ export class SurfaceAdminService {
    * Replace the explicit admin list for a surface.
    *
    * Transport authorization happens BEFORE this code runs: the operator-cookie
-   * middleware (middleware.ts, PR #139) gates every mutating /api request, so
+   * middleware (proxy.ts, PR #139) gates every mutating /api request, so
    * only a logged-in dashboard operator can reach this at all.
    *
    * Actor check (defense-in-depth + semantic attribution): `actor` must ALREADY
@@ -279,7 +279,7 @@ export class SurfaceAdminService {
    * and writing one would change the setAdmins bootstrap-actor semantics.
    *
    * No actor check: this is not a surface-identity mutation — it runs inside
-   * operator-transport-gated routes (middleware.ts) as a side effect of the env
+   * operator-transport-gated routes (proxy.ts) as a side effect of the env
    * write the operator just made. Invalid entries (wildcards, unresolved
    * @handles) are dropped, never stored.
    */
