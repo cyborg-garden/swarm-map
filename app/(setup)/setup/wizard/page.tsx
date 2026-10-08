@@ -169,6 +169,7 @@ export default function WizardPage() {
   const [deployResult, setDeployResult] = useState<{ ok: boolean; error?: string; port?: number; healthy?: boolean; harnessId?: string; agentId?: string; runtime?: string } | null>(null)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const [dockerChecking, setDockerChecking] = useState(true)
+  const [dockerError, setDockerError] = useState<string | null>(null)
   const [availableKeys, setAvailableKeys] = useState<Key[]>([])
   const [templates, setTemplates] = useState<UseCaseTemplateInfo[]>([])
   const [signalDialogOpen, setSignalDialogOpen] = useState(false)
@@ -179,10 +180,19 @@ export default function WizardPage() {
     setDockerChecking(true)
     try {
       const res = await fetch('/api/health/docker')
-      const data = await res.json()
+      const data = await res.json().catch(() => null)
+      // A non-2xx (e.g. the auth gate's 503) has no `available` field. Report the
+      // real reason instead of silently rendering "Docker is missing".
+      if (!res.ok || !data) {
+        setDockerAvailable(false)
+        setDockerError(data?.error ?? `Health check failed (HTTP ${res.status})`)
+        return
+      }
       setDockerAvailable(data.available === true)
-    } catch {
+      setDockerError(data.available === true ? null : (data.error ?? 'Docker is not reachable'))
+    } catch (err) {
       setDockerAvailable(false)
+      setDockerError(err instanceof Error ? err.message : 'Health check request failed')
     } finally {
       setDockerChecking(false)
     }
@@ -392,12 +402,19 @@ export default function WizardPage() {
             <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-4 space-y-2">
               <p className="font-semibold text-destructive">Docker is required but not detected.</p>
               <p className="text-sm text-muted-foreground">
-                Install Docker Desktop from{' '}
+                Install or start a Docker-compatible engine —{' '}
                 <a href="https://docker.com/products/docker-desktop" target="_blank" rel="noopener" className="underline text-[var(--accent)]">
-                  docker.com/products/docker-desktop
+                  Docker Desktop
                 </a>{' '}
-                and make sure it&apos;s running before continuing.
+                or{' '}
+                <a href="https://orbstack.dev" target="_blank" rel="noopener" className="underline text-[var(--accent)]">
+                  OrbStack
+                </a>{' '}
+                — and make sure it&apos;s running before continuing.
               </p>
+              {dockerError && (
+                <p className="text-xs text-muted-foreground break-all">Reported: {dockerError}</p>
+              )}
             </div>
             <Button
               variant="outline"

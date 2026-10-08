@@ -2,7 +2,8 @@
  * Fleet-wide SQLite integrity monitoring (#204, PR1).
  *
  * Harness state DBs live on the host (VirtioFS bind mounts) and can be torn
- * by mid-write hard-stops under Docker Desktop VM memory pressure. In the
+ * by mid-write hard-stops under container-engine VM memory pressure (the
+ * motivating incident was Docker Desktop; OrbStack's VM applies too). In the
  * motivating incident a harness's state.db failed writes for 6 days with no
  * surfaced signal. This module provides:
  *

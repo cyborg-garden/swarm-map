@@ -78,6 +78,15 @@ find_port() {
   return 1
 }
 
+# Preflight: warn early if no Docker engine answers — otherwise the UI starts
+# fine and every agent view is silently empty. Non-fatal: the app still runs
+# (the dashboard now shows the same condition), and the operator may start the
+# engine after boot.
+if ! docker version >/dev/null 2>&1; then
+  echo "WARNING: Docker is not reachable — start Docker Desktop or OrbStack." >&2
+  echo "         Swarm Map will start, but agents cannot be discovered until it is." >&2
+fi
+
 PORT=$(find_port)
 echo "Starting Swarm Map on http://localhost:$PORT"
 exec npx next dev --port "$PORT"

@@ -5,12 +5,12 @@ import { useEffect } from 'react'
 /**
  * Client-side companion to the middleware auth gate.
  *
- * The dashboard mutates via inline `fetch(url, { method })` calls scattered
- * across pages/components — there is no single mutation wrapper (the shared
- * `useApi` hook is GET-only, so it never trips the gate). To redirect to /login
- * on a 401 from ANY of those mutations without editing every call site, we wrap
- * window.fetch once when the dashboard mounts and watch for the gate's
- * `401 { error: 'auth required' }` response.
+ * Pages fetch via inline `fetch(url, { method })` calls and the `useApi` hook —
+ * there is no single request wrapper. To redirect to /login on a 401 from ANY of
+ * them without editing every call site, we wrap window.fetch once at the root
+ * layout and watch for the gate's `401 { error: 'auth required' }` response.
+ * Mounted globally (not just the dashboard) so the pre-auth setup wizard, which
+ * now also hits the gated API, redirects instead of silently failing.
  *
  * This is a UX convenience only — it is NOT a security control. The real
  * enforcement is server-side in middleware.ts.
