@@ -1187,6 +1187,7 @@ export class HarnessService {
         ...(overlay.extraEnv && Object.keys(overlay.extraEnv).length
           ? { extraEnv: overlay.extraEnv }
           : {}),
+        ...(overlay.extraAptPackages?.length ? { extraAptPackages: overlay.extraAptPackages } : {}),
         ...(overlay.apiPort !== undefined ? { apiPort: overlay.apiPort } : {}),
         ...(overlay.pinnedImageRef ? { pinnedImageRef: overlay.pinnedImageRef } : {}),
         ...(overlay.lastKnownDigest ? { lastKnownDigest: overlay.lastKnownDigest } : {}),
@@ -1290,6 +1291,7 @@ export class HarnessService {
       // overlay stays byte-identical.
       ...(o.extraMounts?.length ? { extraMounts: o.extraMounts } : {}),
       ...(o.extraEnv && Object.keys(o.extraEnv).length ? { extraEnv: o.extraEnv } : {}),
+      ...(o.extraAptPackages?.length ? { extraAptPackages: o.extraAptPackages } : {}),
       // Per-entry "track newest version" flags; omitted when absent so a
       // legacy overlay stays byte-identical.
       ...(o.modelTracking && Object.keys(o.modelTracking).length ? { modelTracking: o.modelTracking } : {}),

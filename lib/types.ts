@@ -76,6 +76,11 @@ export type Harness = {
   // often committed alongside deploy config. Secrets belong in the agent's
   // .env (env_file), which this never touches.
   extraEnv?: Record<string, string>
+  // Debian packages baked into THIS agent's image only (e.g. headless
+  // LibreOffice for an agent whose file tools convert Office documents).
+  // Rendered as the HERMES_EXTRA_APT_PACKAGES build arg on every
+  // regeneration, so a rebuild cannot silently drop them.
+  extraAptPackages?: string[]
   // "Track the newest version of this model" — keyed by "provider/model"
   // exactly as the entry appears in the agent's fallback_providers (e.g.
   // "openrouter/z-ai/glm-5.2"). true = the model-update scheduler may rotate

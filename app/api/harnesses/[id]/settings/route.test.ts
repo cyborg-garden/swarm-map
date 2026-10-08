@@ -1141,6 +1141,39 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
     expect(generateStandaloneCompose).not.toHaveBeenCalled()
   })
 
+  it('passes the harness\'s saved extraAptPackages into generateCompose', async () => {
+    vi.mocked(services.harness.get).mockReturnValue({
+      name: 'cyborg-public',
+      runtime: 'hermes',
+      resources: { memory: '1G', cpus: '1.0' },
+      composeFile: '/tmp/cyborg-public.yml',
+      extraAptPackages: ['libreoffice-writer-nogui', 'pandoc'],
+    } as never)
+
+    const res = await PUT(makeRequest({
+      dmPolicy: 'approved-only',
+      resources: { memory: '2G', cpus: '2.0' },
+    }), makeParams('h_cp'))
+    expect(res.status).toBe(200)
+    const options = vi.mocked(generateStandaloneCompose).mock.calls[0][3]
+    expect(options?.extraAptPackages).toEqual(['libreoffice-writer-nogui', 'pandoc'])
+  })
+
+  it('REFUSES (400, nothing written) a saved extraAptPackages entry apt would read as an option', async () => {
+    vi.mocked(services.harness.get).mockReturnValue({
+      name: 'cyborg-public',
+      runtime: 'hermes',
+      composeFile: '/tmp/cyborg-public.yml',
+      extraAptPackages: ['--allow-unauthenticated'],
+    } as never)
+
+    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_cp'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/not a valid Debian package name/)
+    expect((fs.writeFileSync as unknown as { mock: { calls: unknown[][] } }).mock.calls)
+      .toHaveLength(0)
+  })
+
   it('REFUSES (400) a reserved extraEnv name rather than silently overriding .env policy', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
       name: 'iris',
