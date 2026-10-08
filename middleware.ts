@@ -5,11 +5,12 @@ import { SESSION_COOKIE, verifySession } from '@/lib/auth/session'
 /**
  * Auth gate for mutating API routes.
  *
- * WHY: HSM has no transport auth. Docker Desktop SNATs container traffic to
- * 127.0.0.1, so agent-container requests and dashboard requests are
- * indistinguishable by source IP — the only viable separator is a credential
- * the agent cannot obtain. This gate requires a valid operator-session cookie
- * (a stateless HMAC of HSM_OPERATOR_TOKEN) on every state-changing request.
+ * WHY: HSM has no transport auth. Agent containers reach the host through the
+ * container engine's network (Docker Desktop, OrbStack), so an agent-container
+ * request arrives with no reliable marker distinguishing it from a dashboard
+ * request — the only viable separator is a credential the agent cannot obtain.
+ * This gate requires a valid operator-session cookie (a stateless HMAC of
+ * HSM_OPERATOR_TOKEN) on every state-changing request.
  *
  * BEHAVIOR:
  *  - POST / PUT / PATCH / DELETE: require a valid hsm_session cookie.
@@ -35,6 +36,12 @@ const READ_METHODS = new Set(['GET', 'HEAD'])
 // Routes that must never be gated: they run before a session exists (login),
 // tear it down (logout), and neither should 401 the operator out.
 const EXCLUDED_PATHS = new Set(['/api/auth/login', '/api/auth/logout'])
+
+// Liveness probes that must answer before any session exists — the setup wizard
+// checks Docker before the operator can log in. Returns availability/versions,
+// no secrets. Gating this made the wizard read the gate's 503 as "Docker is
+// missing" and tell the operator to install Docker Desktop.
+const PUBLIC_GET_PATHS = new Set(['/api/health/docker'])
 
 // The ONLY GET paths agents read at runtime (verified against hermes-agent
 // swarm_map_policy plugin). Each returns a boolean, no secret. `admins/<userId>`
@@ -70,6 +77,7 @@ function requiresAuth(method: string, pathname: string): boolean {
     return true
   }
   if (READ_METHODS.has(method)) {
+    if (PUBLIC_GET_PATHS.has(pathname)) return false
     return !AGENT_READABLE_GET_PATHS.some((re) => re.test(pathname))
   }
   return false // OPTIONS and other non-mutating verbs

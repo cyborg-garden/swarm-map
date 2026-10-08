@@ -140,7 +140,8 @@ export class DockerService {
   // Short-TTL cache for batch stats. `docker stats` fans out one API request
   // per container inside the VM; with the dashboard polling /api/harnesses
   // every 5s per open tab, uncached calls hammered dockerd hard enough to
-  // wedge the Docker Desktop VM (fleet outage 2026-08-20 → 2026-08-24).
+  // wedge the container engine's VM (Docker Desktop; fleet outage
+  // 2026-08-20 → 2026-08-24).
   // Failures are cached too — a dead daemon must not be re-probed by a 15s
   // blocking exec on every poll.
   private statsCache: { ts: number; data: Record<string, ContainerStats> } | null = null

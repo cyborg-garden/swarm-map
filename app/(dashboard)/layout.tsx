@@ -1,6 +1,5 @@
 import { Sidebar, MobileNav } from '@/components/shell/sidebar'
 import { Topbar } from '@/components/shell/topbar'
-import { AuthGuard } from '@/components/auth/auth-guard'
 import { redirect } from 'next/navigation'
 import fs from 'fs'
 import path from 'path'
@@ -27,7 +26,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex min-h-screen">
-      <AuthGuard />
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
         <Topbar />

@@ -50,8 +50,11 @@ function relativeTime(ts: number): string {
 }
 
 export default function DashboardPage() {
-  const { data: harnesses, loading: hLoading } = useApi<Harness[]>('/api/harnesses', 5000)
-  const { data: audit, loading: aLoading } = useApi<AuditEntry[]>('/api/audit', 5000)
+  const { data: harnesses, loading: hLoading, error: hError } = useApi<Harness[]>('/api/harnesses', 5000)
+  const { data: audit, loading: aLoading, error: aError } = useApi<AuditEntry[]>('/api/audit', 5000)
+  // Readiness probe (ungated): surface a dead engine on the front page instead
+  // of an empty-but-silent dashboard. harness.list() swallows the Docker error.
+  const { data: dockerHealth } = useApi<{ available: boolean; error?: string }>('/api/health/docker', 15000)
   // Code drift — a standing condition (nothing on this host rebuilds itself),
   // so a slow poll is plenty and the banner stays up until someone acts.
   const { data: drift } = useApi<{ checkedAt: number; agents: DriftSummary[] }>('/api/fleet/drift', 60000)
@@ -68,6 +71,23 @@ export default function DashboardPage() {
   return (
     <div>
       <h2 className="text-2xl font-semibold mb-6">Dashboard</h2>
+
+      {dockerHealth && dockerHealth.available === false && (
+        <div className="mb-6 rounded-xl border border-destructive/30 bg-destructive/10 p-4">
+          <p className="text-sm font-semibold text-destructive">Docker is not available.</p>
+          <p className="text-sm text-muted-foreground">
+            {dockerHealth.error ?? 'Start Docker Desktop or OrbStack (or another Docker-compatible engine).'}{' '}
+            Agents cannot be discovered or managed until the engine is reachable.
+          </p>
+        </div>
+      )}
+
+      {(hError || aError) && dockerHealth?.available !== false && (
+        <div className="mb-6 rounded-xl border border-destructive/30 bg-destructive/10 p-4">
+          <p className="text-sm font-semibold text-destructive">Some dashboard data could not be loaded.</p>
+          <p className="text-sm text-muted-foreground">{hError ?? aError}</p>
+        </div>
+      )}
 
       <DriftBanner agents={drift?.agents} />
 

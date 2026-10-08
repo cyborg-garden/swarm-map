@@ -47,8 +47,9 @@ services:
 
   # Host-header rewriting proxy — see host-proxy.conf. Owns the published port
   # 8080 that agents reach via host.docker.internal. Bound to 127.0.0.1 ONLY:
-  # on Docker Desktop, host.docker.internal reaches host-loopback services, so
-  # agents still connect while LAN/tailnet/other-network clients cannot. This is
+  # both Docker Desktop and OrbStack resolve host.docker.internal to host-loopback
+  # services, so agents still connect while LAN/tailnet/other-network clients
+  # cannot. This is
   # what closes the unauthenticated-daemon exposure (and makes the daemon's
   # DNS-rebinding protection moot rather than defeated).
   signal-host-proxy:

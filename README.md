@@ -89,7 +89,7 @@ On first launch, the setup wizard detects your Hermes compose directories automa
 ### Requirements
 
 - **Node.js 18+**
-- **Docker** running locally (used for container management)
+- **Docker** running locally — Docker Desktop or OrbStack, used for container management (Swarm Map drives whichever `docker` CLI is on your PATH)
 - For the Hermes runtime: **Hermes Agent** instances — Swarm Map deploys the multi-tenant fork [cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt), a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
 - For the Letta runtime: a **Letta server** — the wizard brings one up for you via `docker/letta-compose.yml`
 

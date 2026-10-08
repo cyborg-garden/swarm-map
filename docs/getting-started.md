@@ -4,7 +4,7 @@ Deploy your first AI agent in under 5 minutes.
 
 ## Prerequisites
 
-- **Docker Desktop** running ([download](https://docker.com/products/docker-desktop))
+- A **Docker-compatible engine** running — [Docker Desktop](https://docker.com/products/docker-desktop) or [OrbStack](https://orbstack.dev) (either works; Swarm Map only shells out to the `docker` CLI)
 - **Node.js 18+** ([download](https://nodejs.org))
 - An API key from at least one provider (Anthropic, OpenRouter, Google) — or use Ollama for free local inference
 
@@ -17,6 +17,11 @@ npm install
 npm run seed    # first run only
 npm run dev     # opens http://localhost:3000
 ```
+
+On first run Swarm Map generates an operator token, writes it to `.env.local`
+(gitignored, `0600`), and logs the path. Sign in at `/login` with the
+`HSM_OPERATOR_TOKEN` value from that file. To choose your own instead, set
+`HSM_OPERATOR_TOKEN` in `.env.local` before starting (see `.env.example`).
 
 ## Create Your First Agent
 

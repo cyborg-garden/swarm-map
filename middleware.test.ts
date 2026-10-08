@@ -38,6 +38,9 @@ describe('middleware auth gate — token SET', () => {
   it('GET agent policy path → passes ungated', async () => {
     expect(passedThrough(await middleware(req(AGENT_POLICY, 'GET')))).toBe(true)
   })
+  it('GET /api/health/docker → passes ungated (pre-auth readiness probe)', async () => {
+    expect(passedThrough(await middleware(req('/api/health/docker', 'GET')))).toBe(true)
+  })
 
   // --- all other reads are gated (they can leak operator-sensitive data) ---
   it('GET /api/harnesses with no cookie → 401 (dashboard read, needs session)', async () => {
@@ -120,5 +123,11 @@ describe('middleware auth gate — token UNSET (fail-closed)', () => {
   })
   it('agent group-invite approval POST still passes (same fleet-keeps-working rationale)', async () => {
     expect(passedThrough(await middleware(req(AGENT_GROUPS, 'POST')))).toBe(true)
+  })
+  it('GET /api/health/docker still passes — the wizard must check Docker before login', async () => {
+    expect(passedThrough(await middleware(req('/api/health/docker', 'GET')))).toBe(true)
+  })
+  it('GET /api/health/docker does NOT leak the gate to other health paths', async () => {
+    expect((await middleware(req('/api/health', 'GET'))).status).toBe(503)
   })
 })
