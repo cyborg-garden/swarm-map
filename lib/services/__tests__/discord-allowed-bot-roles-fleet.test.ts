@@ -95,3 +95,26 @@ describe('/api/fleet/discord-allowed-bot-roles', () => {
     expect(envOf('iris')).toBe(ENV)
   })
 })
+
+describe('PUT /api/settings with discordAllowedBotRoles', () => {
+  it('syncs the fleet right away', async () => {
+    const updateSettings = vi.fn((p: Record<string, unknown>) => p)
+    const { services } = await import('@/lib/services')
+    ;(services.config as unknown as { updateSettings: typeof updateSettings }).updateSettings = updateSettings
+    const { PUT } = await import('@/app/api/settings/route')
+    const res = await PUT(new Request('http://x/api/settings', {
+      method: 'PUT', body: JSON.stringify({ discordAllowedBotRoles: [ROLE] }),
+    }))
+    expect(res.status).toBe(200)
+    expect(envOf('iris')).toContain(`DISCORD_ALLOWED_BOT_ROLES=${ROLE}`)
+  })
+
+  it('does not sync for unrelated settings', async () => {
+    const updateSettings = vi.fn((p: Record<string, unknown>) => p)
+    const { services } = await import('@/lib/services')
+    ;(services.config as unknown as { updateSettings: typeof updateSettings }).updateSettings = updateSettings
+    const { PUT } = await import('@/app/api/settings/route')
+    await PUT(new Request('http://x/api/settings', { method: 'PUT', body: JSON.stringify({ onboarded: true }) }))
+    expect(envOf('iris')).toBe(ENV)
+  })
+})

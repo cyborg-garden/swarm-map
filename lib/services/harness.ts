@@ -36,6 +36,7 @@ const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
 import { PLATFORM_ENV_KEYS as SURFACE_STRIP_BY_PLATFORM, MENTION_GATING_VARS } from '@/lib/surfaces/derive'
 import { ensureDiscordThreadGate } from './discord-thread-gate'
+import { applyAllowedBotRolesSetting } from './discord-allowed-bot-roles'
 
 const HARNESSES_FILE = 'harnesses.json'
 
@@ -2131,7 +2132,11 @@ export class HarnessService {
     // covers absent keys, not present-but-empty ones.)
     // Same pass adds DISCORD_THREAD_REQUIRE_MENTION=true to a Discord agent
     // that lacks it (fleet default 2026-10-06; explicit values are kept).
-    const healedEnv = ensureDiscordThreadGate(normalizeEmptyMentionGating(envContent))
+    // And the fleet bot-sender role gate, when swarm-map manages it.
+    const healedEnv = applyAllowedBotRolesSetting(
+      ensureDiscordThreadGate(normalizeEmptyMentionGating(envContent)),
+      this.config?.getSettings()?.discordAllowedBotRoles,
+    )
     const mentionGatingHealed = healedEnv !== envContent
     envContent = healedEnv
 

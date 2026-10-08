@@ -118,3 +118,18 @@ describe('fleet sync + posture', () => {
     expect(discordAllowedBotRolesPosture(targets(), null).agents.every((a) => a.status === 'unmanaged')).toBe(true)
   })
 })
+
+describe('applyAllowedBotRolesSetting', () => {
+  it('writes for a Discord agent when the setting is a valid list', async () => {
+    const { applyAllowedBotRolesSetting } = await import('../discord-allowed-bot-roles')
+    expect(applyAllowedBotRolesSetting(BASE, [ROLE])).toContain(`${DISCORD_ALLOWED_BOT_ROLES_VAR}=${ROLE}`)
+  })
+
+  it('leaves the text alone when unmanaged, invalid, or not a Discord agent', async () => {
+    const { applyAllowedBotRolesSetting } = await import('../discord-allowed-bot-roles')
+    for (const s of [undefined, null, [], ['x'], [GARDEN_GUILD_ID], 'x']) {
+      expect(applyAllowedBotRolesSetting(BASE, s)).toBe(BASE)
+    }
+    expect(applyAllowedBotRolesSetting('SIGNAL_ACCOUNT=+1\n', [ROLE])).toBe('SIGNAL_ACCOUNT=+1\n')
+  })
+})

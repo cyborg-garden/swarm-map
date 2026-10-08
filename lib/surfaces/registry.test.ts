@@ -194,7 +194,9 @@ describe('registry structural invariants', () => {
     // +1: DISCORD_THREAD_REQUIRE_MENTION (mention required in threads, 2026-10-06)
     expect(ALL_SURFACE_VARS.has('DISCORD_THREAD_REQUIRE_MENTION')).toBe(true)
     expect(SURFACES.discord.behavior.threadRequireMention).toBe('DISCORD_THREAD_REQUIRE_MENTION')
-    expect(ALL_SURFACE_VARS.size).toBe(39)
+    // +1: DISCORD_ALLOWED_BOT_ROLES (bot-sender role gate, fleet setting)
+    expect(ALL_SURFACE_VARS.has('DISCORD_ALLOWED_BOT_ROLES')).toBe(true)
+    expect(ALL_SURFACE_VARS.size).toBe(40)
   })
 
   it('isSurfaceSlug / surfaceSpec agree with the SURFACES keys', () => {

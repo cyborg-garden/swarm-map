@@ -25,9 +25,10 @@
 
 import fs from 'fs'
 import path from 'path'
+import { SURFACES } from '@/lib/surfaces/registry'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
 
-export const DISCORD_ALLOWED_BOT_ROLES_VAR = 'DISCORD_ALLOWED_BOT_ROLES'
+export const DISCORD_ALLOWED_BOT_ROLES_VAR = SURFACES.discord.behavior.allowedBotRoles!
 
 /** A Discord snowflake. Each role lands verbatim on a .env line. */
 export const ROLE_ID_RE = /^[0-9]{15,21}$/
@@ -77,6 +78,17 @@ export function setAllowedBotRolesEnv(env: string, roles: readonly string[]): { 
     out.push(raw)
   }
   return { status: 'updated', env: out.join('\n') }
+}
+
+/**
+ * Apply the `discordAllowedBotRoles` setting to one agent's .env text, for
+ * the paths that bring a Discord agent into the fleet between server starts
+ * (import, connecting Discord). Unmanaged or invalid settings and agents with
+ * no Discord token leave the text unchanged. Never throws.
+ */
+export function applyAllowedBotRolesSetting(env: string, setting: unknown): string {
+  if (!isAllowedBotRoleList(setting) || !hasDiscordSurface(env)) return env
+  return setAllowedBotRolesEnv(env, [...new Set(setting)]).env
 }
 
 // ── fleet sync (the writer) + posture (report only) ──────────────────────────

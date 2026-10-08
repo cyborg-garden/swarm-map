@@ -7,6 +7,7 @@ import { setPlatformEnabled } from '@/lib/config-yaml-helpers'
 import { services } from '@/lib/services'
 import { expandSignalAllowlist, resolveTelegramAdmins, type ResolvedIdentity } from '@/lib/resolvers'
 import { USERS_VARS } from '@/lib/surfaces/derive'
+import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-roles'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -113,6 +114,12 @@ export async function POST(
 
   // Ensure policy defaults exist for new connections (empty = approved-only).
   content = ensurePolicyDefaults(content, platform)
+
+  // A newly connected Discord agent joins the fleet bot-sender role gate now,
+  // not at the next server start.
+  if (platform === 'discord') {
+    content = applyAllowedBotRolesSetting(content, services.config?.getSettings?.()?.discordAllowedBotRoles)
+  }
 
   fs.writeFileSync(envPath, content, { mode: 0o600 })
 

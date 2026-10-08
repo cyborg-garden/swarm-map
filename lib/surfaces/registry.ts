@@ -67,6 +67,7 @@ export type SurfaceSpec = {
     allowBots?: string // Discord only — tri-state, evaluated before the allowlist
     botsRequireInlineMention?: string // Discord only — bot senders must carry a literal inline @mention (reply-pings don't count)
     threadRequireMention?: string // Discord only — @mention required inside threads the bot has joined too (adapter default is false = answer everything there)
+    allowedBotRoles?: string // Discord only — role ids a BOT sender must hold, on top of allowBots (fleet setting discordAllowedBotRoles)
     groupInvitePolicy?: string // signal / slack / telegram — who may add the bot
     channelScopedAccess?: string // Discord only — approved-channel admission
     profileName?: string // Signal only — display-name preference, re-applied on connect
@@ -178,6 +179,9 @@ export const SURFACES: Record<SurfaceSlug, SurfaceSpec> = {
       // nothing here may render it into config.yaml.
       threadRequireMention: 'DISCORD_THREAD_REQUIRE_MENTION',
       channelScopedAccess: 'DISCORD_CHANNEL_SCOPED_ACCESS',
+      // Fleet-managed (discordAllowedBotRoles setting, lib/services/discord-allowed-bot-roles).
+      // Listed here so extraEnv cannot shadow it with a compose environment: entry.
+      allowedBotRoles: 'DISCORD_ALLOWED_BOT_ROLES',
     },
     identity: {
       // Snowflake. Canonical bound 15–21 (real snowflakes are 17–20 + drift).
