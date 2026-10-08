@@ -59,6 +59,20 @@ jobs:
         # OPENROUTER_API_KEY is set, this step fails closed (the message says so) —
         # distinct from the deterministic step above, so a red here means "set the
         # key", a red above means "a secret/PII leak was found".
+        #
+        # Runs for push:main and same-repo PRs. Fork PRs never receive secrets,
+        # so there it is skipped (next step explains) instead of failing on a
+        # key the contributor cannot provide. Fork detection compares repo names
+        # from the event payload — nothing the PR author can set from a title or
+        # branch name. The deterministic layer above is never skipped.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python scripts/check_sanitization.py ${{ steps.scope.outputs.mode }}
+      - name: Particulars gate skipped (fork PR — no secrets)
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          msg="Particulars gate (semantic) SKIPPED: fork PRs get no repository secrets, so OPENROUTER_API_KEY is unavailable. The deterministic secrets/PII gate above DID run. A maintainer should run 'python scripts/check_sanitization.py --diff' locally before merging; the full-tree semantic scan also runs on push to main and in sanitization-scheduled."
+          echo "::notice title=Particulars gate skipped::$msg"
+          echo "### Particulars gate skipped (fork PR)" >> "$GITHUB_STEP_SUMMARY"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
