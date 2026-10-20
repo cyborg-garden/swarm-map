@@ -115,6 +115,17 @@ def load_config(root="."):
 _DETERMINISTIC_PATTERNS = [
     ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}"), "strip:sk-ant-"),
     ("openai-key", re.compile(r"sk-(?:proj-)?[A-Za-z0-9]{20,}"), "strip:sk-"),
+    # Project and service-account keys carry "_" and "-" in the body.
+    ("openai-key", re.compile(r"\bsk-(?:proj|svcacct)-[A-Za-z0-9_\-]{20,}"), "strip:sk-proj-"),
+    ("openrouter-key", re.compile(r"\bsk-or-v1-[0-9a-f]{64}\b"), "strip:sk-or-v1-"),
+    # Discord bot token: base64url(user id) . timestamp . HMAC.
+    ("discord-bot-token", re.compile(
+        r"\b[MN][A-Za-z\d_\-]{23,25}\.[A-Za-z\d_\-]{6}\.[A-Za-z\d_\-]{27,38}\b"), "last-segment"),
+    ("discord-webhook", re.compile(r"discord(?:app)?\.com/api/webhooks/\d+/[\w\-]+"), None),
+    ("telegram-bot-token", re.compile(r"(?<![\w:])\d{8,10}:[A-Za-z0-9_\-]{35}(?![\w\-])"), None),
+    ("huggingface-token", re.compile(r"\bhf_[A-Za-z0-9]{30,}"), "strip:hf_"),
+    ("npm-token", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"), "strip:npm_"),
+    ("gitlab-token", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}"), "strip:glpat-"),
     ("stripe-key", re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"), None),
     ("github-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), "strip:ghp_"),
     ("github-fine-grained-pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"), "strip:github_pat_"),
@@ -136,12 +147,12 @@ _DETERMINISTIC_PATTERNS = [
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
-        r"\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-]{16,})[\"']"), "group1"),
+        r"[\"']?\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-.]{16,})[\"']"), "group1"),
     # Unquoted hardcoded credential (YAML / .env): entropy-gated so a bare
     # identifier or function call is not reported as a literal secret.
     ("hardcoded-credential-unquoted", re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
-        r"\s*[=:]\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
+        r"[\"']?\s*[=:]\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
     ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "pii"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),
     # E.164 international (e.g. a contact wired into config/SOUL): "+" + 7–15 digits,
@@ -152,7 +163,7 @@ _DETERMINISTIC_PATTERNS = [
     # separator-free form above misses every human-formatted number.
     ("intl-phone", re.compile(r"(?<![\w.])\+\d{1,3}[\s.\-]?\d[\d\s.\-]{6,}\d(?![\w.])"), "pii"),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "pii"),
-    ("credit-card", re.compile(r"\b(?:\d[ \-]?){13,19}\b"), "luhn"),
+    ("credit-card", re.compile(r"\b(?:\d[ \-]?){12,18}\d\b"), "luhn"),
     ("ipv4", re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"), "ipv4"),
 ]
 
@@ -176,6 +187,38 @@ def _has_entropy(s):
     Tightening this further false-positives on ordinary code identifiers, which is
     worse for a gate that has to stay believable."""
     return bool(re.search(r"\d", s)) and bool(re.search(r"[A-Za-z]", s))
+
+
+def _card_brand_ok(digits):
+    """A real issuer prefix (IIN) with that brand's lengths. Discord snowflakes
+    and other long ids pass Luhn about one time in ten; they start with 1, so
+    they drop out here."""
+    n = len(digits)
+    if digits[0] == "4":
+        return n in (13, 16, 19)                                   # Visa
+    if 51 <= int(digits[:2]) <= 55 or 2221 <= int(digits[:4]) <= 2720:
+        return n == 16                                             # Mastercard
+    if digits[:2] in ("34", "37"):
+        return n == 15                                             # Amex
+    if digits[:4] == "6011" or digits[:2] == "65" or 644 <= int(digits[:3]) <= 649:
+        return 16 <= n <= 19                                       # Discover
+    return False
+
+
+_PLACEHOLDER_WORDS = re.compile(
+    r"(?i)your|example|change_?me|placeholder|replace|redacted|dummy|sample|insert|todo|xxxx")
+# All-lowercase words joined by . _ - with no digit: a name or key path
+# ("discord.bot.token", "turnstile-token-xyz"), not a generated secret.
+_LOWER_SLUG = re.compile(r"^[a-z]+(?:[._\-][a-z]+)*$")
+_ENV_REFERENCE = re.compile(r"^(?:[A-Z][A-Z0-9_]*|process\.env\.\w+|os\.environ\S*|env\.\w+)$")
+
+
+def _is_credential_placeholder(body):
+    """Assignment values that obviously are not secrets: a template word
+    ("your_api_key_here", "changeme"), or the NAME of an env var rather than
+    its value ("OPENROUTER_API_KEY", "process.env.X")."""
+    b = str(body).strip("\"'")
+    return bool(_PLACEHOLDER_WORDS.search(b) or _ENV_REFERENCE.match(b) or _LOWER_SLUG.match(b))
 
 
 def _luhn_ok(digits):
@@ -253,13 +296,19 @@ def _is_finding(match, gate, det_cfg=None):
         return True  # never placeholder-gated: see the gate legend above
     if gate == "luhn":
         digits = re.sub(r"\D", "", match.group(0))
-        return 13 <= len(digits) <= 19 and _luhn_ok(digits)
+        return _card_brand_ok(digits) and _luhn_ok(digits)
     if gate == "group1":
         body = match.group(1)
+        if _is_credential_placeholder(body):
+            return False
     elif gate == "group1-entropy":
         body = match.group(1)
+        if _is_credential_placeholder(body):
+            return False
         if not _has_entropy(body):
             return False  # an identifier / expression, not a literal secret
+    elif gate == "last-segment":
+        body = match.group(0).rsplit(".", 1)[-1]  # the HMAC part is random in a real token
     elif isinstance(gate, str) and gate.startswith("strip:"):
         prefix = gate[len("strip:"):]
         text = match.group(0)
@@ -308,13 +357,17 @@ def _is_allowed(label, value, allow):
     return False
 
 
-# Provider-prefixed credentials and key material: a hit is a real secret in any
-# file, fixture directories included. Everything else (PII, heuristic
+# Provider-prefixed credentials, JWTs and key material: a hit is a real secret
+# in any file, fixture directories included. Everything else (PII, heuristic
 # assignments, connection strings) may be skipped in test-fixture paths.
+# Connection strings stay skippable: fixture URLs with user:pass are common in
+# tests (swarm-map and iris both have them) and are rarely real.
 HIGH_CONFIDENCE_LABELS = frozenset({
     "anthropic-key", "openai-key", "stripe-key", "github-token", "github-fine-grained-pat",
     "slack-token", "slack-webhook", "aws-access-key", "google-api-key",
     "google-oauth-client-secret", "sendgrid-key", "notion-token", "private-key-block",
+    "openrouter-key", "discord-bot-token", "discord-webhook", "telegram-bot-token",
+    "huggingface-token", "npm-token", "gitlab-token", "jwt",
 })
 
 # Credential-bearing file names are never skipped, wherever they sit.

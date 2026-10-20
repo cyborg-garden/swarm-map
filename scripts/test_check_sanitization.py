@@ -1283,3 +1283,108 @@ def test_the_workflow_never_needs_an_authenticated_fetch():
         if "git fetch" in line and not line.strip().startswith("#"):
             raise AssertionError(f"unauthenticated fetch in workflow: {line.strip()}")
     assert "fetch-depth: ${{ inputs.mode == 'full-tree' && 1 || 0 }}" in wf
+
+
+# =============================================================================
+# Round-4 audit: JSON-style assignments, the fleet's provider prefixes, card IINs.
+# Fixtures are joined from fragments so this file holds no whole token.
+# =============================================================================
+
+OR_KEY = _F("sk-or-", "v1-", "0123456789abcdef" * 4)
+DISCORD_BOT = _F("MTIzNDU2Nzg5MDEyMzQ1Njc4", ".Gh7kLm", ".", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCd")
+TELEGRAM = _F("123456789", ":", "AAH3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdE")
+
+
+@pytest.mark.parametrize("line", [
+    '{"OPENROUTER_API_KEY": "%s"}' % "aB3dEf7hJk9mNp2qRs5tUv8wXy1z",
+    '{"api_key": "aB3dEf7hJk9mNp2qRs5tUv8wXy1z"}',
+    "{'token': 'aB3dEf7hJk9mNp2qRs5tUv8wXy1z'}",
+    '"DISCORD_BOT_TOKEN": "%s"' % DISCORD_BOT,
+    '"client_secret" : "aB3dEf7hJk9mNp2qRs5tUv8wXy1z"',
+])
+def test_json_style_credential_assignments_are_caught(line):
+    assert any(l.startswith("hardcoded-credential") or l == "discord-bot-token" for l in _labels(line)), line
+
+
+@pytest.mark.parametrize("line", [
+    '{"api_key": ""}',
+    '{"api_key": "${OPENROUTER_API_KEY}"}',
+    '{"api_key": "<your-openrouter-key>"}',
+    '{"token": "xxxxxxxxxxxxxxxxxxxx"}',
+    '{"password": "changeme-changeme-123"}',
+    '{"api_key": "your_api_key_goes_here"}',
+    '{"api_key": "OPENROUTER_API_KEY"}',
+    '{"token": "process.env.GITHUB_TOKEN"}',
+    '"max_tokens": 4096',
+    'apiKeyEnv: "OPENROUTER_API_KEY_SECONDARY"',
+])
+def test_json_style_placeholders_stay_quiet(line):
+    assert not any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
+@pytest.mark.parametrize("label,sample", [
+    ("openrouter-key", OR_KEY),
+    ("discord-bot-token", DISCORD_BOT),
+    ("discord-webhook", _F("https://discord.com/api/", "webhooks/123456789012345678/", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z_-0AbCd")),
+    ("discord-webhook", _F("https://discordapp.com/api/", "webhooks/123456789012345678/", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z")),
+    ("telegram-bot-token", TELEGRAM),
+    ("huggingface-token", _F("hf_", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdE")),
+    ("npm-token", _F("npm_", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdEfG")),
+    ("gitlab-token", _F("glpat-", "aB3dEf7hJk9mNp2qRs5t")),
+    ("openai-key", _F("sk-svcacct-", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z_0AbCd-Ef")),
+    ("openai-key", _F("sk-proj-", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z_0AbCd-Ef")),
+])
+def test_fleet_provider_tokens_fire(label, sample):
+    assert label in _labels(f"x {sample} y"), (label, _labels(f"x {sample} y"))
+    assert label in cs.HIGH_CONFIDENCE_LABELS
+
+
+def test_fleet_provider_tokens_are_caught_inside_fixture_dirs(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
+    _write(root, "tests/fixtures.py", f"T = '{OR_KEY}'")
+    assert cs.main(["--deterministic-only", "tests/fixtures.py"], root=root) == 1
+
+
+def _luhn_complete(prefix, length):
+    for d in range(10):
+        n = prefix + "0" * (length - len(prefix) - 1) + str(d)
+        if cs._luhn_ok(n):
+            return n
+
+
+def test_card_detection_requires_a_real_iin_and_length():
+    for prefix, length in (("4", 16), ("4", 13), ("51", 16), ("2221", 16), ("2720", 16),
+                           ("34", 15), ("37", 15), ("6011", 16), ("65", 16), ("644", 19)):
+        n = _luhn_complete(prefix, length)
+        assert "credit-card" in _labels(f"card {n}"), (prefix, length)
+    for prefix, length in (("15310", 19), ("1", 16), ("9", 16), ("34", 16), ("2721", 16), ("4", 15)):
+        n = _luhn_complete(prefix, length)
+        assert "credit-card" not in _labels(f"id {n}"), (prefix, length)
+
+
+@pytest.mark.parametrize("line", [
+    "token: 'discord.bot.token'",
+    '{"token": "turnstile-token-xyz"}',
+    'password = "correct_horse_battery"',
+])
+def test_lowercase_slug_values_are_names_not_secrets(line):
+    assert not any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
+def test_a_digitful_or_mixed_case_quoted_value_still_flags():
+    assert "hardcoded-credential" in _labels('password = "correct_horse_battery_9"')
+    assert "hardcoded-credential" in _labels('password = "Correct_Horse_Battery"')
+
+
+def test_discord_token_placeholder_with_x_run_is_quiet():
+    ph = _F("MTA", "x" * 23, ".", "x" * 6, ".", "x" * 27)
+    assert "discord-bot-token" not in _labels(f"DISCORD_BOT_TOKEN={ph}")
+    assert "discord-bot-token" in _labels(f"DISCORD_BOT_TOKEN={DISCORD_BOT}")
+
+
+def test_jwts_are_caught_inside_fixture_dirs(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
+    _write(root, "tests/f.py", "T = '" + _F("eyJ", "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ") + "'")
+    assert cs.main(["--deterministic-only", "tests/f.py"], root=root) == 1
