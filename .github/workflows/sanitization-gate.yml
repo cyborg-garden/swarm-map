@@ -139,6 +139,7 @@ jobs:
             scripts/check_sanitization.py
             scripts/test_check_sanitization.py
             sanitize.config.json
+            .github/workflows/sanitization-gate.yml
           sparse-checkout-cone-mode: false
 
       # dir   = the gate under TEST (self-tests, config check).

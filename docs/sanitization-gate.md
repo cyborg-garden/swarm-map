@@ -17,8 +17,8 @@ land such material.
 
 ## Threat model
 
-The gate stops **accidental** leaks: a trusted committer (Juniper, or one of her
-agents) committing a credential, personal data, or one deployment's particulars
+The gate stops **accidental** leaks: a trusted committer (the maintainer, or one of
+their agents) committing a credential, personal data, or one deployment's particulars
 by mistake. Within that model it fails closed: it scans every file in scope,
 cannot be switched off or narrowed by config, judges a PR with the base
 branch's config (and, in this repo, the base branch's script), and reports a
