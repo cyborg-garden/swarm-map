@@ -5,7 +5,8 @@ import os from 'os'
 import path from 'path'
 import {
   DISCORD_ALLOWED_BOT_ROLES_VAR,
-  GARDEN_GUILD_ID,
+  GUILD_IDS_VAR,
+  guildIds,
   discordAllowedBotRolesPosture,
   isAllowedBotRoleList,
   setAllowedBotRolesEnv,
@@ -15,6 +16,11 @@ import { validateSettingsPatch } from '../config'
 
 const ROLE = '1600000000000000001'
 const ROLE2 = '1600000000000000002'
+// A guild id is also its @everyone role id. The real one is instance config
+// (DISCORD_GUILD_IDS), never source; tests use a made-up one.
+const GARDEN_GUILD_ID = '1600000000000000099'
+beforeEach(() => { vi.stubEnv('DISCORD_GUILD_IDS', GARDEN_GUILD_ID) })
+afterEach(() => { vi.unstubAllEnvs() })
 const BASE = 'DISCORD_BOT_TOKEN=t\nDISCORD_ALLOW_BOTS=mentions\nDISCORD_ALLOWED_USERS=123456789012345678\n'
 
 describe('setAllowedBotRolesEnv', () => {
@@ -131,5 +137,35 @@ describe('applyAllowedBotRolesSetting', () => {
       expect(applyAllowedBotRolesSetting(BASE, s)).toBe(BASE)
     }
     expect(applyAllowedBotRolesSetting('SIGNAL_ACCOUNT=+1\n', [ROLE])).toBe('SIGNAL_ACCOUNT=+1\n')
+  })
+})
+
+
+describe('guild ids come from instance config, not source', () => {
+  it('reads DISCORD_GUILD_IDS as a comma list of snowflakes, ignoring junk', () => {
+    vi.stubEnv(GUILD_IDS_VAR, ` ${GARDEN_GUILD_ID}, 1600000000000000098 ,x,`)
+    expect(guildIds()).toEqual([GARDEN_GUILD_ID, '1600000000000000098'])
+  })
+
+  it('refuses every listed guild id as a role, in both copies of the rule', () => {
+    vi.stubEnv(GUILD_IDS_VAR, `1600000000000000098,${GARDEN_GUILD_ID}`)
+    for (const g of ['1600000000000000098', GARDEN_GUILD_ID]) {
+      expect(isAllowedBotRoleList([g])).toBe(false)
+      expect(() => validateSettingsPatch({ discordAllowedBotRoles: [g] })).toThrow()
+    }
+  })
+
+  it('unset = no guild-id refusal (safe default for any other deployment)', () => {
+    vi.stubEnv(GUILD_IDS_VAR, '')
+    expect(guildIds()).toEqual([])
+    expect(isAllowedBotRoleList([GARDEN_GUILD_ID])).toBe(true)
+    expect(validateSettingsPatch({ discordAllowedBotRoles: [GARDEN_GUILD_ID] })).toEqual({ discordAllowedBotRoles: [GARDEN_GUILD_ID] })
+  })
+
+  it('no deployment\'s guild id is hardcoded in the services', () => {
+    for (const f of ['discord-allowed-bot-roles.ts', 'config.ts']) {
+      const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8')
+      expect(src).not.toMatch(/['"][0-9]{17,20}['"]/)
+    }
   })
 })

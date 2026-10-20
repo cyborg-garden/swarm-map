@@ -85,10 +85,11 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         // Same rule as isAllowedBotRoleList (discord-allowed-bot-roles.ts),
         // inlined to keep this module free of service imports; the writer
         // re-checks it, and a test pins the two together.
+        const guildIds = (process.env.DISCORD_GUILD_IDS ?? '').split(',').map((s) => s.trim())
         if (
           !Array.isArray(value) ||
           value.length === 0 ||
-          !value.every((v) => typeof v === 'string' && /^[0-9]{15,21}$/.test(v) && v !== '1531068097719570432')
+          !value.every((v) => typeof v === 'string' && /^[0-9]{15,21}$/.test(v) && !guildIds.includes(v))
         ) {
           throw new Error(
             'discordAllowedBotRoles must be a non-empty array of Discord role IDs (not the @everyone/guild id), or null',

@@ -26,6 +26,7 @@ const dir = (n: string) => path.join(home, `.hermes-${n}`)
 const envOf = (n: string) => fs.readFileSync(path.join(dir(n), '.env'), 'utf-8')
 
 beforeEach(() => {
+  vi.stubEnv('DISCORD_GUILD_IDS', '1600000000000000099')
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-roles-fleet-'))
   vi.spyOn(os, 'homedir').mockReturnValue(home)
   for (const n of ['iris', 'mare']) {
@@ -41,6 +42,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllEnvs()
   fs.rmSync(home, { recursive: true, force: true })
 })
 
@@ -52,7 +54,7 @@ describe('syncFleetDiscordAllowedBotRolesAtStartup', () => {
 
   it('ignores a hand-edited setting that is not a list of role IDs, writing nothing', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    for (const bad of [[`${ROLE}\nDISCORD_ALLOW_ALL_USERS=true`], ['trusted-bot'], 'x', [123], [], ['1531068097719570432']]) {
+    for (const bad of [[`${ROLE}\nDISCORD_ALLOW_ALL_USERS=true`], ['trusted-bot'], 'x', [123], [], ['1600000000000000099']]) {
       getSettingsMock.mockReturnValue({ discordAllowedBotRoles: bad })
       expect(syncFleetDiscordAllowedBotRolesAtStartup()).toBeNull()
     }

@@ -19,8 +19,8 @@
  * rather than written fleet-wide by accident.
  *
  * The @everyone role's id is the guild id; it never grants in the adapter, and
- * the setting refuses the garden guild's id so a copy-paste of it cannot read
- * as "configured" while gating nothing useful.
+ * the setting refuses the deployment's guild ids (DISCORD_GUILD_IDS) so a
+ * copy-paste of one cannot read as "configured" while gating nothing useful.
  */
 
 import fs from 'fs'
@@ -33,15 +33,26 @@ export const DISCORD_ALLOWED_BOT_ROLES_VAR = SURFACES.discord.behavior.allowedBo
 /** A Discord snowflake. Each role lands verbatim on a .env line. */
 export const ROLE_ID_RE = /^[0-9]{15,21}$/
 
-/** The garden guild — its id is also its @everyone role id. */
-export const GARDEN_GUILD_ID = '1531068097719570432'
+/**
+ * This deployment's Discord guild ids (DISCORD_GUILD_IDS, comma-separated, in
+ * the instance env such as .env.local). A guild's id is also its @everyone
+ * role id, so these are refused as "allowed bot roles". Instance config, never
+ * source: a public base package must not carry one deployment's guild. Unset =
+ * no guild-id refusal; every other rule still applies.
+ */
+export const GUILD_IDS_VAR = 'DISCORD_GUILD_IDS'
+
+export function guildIds(): string[] {
+  return (process.env[GUILD_IDS_VAR] ?? '').split(',').map((s) => s.trim()).filter((s) => ROLE_ID_RE.test(s))
+}
 
 /** True when `v` is a non-empty list of role IDs safe to write. */
 export function isAllowedBotRoleList(v: unknown): v is string[] {
+  const guilds = guildIds()
   return (
     Array.isArray(v) &&
     v.length > 0 &&
-    v.every((r) => typeof r === 'string' && ROLE_ID_RE.test(r) && r !== GARDEN_GUILD_ID)
+    v.every((r) => typeof r === 'string' && ROLE_ID_RE.test(r) && !guilds.includes(r))
   )
 }
 
