@@ -44,7 +44,6 @@
       "@company.com",
       "+1234567890",
       "postgresql://letta:letta@letta-db:5432",
-      "1531068097719570432",
       "1.31.38.89",
       "3.5.7.9",
       "1.5.75.75"
@@ -64,6 +63,6 @@
       "proxy.test.ts"
     ],
     "$comment_skip_paths": "Test code that holds credential-SHAPED fixtures on purpose. The gate accepts only test-fixture paths here (fixture dirs or test files); keep this tight.",
-    "$comment_allow_exact": "Exact values (never substrings), each verified in place: '+1234567890' is a UI placeholder in components/surfaces/platform-ui.ts; the letta connection string is the commented example in docker/letta-compose.yml (user and password are both the service name); the three dotted quads are SVG path coordinates in public/*.svg, not addresses; the 19-digit number is the garden Discord guild id hardcoded in lib/services/config.ts and lib/services/discord-allowed-bot-roles.ts. That last one IS a deployment particular in public base code: it is excused here only so the full-tree lane can go green, and should move into instance config."
+    "$comment_allow_exact": "Exact values (never substrings), each verified in place: '+1234567890' is a UI placeholder in components/surfaces/platform-ui.ts; the letta connection string is the commented example in docker/letta-compose.yml (user and password are both the service name); the three dotted quads are SVG path coordinates in public/*.svg, not addresses."
   }
 }

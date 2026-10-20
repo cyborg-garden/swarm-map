@@ -1181,3 +1181,30 @@ def test_rfc_reserved_documentation_domains_are_never_findings():
         assert "email" not in _labels(f"mail {addr} now"), addr
     for addr in ("g@example.co", "h@myexample.com", "i@example.com.realcorp.io", "j@test.com"):
         assert "email" in _labels(f"mail {addr} now"), addr
+
+
+# ---- the reusable workflow: what judges a PR in the gate's home repo ---------
+
+def _gate_workflow():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".github",
+                     "workflows", "sanitization-gate.yml")
+    with open(p, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_home_repo_prs_are_judged_by_the_base_commits_gate():
+    """A swarm-map PR that weakens check_sanitization.py must not be judged by
+    its own weakened copy: the judging steps run the BASE commit's script, while
+    the self-tests still exercise the PR's script."""
+    wf = _gate_workflow()
+    assert 'git show "$BASE_SHA:scripts/check_sanitization.py"' in wf
+    for step in ("2. Secrets & PII gate", "3. Particulars gate (semantic"):
+        body = wf.split(step, 1)[1].split("\n      - name:", 1)[0]
+        assert "steps.gate.outputs.judge" in body, step
+        assert "steps.gate.outputs.dir" not in body, step
+    tests = wf.split("0. Gate self-tests", 1)[1].split("\n      - name:", 1)[0]
+    assert "steps.gate.outputs.dir" in tests
+
+
+def test_the_workflow_refuses_pull_request_target():
+    assert 'if [ "$EVENT" = "pull_request_target" ]' in _gate_workflow()
