@@ -120,3 +120,19 @@ describe('PUT /api/settings with discordAllowedBotRoles', () => {
     expect(envOf('iris')).toBe(ENV)
   })
 })
+
+describe('startup warning for an unset DISCORD_GUILD_IDS', () => {
+  it('warns loudly once per start when the var is unset', () => {
+    vi.stubEnv('DISCORD_GUILD_IDS', '')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    syncFleetDiscordAllowedBotRolesAtStartup()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('DISCORD_GUILD_IDS')
+  })
+
+  it('stays quiet when it is set', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    syncFleetDiscordAllowedBotRolesAtStartup()
+    expect(warn).not.toHaveBeenCalled()
+  })
+})

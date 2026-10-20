@@ -6,7 +6,7 @@
 
 import { services } from '@/lib/services'
 import { fleetThreadGateTargets } from './discord-thread-gate-fleet'
-import { isAllowedBotRoleList, syncDiscordAllowedBotRoles, type BotRoleSyncResult } from './discord-allowed-bot-roles'
+import { GUILD_IDS_VAR, guildIds, isAllowedBotRoleList, syncDiscordAllowedBotRoles, type BotRoleSyncResult } from './discord-allowed-bot-roles'
 
 /**
  * The configured bot role IDs, or null when swarm-map does not manage them.
@@ -51,4 +51,17 @@ export function syncFleetDiscordAllowedBotRoles(): BotRoleSyncResult | null {
   }
 }
 
-export const syncFleetDiscordAllowedBotRolesAtStartup = syncFleetDiscordAllowedBotRoles
+/**
+ * Server-start entry point: warns when this deployment has not named its guild
+ * ids (the guild id is also the @everyone role, and only DISCORD_GUILD_IDS lets
+ * the setting refuse it), then syncs.
+ */
+export function syncFleetDiscordAllowedBotRolesAtStartup(): BotRoleSyncResult | null {
+  if (guildIds().length === 0) {
+    console.warn(
+      `[discord-allowed-bot-roles] WARNING: ${GUILD_IDS_VAR} is unset, so discordAllowedBotRoles ` +
+      'cannot refuse this deployment\'s guild (@everyone) id. Set it in the instance env (.env.local).',
+    )
+  }
+  return syncFleetDiscordAllowedBotRoles()
+}
