@@ -1,0 +1,61 @@
+{
+  "$comment": "Sanitization gate config for swarm-map, which is also the canonical HOME of the gate (scripts/check_sanitization.py + .github/workflows/sanitization-gate.yml). This file carries only swarm-map's own particulars; the detection machinery is shared by every repo that calls the gate.",
+
+  "package_name": "swarm-map",
+  "package_kind": "SHARED base package of the Swarm Map agent platform, which ships to EVERY downstream deployment",
+
+  "sensitive_prefixes": [
+    "infra/templates/",
+    "docs/",
+    "SOUL"
+  ],
+  "$comment_prefixes": "infra/templates/ holds the base plugins, skills and hooks shipped to every agent; docs/ holds runbooks and templates; SOUL matches any top-level base soul template. Top-level *.md (README, CONTRIBUTING) are always included automatically.",
+
+  "semantic": {
+    "domain_noun": "downstream deployment, investigation, customer, or operator instance",
+    "flag_examples": [
+      "names of real individuals (investigation subjects, suspects, targets, customers, end-users, or named staff)",
+      "organizations or companies tied to a specific investigation or customer (NOT the publishing project itself)",
+      "document IDs, file names, dataset names, case numbers, or URLs specific to one investigation / customer / use case",
+      "a codename or label identifying a particular investigation / customer / case",
+      "operator- or instance-specific infrastructure identifiers: specific hostnames, chat/group IDs, server addresses or ports, account numbers, phone numbers",
+      "dates, locations, or details that only make sense for one specific downstream use case"
+    ],
+    "do_not_flag_examples": [
+      "the publishing org/project, its products and repos: cyborg-garden / cyborg.garden, and the former org names it was published under, which still appear throughout historical content: NimbleCo / NimbleCoAI / NimbleCoOrg / nimbleco.ai",
+      "Hermes, Swarm Map / SM / swarm-map, the former names Hermes Swarm Map / HSM / hermes-swarm-map, hermes-agent and its published multi-tenant fork hermes-agent-mt, this repo's own name and its GitHub URLs",
+      "the platform's own architecture, design, roadmap, plans, and contributor docs",
+      "generic tool / API / platform / model / provider names and public reference material",
+      "clearly fictional placeholders (Subject A, <case>, example.com, <host>)"
+    ],
+    "extra_instructions": [
+      "This package MAY, and naturally does, describe the platform itself. Prefer NOT flagging the platform's own project identity, but DO flag anything that looks like it came from a specific investigation, customer, or operator instance."
+    ],
+    "model": "moonshotai/kimi-k3"
+  },
+
+  "deterministic": {
+    "enabled": true,
+    "allow_substrings": [
+      "@example.com",
+      "@example.org",
+      "@example.net",
+      "@email.com",
+      "@test.com",
+      "@domain.com",
+      "@anthropic.com",
+      "@yourdomain.com",
+      "@company.com"
+    ],
+    "$comment_allow_substrings": "The placeholder email domains swarm-map's pre-canonical gate hardcoded. Matched against the detected value only, never the whole line.",
+    "scope": "sensitive",
+    "$comment_scope": "swarm-map's pre-canonical gate ran the secrets/PII layer over content paths only (infra/templates/, docs/, SOUL*, top-level *.md). Kept as-is for the migration; widening to \"all\" surfaces ~25 code/test files with credential-shaped fixtures that need triage first.",
+    "ipv4_scope": "public",
+    "allow_fiction_phones": true,
+    "$comment_relaxations": "Carried over from swarm-map's pre-canonical gate: only globally routable IPv4 counts (private, CGNAT, loopback, link-local and RFC 5737 documentation ranges are fixtures in infra code), and NANP 555 numbers are documentation placeholders. Both default OFF in the canonical gate.",
+    "skip_paths": [
+      "scripts/test_check_sanitization.py"
+    ],
+    "$comment_skip_paths": "The gate's own self-tests hold credential-SHAPED fixtures on purpose. Keep this tight."
+  }
+}

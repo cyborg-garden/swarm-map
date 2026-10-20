@@ -1,17 +1,17 @@
 name: sanitization
 
-# Gate the base package (infra/templates/**, docs, base skills/soul) so it never
-# ships secrets, PII, or use-case-specific particulars to every agent — even from
-# an automated contribution. Two layers, both required, fail-closed: a
-# deterministic secret/PII layer (no key needed) plus an LLM particulars layer.
+# swarm-map's own run of the canonical gate (sanitization-gate.yml, in this
+# repo). Called locally (./), so a PR that changes the gate is tested and gated
+# by its own change; other repos call it pinned to a sanitization-gate-v* tag.
 #
 # Scope differs by trigger:
-#   * pull_request → DIFF-ONLY. Scans only files changed across the full PR range
-#     (git diff --name-only origin/main...HEAD). Keeps the gate from flaky-blocking
-#     contributors on pre-existing, untouched content.
-#   * push: main   → FULL-TREE (--all). Publish-time backstop — unchanged.
-# The scheduled full-tree audit (the detection backstop for anything a diff-only PR
-# never touched) lives in sanitization-scheduled.yml.
+#   * pull_request → DIFF-ONLY (git diff origin/main...HEAD, the full PR range).
+#     Never flaky-blocks contributors on pre-existing, untouched content.
+#   * push: main   → FULL-TREE. Publish-time backstop.
+# The daily full-tree audit lives in sanitization-scheduled.yml.
+#
+# What swarm-map counts as a particular, and which paths carry content, lives in
+# sanitize.config.json — not in the script.
 on:
   pull_request:
     paths:
@@ -20,59 +20,22 @@ on:
       - '**/*.md'
       - 'SOUL*'
       - '**/SOUL*'
+      - 'sanitize.config.json'
       - 'scripts/check_sanitization.py'
       - 'scripts/test_check_sanitization.py'
       - '.github/workflows/sanitization.yml'
       - '.github/workflows/sanitization-scheduled.yml'
+      - '.github/workflows/sanitization-gate.yml'
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   sanitize:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Full history so the three-dot PR-range diff has a merge-base to work from.
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install scanner deps
-        run: pip install -r scripts/requirements.txt
-      - name: Scanner self-tests
-        run: python -m pytest scripts/test_check_sanitization.py -q
-      - name: Determine scan scope
-        id: scope
-        # PRs scan only their own diff; push:main scans the whole base package.
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch origin main --quiet
-            echo "mode=--diff" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=--all" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Secrets & PII gate (deterministic — always enforced, no key needed)
-        run: python scripts/check_sanitization.py ${{ steps.scope.outputs.mode }} --deterministic-only
-      - name: Particulars gate (semantic — needs OPENROUTER_API_KEY, fails closed)
-        # Catches use-case-specific names / orgs / case IDs. Until the repo secret
-        # OPENROUTER_API_KEY is set, this step fails closed (the message says so) —
-        # distinct from the deterministic step above, so a red here means "set the
-        # key", a red above means "a secret/PII leak was found".
-        #
-        # Runs for push:main and same-repo PRs. Fork PRs never receive secrets,
-        # so there it is skipped (next step explains) instead of failing on a
-        # key the contributor cannot provide. Fork detection compares repo names
-        # from the event payload — nothing the PR author can set from a title or
-        # branch name. The deterministic layer above is never skipped.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: python scripts/check_sanitization.py ${{ steps.scope.outputs.mode }}
-      - name: Particulars gate skipped (fork PR — no secrets)
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-        run: |
-          msg="Particulars gate (semantic) SKIPPED: fork PRs get no repository secrets, so OPENROUTER_API_KEY is unavailable. The deterministic secrets/PII gate above DID run. A maintainer should run 'python scripts/check_sanitization.py --diff' locally before merging; the full-tree semantic scan also runs on push to main and in sanitization-scheduled."
-          echo "::notice title=Particulars gate skipped::$msg"
-          echo "### Particulars gate skipped (fork PR)" >> "$GITHUB_STEP_SUMMARY"
-          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+    uses: ./.github/workflows/sanitization-gate.yml
+    with:
+      mode: ${{ github.event_name == 'pull_request' && 'pr' || 'full-tree' }}
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

@@ -1,34 +1,21 @@
 name: sanitization-scheduled
 
 # Scheduled FULL-TREE sanitization audit — the detection backstop for the
-# diff-only PR gate. Because pull_request now scans only a PR's own diff
-# (sanitization.yml), a leak could in principle reach the base package in a file
-# no single PR touched (e.g. a rename, a merge, or an out-of-band edit). This lane
-# re-scans the ENTIRE base package on a cron with BOTH layers, fail-closed —
-# exactly the coverage the PR gate used to provide, moved off the critical path
-# so it can't flaky-block contributors on pre-existing content.
-#
-# Runs on the default branch (main). workflow_dispatch allows an on-demand audit.
+# diff-only PR gate. A leak could reach the base package in a file no single PR
+# touched (a rename, a merge, an out-of-band edit); this lane re-scans the whole
+# tree daily with both layers, fail-closed. workflow_dispatch runs it on demand.
 on:
   schedule:
     - cron: '17 9 * * *'   # daily, 09:17 UTC
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   sanitize-full-tree:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install scanner deps
-        run: pip install -r scripts/requirements.txt
-      - name: Scanner self-tests
-        run: python -m pytest scripts/test_check_sanitization.py -q
-      - name: Full-tree secrets & PII gate (deterministic — always enforced, no key needed)
-        run: python scripts/check_sanitization.py --all --deterministic-only
-      - name: Full-tree particulars gate (semantic — needs OPENROUTER_API_KEY, fails closed)
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: python scripts/check_sanitization.py --all
+    uses: ./.github/workflows/sanitization-gate.yml
+    with:
+      mode: full-tree
+    secrets:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
