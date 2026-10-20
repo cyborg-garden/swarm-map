@@ -9,6 +9,7 @@ import {
   templateEnabledPlugins,
   installUseCaseTemplate,
   reapplyUseCaseTemplate,
+  agentDisplayName,
   type UseCaseTemplate,
 } from '../usecase-templates'
 
@@ -41,6 +42,12 @@ describe('use-case template registry', () => {
 
   it('returns [] when the registry file is absent', () => {
     expect(loadUseCaseTemplates(path.join(repoRoot, 'nonexistent'))).toEqual([])
+  })
+
+  it('derives a display name from the harness name', () => {
+    expect(agentDisplayName('vera')).toBe('Vera')
+    expect(agentDisplayName('ops-bot')).toBe('Ops Bot')
+    expect(agentDisplayName('McKenzie')).toBe('McKenzie')
   })
 
   it('lists enabled plugin names', () => {
@@ -86,6 +93,24 @@ describe('installUseCaseTemplate (trust-gated, injected fetch)', () => {
     expect(fs.existsSync(path.join(agentDir, 'plugins', 'matilde', 'plugin.yaml'))).toBe(true)
     const soul = fs.readFileSync(path.join(agentDir, 'SOUL.md'), 'utf-8')
     expect(soul).toContain('careful research assistant')
+  })
+
+  it('substitutes {{AGENT_NAME}} in the template SOUL with a display name from the harness name', async () => {
+    fs.writeFileSync(
+      path.join(fixtures, 'docker', 'SOUL.Matilde.md'),
+      '# {{AGENT_NAME}}\nYou are {{AGENT_NAME}}, a generalist. Keep {{UNKNOWN_THING}} as-is.\n',
+    )
+    await installUseCaseTemplate(agentDir, TEMPLATE, {
+      gitFetch: (src) => fetchBy(src.subdir),
+      cacheRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'uc-cache-')),
+      agentName: 'vera',
+    })
+    const soul = fs.readFileSync(path.join(agentDir, 'SOUL.md'), 'utf-8')
+    expect(soul).toContain('# Vera\n')
+    expect(soul).toContain('You are Vera, a generalist.')
+    expect(soul).not.toContain('{{AGENT_NAME}}')
+    // Unknown placeholders are left alone (and warned about), never blanked.
+    expect(soul).toContain('{{UNKNOWN_THING}}')
   })
 
   it('refuses a poisoned SOUL at STRICT scope (catches exfil that context scope misses)', async () => {

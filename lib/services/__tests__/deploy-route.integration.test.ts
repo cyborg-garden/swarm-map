@@ -280,7 +280,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     const json = await res.json()
     expect(json.ok).toBe(true)
     expect(tmpl.get).toHaveBeenCalledWith('matilde')
-    expect(tmpl.install).toHaveBeenCalledWith(path.join(h.tmpHome, '.hermes-sci'), template)
+    // The harness name is passed through so the template SOUL's {{AGENT_NAME}} gets filled.
+    expect(tmpl.install).toHaveBeenCalledWith(path.join(h.tmpHome, '.hermes-sci'), template, { agentName: 'sci' })
     // template's enabled plugin is written into config.yaml plugins.enabled
     const cfg = fs.readFileSync(path.join(h.tmpHome, '.hermes-sci', 'config.yaml'), 'utf-8')
     expect(cfg).toContain('matilde')

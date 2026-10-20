@@ -67,6 +67,40 @@ export interface InstallTemplateOpts {
   /** Seed the template SOUL over the agent's SOUL.md. Default true (create-time);
    *  re-apply passes false to preserve a deployed agent's identity. */
   seedSoul?: boolean
+  /** The agent's name as entered at create time (e.g. "vera"). Fills the
+   *  template SOUL's {{AGENT_NAME}} placeholder (as a display name, "Vera"). */
+  agentName?: string
+}
+
+/**
+ * Display name for an agent from its harness name: "vera" -> "Vera",
+ * "ops-bot" -> "Ops Bot". Words that already carry capitals are kept as typed.
+ */
+export function agentDisplayName(name: string): string {
+  return name
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => (w === w.toLowerCase() ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ')
+}
+
+/**
+ * Fill the {{PLACEHOLDER}}s a template SOUL declares. Only known keys are
+ * replaced; unknown ones are left verbatim (a template may use a token the
+ * operator fills in by hand) and reported so the deploy can warn.
+ */
+export function fillSoulPlaceholders(
+  content: string,
+  values: Record<string, string>,
+): { content: string; unknown: string[] } {
+  const unknown = new Set<string>()
+  const out = content.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (match, key: string) => {
+    if (Object.prototype.hasOwnProperty.call(values, key)) return values[key]
+    unknown.add(key)
+    return match
+  })
+  return { content: out, unknown: [...unknown] }
 }
 
 export function loadUseCaseTemplates(repoRoot: string = process.cwd()): UseCaseTemplate[] {
@@ -120,7 +154,7 @@ export async function installUseCaseTemplate(
   const results = await installArtifacts(agentDataDir, manifest, process.cwd(), { gitToken, cacheRoot, gitFetch, scope: 'strict', overwrite: opts.overwrite })
 
   if (template.soul && opts.seedSoul !== false) {
-    await seedSoulFromGit(agentDataDir, template.soul, gitFetch, cacheRoot)
+    await seedSoulFromGit(agentDataDir, template.soul, gitFetch, cacheRoot, opts.agentName)
   }
   return results
 }
@@ -177,6 +211,7 @@ async function seedSoulFromGit(
   soul: UseCaseSoul,
   gitFetch: (src: GitSource) => string,
   cacheRoot: string,
+  agentName?: string,
 ): Promise<void> {
   const src = parseGitSource(soul.source)
   if (!src) throw new Error(`Use-case template SOUL source must be a pinned git source: "${soul.source}"`)
@@ -192,7 +227,16 @@ async function seedSoulFromGit(
 
   // Gate the SOUL file in isolation: copy just it into a scratch dir and scan.
   const scratch = fs.mkdtempSync(path.join(cacheRoot, 'soul-gate-'))
-  await cp(soulSrc, path.join(scratch, 'SOUL.md'))
+  const values: Record<string, string> = {}
+  if (agentName && agentName.trim()) values.AGENT_NAME = agentDisplayName(agentName)
+  const filled = fillSoulPlaceholders(fs.readFileSync(soulSrc, 'utf-8'), values)
+  if (filled.unknown.length > 0) {
+    console.warn(
+      `[usecase-templates] SOUL from ${soul.source} has unfilled placeholders: ${filled.unknown.map((k) => `{{${k}}}`).join(', ')}`,
+    )
+  }
+  // Gate the FILLED content — the name is operator input and ends up in the prompt.
+  fs.writeFileSync(path.join(scratch, 'SOUL.md'), filled.content, 'utf-8')
   // SOUL becomes the agent's identity prompt — gate it at the strictest scope.
   const gate = gateArtifactDir(scratch, 'strict')
   if (!gate.ok) {

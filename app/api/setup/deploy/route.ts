@@ -549,7 +549,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
     // Throws (failing the create before the container starts) if the trust gate
     // refuses any fetched content — a poisoned template must never deploy.
     if (useCaseTemplate) {
-      await installUseCaseTemplate(agentDataDir, useCaseTemplate)
+      await installUseCaseTemplate(agentDataDir, useCaseTemplate, { agentName: name })
       // A template SOUL replaces the default one; put the orientation block
       // (and anything else the template displaced) back. Add-only.
       applyBasePackageToDir(agentDataDir, basePackage, selection)
