@@ -6,6 +6,7 @@ report a repo "clean". They are the union of every per-repo copy's tests
 (swarm-map, Matilde, osint-engine, agentic-startup-generalist, iris, the
 use-case template) from before the gate was made canonical.
 """
+import json
 import os
 import re
 import subprocess
@@ -922,3 +923,133 @@ def test_the_gate_does_not_flag_its_own_source():
     src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check_sanitization.py")
     with open(src, encoding="utf-8") as fh:
         assert cs.scan_deterministic(fh.read(), []) == []
+
+
+# =============================================================================
+# Audit of swarm-map#265 (2026-10-20). Each test reproduced a bypass first.
+# =============================================================================
+
+def _commit_all(git, msg="c"):
+    git("add", "-A")
+    git("commit", "-qm", msg)
+
+
+def test_non_ascii_filename_is_scanned_in_diff_mode(tmp_path, monkeypatch):
+    """git C-quotes non-ASCII paths ("docs/caf\\303\\251.md") unless asked not to;
+    the quoted name never exists on disk, so the file was silently skipped and a
+    real token passed — even under --require-semantic with no key."""
+    git = _git_repo(tmp_path)
+    _write(str(tmp_path), "sanitize.config.json", '{"sensitive_prefixes":["docs/"]}')
+    _commit_all(git, "base")
+    git("checkout", "-q", "-b", "feature")
+    _write(str(tmp_path), "docs/café.md", f"token: {GH_PAT_P}")
+    _commit_all(git, "leak")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("SANITIZE_BASE_REF", "main")
+    assert "docs/café.md" in cs.git_changed_files("main", str(tmp_path))
+    assert cs.main(["--diff", "--deterministic-only"], root=str(tmp_path)) == 1
+    assert cs.main(["--diff", "--require-semantic"], root=str(tmp_path)) != 0
+
+
+def test_non_ascii_filename_is_scanned_in_full_tree_mode(tmp_path, monkeypatch):
+    git = _git_repo(tmp_path)
+    _write(str(tmp_path), "sanitize.config.json", '{"sensitive_prefixes":["docs/"]}')
+    _write(str(tmp_path), "docs/über notes.md", f"token: {GH_PAT_P}")
+    _commit_all(git)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert "docs/über notes.md" in cs.git_tracked_files(str(tmp_path))
+    assert cs.main(["--all", "--deterministic-only"], root=str(tmp_path)) == 1
+
+
+def test_deleted_files_in_the_pr_range_are_not_failures(tmp_path, monkeypatch):
+    git = _git_repo(tmp_path)
+    _write(str(tmp_path), "sanitize.config.json", '{"sensitive_prefixes":["docs/"]}')
+    _write(str(tmp_path), "docs/old.md", "Generic methodology.")
+    _commit_all(git, "base")
+    git("checkout", "-q", "-b", "feature")
+    os.remove(os.path.join(str(tmp_path), "docs", "old.md"))
+    _commit_all(git, "delete")
+    monkeypatch.setenv("SANITIZE_BASE_REF", "main")
+    assert cs.git_changed_files("main", str(tmp_path)) == []
+    assert cs.main(["--diff", "--deterministic-only"], root=str(tmp_path)) == 0
+
+
+def test_a_listed_path_missing_from_disk_is_a_hard_failure(tmp_path, capsys):
+    """Never a silent skip: a path the gate was told to scan and cannot find
+    means its view of the tree is wrong."""
+    _write(str(tmp_path), "sanitize.config.json", "{}")
+    assert cs.main(["--deterministic-only", "docs/nowhere.md"], root=str(tmp_path)) == 2
+    assert "docs/nowhere.md" in capsys.readouterr().out
+
+
+def test_one_non_utf8_byte_does_not_hide_a_token(tmp_path, monkeypatch):
+    """A latin-1 byte made the UTF-8 decode fail and layer 1 skipped the file."""
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    os.makedirs(os.path.join(root, "docs"))
+    with open(os.path.join(root, "docs", "latin1.md"), "wb") as fh:
+        fh.write(b"caf\xe9 token: " + GH_PAT_P.encode())
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert cs.main(["--deterministic-only", "docs/latin1.md"], root=root) == 1
+
+
+def test_genuine_binaries_are_skipped_by_nul_heuristic(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    os.makedirs(os.path.join(root, "img"))
+    with open(os.path.join(root, "img", "a.png"), "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\xff" * 64)
+    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 0
+    assert cs.read_text_or_none(os.path.join(root, "img", "a.png")) is None
+
+
+@pytest.mark.parametrize("det", [
+    {"allow_substrings": [""]},
+    {"allow_substrings": ["   "]},
+    {"allow_substrings": ["@"]},
+    {"allow_substrings": [7]},
+    {"skip_paths": [""]},
+    {"skip_paths": ["."]},
+    {"skip_paths": ["./"]},
+    {"skip_paths": ["/"]},
+    {"skip_paths": ["**"]},
+    {"skip_paths": ["*"]},
+    {"skip_paths": ["tests/**"]},
+    {"skip_paths": ["../x/"]},
+    {"skip_paths": [None]},
+])
+def test_config_entries_that_disable_layer_one_are_rejected_on_every_run(tmp_path, det, capsys):
+    """allow_substrings [""] matches every value, so layer 1 could never report
+    anything; skip_paths "" / "." / "**" are the same hole for paths. These are
+    rejected by EVERY gate run, not only by --check-config."""
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", json.dumps({"deterministic": det}))
+    _write(root, "docs/leak.md", f"token: {GH_PAT_P}")
+    assert cs.config_problems(cs.load_config(root)), det
+    assert cs.main(["--deterministic-only", "docs/leak.md"], root=root) == 2
+    assert "CONFIG ERROR" in capsys.readouterr().out
+
+
+def test_empty_sensitive_prefix_is_rejected():
+    assert cs.config_problems({"sensitive_prefixes": ["docs/", ""]})
+
+
+def test_check_config_rejects_a_skip_path_that_covers_every_tracked_file(tmp_path):
+    git = _git_repo(tmp_path)
+    _write(str(tmp_path), "sanitize.config.json",
+           '{"sensitive_prefixes":["docs/"],"deterministic":{"skip_paths":["docs/"]}}')
+    _write(str(tmp_path), "docs/a.md", "x")
+    _commit_all(git)
+    # sanitize.config.json itself is tracked and outside docs/, so make the
+    # skip cover it too by moving the only other content under docs/.
+    assert cs.main(["--check-config"], root=str(tmp_path)) == 0
+    _write(str(tmp_path), "sanitize.config.json",
+           '{"sensitive_prefixes":["docs/"],"deterministic":{"skip_paths":["docs/","sanitize.config.json"]}}')
+    _commit_all(git)
+    assert cs.main(["--check-config"], root=str(tmp_path)) == 2
+
+
+def test_reasonable_shipped_configs_still_validate():
+    for det in ({"allow_substrings": ["+1555", "a@b.com", "0.0.0.0", "@test.com"],
+                 "skip_paths": ["tests/", "scripts/test_check_sanitization.py"]},):
+        assert cs.config_problems({"sensitive_prefixes": ["docs/"], "deterministic": det}) == []

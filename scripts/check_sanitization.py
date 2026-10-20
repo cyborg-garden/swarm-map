@@ -528,12 +528,23 @@ def select_sensitive_files(paths, prefixes):
     return out
 
 
+def _git_paths(root, *args):
+    """Run git and return the NUL-delimited paths it prints.
+
+    Always ``-z``: without it git C-quotes any path with a non-ASCII byte
+    ("docs/caf\\303\\251.md"), the quoted name never exists on disk, and the
+    file used to be silently skipped — a token in docs/café.md passed the gate.
+    Paths are decoded the way the OS decodes them, so they round-trip to open().
+    """
+    res = subprocess.run(["git", "-C", root, *args, "-z"], capture_output=True, check=True)
+    return [os.fsdecode(p) for p in res.stdout.split(b"\0") if p]
+
+
 def git_tracked_files(root="."):
     """All git-tracked files, for --full-tree mode. Outside a git checkout, walk
     the directory instead (minus .git) rather than scanning nothing."""
     try:
-        res = subprocess.run(["git", "-C", root, "ls-files"],
-                             capture_output=True, text=True, check=True)
+        return _git_paths(root, "ls-files")
     except (subprocess.CalledProcessError, FileNotFoundError):
         out = []
         for dirpath, dirs, files in os.walk(root):
@@ -541,18 +552,83 @@ def git_tracked_files(root="."):
             for f in files:
                 out.append(os.path.relpath(os.path.join(dirpath, f), root))
         return sorted(out)
-    return [ln for ln in res.stdout.splitlines() if ln.strip()]
 
 
 def git_changed_files(base_ref="origin/main", root="."):
     """Files changed across the FULL PR range — ``git diff --name-only
     BASE...HEAD`` (three-dot: everything on the branch since it forked from
     BASE, not just the tip commit), so a leak cannot hide in an earlier commit
-    of the same PR. The full-tree lane is the backstop for files no PR touched."""
-    res = subprocess.run(
-        ["git", "-C", root, "diff", "--name-only", f"{base_ref}...HEAD"],
-        capture_output=True, text=True, check=True)
-    return [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+    of the same PR. The full-tree lane is the backstop for files no PR touched.
+    Deletions are excluded (--diff-filter=d): there is nothing left to leak."""
+    return _git_paths(root, "diff", "--name-only", "--diff-filter=d", f"{base_ref}...HEAD")
+
+
+_BINARY_SNIFF = 8192
+
+
+def read_text_or_none(path):
+    """File content as text, or None for a genuine binary.
+
+    Binary is decided by a NUL byte in the first 8 KiB, never by a failed UTF-8
+    decode: one latin-1 byte used to make the decode fail and layer 1 skipped
+    the whole file, token and all. Undecodable bytes become U+FFFD instead.
+    """
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if b"\0" in data[:_BINARY_SNIFF]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+# Entries that would switch layer 1 off wholesale if a config carried them.
+_MIN_ALLOW_LEN = 4
+_DEGENERATE_SKIP = {".", "./", "/", "*", "**", "*/", "**/"}
+
+
+def config_problems(cfg):
+    """Structural problems that would quietly disable part of the gate.
+
+    Run on EVERY gate invocation, not only --check-config: an allow_substrings
+    entry of "" matches every detected value, so layer 1 could never report
+    anything; a skip_paths entry of "" / "." / "**" is the same hole for paths.
+    """
+    problems = []
+    if not isinstance(cfg, dict):
+        return [f"{CONFIG_NAME} must hold a JSON object"]
+    prefixes = cfg.get("sensitive_prefixes", [])
+    if not isinstance(prefixes, list) or any(
+            not isinstance(p, str) or not p.strip() for p in prefixes):
+        problems.append("sensitive_prefixes must be a list of non-empty strings")
+    det = cfg.get("deterministic", {})
+    if not isinstance(det, dict):
+        return problems + ["deterministic must be an object"]
+    if det.get("scope", "all") not in DETERMINISTIC_SCOPES:
+        problems.append(f"deterministic.scope must be one of {DETERMINISTIC_SCOPES}")
+    if det.get("ipv4_scope", "all") not in IPV4_SCOPES:
+        problems.append(f"deterministic.ipv4_scope must be one of {IPV4_SCOPES}")
+    allow = det.get("allow_substrings", [])
+    if not isinstance(allow, list):
+        problems.append("deterministic.allow_substrings must be a list")
+    else:
+        for a in allow:
+            if not isinstance(a, str) or len(a.strip()) < _MIN_ALLOW_LEN:
+                problems.append(
+                    f"deterministic.allow_substrings entry {a!r} is empty or too short "
+                    f"(< {_MIN_ALLOW_LEN} characters) — it would excuse nearly every hit. "
+                    f"Name the value that cannot be real.")
+    skips = det.get("skip_paths", [])
+    if not isinstance(skips, list):
+        problems.append("deterministic.skip_paths must be a list")
+    else:
+        for sp in skips:
+            bad = (not isinstance(sp, str) or not sp.strip() or sp.strip() in _DEGENERATE_SKIP
+                   or any(c in sp for c in "*?[") or sp.startswith(("/", "..")))
+            if bad:
+                problems.append(
+                    f"deterministic.skip_paths entry {sp!r} is empty, a glob, absolute, or "
+                    f"covers the whole tree — skip_paths are literal path prefixes such as "
+                    f"'tests/'.")
+    return problems
 
 
 def check_config(root="."):
@@ -570,22 +646,20 @@ def check_config(root="."):
             cfg = json.load(fh)
     except (OSError, ValueError) as exc:
         return [f"{CONFIG_NAME} is not valid JSON: {exc}"]
-    problems = []
+    problems = config_problems(cfg)
+    if problems:
+        return problems
+    tracked = git_tracked_files(root)
     prefixes = cfg.get("sensitive_prefixes")
-    if not prefixes or not isinstance(prefixes, list):
+    if not prefixes:
         problems.append("sensitive_prefixes must be a non-empty list")
-    elif not select_sensitive_files(
-            [p for p in git_tracked_files(root) if "/" in p], prefixes):
+    elif not select_sensitive_files([p for p in tracked if "/" in p], prefixes):
         problems.append(f"sensitive_prefixes {prefixes} match no tracked file — "
                         f"the semantic layer would only ever see top-level *.md")
-    det = cfg.get("deterministic", {})
-    if det.get("scope", "all") not in DETERMINISTIC_SCOPES:
-        problems.append(f"deterministic.scope must be one of {DETERMINISTIC_SCOPES}")
-    if det.get("ipv4_scope", "all") not in IPV4_SCOPES:
-        problems.append(f"deterministic.ipv4_scope must be one of {IPV4_SCOPES}")
-    for key in ("allow_substrings", "skip_paths"):
-        if not isinstance(det.get(key, []), list):
-            problems.append(f"deterministic.{key} must be a list")
+    skips = tuple(cfg.get("deterministic", {}).get("skip_paths", []))
+    if skips and tracked and all(p.startswith(skips) for p in tracked):
+        problems.append(f"deterministic.skip_paths {list(skips)} cover every tracked file — "
+                        f"layer 1 would scan nothing")
     return problems
 
 # ---------------------------------------------------------------- main
@@ -619,6 +693,12 @@ def main(argv, root=".", client_factory=_make_client):
         return 2
 
     cfg = load_config(root)
+    problems = config_problems(cfg)
+    if problems:
+        for p in problems:
+            print(f"CONFIG ERROR: {p}")
+        print(f"sanitization: {CONFIG_NAME} would disable part of the gate — failing closed.")
+        return 2
     prefixes = cfg.get("sensitive_prefixes", [])
     det_cfg = cfg.get("deterministic", {})
     allow = det_cfg.get("allow_substrings", [])
@@ -635,6 +715,19 @@ def main(argv, root=".", client_factory=_make_client):
         print("sanitization: no files given (use a file list or --full-tree).")
         return 0
 
+    # Every path the gate was told to scan must exist. A missing one means the
+    # gate's view of the tree is wrong (a mis-decoded name, a stale list), and a
+    # silent skip there is exactly how a leak walks through. Deletions never get
+    # here: --diff excludes them. Symlinks, submodules and directories exist but
+    # are not regular files; they are skipped below, not failed.
+    missing = [rel for rel in candidates if not os.path.lexists(os.path.join(root, rel))]
+    if missing:
+        for rel in missing:
+            print(f"MISSING {rel}")
+        print(f"\nsanitization: {len(missing)} listed path(s) not found on disk — failing "
+              f"closed rather than skipping them.")
+        return 2
+
     sensitive = select_sensitive_files(candidates, prefixes)
 
     # ---- Layer 1: deterministic, over ALL candidate text files (fails closed).
@@ -649,12 +742,10 @@ def main(argv, root=".", client_factory=_make_client):
                 continue  # e.g. tests/ — legitimately holds credential-shaped fixtures
             path = os.path.join(root, rel)
             if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    content = fh.read()
-            except (UnicodeDecodeError, OSError):
-                continue  # binary / unreadable — skip
+                continue  # symlink target outside, submodule, directory
+            content = read_text_or_none(path)
+            if content is None:
+                continue  # genuine binary (NUL bytes)
             hits = scan_deterministic(content, allow, det_cfg)
             if hits:
                 det_hits[rel] = hits
@@ -680,10 +771,11 @@ def main(argv, root=".", client_factory=_make_client):
                 client = client_factory()
                 for rel in sensitive:
                     path = os.path.join(root, rel)
-                    if not os.path.exists(path):
+                    if not os.path.isfile(path):
                         continue
-                    with open(path, encoding="utf-8", errors="replace") as fh:
-                        content = fh.read()
+                    content = read_text_or_none(path)
+                    if content is None:
+                        continue  # genuine binary: nothing a text reviewer can judge
                     verdict = assess(content, client, rel, system_prompt, model)
                     if verdict["flagged"]:
                         sem_flagged[rel] = verdict["reasons"]

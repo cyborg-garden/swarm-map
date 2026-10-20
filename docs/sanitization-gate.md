@@ -32,6 +32,12 @@ jobs:
 
 Pin a `sanitization-gate-v*` tag, never `@main`. Private repos can call it.
 
+**Make the check required.** If the pinned tag does not exist, the caller job
+fails before it starts and no check appears on the PR, so the PR can look green.
+Require `<caller job id> / sanitize` (for the caller above: `sanitization / sanitize`)
+on the default branch. `pull_request_target` is refused: it would scan the base
+branch with the secret exposed.
+
 ## Releasing a new version
 
 1. Change the script and its tests here (red, then green).

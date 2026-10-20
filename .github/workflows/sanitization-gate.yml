@@ -21,6 +21,14 @@ name: sanitization-gate
 # same tag (inputs.gate_ref defaults to it), so the workflow and the script it
 # runs can never come from different releases.
 #
+# MAKE THE CHECK REQUIRED. A pin to a tag that does not exist (a typo, or a
+# consumer merged before the gate's release was tagged) makes the CALLER job
+# fail at 0s with no check reported on the PR, so the PR can look green while
+# nothing ran. Only a required status check turns that into a block. In each
+# consumer, require the check named "<caller job id> / sanitize" — e.g.
+# "sanitize / sanitize" for a caller job with id `sanitize` — on the default
+# branch (branch protection or a ruleset).
+#
 # RELEASING A NEW GATE VERSION: bump GATE_VERSION in scripts/check_sanitization.py
 # AND the gate_ref default below to the same sanitization-gate-vX.Y.Z, merge, tag
 # that commit, then bump each consumer's pin. The "version guard" step fails if
@@ -87,9 +95,16 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # pull_request_target checks out the BASE branch, so the PR diff is
+          # empty (a vacuous pass) while the secret is exposed to a run triggered
+          # by untrusted code. Refused outright, in every mode.
+          if [ "$EVENT" = "pull_request_target" ]; then
+            echo "::error::pull_request_target is refused: it scans the base branch, not the PR, and exposes OPENROUTER_API_KEY. Call this gate from a pull_request workflow."
+            exit 2
+          fi
           case "$MODE" in
             pr)
-              if [ "$EVENT" != "pull_request" ] && [ "$EVENT" != "pull_request_target" ]; then
+              if [ "$EVENT" != "pull_request" ]; then
                 echo "::error::mode=pr needs a pull_request event (got '$EVENT'). Use mode: full-tree for push, schedule, tag and dispatch runs."
                 exit 2
               fi ;;
