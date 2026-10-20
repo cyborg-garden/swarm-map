@@ -21,12 +21,12 @@ import check_sanitization as cs  # noqa: E402
 # ---- Layer 1: deterministic --------------------------------------------------
 
 def test_detects_anthropic_key():
-    hits = cs.scan_deterministic("token = sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA", [])
+    hits = cs.scan_deterministic("token = sk-ant-" "api03-AAAAAAAAAAAAAAAAAAAAAAAA", [])
     assert any(label == "anthropic-key" for label, _ in hits)
 
 
 def test_detects_private_key_block():
-    hits = cs.scan_deterministic("-----BEGIN OPENSSH PRIVATE KEY-----", [])
+    hits = cs.scan_deterministic("-----BEGIN OPENSSH PRIVATE" " KEY-----", [])
     assert any(label == "private-key-block" for label, _ in hits)
 
 
@@ -131,7 +131,7 @@ def test_placeholder_gate_does_not_reach_pii_patterns():
 def test_degenerate_run_inside_a_real_secret_still_flags():
     """The placeholder check looks at the WHOLE body. A run of zeroes inside an
     otherwise real-looking key must not buy an exemption."""
-    hits = cs.scan_deterministic("AKIA0000AAAABBBBCCCC", [])
+    hits = cs.scan_deterministic("AKIA" "0000AAAABBBBCCCC", [])
     assert any(l == "aws-access-key" for l, _ in hits)
 
 
@@ -207,7 +207,7 @@ def _write(root, rel, body):
 def test_main_hard_fails_on_secret(tmp_path, monkeypatch):
     root = str(tmp_path)
     _write(root, "sanitize.config.json", '{"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "hermes-skill/SKILL.md", "key sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBB")
+    _write(root, "hermes-skill/SKILL.md", "key sk-ant-" "api03-BBBBBBBBBBBBBBBBBBBBBBBB")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     rc = cs.main(["hermes-skill/SKILL.md"], root=root)
     assert rc == 1  # deterministic hard fail regardless of semantic
@@ -317,7 +317,7 @@ def test_deterministic_only_still_hard_fails_on_a_secret(tmp_path, monkeypatch):
     root = str(tmp_path)
     _write(root, "sanitize.config.json",
            '{"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "docs/leak.md", "oops AKIA1234567890ABCDEF left in prose")
+    _write(root, "docs/leak.md", "oops AKIA" "1234567890ABCDEF left in prose")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert cs.main(["--deterministic-only", "docs/leak.md"], root=root) == 1
 
@@ -468,7 +468,7 @@ def test_secret_still_hard_fails_even_if_semantic_layer_breaks(tmp_path, monkeyp
     root = str(tmp_path)
     _write(root, "sanitize.config.json",
            '{"sensitive_prefixes":["hermes-skill/"],"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "hermes-skill/SKILL.md", "key sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCC")
+    _write(root, "hermes-skill/SKILL.md", "key sk-ant-" "api03-CCCCCCCCCCCCCCCCCCCCCCCC")
     monkeypatch.setenv("OPENROUTER_API_KEY", "present-but-broken")
     rc = cs.main(["hermes-skill/SKILL.md"], root=root,
                  client_factory=lambda: _ExplodingClient(RuntimeError("Connection error.")))
@@ -479,10 +479,10 @@ def test_skip_paths_excludes_fixtures_from_deterministic(tmp_path, monkeypatch):
     root = str(tmp_path)
     _write(root, "sanitize.config.json",
            '{"deterministic":{"enabled":true,"allow_substrings":[],"skip_paths":["tests/"]}}')
-    _write(root, "tests/fixtures.py", "fake AKIA1234567890ABCDEF in a test fixture")
+    _write(root, "tests/fixtures.py", "fake owner jane.doe@realcorp.io in a test fixture")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     rc = cs.main(["tests/fixtures.py"], root=root)
-    assert rc == 0  # skipped, not flagged
+    assert rc == 0  # PII-style shapes skipped; provider keys are not (see round-3 tests)
 
 
 def test_this_repos_config_skips_its_own_test_fixtures(monkeypatch):
@@ -501,7 +501,7 @@ def test_full_tree_mode_scans_tracked_files(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", root, "config", "user.email", "t@t"], check=True)
     subprocess.run(["git", "-C", root, "config", "user.name", "t"], check=True)
     _write(root, "sanitize.config.json", '{"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "notes.md", "leaked AKIA1234567890ABCDEF here")
+    _write(root, "notes.md", "leaked AKIA" "1234567890ABCDEF here")
     subprocess.run(["git", "-C", root, "add", "-A"], check=True)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     rc = cs.main(["--full-tree"], root=root)
@@ -512,7 +512,7 @@ def test_all_is_an_alias_for_full_tree(tmp_path, monkeypatch):
     root = str(tmp_path)
     subprocess.run(["git", "init", "-q", root], check=True)
     _write(root, "sanitize.config.json", '{"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "notes.md", "leaked AKIA1234567890ABCDEF here")
+    _write(root, "notes.md", "leaked AKIA" "1234567890ABCDEF here")
     subprocess.run(["git", "-C", root, "add", "-A"], check=True)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert cs.main(["--all"], root=root) == 1
@@ -532,7 +532,7 @@ def test_hard_fail_hits_are_reported_even_when_the_semantic_layer_fails_closed(
     _write(root, "sanitize.config.json",
            '{"sensitive_prefixes":["hermes-skill/"],'
            '"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "hermes-skill/SKILL.md", "oops AKIA1234567890ABCDEF left in prose")
+    _write(root, "hermes-skill/SKILL.md", "oops AKIA" "1234567890ABCDEF left in prose")
     monkeypatch.setenv("OPENROUTER_API_KEY", "present-but-broken")
     rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
                  client_factory=lambda: _ExplodingClient(RuntimeError("Connection error.")))
@@ -550,7 +550,7 @@ def test_hard_fail_hits_are_reported_when_require_semantic_has_no_key(
     _write(root, "sanitize.config.json",
            '{"sensitive_prefixes":["hermes-skill/"],'
            '"deterministic":{"enabled":true,"allow_substrings":[]}}')
-    _write(root, "hermes-skill/SKILL.md", "oops AKIA1234567890ABCDEF left in prose")
+    _write(root, "hermes-skill/SKILL.md", "oops AKIA" "1234567890ABCDEF left in prose")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root)
     out = capsys.readouterr().out
@@ -823,7 +823,7 @@ def test_diff_mode_scans_the_pr_range(tmp_path, monkeypatch):
 
 def test_full_tree_outside_git_walks_the_directory(tmp_path, monkeypatch):
     _write(str(tmp_path), "sanitize.config.json", "{}")
-    _write(str(tmp_path), "notes.md", "leaked AKIA1234567890ABCDEF here")
+    _write(str(tmp_path), "notes.md", "leaked AKIA" "1234567890ABCDEF here")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert cs.main(["--all", "--deterministic-only"], root=str(tmp_path)) == 1
 
@@ -1208,3 +1208,78 @@ def test_home_repo_prs_are_judged_by_the_base_commits_gate():
 
 def test_the_workflow_refuses_pull_request_target():
     assert 'if [ "$EVENT" = "pull_request_target" ]' in _gate_workflow()
+
+
+# =============================================================================
+# Round-3 audit. Threat model: accidental leaks by trusted committers and their
+# agents (see docs/sanitization-gate.md). Each test reproduced a miss first.
+# =============================================================================
+
+@pytest.mark.parametrize("data", [
+    b"\xff\xfe" + GH_PAT_P.encode(),
+    b"\xfe\xff\n" + GH_PAT_P.encode(),
+    b"\xff\xfeGITHUB_TOKEN=" + GH_PAT_P.encode() + b"\n",
+    b"\xff\xfe junk " + GH_PAT_P.encode(),
+])
+def test_a_stray_bom_cannot_hide_an_ascii_secret(tmp_path, data):
+    """Layer 1 scans the union of the BOM/heuristic decoding and a raw latin-1
+    reading: a secret visible in either counts."""
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    _bin_write(root, "config/.env", data)
+    assert cs.main(["--deterministic-only", "config/.env"], root=root) == 1
+
+
+@pytest.mark.parametrize("rel", ["proxy.test.tsx", "proxy.test.ts.env", "proxy.test.ts.bak"])
+def test_skip_paths_match_whole_files_not_string_prefixes(tmp_path, rel):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["proxy.test.ts"]}}')
+    _write(root, rel, f"password = hunter2Correct9Horse and {GH_PAT_P}")
+    assert cs.main(["--deterministic-only", rel], root=root) == 1
+
+
+def test_skip_paths_directory_entries_are_segment_aligned(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
+    _write(root, "tests_old/x.md", "contact jane.doe@realcorp.io")
+    assert cs.main(["--deterministic-only", "tests_old/x.md"], root=root) == 1
+    _write(root, "tests/x.md", "contact jane.doe@realcorp.io")
+    assert cs.main(["--deterministic-only", "tests/x.md"], root=root) == 0  # PII skipped in fixtures
+
+
+def test_high_confidence_secrets_are_caught_even_in_skipped_fixture_paths(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
+    _write(root, "tests/fixtures.py", f"T = '{GH_PAT_P}'")
+    assert cs.main(["--deterministic-only", "tests/fixtures.py"], root=root) == 1
+    _write(root, "tests/fixtures.py", "-----BEGIN RSA PRIVATE" + " KEY-----")
+    assert cs.main(["--deterministic-only", "tests/fixtures.py"], root=root) == 1
+    # PII-style and heuristic shapes are what fixture paths are allowed to hold.
+    _write(root, "tests/fixtures.py", "EMAIL='jane.doe@realcorp.io'\npassword = 'hunter2Correct9Horse'")
+    assert cs.main(["--deterministic-only", "tests/fixtures.py"], root=root) == 0
+
+
+@pytest.mark.parametrize("rel", ["tests/prod.env", "tests/.env", "tests/.env.local",
+                                 "tests/server.pem", "tests/tls.key", "tests/id_ed25519"])
+def test_credential_files_are_never_skipped(tmp_path, rel):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
+    _write(root, rel, "DB_PASSWORD=hunter2Correct9Horse\nOWNER=jane.doe@realcorp.io")
+    assert cs.main(["--deterministic-only", rel], root=root) == 1
+
+
+def test_the_workflow_refuses_a_gate_ref_that_is_not_a_tag_or_full_sha():
+    wf = _gate_workflow()
+    guard = wf.split("Version guard", 1)[1].split("\n      - name:", 1)[0]
+    assert "[0-9a-f]{40}" in guard and "sanitization-gate-v" in guard
+    assert "if: github.repository != 'cyborg-garden/swarm-map'\n" in guard  # no startsWith escape hatch
+
+
+def test_the_workflow_never_needs_an_authenticated_fetch():
+    """persist-credentials: false means a later `git fetch` fails in a private
+    repo. fetch-depth 0 at checkout already brings every branch and the base."""
+    wf = _gate_workflow()
+    for line in wf.splitlines():
+        if "git fetch" in line and not line.strip().startswith("#"):
+            raise AssertionError(f"unauthenticated fetch in workflow: {line.strip()}")
+    assert "fetch-depth: ${{ inputs.mode == 'full-tree' && 1 || 0 }}" in wf

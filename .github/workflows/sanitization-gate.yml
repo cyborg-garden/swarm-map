@@ -21,6 +21,10 @@ name: sanitization-gate
 # same tag (inputs.gate_ref defaults to it), so the workflow and the script it
 # runs can never come from different releases.
 #
+# THREAT MODEL: this stops ACCIDENTAL leaks by trusted committers and their
+# agents. It is not a defence against a malicious committer who can edit
+# workflows; required checks, CODEOWNERS and review cover that.
+#
 # MAKE THE CHECK REQUIRED. A pin to a tag that does not exist (a typo, or a
 # consumer merged before the gate's release was tagged) makes the CALLER job
 # fail at 0s with no check reported on the PR, so the PR can look green while
@@ -152,7 +156,7 @@ jobs:
             echo "dir=$GITHUB_WORKSPACE/scripts" >> "$GITHUB_OUTPUT"
             if [ "$EVENT" = "pull_request" ]; then
               mkdir -p "$RUNNER_TEMP/base-gate"
-              git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$BASE_SHA"
+              git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || { echo "::error::base commit $BASE_SHA is not in the checkout"; exit 2; }
               git show "$BASE_SHA:scripts/check_sanitization.py" > "$RUNNER_TEMP/base-gate/check_sanitization.py"
               echo "judge=$RUNNER_TEMP/base-gate" >> "$GITHUB_OUTPUT"
               if ! git diff --quiet "$BASE_SHA" HEAD -- scripts/check_sanitization.py; then
@@ -172,13 +176,24 @@ jobs:
             echo "judge=$RUNNER_TEMP/sanitization-gate/scripts" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Version guard (gate_ref must match the script's GATE_VERSION)
-        if: github.repository != 'cyborg-garden/swarm-map' && startsWith(inputs.gate_ref, 'sanitization-gate-v')
+      # gate_ref must be a release tag (whose name must match the script's
+      # GATE_VERSION) or a full 40-hex commit SHA. Branch names and short refs
+      # are refused: they move.
+      - name: Version guard (gate_ref must be a release tag or full SHA)
+        if: github.repository != 'cyborg-garden/swarm-map'
         env:
           GATE_REF: ${{ inputs.gate_ref }}
           GATE_DIR: ${{ steps.gate.outputs.dir }}
         run: |
           set -euo pipefail
+          if printf '%s' "$GATE_REF" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "gate pinned to commit $GATE_REF"
+            exit 0
+          fi
+          if ! printf '%s' "$GATE_REF" | grep -Eqx 'sanitization-gate-v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::gate_ref '$GATE_REF' is neither a sanitization-gate-vX.Y.Z tag nor a full 40-hex commit SHA."
+            exit 2
+          fi
           v="$(python3 -c "import sys; sys.path.insert(0, '$GATE_DIR'); import check_sanitization as c; print(c.GATE_VERSION)")"
           if [ "sanitization-gate-v$v" != "$GATE_REF" ]; then
             echo "::error::gate_ref $GATE_REF carries GATE_VERSION $v. The tag and the script disagree; fix the release, do not override gate_ref."
@@ -213,7 +228,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$MODE" = "pr" ]; then
-            git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+            # No `git fetch` anywhere: the checkout keeps no credentials
+            # (persist-credentials: false), so a fetch fails in a private repo.
+            # fetch-depth 0 already brought every branch, including the base.
+            git rev-parse --verify --quiet "origin/${BASE_REF}^{commit}" >/dev/null \
+              || { echo "::error::origin/${BASE_REF} is not in the checkout"; exit 2; }
             echo "args=--diff" >> "$GITHUB_OUTPUT"
             echo "base=origin/${BASE_REF}" >> "$GITHUB_OUTPUT"
             echo "changed files:"
@@ -240,7 +259,7 @@ jobs:
             echo "path=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$BASE_SHA"
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || { echo "::error::base commit $BASE_SHA is not in the checkout"; exit 2; }
           if git cat-file -e "$BASE_SHA:sanitize.config.json" 2>/dev/null; then
             git show "$BASE_SHA:sanitize.config.json" > "$RUNNER_TEMP/trusted-sanitize.config.json"
             echo "path=$RUNNER_TEMP/trusted-sanitize.config.json" >> "$GITHUB_OUTPUT"

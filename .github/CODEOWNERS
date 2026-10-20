@@ -1,0 +1,7 @@
+# CI (including the sanitization gate's caller), the gate's per-repo config, and
+# the gate itself need the owner's review. Advisory today: no branch protection
+# requires code-owner review, so this blocks nothing.
+/.github/ @juniperbevensee
+/sanitize.config.json @juniperbevensee
+/scripts/check_sanitization.py @juniperbevensee
+/scripts/test_check_sanitization.py @juniperbevensee

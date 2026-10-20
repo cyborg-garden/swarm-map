@@ -308,7 +308,30 @@ def _is_allowed(label, value, allow):
     return False
 
 
-def scan_deterministic(content, allow_substrings, det_cfg=None):
+# Provider-prefixed credentials and key material: a hit is a real secret in any
+# file, fixture directories included. Everything else (PII, heuristic
+# assignments, connection strings) may be skipped in test-fixture paths.
+HIGH_CONFIDENCE_LABELS = frozenset({
+    "anthropic-key", "openai-key", "stripe-key", "github-token", "github-fine-grained-pat",
+    "slack-token", "slack-webhook", "aws-access-key", "google-api-key",
+    "google-oauth-client-secret", "sendgrid-key", "notion-token", "private-key-block",
+})
+
+# Credential-bearing file names are never skipped, wherever they sit.
+_CREDENTIAL_FILE = re.compile(r"^(\.env.*|.+\.env|.+\.pem|.+\.key|id_[a-z0-9_]+(\.pub)?)$", re.I)
+
+
+def _is_skipped(rel, skip_paths):
+    """skip_paths match by path segment: an entry ending in "/" covers that
+    directory, any other entry covers exactly that file. Never a bare string
+    prefix (proxy.test.ts must not cover proxy.test.tsx or proxy.test.ts.env),
+    and never a credential-bearing file name."""
+    if _CREDENTIAL_FILE.match(rel.rsplit("/", 1)[-1]):
+        return False
+    return any(rel.startswith(sp) if sp.endswith("/") else rel == sp for sp in skip_paths)
+
+
+def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
     """Return a list of (label, matched_text) for credential/PII hits, minus any
     match that is itself allowlisted.
 
@@ -322,6 +345,8 @@ def scan_deterministic(content, allow_substrings, det_cfg=None):
     """
     hits = []
     for label, pat, gate in _DETERMINISTIC_PATTERNS:
+        if only is not None and label not in only:
+            continue
         for m in pat.finditer(content):
             if not _is_finding(m, gate, det_cfg):
                 continue
@@ -636,6 +661,22 @@ def _sniff_wide(head):
     return None
 
 
+def layer1_texts(path):
+    """Every reading of a file that layer 1 must scan.
+
+    The decoding chosen from a BOM or NUL pattern, PLUS the raw bytes read as
+    latin-1. A stray FF FE in front of an ASCII token used to make the file
+    decode as UTF-16 garbage and the token vanished; with the union, a secret
+    visible in either reading counts.
+    """
+    primary = read_for_layer1(path)
+    if os.path.islink(path):
+        return [primary]
+    with open(path, "rb") as fh:
+        raw = fh.read().decode("latin-1")
+    return [primary] if raw == primary else [primary, raw]
+
+
 def read_for_layer1(path):
     """Text for the secrets/PII layer, which must scan EVERY file.
 
@@ -779,7 +820,7 @@ def check_config(root="."):
         problems.append(f"sensitive_prefixes {prefixes} match no tracked file — "
                         f"the semantic layer would only ever see top-level *.md")
     skips = tuple(cfg.get("deterministic", {}).get("skip_paths", []))
-    if skips and tracked and all(p.startswith(skips) for p in tracked):
+    if skips and tracked and all(_is_skipped(p, skips) for p in tracked):
         problems.append(f"deterministic.skip_paths {list(skips)} cover every tracked file — "
                         f"layer 1 would scan nothing")
     return problems
@@ -858,12 +899,17 @@ def main(argv, root=".", client_factory=_make_client):
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
     for rel in candidates:
-        if skip_paths and rel.startswith(skip_paths):
-            continue  # tests/ — legitimately holds credential-shaped fixtures
         path = os.path.join(root, rel)
         if not os.path.islink(path) and not os.path.isfile(path):
             continue  # submodule or directory: its files are scanned in their own repo
-        hits = scan_deterministic(read_for_layer1(path), allow, det_cfg)
+        # Inside a fixture skip path only the PII-style and heuristic shapes are
+        # skipped; provider tokens and private keys are always reported.
+        only = HIGH_CONFIDENCE_LABELS if _is_skipped(rel, skip_paths) else None
+        hits = []
+        for text in layer1_texts(path):
+            for hit in scan_deterministic(text, allow, det_cfg, only=only):
+                if hit not in hits:
+                    hits.append(hit)
         if hits:
             det_hits[rel] = hits
 

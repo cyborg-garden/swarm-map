@@ -15,6 +15,20 @@ land such material.
   local launcher (`scripts/check_sanitization.py` there fetches this script at the
   pinned tag; it is not a copy).
 
+## Threat model
+
+The gate stops **accidental** leaks: a trusted committer (Juniper, or one of her
+agents) committing a credential, personal data, or one deployment's particulars
+by mistake. Within that model it fails closed: it scans every file in scope,
+cannot be switched off or narrowed by config, judges a PR with the base
+branch's config (and, in this repo, the base branch's script), and reports a
+check on every PR.
+
+It is **not** a defence against a malicious committer who can already edit
+workflows or push to the default branch. That is what required status checks,
+CODEOWNERS review and branch protection are for. Make the `sanitize / sanitize`
+check required on every consumer.
+
 Never vendor a copy of the script into another repo. The copies drifted apart,
 each quietly missing a protection another still had.
 
@@ -105,7 +119,15 @@ Every relaxation defaults off. Layer 1 cannot be disabled or narrowed by config
 (`deterministic.enabled: false` and `scope` are rejected), and every gate run
 validates the config before scanning. Layer 1 scans every file, binaries
 included: UTF-16/32 is decoded, other NUL-bearing files are read byte-for-byte,
-and a symlink is scanned as its target string.
+and a symlink is scanned as its target string. Every file is scanned twice, as
+decoded and as raw latin-1 bytes, so a stray byte-order mark cannot hide an ASCII
+secret.
+
+`skip_paths` match by path segment (a `dir/` entry or an exact file, never a bare
+prefix). Inside them only PII-style and heuristic shapes are skipped: provider
+tokens and private keys are still reported, so a fixture fake must be a
+low-entropy placeholder or listed exactly in `allow_substrings`. Files named like
+`.env*`, `*.env`, `*.pem`, `*.key` or `id_*` are never skipped.
 
 On `pull_request` the workflow scans with the **base commit's** config. A PR that
 changes `sanitize.config.json` gets a notice; the change applies after merge.

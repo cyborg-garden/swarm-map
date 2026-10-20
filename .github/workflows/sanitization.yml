@@ -13,19 +13,9 @@ name: sanitization
 # What swarm-map counts as a particular, and which paths carry content, lives in
 # sanitize.config.json — not in the script.
 on:
+  # No paths filter: a required check must report on EVERY PR, and a leak in
+  # lib/** is still a leak. (A filtered-out run reports nothing at all.)
   pull_request:
-    paths:
-      - 'infra/templates/**'
-      - 'docs/**'
-      - '**/*.md'
-      - 'SOUL*'
-      - '**/SOUL*'
-      - 'sanitize.config.json'
-      - 'scripts/check_sanitization.py'
-      - 'scripts/test_check_sanitization.py'
-      - '.github/workflows/sanitization.yml'
-      - '.github/workflows/sanitization-scheduled.yml'
-      - '.github/workflows/sanitization-gate.yml'
   push:
     branches: [main]
 
