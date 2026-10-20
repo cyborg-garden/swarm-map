@@ -67,7 +67,11 @@ CONFIG_NAME = "sanitize.config.json"
 
 
 def config_path(root="."):
-    return os.path.join(root, CONFIG_NAME)
+    """$SANITIZE_CONFIG overrides the in-tree file. The reusable workflow uses it
+    to scan a pull request with the BASE commit's config: a PR must never be able
+    to loosen the rules it is judged by."""
+    override = os.environ.get("SANITIZE_CONFIG", "").strip()
+    return override or os.path.join(root, CONFIG_NAME)
 
 
 def load_config(root="."):
@@ -128,7 +132,7 @@ _DETERMINISTIC_PATTERNS = [
     ("basic-auth", re.compile(r"(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/=]{16,}"), None),
     # <scheme>://<user>:<secret>@<host> — credentials in a connection string.
     ("connection-string-credentials",
-     re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]+:[^\s@/]{3,}@[^\s/]+"), None),
+     re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]+:[^\s@/]{3,}@[^\s/\"'<>,;)]+"), None),
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
@@ -223,7 +227,7 @@ def _is_fiction_phone(text):
 
 
 IPV4_SCOPES = ("all", "public")
-DETERMINISTIC_SCOPES = ("all", "sensitive")
+
 
 
 def _is_finding(match, gate, det_cfg=None):
@@ -267,6 +271,43 @@ def _is_finding(match, gate, det_cfg=None):
     return not _is_placeholder(body)
 
 
+_IPV4_NET = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.$")
+
+
+_RESERVED_DOMAINS = ("example.com", "example.org", "example.net")
+_RESERVED_TLDS = (".example", ".test", ".invalid", ".localhost")
+
+
+def _is_reserved_email(value):
+    """RFC 2606 / RFC 6761 documentation domains: no one can own an address there."""
+    dom = value.rsplit("@", 1)[-1].lower()
+    return (dom in _RESERVED_DOMAINS or dom.endswith(tuple("." + d for d in _RESERVED_DOMAINS))
+            or dom.endswith(_RESERVED_TLDS))
+
+
+def _is_allowed(label, value, allow):
+    """Whether an allowlist entry excuses this exact hit.
+
+    Entries are NOT substrings. A substring rule let ["sk-ant-"] excuse every
+    Anthropic key. An entry excuses a hit only when it IS the value, or, for
+    two PII shapes with a reserved-for-documentation idiom:
+      email  "example.com" / "@example.com" excuses addresses AT that exact domain
+      ipv4   "198.51.100." (three octets + dot) excuses that /24
+    """
+    if label == "email" and _is_reserved_email(value):
+        return True
+    for a in allow:
+        if a == value:
+            return True
+        if label == "email" and "@" in value:
+            dom = a[1:] if a.startswith("@") else a
+            if "@" not in dom and "." in dom and value.rsplit("@", 1)[1].lower() == dom.lower():
+                return True
+        if label == "ipv4" and _IPV4_NET.match(a) and value.startswith(a):
+            return True
+    return False
+
+
 def scan_deterministic(content, allow_substrings, det_cfg=None):
     """Return a list of (label, matched_text) for credential/PII hits, minus any
     match that is itself allowlisted.
@@ -284,7 +325,7 @@ def scan_deterministic(content, allow_substrings, det_cfg=None):
         for m in pat.finditer(content):
             if not _is_finding(m, gate, det_cfg):
                 continue
-            if any(allow in m.group(0) for allow in allow_substrings):
+            if _is_allowed(label, m.group(0), allow_substrings):
                 continue
             hit = (label, m.group(0))
             if hit not in hits:  # one line per distinct value, however often it repeats
@@ -452,8 +493,15 @@ class _OpenRouterClient:
 
 def semantic_model(cfg):
     """SANITIZE_MODEL env overrides the config's model; DEFAULT_MODEL backstops both."""
-    return (os.environ.get("SANITIZE_MODEL", "").strip()
-            or cfg.get("semantic", {}).get("model", DEFAULT_MODEL))
+    model = (os.environ.get("SANITIZE_MODEL", "").strip()
+             or cfg.get("semantic", {}).get("model", DEFAULT_MODEL))
+    if "/" not in model:
+        # An Anthropic-SDK-era id ("claude-opus-4-8") cannot name an OpenRouter
+        # model; sending it would fail the layer for a reason nobody can see.
+        print(f"WARNING: semantic.model {model!r} is not an OpenRouter id "
+              f"(vendor/model); using {DEFAULT_MODEL}.")
+        return DEFAULT_MODEL
+    return model
 
 
 def _make_client():  # pragma: no cover - thin wrapper, mocked in tests
@@ -565,6 +613,54 @@ def git_changed_files(base_ref="origin/main", root="."):
 
 _BINARY_SNIFF = 8192
 
+_BOMS = ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+         (b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
+
+
+def _sniff_wide(head):
+    """Encoding of BOM-less UTF-16/32 text, judged by where the NULs sit."""
+    if len(head) < 8:
+        return None
+    for width, enc_le, enc_be in ((4, "utf-32-le", "utf-32-be"), (2, "utf-16-le", "utf-16-be")):
+        n = len(head) - len(head) % width
+        lanes = [sum(1 for i in range(k, n, width) if head[i] == 0) for k in range(width)]
+        units = n // width
+        if width == 4 and lanes[1] > .9 * units and lanes[2] > .9 * units and lanes[3] > .9 * units:
+            return enc_le
+        if width == 4 and lanes[0] > .9 * units and lanes[1] > .9 * units and lanes[2] > .9 * units:
+            return enc_be
+        if width == 2 and lanes[1] > .6 * units and lanes[0] < .1 * units:
+            return enc_le
+        if width == 2 and lanes[0] > .6 * units and lanes[1] < .1 * units:
+            return enc_be
+    return None
+
+
+def read_for_layer1(path):
+    """Text for the secrets/PII layer, which must scan EVERY file.
+
+    A NUL in the first 8 KiB used to make both layers skip the file, so a key
+    behind a NUL prefix, or in UTF-16 text, passed. Now: a BOM or the NUL
+    pattern of UTF-16/32 selects that decoding; any other file containing NULs
+    is read byte-for-byte as latin-1, where ASCII-shaped secrets still match.
+    A symlink is scanned as its target string (what git stores), and never
+    followed, dangling or not.
+    """
+    if os.path.islink(path):
+        return os.readlink(path)
+    with open(path, "rb") as fh:
+        data = fh.read()
+    for bom, enc in _BOMS:
+        if data.startswith(bom):
+            return data.decode(enc, errors="replace")
+    head = data[:_BINARY_SNIFF]
+    if b"\0" in head:
+        wide = _sniff_wide(head)
+        if wide:
+            return data.decode(wide, errors="replace")
+        return data.decode("latin-1")
+    return data.decode("utf-8", errors="replace")
+
 
 def read_text_or_none(path):
     """File content as text, or None for a genuine binary.
@@ -575,9 +671,28 @@ def read_text_or_none(path):
     """
     with open(path, "rb") as fh:
         data = fh.read()
+    for bom, enc in _BOMS:
+        if data.startswith(bom):
+            return data.decode(enc, errors="replace")
     if b"\0" in data[:_BINARY_SNIFF]:
-        return None
+        wide = _sniff_wide(data[:_BINARY_SNIFF])
+        return data.decode(wide, errors="replace") if wide else None
     return data.decode("utf-8", errors="replace")
+
+
+_FIXTURE_DIRS = {"tests", "test", "__tests__", "fixtures", "testdata"}
+_TEST_FILE = re.compile(r"^(test_.+\.py|.+_test\.(py|go)|.+\.(test|spec)\.[cm]?[jt]sx?)$")
+
+
+def _is_fixture_path(sp):
+    """skip_paths may only name test code: a fixture directory, a path inside
+    one, or a file that is itself a test."""
+    parts = [p for p in sp.split("/") if p]
+    if not parts:
+        return False
+    if sp.endswith("/"):
+        return parts[-1] in _FIXTURE_DIRS
+    return bool(_TEST_FILE.match(parts[-1])) or any(p in _FIXTURE_DIRS for p in parts[:-1])
 
 
 # Entries that would switch layer 1 off wholesale if a config carried them.
@@ -602,8 +717,12 @@ def config_problems(cfg):
     det = cfg.get("deterministic", {})
     if not isinstance(det, dict):
         return problems + ["deterministic must be an object"]
-    if det.get("scope", "all") not in DETERMINISTIC_SCOPES:
-        problems.append(f"deterministic.scope must be one of {DETERMINISTIC_SCOPES}")
+    if det.get("enabled", True) is not True:
+        problems.append("deterministic.enabled cannot be turned off: the secrets/PII "
+                        "layer is the floor of the gate")
+    if det.get("scope", "all") != "all":
+        problems.append("deterministic.scope cannot narrow layer 1: it scans every "
+                        "candidate file (only \"all\" is accepted)")
     if det.get("ipv4_scope", "all") not in IPV4_SCOPES:
         problems.append(f"deterministic.ipv4_scope must be one of {IPV4_SCOPES}")
     allow = det.get("allow_substrings", [])
@@ -622,12 +741,15 @@ def config_problems(cfg):
     else:
         for sp in skips:
             bad = (not isinstance(sp, str) or not sp.strip() or sp.strip() in _DEGENERATE_SKIP
-                   or any(c in sp for c in "*?[") or sp.startswith(("/", "..")))
+                   or any(c in sp for c in "*?") or sp.startswith(("/", ".."))
+                   or not _is_fixture_path(sp))
             if bad:
                 problems.append(
-                    f"deterministic.skip_paths entry {sp!r} is empty, a glob, absolute, or "
-                    f"covers the whole tree — skip_paths are literal path prefixes such as "
-                    f"'tests/'.")
+                    f"deterministic.skip_paths entry {sp!r} is not a test-fixture path. "
+                    f"Layer 1 may skip only test code that holds credential-shaped "
+                    f"fixtures: a directory named tests/, test/, __tests__/, fixtures/ or "
+                    f"testdata/ (at any depth), or a test file (test_*.py, *_test.py, "
+                    f"*.test.ts, *.spec.js, ...).")
     return problems
 
 
@@ -730,25 +852,20 @@ def main(argv, root=".", client_factory=_make_client):
 
     sensitive = select_sensitive_files(candidates, prefixes)
 
-    # ---- Layer 1: deterministic, over ALL candidate text files (fails closed).
-    # deterministic.scope = "sensitive" narrows it to the semantic layer's
-    # content paths (swarm-map's historical behaviour); "all" is the default.
+    # ---- Layer 1: deterministic, over EVERY candidate file (fails closed). No
+    # config can switch it off or narrow it (config_problems rejects that); only
+    # test-fixture paths in skip_paths are excluded. Binaries are scanned too.
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
-    det_candidates = sensitive if det_cfg.get("scope", "all") == "sensitive" else candidates
-    if det_cfg.get("enabled", True):
-        for rel in det_candidates:
-            if skip_paths and rel.startswith(skip_paths):
-                continue  # e.g. tests/ — legitimately holds credential-shaped fixtures
-            path = os.path.join(root, rel)
-            if not os.path.isfile(path):
-                continue  # symlink target outside, submodule, directory
-            content = read_text_or_none(path)
-            if content is None:
-                continue  # genuine binary (NUL bytes)
-            hits = scan_deterministic(content, allow, det_cfg)
-            if hits:
-                det_hits[rel] = hits
+    for rel in candidates:
+        if skip_paths and rel.startswith(skip_paths):
+            continue  # tests/ — legitimately holds credential-shaped fixtures
+        path = os.path.join(root, rel)
+        if not os.path.islink(path) and not os.path.isfile(path):
+            continue  # submodule or directory: its files are scanned in their own repo
+        hits = scan_deterministic(read_for_layer1(path), allow, det_cfg)
+        if hits:
+            det_hits[rel] = hits
 
     # ---- Layer 2: semantic, over content-bearing files only
     sem_flagged = {}
@@ -771,8 +888,8 @@ def main(argv, root=".", client_factory=_make_client):
                 client = client_factory()
                 for rel in sensitive:
                     path = os.path.join(root, rel)
-                    if not os.path.isfile(path):
-                        continue
+                    if os.path.islink(path) or not os.path.isfile(path):
+                        continue  # layer 1 scanned the link string; no prose here
                     content = read_text_or_none(path)
                     if content is None:
                         continue  # genuine binary: nothing a text reviewer can judge

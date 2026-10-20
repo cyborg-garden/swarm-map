@@ -38,7 +38,9 @@ name: sanitization-gate
 #   0. The gate's own self-tests. A scanner that cannot detect its own fixtures
 #      never gets to report a repo clean.
 #   1. Config check. A missing/invalid sanitize.config.json, or sensitive_prefixes
-#      that select nothing, fails here.
+#      that select nothing, fails here. Config can never switch layer 1 off,
+#      narrow it, or skip anything but test fixtures; allow entries are exact.
+#      On pull_request, steps 2-3 use the BASE commit's config, never the PR's.
 #   2. Secrets & PII (deterministic). No credential, no network. Runs on EVERY
 #      run, including fork PRs. Hard fail on any hit.
 #   3. Particulars (semantic). Needs OPENROUTER_API_KEY and runs with
@@ -200,10 +202,44 @@ jobs:
             echo "base=" >> "$GITHUB_OUTPUT"
           fi
 
+      # A PR must never loosen the rules it is judged by. On pull_request the
+      # gate reads sanitize.config.json from the BASE commit; a config change in
+      # the PR takes effect only after merge. Notice, not failure: failing would
+      # block every legitimate config edit and push maintainers toward bypasses,
+      # while scanning with the base config already means a loosening cannot help
+      # the PR that introduces it. The change itself still needs human review.
+      - name: Resolve the trusted config
+        id: cfg
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --no-tags origin "$BASE_SHA"
+          if git cat-file -e "$BASE_SHA:sanitize.config.json" 2>/dev/null; then
+            git show "$BASE_SHA:sanitize.config.json" > "$RUNNER_TEMP/trusted-sanitize.config.json"
+            echo "path=$RUNNER_TEMP/trusted-sanitize.config.json" >> "$GITHUB_OUTPUT"
+            if ! git diff --quiet "$BASE_SHA" HEAD -- sanitize.config.json; then
+              msg="This PR changes sanitize.config.json. The gate scanned it with the BASE branch's config; the change takes effect only after merge. A maintainer must review the config change by hand: anything that loosens the gate needs a reason."
+              echo "::notice title=Config change not applied to this PR::$msg"
+              { echo "### sanitize.config.json changed"; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            msg="The base commit has no sanitize.config.json (first adoption of the gate), so there is no trusted config: this run uses the PR's own config. Review that config by hand before merging."
+            echo "::warning title=No trusted config at base::$msg"
+            { echo "### No trusted config at base"; echo "$msg"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: "2. Secrets & PII gate (deterministic — always enforced, no key needed)"
         env:
           GATE_DIR: ${{ steps.gate.outputs.dir }}
           SANITIZE_BASE_REF: ${{ steps.scope.outputs.base }}
+          SANITIZE_CONFIG: ${{ steps.cfg.outputs.path }}
           OPENROUTER_API_KEY: ""
         run: python "$GATE_DIR/check_sanitization.py" ${{ steps.scope.outputs.args }} --deterministic-only --require-config
 
@@ -214,6 +250,7 @@ jobs:
         env:
           GATE_DIR: ${{ steps.gate.outputs.dir }}
           SANITIZE_BASE_REF: ${{ steps.scope.outputs.base }}
+          SANITIZE_CONFIG: ${{ steps.cfg.outputs.path }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python "$GATE_DIR/check_sanitization.py" ${{ steps.scope.outputs.args }} --require-semantic --require-config
 

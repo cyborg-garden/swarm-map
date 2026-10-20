@@ -83,7 +83,7 @@ automatic rejection — but the judgement has to happen.
 
 | | Layer 1 | Layer 2 |
 |---|---|---|
-| Scope | every changed file (or only content paths, with `deterministic.scope: "sensitive"`) | files under `sensitive_prefixes`, plus top-level `*.md` |
+| Scope | every changed file | files under `sensitive_prefixes`, plus top-level `*.md` |
 | Credential needed | no | yes |
 | A hit means | hard fail, remove it | human review |
 
@@ -96,14 +96,19 @@ automatic rejection — but the judgement has to happen.
 | `sensitive_prefixes` | — | content paths for layer 2 (validated: must match a tracked file) |
 | `semantic.domain_noun`, `flag_examples`, `do_not_flag_examples`, `extra_instructions` | generic | the repo's definition of a particular |
 | `semantic.model` | `moonshotai/kimi-k3` | OpenRouter model; `SANITIZE_MODEL` overrides |
-| `deterministic.allow_substrings` | `[]` | values that cannot be real, matched against the detected value only |
-| `deterministic.skip_paths` | `[]` | paths that hold credential-shaped fixtures on purpose |
-| `deterministic.scope` | `all` | `sensitive` limits layer 1 to content paths |
+| `deterministic.allow_substrings` | `[]` | values that cannot be real. **Exact** match of the detected value; the only wider forms are an email domain (`example.com` excuses addresses at exactly that domain) and an IPv4 /24 (`198.51.100.`) |
+| `deterministic.skip_paths` | `[]` | test code holding credential-shaped fixtures: a `tests/`, `test/`, `__tests__/`, `fixtures/` or `testdata/` directory, or a test file. Nothing else is accepted |
 | `deterministic.ipv4_scope` | `all` | `public` reports only globally routable IPv4 |
 | `deterministic.allow_fiction_phones` | `false` | ignore NANP 555 numbers |
 
-Every relaxation defaults off. The CI workflow runs `--check-config` first and
-`--require-config` throughout, so a missing or broken config fails the run.
+Every relaxation defaults off. Layer 1 cannot be disabled or narrowed by config
+(`deterministic.enabled: false` and `scope` are rejected), and every gate run
+validates the config before scanning. Layer 1 scans every file, binaries
+included: UTF-16/32 is decoded, other NUL-bearing files are read byte-for-byte,
+and a symlink is scanned as its target string.
+
+On `pull_request` the workflow scans with the **base commit's** config. A PR that
+changes `sanitize.config.json` gets a notice; the change applies after merge.
 
 ## Running it locally
 
@@ -145,11 +150,10 @@ In order of preference:
 2. **Generalize the content.** Replace a real name, host, or identifier with a
    placeholder, or describe the shape instead of writing a sample. Reserved
    documentation domains and ranges exist for this.
-3. **Allowlist it — only if the value cannot possibly be real.** Add a substring
-   of the detected value to `deterministic.allow_substrings` in
-   `sanitize.config.json`, and say in that file's comment why the value is not
-   real. Entries are matched against the detected value, not the whole line, so
-   exempting one documentation address cannot quietly exempt a real one beside it.
+3. **Allowlist it — only if the value cannot possibly be real.** Add the exact
+   detected value to `deterministic.allow_substrings` in `sanitize.config.json`,
+   and say in that file's comment why the value is not real. Entries are exact
+   matches, never substrings. Config changes made in a PR apply only after merge.
 
 What not to do: widen a pattern, disable a layer, or drop `--require-semantic` to
 get a green check. A gate that is edited until it passes is not a gate. If the

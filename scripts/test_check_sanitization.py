@@ -768,9 +768,9 @@ def test_openrouter_client_translates_to_chat_completions(monkeypatch):
 
 def test_sanitize_model_env_overrides_config(monkeypatch):
     monkeypatch.setenv("SANITIZE_MODEL", "other/model")
-    assert cs.semantic_model({"semantic": {"model": "m"}}) == "other/model"
+    assert cs.semantic_model({"semantic": {"model": "v/m"}}) == "other/model"
     monkeypatch.delenv("SANITIZE_MODEL")
-    assert cs.semantic_model({"semantic": {"model": "m"}}) == "m"
+    assert cs.semantic_model({"semantic": {"model": "v/m"}}) == "v/m"
     assert cs.semantic_model({}) == cs.DEFAULT_MODEL
 
 
@@ -894,16 +894,15 @@ def test_version_is_exposed():
     assert re.match(r"^\d+\.\d+\.\d+$", cs.GATE_VERSION)
 
 
-def test_deterministic_scope_sensitive_limits_layer_one_to_content_paths(tmp_path, monkeypatch):
-    """swarm-map's pre-canonical gate ran the secrets/PII layer over content
-    paths only. A repo can keep that with deterministic.scope = "sensitive";
-    the default ("all") still covers every candidate file."""
+def test_deterministic_scope_sensitive_is_rejected(tmp_path, monkeypatch):
+    """Re-audit 2026-10-20: scope "sensitive" let a key in src.py pass. Layer 1
+    scans every candidate file; a config cannot narrow it."""
     root = str(tmp_path)
     _write(root, "engine/db.py", "DSN = 'postgres://svc:s3cretpw@db.internal.example:5432/app'")
     _write(root, "sanitize.config.json",
            '{"sensitive_prefixes":["docs/"],"deterministic":{"scope":"sensitive"}}')
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    assert cs.main(["--deterministic-only", "engine/db.py"], root=root) == 0
+    assert cs.main(["--deterministic-only", "engine/db.py"], root=root) == 2
     _write(root, "sanitize.config.json", '{"sensitive_prefixes":["docs/"]}')
     assert cs.main(["--deterministic-only", "engine/db.py"], root=root) == 1
 
@@ -1034,18 +1033,18 @@ def test_empty_sensitive_prefix_is_rejected():
     assert cs.config_problems({"sensitive_prefixes": ["docs/", ""]})
 
 
-def test_check_config_rejects_a_skip_path_that_covers_every_tracked_file(tmp_path):
+def test_check_config_rejects_a_skip_path_that_covers_every_tracked_file(tmp_path, monkeypatch):
     git = _git_repo(tmp_path)
-    _write(str(tmp_path), "sanitize.config.json",
-           '{"sensitive_prefixes":["docs/"],"deterministic":{"skip_paths":["docs/"]}}')
-    _write(str(tmp_path), "docs/a.md", "x")
+    cfg = os.path.join(str(tmp_path), "..", "cover.json")
+    with open(cfg, "w") as fh:
+        fh.write('{"sensitive_prefixes":["tests/"],"deterministic":{"skip_paths":["tests/"]}}')
+    monkeypatch.setenv("SANITIZE_CONFIG", cfg)
+    _write(str(tmp_path), "tests/a.md", "x")
+    _write(str(tmp_path), "README.md", "x")
     _commit_all(git)
-    # sanitize.config.json itself is tracked and outside docs/, so make the
-    # skip cover it too by moving the only other content under docs/.
     assert cs.main(["--check-config"], root=str(tmp_path)) == 0
-    _write(str(tmp_path), "sanitize.config.json",
-           '{"sensitive_prefixes":["docs/"],"deterministic":{"skip_paths":["docs/","sanitize.config.json"]}}')
-    _commit_all(git)
+    git("rm", "-q", "README.md")
+    git("commit", "-qm", "only tests left")
     assert cs.main(["--check-config"], root=str(tmp_path)) == 2
 
 
@@ -1053,3 +1052,132 @@ def test_reasonable_shipped_configs_still_validate():
     for det in ({"allow_substrings": ["+1555", "a@b.com", "0.0.0.0", "@test.com"],
                  "skip_paths": ["tests/", "scripts/test_check_sanitization.py"]},):
         assert cs.config_problems({"sensitive_prefixes": ["docs/"], "deterministic": det}) == []
+
+
+
+# =============================================================================
+# Re-audit of swarm-map#265 @6512f55. Each test reproduced a bypass first.
+# =============================================================================
+
+@pytest.mark.parametrize("det", [
+    {"enabled": False},
+    {"scope": "sensitive"},
+    {"skip_paths": ["docs/"]},
+    {"skip_paths": ["d"]},
+    {"skip_paths": ["src/"]},
+    {"skip_paths": ["docs/notes.md"]},
+])
+def test_config_cannot_switch_layer_one_off(tmp_path, det, capsys):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", json.dumps({"deterministic": det}))
+    _write(root, "docs/notes.md", f"token: {GH_PAT_P}")
+    assert cs.config_problems(cs.load_config(root)), det
+    assert cs.main(["--deterministic-only", "docs/notes.md"], root=root) == 2
+
+
+@pytest.mark.parametrize("skip", [
+    "tests/", "lib/services/__tests__/", "spec/fixtures/", "pkg/testdata/",
+    "scripts/test_check_sanitization.py", "app/api/login/route.test.ts",
+    "lib/x.spec.ts", "engine/db_test.py", "tests/fixtures/keys.json",
+])
+def test_fixture_shaped_skip_paths_are_accepted(skip):
+    assert cs.config_problems({"deterministic": {"skip_paths": [skip]}}) == [], skip
+
+
+def test_allow_entry_must_match_a_credential_exactly(tmp_path):
+    """allow ["sk-ant-"] used to excuse every Anthropic key by substring."""
+    key = _F("sk-ant-", "api03-aB3dEf7hJk", "9mNp2qRs5tUv8wXy1z")
+    assert "anthropic-key" in _labels(f"k={key}", ["sk-ant-"])
+    assert "anthropic-key" in _labels(f"k={key}", [key[:-1]])
+    assert "anthropic-key" not in _labels(f"k={key}", [key])
+
+
+def test_allow_entry_email_domain_and_ipv4_network_forms():
+    assert _labels("x jane@example.com y", ["example.com"]) == []
+    assert _labels("x jane@example.com y", ["@example.com"]) == []
+    # a domain entry does not excuse a different domain that merely contains it
+    assert "email" in _labels("x jane@notexample.com y", ["example.com"])
+    assert "email" in _labels("x jane@example.com.evil.io y", ["example.com"])
+    assert _labels("doc 198.51.100.7", ["198.51.100."]) == []
+    assert "ipv4" in _labels("host 198.51.1.7", ["198.51."])  # /16 prefixes are not accepted
+    assert "ipv4" in _labels("host 45.33.32.156", ["45.33.32.15"])  # not a substring match
+
+
+def test_allow_entry_does_not_excuse_a_value_containing_it(tmp_path):
+    assert "email" in _labels("contact a@b.com.realcorp.io", ["a@b.com"])
+
+
+def _bin_write(root, rel, data):
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def test_nul_prefixed_file_is_still_scanned_by_layer_one(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    _bin_write(root, "docs/x.md", b"\x00\x00" + f"token: {GH_PAT_P}".encode())
+    assert cs.main(["--deterministic-only", "docs/x.md"], root=root) == 1
+
+
+@pytest.mark.parametrize("enc", ["utf-16", "utf-16-le", "utf-16-be", "utf-32"])
+def test_utf16_and_utf32_text_is_decoded_and_scanned(tmp_path, enc):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    _bin_write(root, "docs/w.md", f"Notes\ntoken: {GH_PAT_P}\n".encode(enc))
+    assert cs.main(["--deterministic-only", "docs/w.md"], root=root) == 1
+
+
+def test_a_png_with_a_key_inside_is_still_caught(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    _bin_write(root, "img/a.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + GH_PAT_P.encode() + b"\xff" * 32)
+    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 1
+
+
+def test_semantic_layer_still_skips_true_binaries(tmp_path, monkeypatch):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["docs/"]}')
+    _bin_write(root, "docs/a.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + b"\xff" * 32)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    client = _FakeClient('{"flagged": false, "reasons": []}')
+    assert cs.main(["--require-semantic", "docs/a.png"], root=root, client_factory=lambda: client) == 0
+    assert client.calls == []
+
+
+def test_symlink_target_string_is_scanned(tmp_path):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", "{}")
+    os.makedirs(os.path.join(root, "docs"))
+    os.symlink(f"/srv/{GH_PAT_P}/x", os.path.join(root, "docs", "link"))  # dangling
+    assert cs.main(["--deterministic-only", "docs/link"], root=root) == 1
+    os.symlink("README.md", os.path.join(root, "docs", "ok"))
+    assert cs.main(["--deterministic-only", "docs/ok"], root=root) == 0
+
+
+def test_config_path_override_is_used(tmp_path, monkeypatch):
+    """The workflow scans a PR with the BASE commit's config, passed this way."""
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"deterministic":{"allow_substrings":["jane@realcorp.io"]}}')
+    _write(root, "docs/x.md", "contact jane@realcorp.io")
+    assert cs.main(["--deterministic-only", "docs/x.md"], root=root) == 0
+    base = os.path.join(root, "..", "base.json")
+    with open(base, "w") as fh:
+        fh.write("{}")
+    monkeypatch.setenv("SANITIZE_CONFIG", base)
+    assert cs.main(["--deterministic-only", "docs/x.md"], root=root) == 1
+
+
+def test_an_anthropic_sdk_model_id_falls_back_to_the_default(capsys):
+    assert cs.semantic_model({"semantic": {"model": "claude-opus-4-8"}}) == cs.DEFAULT_MODEL
+    assert cs.semantic_model({"semantic": {"model": "vendor/model"}}) == "vendor/model"
+
+
+def test_rfc_reserved_documentation_domains_are_never_findings():
+    """RFC 2606 / 6761 reserve these for documentation; nobody can own one."""
+    for addr in ("a@example.com", "b@example.org", "c@sub.example.net",
+                 "example.com@evil.example", "d@host.test", "e@x.invalid", "f@box.localhost"):
+        assert "email" not in _labels(f"mail {addr} now"), addr
+    for addr in ("g@example.co", "h@myexample.com", "i@example.com.realcorp.io", "j@test.com"):
+        assert "email" in _labels(f"mail {addr} now"), addr
