@@ -6,7 +6,7 @@ Companion to `../specs/2026-06-03-artifact-commons-design.md` and
 
 ## 1. Build the artifact in its own (private) repo
 - **One repo per artifact** (or one for a tightly-paired plugin+skill). Start **private**.
-- Layout (osint-engine convention): `hermes-plugin/` (`plugin.yaml` + `__init__.py`
+- Layout (standard artifact convention): `hermes-plugin/` (`plugin.yaml` + `__init__.py`
   + code), `hermes-skill/SKILL.md`, `tests/`.
 - `plugin.yaml` declares `declared_capabilities` (e.g. `tools: []`, `network: true`).
 - Add GitHub collaborators to the private repo to collaborate **before** it's public.
@@ -21,15 +21,15 @@ unpinned source loudly (an unpinned ref can silently drift to malicious code).
 ## 3. Reference it in the manifest
 `infra/artifacts.json`. **Point the source at the artifact *subdir* inside the
 repo** (`#<tag>:<subdir>`), not the repo root — a single repo typically holds a
-co-located plugin **and** skill (the osint-engine layout), each referenced by its
+co-located plugin **and** skill (the standard layout), each referenced by its
 own subdir and installed to its own agent dir (`plugins/<name>/`, `skills/<name>/`):
 ```json
 {
   "plugins": [
-    { "name": "captcha_solver",  "source": "git:<org>/<repo>#v0.1.0:hermes-plugin", "enabled": true }
+    { "name": "example_plugin",   "source": "git:<org>/<repo>#v0.1.0:hermes-plugin", "enabled": true }
   ],
   "skills": [
-    { "name": "captcha-solving", "source": "git:<org>/<repo>#v0.1.0:hermes-skill" }
+    { "name": "example-skill", "source": "git:<org>/<repo>#v0.1.0:hermes-skill" }
   ]
 }
 ```

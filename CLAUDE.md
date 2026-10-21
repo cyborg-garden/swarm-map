@@ -14,7 +14,7 @@ See **AGENTS.md** for architecture, patterns, service layer, and what not to do.
    ```
    All tests must pass. Don't skip or comment out tests.
 
-3. **This is NOT an Egregore instance.** No `memory/`, no `/save`, no `/handoff`, no `/wrap`. Standard git workflow.
+3. **Standard git workflow.** No shared-memory conventions here: no `memory/` dir, no `/save`, `/handoff` or `/wrap` commands.
 
 4. **Next.js version warning.** This runs Next.js 16 — params are Promises, layouts support `export const dynamic`, etc. Check `node_modules/next/dist/docs/` when unsure.
 

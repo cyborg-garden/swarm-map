@@ -73,7 +73,7 @@ Multi-tenant policy, fleet-aware hooks, HSM API consumers.
 
 ## Refine: an "HSM" answer splits again — baseline vs its own artefact repo
 
-The framework above answers image-vs-HSM. But "→ HSM" hides a second decision, and getting it wrong is the most common mistake (see [decision: capabilities go through the artefact pipeline](https://github.com/NimbleCoAI/nimbleco-memory) `knowledge/decisions/2026-06-22-artefact-vs-hsm-core-boundary.md`). Once something is *not* image, ask:
+The framework above answers image-vs-HSM. But "→ HSM" hides a second decision, and getting it wrong is the most common mistake (the standing decision: new capabilities go through the artefact pipeline, not into HSM core). Once something is *not* image, ask:
 
 ### A. Is it a security boundary? (secret custody, enforcement an operator can't disable)
 
@@ -95,7 +95,7 @@ NimbleCoAI/hermes-agent is a fork of NousResearch/hermes-agent. Every feature th
 
 - **Useful to everyone** → upstream it (PR to NousResearch/hermes-agent) or cherry-pick to the public fork
 - **NimbleCo-specific** → keep it in HSM scaffolding where possible (plugins, hooks, config). If it *must* be in the image (e.g., security fix), accept the fork cost
-- **Experimental** → keep it in the private fork (hermes-swarm) until validated, then decide
+- **Experimental** → keep it in a private fork until validated, then decide
 
 **Current fork divergence:**
 - Public fork removes ~25 upstream tools (platform-specific integrations not needed for NimbleCo)

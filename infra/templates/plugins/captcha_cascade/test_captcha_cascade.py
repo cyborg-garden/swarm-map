@@ -300,7 +300,7 @@ class TestVncUrl:
     """
 
     def test_prefers_vnc_external_url_env(self, monkeypatch):
-        monkeypatch.setenv("VNC_EXTERNAL_URL", "http://100.64.0.5:10642")
+        monkeypatch.setenv("VNC_EXTERNAL_URL", "http://192.0.2.5:10642")
         monkeypatch.setenv("CAMOFOX_URL", "http://host.docker.internal:9377")
         # Must NOT hit the network when the external URL is provided
         import __init__ as mod
@@ -308,11 +308,11 @@ class TestVncUrl:
             mod, "requests",
             MagicMock(get=MagicMock(side_effect=AssertionError("should not call /health"))),
         )
-        assert _vnc_url() == "http://100.64.0.5:10642"
+        assert _vnc_url() == "http://192.0.2.5:10642"
 
     def test_strips_trailing_slash_on_external_url(self, monkeypatch):
-        monkeypatch.setenv("VNC_EXTERNAL_URL", "http://100.64.0.5:10642/")
-        assert _vnc_url() == "http://100.64.0.5:10642"
+        monkeypatch.setenv("VNC_EXTERNAL_URL", "http://192.0.2.5:10642/")
+        assert _vnc_url() == "http://192.0.2.5:10642"
 
     def test_falls_back_to_health_when_no_external_url(self, monkeypatch):
         monkeypatch.delenv("VNC_EXTERNAL_URL", raising=False)

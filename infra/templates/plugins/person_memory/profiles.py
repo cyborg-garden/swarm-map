@@ -7,11 +7,11 @@ Profiles are image-only markdown files at::
 with a small frontmatter header the injector reads::
 
     ---
-    display_name: Alex
-    role: community organiser (non-technical)
+    display_name: Example User
+    role: <role, e.g. non-technical member>
     technical_level: concept
     comm_style: warm, narrative, analogy-first; avoid jargon
-    last_updated: 2026-07-17
+    last_updated: YYYY-MM-DD
     source: declared
     ---
 
@@ -32,8 +32,8 @@ from typing import Any, Dict, List, Optional
 # Identity components are interpolated into a filesystem path, so we hard-reject
 # anything that could traverse (``/``, ``\``, ``..``) or inject NUL/whitespace.
 # This allowlist covers every real Slack/Telegram/Discord id, the ``slack:U…``
-# scheme, and E.164 phone numbers (``+64…`` — Signal presents these as sender
-# ids), while making the profile path un-escapable regardless of how trusted
+# scheme, and E.164 phone numbers (``+<country code><number>`` — Signal
+# presents these as sender ids), while making the profile path un-escapable regardless of how trusted
 # the calling connector's id happens to be.
 _ID_RE = re.compile(r"^[A-Za-z0-9._:+-]+$")
 
