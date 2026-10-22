@@ -7,6 +7,7 @@ import { generateDefaultConfig } from '@/lib/templates/config-yaml'
 import type { Storage } from './storage'
 import type { DockerService } from './docker'
 import type { AuditService } from './audit'
+import { installPackToDir, type PackInstallResult } from './pack-install'
 import type { ConfigService } from './config'
 import { getCostToday, getInvocationsToday } from './usage'
 import { markRestarting, isRestarting, clearRestarting } from './restart-tracker'
@@ -1453,6 +1454,31 @@ export class HarnessService {
    * The container is recreated only when .env, config or artifacts changed.
    * dryRun returns the plan without writing, assigning or restarting.
    */
+  /**
+   * Install one opt-in pack (git-sourced artifacts included) into an existing
+   * agent, then recreate it so the runtime loads the new plugin. Add-only.
+   */
+  async installPack(
+    id: string,
+    pack: string,
+    opts: { overwrite?: boolean; restart?: boolean } = {},
+  ): Promise<PackInstallResult & { restarted: boolean }> {
+    const harness = this.get(id)
+    if (!harness?.serviceName) {
+      throw new Error(`Harness ${id} not found`)
+    }
+    const dataDir = guessDataDir(harness.serviceName, harness.serviceName)
+    const result = await installPackToDir(dataDir, pack, {
+      overwrite: opts.overwrite,
+      gitToken: process.env.ARTIFACT_GIT_TOKEN || process.env.GITHUB_TOKEN || undefined,
+    })
+    const changed = result.installed && result.results.some((r) => r.installed && !r.skipped)
+    const restarted = changed && opts.restart !== false
+    if (restarted) this.restart(id, 'recreate')
+    this.audit.append({ who: 'admin', what: `pack:install:${pack}${result.installed ? '' : ':failed'}`, target: harness.name })
+    return { ...result, restarted }
+  }
+
   syncArtifacts(
     id: string,
     opts: {
