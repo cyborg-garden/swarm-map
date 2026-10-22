@@ -29,7 +29,10 @@ const h = vi.hoisted(() => ({
   deleteAgent: vi.fn(async () => undefined),
 }))
 
-vi.mock('child_process', () => ({ execSync: vi.fn(() => Buffer.from('')) }))
+vi.mock('child_process', () => ({
+  execSync: vi.fn(() => Buffer.from('')),
+  execFileSync: vi.fn(() => Buffer.from('')),
+}))
 
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>()
@@ -98,8 +101,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   })
 
   it('local-build: builds the image as a separate step (build-appropriate timeout) before up -d', async () => {
-    const { execSync } = await import('child_process')
-    vi.mocked(execSync).mockClear()
+    const { execFileSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
 
     // useLocalBuild on, pointing at a source dir that has a Dockerfile.
     h.hermesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-src-'))
@@ -111,8 +114,10 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     })
     expect((await res.json()).ok).toBe(true)
 
-    const calls = vi.mocked(execSync).mock.calls
-    const cmds = calls.map(c => String(c[0]))
+    // Compose runs in argv form (execFileSync, no shell), so the path is one
+    // argument whatever characters settings.dataDir contains.
+    const calls = vi.mocked(execFileSync).mock.calls
+    const cmds = calls.map(c => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     const buildIdx = cmds.findIndex(c => /compose -f .* build$/.test(c))
     const upIdx = cmds.findIndex(c => /compose -f .* up -d/.test(c))
 
@@ -121,7 +126,11 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(upIdx).toBeGreaterThan(buildIdx)
     // The build gets a build-appropriate timeout, not the short start timeout —
     // this is the fix for cold first-time builds blowing the 60s start window.
-    const buildOpts = calls[buildIdx][1] as { timeout?: number }
+    expect(calls[buildIdx][0]).toBe('docker')
+    const buildArgs = calls[buildIdx][1] as string[]
+    expect(buildArgs.slice(0, 2)).toEqual(['compose', '-f'])
+    expect(buildArgs[2]).toBe(path.join(h.tmpData, 'compose', 'lb', 'docker-compose.yml'))
+    const buildOpts = calls[buildIdx][2] as { timeout?: number }
     expect(buildOpts?.timeout ?? 0).toBeGreaterThanOrEqual(600000)
   })
 
@@ -165,12 +174,12 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   })
 
   it('image mode (no local build) does not run a separate build step', async () => {
-    const { execSync } = await import('child_process')
-    vi.mocked(execSync).mockClear()
+    const { execFileSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
 
     await deploy({ name: 'img', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
 
-    const cmds = vi.mocked(execSync).mock.calls.map(c => String(c[0]))
+    const cmds = vi.mocked(execFileSync).mock.calls.map(c => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     expect(cmds.some(c => /compose -f .* build$/.test(c))).toBe(false)
     expect(cmds.some(c => /compose -f .* up -d/.test(c))).toBe(true)
   })
@@ -314,8 +323,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   it('Letta: creates the brain over REST, then deploys a Hermes door wired to it', async () => {
     h.healthCheck.mockReturnValue(true) // server + door reachable
     h.createOverlay.mockResolvedValue({ id: 'h_scout' })
-    const { execSync } = await import('child_process')
-    vi.mocked(execSync).mockClear()
+    const { execFileSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
 
     const res = await deploy({
       name: 'scout', runtime: 'letta', lettaModel: 'anthropic/claude-3-5-sonnet',
@@ -342,7 +351,7 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
 
     // (c) Door compose written, container started, overlay registered.
     expect(fs.existsSync(path.join(h.tmpData, 'compose', 'scout', 'docker-compose.yml'))).toBe(true)
-    const cmds = vi.mocked(execSync).mock.calls.map((c) => String(c[0]))
+    const cmds = vi.mocked(execFileSync).mock.calls.map((c) => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     expect(cmds.some((c) => /compose -f .* up -d/.test(c))).toBe(true)
     expect(h.createOverlay).toHaveBeenCalledTimes(1)
 
@@ -379,8 +388,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   it('Letta: 409 when an agent with the same name already exists on the server (no door left behind)', async () => {
     h.healthCheck.mockReturnValue(true)
     h.listAgents.mockResolvedValue([{ id: 'a1', name: 'scout' }])
-    const { execSync } = await import('child_process')
-    vi.mocked(execSync).mockClear()
+    const { execFileSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
     const res = await deploy({
       name: 'scout', runtime: 'letta', lettaModel: 'anthropic/claude-3-5-sonnet', llmKey: 'sk-ant',
     })
@@ -390,14 +399,14 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(fs.existsSync(path.join(h.tmpHome, '.hermes-scout'))).toBe(false)
     expect(fs.existsSync(path.join(h.tmpData, 'compose', 'scout'))).toBe(false)
     expect(h.createOverlay).not.toHaveBeenCalled()
-    const cmds = vi.mocked(execSync).mock.calls.map((c) => String(c[0]))
+    const cmds = vi.mocked(execFileSync).mock.calls.map((c) => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     expect(cmds.some((c) => /compose -f .* up -d/.test(c))).toBe(false)
   })
 
   it('Letta: 502 when the server never becomes reachable (no door left behind)', async () => {
     h.healthCheck.mockReturnValue(false) // never healthy
-    const { execSync } = await import('child_process')
-    vi.mocked(execSync).mockClear()
+    const { execFileSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
     const res = await deploy({
       name: 'scout', runtime: 'letta', lettaModel: 'anthropic/claude-3-5-sonnet', llmKey: 'sk-ant',
     })
@@ -407,7 +416,7 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(fs.existsSync(path.join(h.tmpHome, '.hermes-scout'))).toBe(false)
     expect(fs.existsSync(path.join(h.tmpData, 'compose', 'scout'))).toBe(false)
     expect(h.createOverlay).not.toHaveBeenCalled()
-    const cmds = vi.mocked(execSync).mock.calls.map((c) => String(c[0]))
+    const cmds = vi.mocked(execFileSync).mock.calls.map((c) => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     expect(cmds.some((c) => /compose -f .* up -d/.test(c))).toBe(false)
   })
 })

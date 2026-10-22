@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import crypto from 'crypto'
 import type { MemoryScope, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
@@ -28,7 +28,7 @@ function inferTier(harnessName: string): HabitatTier {
 // Get directory size in MB using du
 function dirSizeMb(dirPath: string): number {
   try {
-    const output = execSync(`du -sm "${dirPath}"`, { stdio: 'pipe', timeout: 5000 }).toString()
+    const output = execFileSync('du', ['-sm', dirPath], { stdio: 'pipe', timeout: 5000 }).toString()
     const match = output.match(/^(\d+)/)
     return match ? parseInt(match[1], 10) : 0
   } catch {

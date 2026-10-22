@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { SurfaceAdminService, isValidIdentity, isSupportedSurface } from '../surface-admins'
+import {
+  SurfaceAdminService, isValidIdentity, isSupportedSurface, isValidHarnessId, sanitizeGroupId, agentDataDir,
+} from '../surface-admins'
 import { Storage } from '../storage'
 
 // Each test gets an isolated fake $HOME (for agent .env files) and an isolated
@@ -404,5 +406,59 @@ describe('SurfaceAdminService.isGroupAllowed', () => {
     expect(svc.isGroupAllowed('h_seraph', 'signal', 'gX')).toBe(false)
     expect(svc.isGroupAllowed('h_ghost', 'signal', 'g1')).toBe(false)
     expect(svc.isGroupAllowed('h_seraph', 'whatsapp', 'g1')).toBe(false)
+  })
+})
+
+// Ids that exist on the Mini (ls ~/.hermes-* + docker ps, 2026-10-22), the
+// bare slug the policy plugin sends, and a Letta id from deploy-route tests.
+const REAL_IDS = [
+  'h_personal', 'h_cyborg', 'h_cyborg_public', 'h_evil_duck', 'h_garden_admin',
+  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_letta_server',
+  'h_letta_agent-xyz', 'h_letta_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
+]
+const TRAVERSAL_IDS = [
+  'x/../.hermes-cryptids', '../.hermes-cryptids', '..', '.', '', 'h_a/b', 'h_a\\b',
+  'h_a.b', '_h', '-h', 'h_a\n', 'h_a b', 'h_%2e%2e', 'h_' + 'a'.repeat(200),
+]
+
+describe('isValidHarnessId', () => {
+  it('accepts every real harness id shape', () => {
+    for (const id of REAL_IDS) expect(isValidHarnessId(id), id).toBe(true)
+  })
+  it('rejects path traversal and non-path-safe ids', () => {
+    for (const id of TRAVERSAL_IDS) expect(isValidHarnessId(id), JSON.stringify(id)).toBe(false)
+    expect(isValidHarnessId(undefined)).toBe(false)
+    expect(isValidHarnessId(42)).toBe(false)
+  })
+  it('agentDataDir throws instead of resolving outside ~/.hermes-*', () => {
+    expect(() => agentDataDir('x/../.hermes-cryptids')).toThrow('Invalid harness id')
+    expect(agentDataDir('h_personal')).toBe(path.join(home, '.hermes'))
+    expect(agentDataDir('h_evil_duck')).toBe(path.join(home, '.hermes-evil-duck'))
+  })
+})
+
+describe('sanitizeGroupId', () => {
+  it('trims and keeps real group ids (incl. base64 "=" padding)', () => {
+    expect(sanitizeGroupId(' -100777 ')).toBe('-100777')
+    expect(sanitizeGroupId('group.abc+/==')).toBe('group.abc+/==')
+  })
+  it('rejects newline, list separators, replacement patterns and wildcard', () => {
+    for (const bad of ['g1\nEVIL=1', 'g\r1', 'a,b', '$&', 'a`b', '#c', '*', '', '9'.repeat(129), null, 7]) {
+      expect(sanitizeGroupId(bad), JSON.stringify(bad)).toBeNull()
+    }
+  })
+})
+
+describe('traversal ids on the agent-callable paths', () => {
+  it('approveGroupInvite 400s and isGroupAllowed fails closed for a traversal id', () => {
+    // A real agent .env one level up from the would-be traversal target.
+    writeAgentEnv('cryptids', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n')
+    fs.mkdirSync(path.join(home, '.hermes-x'), { recursive: true })
+    const evil = 'x/../.hermes-cryptids'
+    expect(svc.isGroupAllowed(evil, 'telegram', '-100')).toBe(false)
+    expect(svc.approveGroupInvite(evil, 'telegram', '-100', '111')).toMatchObject({
+      ok: false, status: 400, error: 'Invalid harness id',
+    })
+    expect(svc.isAdmin(evil, 'telegram', '111')).toBe(false)
   })
 })

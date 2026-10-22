@@ -41,7 +41,10 @@ const h = vi.hoisted(() => ({
   healthCheck: vi.fn(() => false),
 }))
 
-vi.mock('child_process', () => ({ execSync: vi.fn(() => Buffer.from('')) }))
+vi.mock('child_process', () => ({
+  execSync: vi.fn(() => Buffer.from('')),
+  execFileSync: vi.fn(() => Buffer.from('')),
+}))
 
 vi.mock('os', async (importOriginal) => {
   const actual = await importOriginal<typeof import('os')>()

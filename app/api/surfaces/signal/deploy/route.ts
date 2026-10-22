@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -64,7 +64,7 @@ export async function POST() {
     } catch { /* nothing to remove */ }
 
     // Start (build the native image on first deploy; cached thereafter)
-    execSync(`docker compose -f "${composePath}" up -d --build`, { timeout: 180000, cwd: swarmDir })
+    execFileSync('docker', ['compose', '-f', composePath, 'up', '-d', '--build'], { timeout: 180000, cwd: swarmDir })
 
     // Poll for health via JSON-RPC (up to 90 seconds — accounts take time to load)
     const signalUrl = getSignalDaemonUrl()

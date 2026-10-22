@@ -31,10 +31,35 @@ export function isSupportedSurface(platform: string): boolean {
   return isSurfaceSlug(platform)
 }
 
+// Harness ids reach these paths straight from URL segments, some on routes
+// agents call without the operator cookie. Real ids are `h_<name>` (e.g.
+// h_personal, h_cyborg_public), bare agent slugs (`seraph-doer`, sent by the
+// policy plugin), or Letta ids (`h_letta_agent-<uuid>`). All are ASCII
+// letters, digits, '_' and '-'. Anything else ('/', '.', '%', whitespace) is
+// rejected so an id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
+const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+export function isValidHarnessId(raw: unknown): raw is string {
+  return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
+}
+
+// Structural guard for a group/chat id before it is written into an agent
+// .env: no whitespace/control chars (line injection), no comma (list
+// separator), no comment/quote chars, no '$'/backtick (String.replace
+// replacement patterns + shell expansion). '=' is deliberately allowed —
+// Signal group IDs are base64 ('=' padding), and only the FIRST '=' on a line
+// splits key from value. Returns the trimmed id, or null when invalid.
+export function sanitizeGroupId(raw: unknown): string | null {
+  const group = typeof raw === 'string' ? raw.trim() : ''
+  if (!group || group.length > 128 || group === '*' || /[\s,;#'"$`]/.test(group)) return null
+  return group
+}
+
 // Resolve an agent's data dir from its harness id — same convention the settings
 // and policy routes use (hermes-personal lives at ~/.hermes, others at
-// ~/.hermes-<name>).
+// ~/.hermes-<name>). Throws on an id that fails isValidHarnessId.
 export function agentDataDir(harnessId: string): string {
+  if (!isValidHarnessId(harnessId)) throw new Error('Invalid harness id')
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
   if (name === 'personal') return path.join(os.homedir(), '.hermes')
   return path.join(os.homedir(), `.hermes-${name}`)
@@ -366,13 +391,12 @@ export class SurfaceAdminService {
     if (!varName) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
     }
-    // Structural guard before the value touches the .env: no whitespace/control
-    // chars (line injection), no comma (list separator), no comment/quote chars,
-    // no '$'/backtick (String.replace replacement patterns + shell expansion).
-    // '=' is deliberately allowed — Signal group IDs are base64 ('=' padding),
-    // and only the FIRST '=' on a line splits key from value.
-    const group = typeof groupId === 'string' ? groupId.trim() : ''
-    if (!group || group.length > 128 || group === '*' || /[\s,;#'"$`]/.test(group)) {
+    if (!isValidHarnessId(harnessId)) {
+      return { ok: false, status: 400, error: 'Invalid harness id' }
+    }
+    // Structural guard before the value touches the .env (see sanitizeGroupId).
+    const group = sanitizeGroupId(groupId)
+    if (!group) {
       return { ok: false, status: 400, error: 'Invalid group id' }
     }
     const actor = typeof addedByUserId === 'string' ? addedByUserId.trim() : ''

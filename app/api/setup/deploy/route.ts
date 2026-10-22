@@ -23,7 +23,7 @@ import { deployLettaAgent, serverKeyVarForModel, LETTA_DEFAULT_PORT } from '@/li
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-import { execSync } from 'child_process'
+import { execSync, execFileSync } from 'child_process'
 
 const BASE_PORT = 8642
 const PORT_STEP = 10
@@ -588,9 +588,11 @@ If this is your very first startup ever, introduce yourself briefly in your home
     // this gives the create path an equivalent build budget.)
     try {
       if ('build' in imageOrBuild) {
-        execSync(`docker compose -f ${composePath} build`, { stdio: 'pipe', timeout: 1_800_000 }) // 30 min — cold builds
+        // argv form, no shell: composePath is built from settings.dataDir, so a
+        // space or shell metacharacter there must not split or run as a command.
+        execFileSync('docker', ['compose', '-f', composePath, 'build'], { stdio: 'pipe', timeout: 1_800_000 }) // 30 min — cold builds
       }
-      execSync(`docker compose -f ${composePath} up -d`, { stdio: 'pipe', timeout: 120000 })
+      execFileSync('docker', ['compose', '-f', composePath, 'up', '-d'], { stdio: 'pipe', timeout: 120000 })
     } catch (err) {
       if (createdAgentDir) fs.rmSync(createdAgentDir, { recursive: true, force: true })
       rollbackKeys()

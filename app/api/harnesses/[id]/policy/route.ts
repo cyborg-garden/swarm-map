@@ -1,17 +1,18 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { getCostMonth } from '@/lib/services/usage'
 import { services } from '@/lib/services'
 // Group/channel allowlist map, derived from the surface registry (lib/surfaces)
 // — the same map surface-admins uses.
 import { GROUPS_VARS as GROUP_VARS } from '@/lib/surfaces/derive'
+// Shared id guards: this route is agent-callable without the operator cookie,
+// so the harness id must never escape ~/.hermes-* and a chatId must never
+// add a line to the .env.
+import { agentDataDir, isValidHarnessId, sanitizeGroupId } from '@/lib/services/surface-admins'
 
-function agentDataDir(harnessId: string): string {
-  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
-  if (name === 'personal') return path.join(os.homedir(), '.hermes')
-  return path.join(os.homedir(), `.hermes-${name}`)
+function invalidHarnessId() {
+  return NextResponse.json({ error: 'Invalid harness id' }, { status: 400 })
 }
 
 function parseEnvFile(envPath: string): Record<string, string> {
@@ -47,6 +48,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  if (!isValidHarnessId(id)) return invalidHarnessId()
   const url = new URL(request.url)
   const action = url.searchParams.get('action') || 'group-check'
 
@@ -139,6 +141,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  if (!isValidHarnessId(id)) return invalidHarnessId()
   const body = await request.json() as {
     action: string
     platform: string
@@ -146,14 +149,20 @@ export async function POST(
     chatName?: string
   }
 
-  const { action, platform, chatId } = body
+  const { action, platform } = body
+  // Same structural guard approveGroupInvite uses: a newline here would add a
+  // new .env line, and '$&' would splice file text through String.replace.
+  const chatId = sanitizeGroupId(body.chatId)
 
   if (!action || !['group-register', 'group-deregister'].includes(action)) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
   }
 
-  if (!platform || !chatId) {
+  if (!platform || body.chatId === undefined || body.chatId === null || body.chatId === '') {
     return NextResponse.json({ error: 'Missing platform or chatId' }, { status: 400 })
+  }
+  if (!chatId) {
+    return NextResponse.json({ error: 'Invalid chatId' }, { status: 400 })
   }
 
   const groupVar = GROUP_VARS[platform]
@@ -179,7 +188,7 @@ export async function POST(
       const newValue = newGroups.join(',')
       const regex = new RegExp(`^${groupVar}=.*$`, 'm')
       if (regex.test(content)) {
-        content = content.replace(regex, `${groupVar}=${newValue}`)
+        content = content.replace(regex, () => `${groupVar}=${newValue}`)
       } else {
         content = content.trimEnd() + `\n${groupVar}=${newValue}\n`
       }
@@ -201,7 +210,7 @@ export async function POST(
     const newValue = newGroups.join(',')
     const regex = new RegExp(`^${groupVar}=.*$`, 'm')
     if (regex.test(content)) {
-      content = content.replace(regex, `${groupVar}=${newValue}`)
+      content = content.replace(regex, () => `${groupVar}=${newValue}`)
     }
     // If var didn't exist, nothing to remove
     fs.writeFileSync(envPath, content, { mode: 0o600 })
