@@ -172,6 +172,13 @@ describe('generateEnvContent', () => {
     expect(env).not.toContain('NOTION_TOKEN')
   })
 
+  it('pins HERMES_UID/HERMES_GID to the process owner (Linux bind-mount writability)', () => {
+    const env = generateEnvContent({ ...base })
+    expect(env).toMatch(/^HERMES_UID=\d+$/m)
+    expect(env).toMatch(/^HERMES_GID=\d+$/m)
+    expect(env).not.toContain('${')
+  })
+
   // The Hermes-to-Letta bridge is gone. No input may produce its env vars,
   // including a caller that still passes the old `lettaBrain` argument.
   it('never emits a LETTA_BRAIN_* line, even when handed the old lettaBrain argument', () => {
