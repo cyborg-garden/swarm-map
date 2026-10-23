@@ -216,6 +216,7 @@ export type Settings = {
   useLocalBuild?: boolean  // Build from hermesDir instead of pulling upstream image
   localApiEnabled?: boolean  // Expose harnesses at a local API endpoint
   localApiPort?: number  // Port for the local API (default 8600)
+  useStateVolume?: boolean  // Put agent state DBs on a Docker named volume via a state-init service (#204 PR2). OFF by default — see ComposeOptions.useStateVolume (the symlinked layout trips hermes-agent-mt's profile check on native Linux). Native-Linux deployments should keep it off.
   vncBindHost?: string  // Host interface for the VPN-mode VNC port (default '127.0.0.1'); set to a Tailscale address for remote human CAPTCHA escalation
   controlBindHost?: string  // Host interface for the VPN-mode Camofox control port 9377 (default '127.0.0.1', unauthenticated browser control); set to a Tailscale address only for remote control
   modelAutoUpdate?: ModelAutoUpdateSettings  // model freshness / "track newest version" policy (see lib/services/model-update-scheduler.ts)

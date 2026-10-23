@@ -245,6 +245,57 @@ describe('generateStandaloneCompose', () => {
     })
   })
 
+  describe('state-volume layout (named volume + state-init service, #204 PR2) — OFF by default', () => {
+    const vol = `hermes-state-${agentName}`
+
+    it('non-VPN default: no state-init service, no named-volume mount, no depends_on, no volumes trailer', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir)
+      expect(result).not.toContain('state-init-')
+      expect(result).not.toContain(`${vol}:/state`)
+      expect(result).not.toContain('depends_on:')
+      expect(result).not.toMatch(/^volumes:\s*$/m)
+    })
+
+    it('VPN default: no state-init service or state volume, but the wireguard gate remains', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
+      expect(result).not.toContain('state-init-')
+      expect(result).not.toContain(`${vol}:/state`)
+      expect(result).not.toMatch(/^volumes:\s*$/m)
+      const hermesBlock = result.split(`hermes-${agentName}:`).pop()!
+      expect(hermesBlock).toMatch(/^\s*depends_on:\s*$/m)
+      expect(hermesBlock).toMatch(/wireguard:\s*\n\s*condition: service_started/)
+      expect(hermesBlock).not.toContain('state-init-')
+    })
+
+    it('non-VPN opt-in (useStateVolume: true): init service, volume mount, gate, and trailer', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { useStateVolume: true })
+      expect(result).toContain(`  state-init-${agentName}:`)
+      expect(result).toContain(`- ${vol}:/state`)
+      expect(result).toMatch(new RegExp(`state-init-${agentName}:\\s*\\n\\s*condition: service_completed_successfully`))
+      expect(result).toMatch(/^volumes:\s*$/m)
+    })
+
+    it('VPN opt-in (useStateVolume: true): init service, volume, and gate coexist with wireguard', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true, useStateVolume: true })
+      expect(result).toContain(`  state-init-${agentName}:`)
+      expect(result).toContain(`- ${vol}:/state`)
+      expect(result).toContain('volumes:')
+      const hermesBlock = result.split(`hermes-${agentName}:`).pop()!
+      expect(hermesBlock).toMatch(new RegExp(`state-init-${agentName}:\\s*\\n\\s*condition: service_completed_successfully`))
+      expect(hermesBlock).toMatch(/wireguard:\s*\n\s*condition: service_started/)
+    })
+
+    it('bundled ollama without the state volume keeps a depends_on: gate on the sidecar only', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { bundledOllama: true })
+      expect(result).not.toContain('state-init-')
+      expect(result).not.toContain(`${vol}:/state`)
+      const hermesBlock = result.split(`hermes-${agentName}:`).pop()!
+      expect(hermesBlock).toMatch(new RegExp(`ollama-${agentName}:\\s*\\n\\s*condition: service_healthy`))
+      expect(hermesBlock).not.toContain('state-init-')
+      expect(result).not.toMatch(/^volumes:\s*$/m)
+    })
+  })
+
   describe('agent HOME (credential/state probes must hit the mounted data dir, not /root)', () => {
     // The gateway runs as a non-root `hermes` user. If HOME is unset it falls
     // back to /root (mode 700, root-owned), so home-relative credential probes

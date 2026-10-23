@@ -1767,7 +1767,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, newId)
-      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }), 'utf-8')
+      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, useStateVolume: settings?.useStateVolume }), 'utf-8')
     }
 
     // A duplicate must NOT inherit the source's host bind mounts, nor the env
@@ -2044,7 +2044,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, id)
-      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }), 'utf-8')
+      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, useStateVolume: settings?.useStateVolume }), 'utf-8')
     }
 
     const overlay: Partial<Harness> = {
@@ -2223,7 +2223,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
       fs.mkdirSync(agentComposeDir, { recursive: true })
       fs.writeFileSync(
         composePath,
-        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }),
+        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, useStateVolume: settings?.useStateVolume }),
         'utf-8'
       )
       composeGenerated = true

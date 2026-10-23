@@ -187,9 +187,9 @@ describe('STATE_INIT_SCRIPT (real script under sh)', () => {
 
 describe('compose generators emit the migration wiring', () => {
   const cases: Array<[string, string]> = [
-    ['plain standalone', generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', {})],
-    ['vpn standalone', generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { vpnEnabled: true })],
-    ['deploy-born', generateAgentCompose('sci', 8642, '/home/u/.hermes-sci', { image: 'ghcr.io/x:latest' })],
+    ['plain standalone', generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { useStateVolume: true })],
+    ['vpn standalone', generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { vpnEnabled: true, useStateVolume: true })],
+    ['deploy-born', generateAgentCompose('sci', 8642, '/home/u/.hermes-sci', { image: 'ghcr.io/x:latest' }, { useStateVolume: true })],
   ]
 
   it.each(cases)('%s: init service + named volume + depends_on gate', (_label, c) => {
@@ -208,7 +208,7 @@ describe('compose generators emit the migration wiring', () => {
   })
 
   it('vpn variant keeps wireguard in map form alongside the init gate', () => {
-    const c = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { vpnEnabled: true, bundledOllama: true })
+    const c = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { vpnEnabled: true, bundledOllama: true, useStateVolume: true })
     expect(c).toMatch(/wireguard:\s*\n\s*condition: service_started/)
     expect(c).toMatch(/ollama-sci:\s*\n\s*condition: service_healthy/)
     // The hermes service itself must not mix list-form deps with the map-form
@@ -224,7 +224,7 @@ describe('compose generators emit the migration wiring', () => {
   })
 
   it('setComposeImage rewrites BOTH the hermes and init source blocks', () => {
-    const c = generateStandaloneCompose('sci', 8642, '/d', { imageOrBuild: { build: '/src/hermes' } })
+    const c = generateStandaloneCompose('sci', 8642, '/d', { imageOrBuild: { build: '/src/hermes' }, useStateVolume: true })
     const out = setComposeImage(c, 'ghcr.io/pinned:1')
     expect(out).not.toContain('build:')
     expect(out.split('image: ghcr.io/pinned:1').length).toBe(3) // hermes + init

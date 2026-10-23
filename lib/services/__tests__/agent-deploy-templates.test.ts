@@ -205,6 +205,22 @@ describe('generateAgentCompose', () => {
     expect(c).toContain('hermes-sci:')
   })
 
+  it('omits the state-volume layout by default (no state-init, no named volume, no depends_on)', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
+    expect(c).not.toContain('state-init-sci:')
+    expect(c).not.toContain('- hermes-state-sci:/state')
+    expect(c).not.toContain('depends_on:')
+    expect(c).not.toMatch(/^volumes:\s*$/m)
+  })
+
+  it('emits the state-volume layout when useStateVolume is set', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { useStateVolume: true })
+    expect(c).toContain('  state-init-sci:')
+    expect(c).toContain('- hermes-state-sci:/state')
+    expect(c).toMatch(/state-init-sci:\s*\n\s*condition: service_completed_successfully/)
+    expect(c).toMatch(/^volumes:\s*$/m)
+  })
+
   it('emits a healthy-gated ollama sidecar when bundledOllama is set', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { bundledOllama: true })
     expect(c).toContain('ollama-sci:')

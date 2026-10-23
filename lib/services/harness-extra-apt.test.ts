@@ -30,7 +30,7 @@ describe('extraAptPackages', () => {
     describe(label, () => {
       it('renders the build arg on the hermes service only', () => {
         const compose = generateStandaloneCompose(agentName, port, dataDir, {
-          vpnEnabled, imageOrBuild: build, extraAptPackages: OFFICE,
+          vpnEnabled, imageOrBuild: build, extraAptPackages: OFFICE, useStateVolume: true,
         })
         const hermes = serviceBlock(compose, `hermes-${agentName}`)
         expect(hermes).toContain(
