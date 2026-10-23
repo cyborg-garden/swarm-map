@@ -16,6 +16,13 @@ export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 # any future repo/directory rename.
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 DEFAULT_PORT="${PORT:-3000}"
+# Loopback on macOS, all interfaces on Linux (see ecosystem.config.js for why).
+# HSM_BIND_HOST overrides.
+if [ "$(uname -s)" = "Darwin" ]; then
+  BIND_HOST="${HSM_BIND_HOST:-127.0.0.1}"
+else
+  BIND_HOST="${HSM_BIND_HOST:-0.0.0.0}"
+fi
 MAX_PORT=$((DEFAULT_PORT + 10))
 
 # In production, pin to the configured port — don't auto-increment.
@@ -27,7 +34,7 @@ if [ "${NODE_ENV:-}" = "production" ]; then
     exit 1
   fi
   echo "Starting Swarm Map (production) on http://localhost:$DEFAULT_PORT"
-  exec npx next start --port "$DEFAULT_PORT" --hostname 0.0.0.0
+  exec npx next start --port "$DEFAULT_PORT" --hostname "$BIND_HOST"
 fi
 
 # Kill only our own zombie processes on a port
@@ -89,4 +96,4 @@ fi
 
 PORT=$(find_port)
 echo "Starting Swarm Map on http://localhost:$PORT"
-exec npx next dev --port "$PORT"
+exec npx next dev --port "$PORT" --hostname "$BIND_HOST"

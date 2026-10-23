@@ -196,18 +196,21 @@ describe('generateStandaloneCompose', () => {
       expect(result).toMatch(/- host_ip: 100\.64\.0\.5\n {8}published: 10642\n {8}target: 6080/)
     })
 
-    it('the VNC and control ports are bind-restricted — only the agent gateway stays broadly reachable', () => {
-      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
-      // Two host_ip restrictions: the human-only VNC port (6080) AND the
-      // unauthenticated camofox control port (9377). The agent gateway (8642)
-      // remains on the default bind so HSM can reach it.
+    it('every VPN-mode published port is bind-restricted, including the agent gateway', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true, apiBindHost: '127.0.0.1' })
+      // Three host_ip restrictions: the agent gateway (8642), the human-only VNC
+      // port (6080) and the unauthenticated camofox control port (9377). HSM and
+      // other containers reach the gateway over loopback/host.docker.internal,
+      // so nothing needs it on the LAN.
       const matches = result.match(/host_ip:/g) || []
-      expect(matches).toHaveLength(2)
+      expect(matches).toHaveLength(3)
+      expect(result).toMatch(/- host_ip: 127\.0\.0\.1\n {8}published: 8642\n {8}target: 8642/)
     })
 
-    it('does not introduce host_ip in non-VPN compose', () => {
-      const result = generateStandaloneCompose(agentName, port, dataDir)
-      expect(result).not.toContain('host_ip')
+    it('non-VPN compose binds the agent gateway to the requested host', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: '127.0.0.1' })
+      expect(result.match(/host_ip:/g) || []).toHaveLength(1)
+      expect(result).toMatch(/- host_ip: 127\.0\.0\.1\n {8}published: 8642\n {8}target: 8642/)
     })
   })
 

@@ -5,7 +5,7 @@
  */
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName, defaultApiBindHost, isValidBindHost } from './harness-compose'
 import { assertNoNewline } from '@/lib/env-helpers'
 
 export function generateEnvContent(params: {
@@ -276,12 +276,16 @@ export function generateAgentCompose(
     ollamaImage?: string
     memory?: string
     cpus?: string
+    /** Host interface for published ports. Defaults to loopback (see ComposeOptions.apiBindHost). */
+    apiBindHost?: string
   },
 ): string {
   // githubMcpEnabled is accepted for API compatibility but no longer used here:
   // the github MCP token is delivered via the agent .env (env_file), not a compose
   // `environment:` override (which resolves from the empty process env and blanks it).
   const { googleMcpDir, bundledOllama, ollamaImage, memory, cpus } = options ?? {}
+  const bindHost = options?.apiBindHost || defaultApiBindHost()
+  if (!isValidBindHost(bindHost)) throw new Error(`apiBindHost must be a bare IP address, got ${JSON.stringify(bindHost)}`)
   const sourceBlock = 'image' in imageOrBuild
     ? `    image: ${imageOrBuild.image}`
     : `    build:\n      context: ${imageOrBuild.build}\n      dockerfile: Dockerfile`
@@ -290,7 +294,7 @@ export function generateAgentCompose(
   // e.g. agent on 8642 → OAuth on 9095, agent on 8652 → OAuth on 9105
   const oauthPort = port + 453  // 8642 + 453 = 9095 (avoids collisions with agent port range)
   const googleMcpPorts = googleMcpDir
-    ? `      - published: ${oauthPort}\n        target: 8095   # Google OAuth callback (google-multiplayer-mcp auth flow)\n`
+    ? `      - host_ip: ${bindHost}\n        published: ${oauthPort}\n        target: 8095   # Google OAuth callback (google-multiplayer-mcp auth flow)\n`
     : ``
 
   const googleMcpVolumes = googleMcpDir
@@ -322,7 +326,8 @@ ${hermesDepends}    extra_hosts:
     env_file:
       - ${agentDataDir}/.env
     ports:
-      - published: ${port}
+      - host_ip: ${bindHost}
+        published: ${port}
         target: 8642
 ${googleMcpPorts}    volumes:
       - ${agentDataDir}:/opt/data

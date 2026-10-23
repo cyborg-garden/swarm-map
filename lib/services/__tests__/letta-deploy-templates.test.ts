@@ -132,10 +132,46 @@ describe('ensureLettaServer', () => {
     expect(info.baseUrl).toBe('http://localhost:8283')
   })
 
-  it('passes no env-file when no keys are provided', async () => {
+  it('passes no env-file when no keys are provided (loopback bind = compose default)', async () => {
     const docker = fakeDocker()
-    await ensureLettaServer(docker as never, { swarmMapDataDir: dir, composeFile: '/c.yml' })
+    await ensureLettaServer(docker as never, { swarmMapDataDir: dir, composeFile: '/c.yml', bindHost: '127.0.0.1' })
     expect(docker.start.mock.calls[0][3]).toBeUndefined()
+  })
+
+  it('a non-loopback bind host is delivered to the compose as LETTA_BIND_HOST (Linux default)', async () => {
+    const docker = fakeDocker()
+    await ensureLettaServer(docker as never, { swarmMapDataDir: dir, composeFile: '/c.yml', bindHost: '0.0.0.0' })
+    const envFile = docker.start.mock.calls[0][3]
+    expect(fs.readFileSync(envFile, 'utf-8')).toContain('LETTA_BIND_HOST=0.0.0.0')
+  })
+
+  it('the default bind host follows the platform rule', async () => {
+    const real = process.platform
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' })
+      const docker = fakeDocker()
+      await ensureLettaServer(docker as never, { swarmMapDataDir: dir, composeFile: '/c.yml' })
+      expect(fs.readFileSync(docker.start.mock.calls[0][3], 'utf-8')).toContain('LETTA_BIND_HOST=0.0.0.0')
+      Object.defineProperty(process, 'platform', { value: 'darwin' })
+      const docker2 = fakeDocker()
+      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'letta-bind-'))
+      await ensureLettaServer(docker2 as never, { swarmMapDataDir: dir2, composeFile: '/c.yml' })
+      expect(docker2.start.mock.calls[0][3]).toBeUndefined()
+      fs.rmSync(dir2, { recursive: true, force: true })
+    } finally {
+      Object.defineProperty(process, 'platform', { value: real })
+    }
+  })
+
+  it('refuses a bind host compose would reject', async () => {
+    const docker = fakeDocker()
+    await expect(ensureLettaServer(docker as never, { swarmMapDataDir: dir, composeFile: '/c.yml', bindHost: 'localhost' })).rejects.toThrow()
+    expect(docker.start).not.toHaveBeenCalled()
+  })
+
+  it('the compose template reads LETTA_BIND_HOST with a loopback fallback', () => {
+    const tpl = fs.readFileSync(path.join(__dirname, '../../../docker/letta-compose.yml'), 'utf-8')
+    expect(tpl).toContain('- "${LETTA_BIND_HOST:-127.0.0.1}:${LETTA_PORT:-8283}:8283"')
   })
 
   // C1: parameterized instance (name/port/dir), singleton default untouched.

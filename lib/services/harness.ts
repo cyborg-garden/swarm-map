@@ -27,7 +27,7 @@ import {
 import { checkBasePackageDrift, type DriftReport } from './base-package-drift'
 import { getUseCaseTemplate, reapplyUseCaseTemplate as reapplyTemplateToDataDir } from './usecase-templates'
 import type { ToolsService } from './tools'
-import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
+import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES, bindUnpinnedPorts, defaultApiBindHost } from './harness-compose'
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import type { ContainerRuntimeAdapter } from './runtime-adapter'
@@ -101,15 +101,29 @@ export function toHarnessSlug(name: string): string {
 // running containers) so a STOPPED agent's published port is still counted —
 // a stopped agent is still "using" that host port the moment it's restarted, and
 // reassigning it would make the restart fail with "port is already allocated".
-// The `0.0.0.0:(\d+)->` binding format is emitted for created/exited containers
+// The `<host-ip>:(\d+)->` binding format is emitted for created/exited containers
 // too, so stopped agents are caught here; the .env scan (source 3) is the
 // belt-and-suspenders catch-all for anything docker doesn't surface.
+// Any host IP counts: agents now publish on 127.0.0.1, older ones on 0.0.0.0
+// and [::]. Matching only 0.0.0.0 would hand a loopback-bound agent's port to
+// the next new agent.
+export function parsePublishedPorts(dockerPsPorts: string): number[] {
+  const ports: number[] = []
+  // A range ("0.0.0.0:8000-8002->…") reserves every port in it.
+  for (const match of dockerPsPorts.matchAll(/:(\d+)(?:-(\d+))?->/g)) {
+    const lo = parseInt(match[1], 10)
+    const hi = match[2] ? parseInt(match[2], 10) : lo
+    for (let p = lo; p <= hi && p - lo < 1024; p++) ports.push(p)
+  }
+  return ports
+}
+
 function dockerPublishedPorts(): number[] {
   const ports: number[] = []
   try {
     const output = execSync('docker ps -a --format "{{.Ports}}"', { timeout: 5000 }).toString()
-    for (const match of output.matchAll(/0\.0\.0\.0:(\d+)->/g)) {
-      ports.push(parseInt(match[1], 10))
+    for (const port of parsePublishedPorts(output)) {
+      ports.push(port)
     }
   } catch {}
   return ports
@@ -1371,6 +1385,10 @@ export class HarnessService {
       mode === 'rebuild' || mode === 'purge'
         ? this.resolveBuildSource(target.composeFile)
         : undefined
+    // Modes that recreate the container are the moment an old compose's
+    // 0.0.0.0 port publish can be swapped for loopback. A plain restart keeps
+    // the existing container, so changing the file then would only make it lie.
+    if (mode !== 'quick') this.pinComposePorts(harness!.name, target.composeFile)
     markRestarting(id, mode)
     try {
       this.docker.restart(target.composeFile, target.serviceName, mode, undefined, buildSource)
@@ -1387,6 +1405,31 @@ export class HarnessService {
       throw err
     }
     this.audit.append({ who: 'admin', what: `restart:${mode}`, target: harness!.name })
+  }
+
+  /**
+   * Rewrite an HSM-generated compose so every published port without a
+   * host_ip binds to the configured apiBindHost (loopback by default). See
+   * bindUnpinnedPorts. No-op when nothing changes; audited when it does.
+   * Fails loud: a recreate that silently keeps the LAN binding is the bug this
+   * exists to remove.
+   */
+  private pinComposePorts(name: string, composeFile: string): void {
+    const host = this.config?.getSettings()?.apiBindHost || defaultApiBindHost()
+    // 0.0.0.0 is compose's own default, so pinning it would change nothing.
+    if (host === '0.0.0.0') return
+    const before = fs.readFileSync(composeFile, 'utf-8')
+    const after = bindUnpinnedPorts(before, host)
+    if (after === before) return
+    const tmp = `${composeFile}.tmp-${process.pid}`
+    try {
+      fs.writeFileSync(tmp, after, { encoding: 'utf-8', mode: fs.statSync(composeFile).mode & 0o777 })
+      fs.renameSync(tmp, composeFile)
+    } catch (err) {
+      fs.rmSync(tmp, { force: true })
+      throw err
+    }
+    this.audit.append({ who: 'admin', what: 'compose:pin-ports', target: name, meta: { host } })
   }
 
   /**
@@ -1661,6 +1704,9 @@ export class HarnessService {
     if (!target) {
       throw new Error(`Harness ${id} has no compose file configured`)
     }
+    // `up -d` recreates the container when the compose changed, so a stopped
+    // old agent picks up the loopback binding on its next start too.
+    this.pinComposePorts(harness!.name, target.composeFile)
     this.docker.start(target.composeFile, target.serviceName)
     this.audit.append({ who: 'admin', what: 'start', target: harness!.name })
   }
@@ -1767,7 +1813,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, newId)
-      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }), 'utf-8')
+      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }), 'utf-8')
     }
 
     // A duplicate must NOT inherit the source's host bind mounts, nor the env
@@ -2044,7 +2090,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, id)
-      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }), 'utf-8')
+      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }), 'utf-8')
     }
 
     const overlay: Partial<Harness> = {
@@ -2223,7 +2269,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
       fs.mkdirSync(agentComposeDir, { recursive: true })
       fs.writeFileSync(
         composePath,
-        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage }),
+        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }),
         'utf-8'
       )
       composeGenerated = true

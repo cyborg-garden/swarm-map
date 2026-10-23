@@ -892,6 +892,7 @@ export async function PUT(
         defaultImage: settings.defaultImage,
         vncBindHost: settings.vncBindHost,
         controlBindHost: settings.controlBindHost,
+        apiBindHost: settings.apiBindHost,
         memory: effectiveResources?.memory,
         cpus: effectiveResources?.cpus,
         // Carried through every regeneration. Dropping these here is exactly

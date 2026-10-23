@@ -120,12 +120,18 @@ Build once, run in production mode:
 
 ```bash
 pnpm build
-npx next start --port 3000 --hostname 0.0.0.0
+npx next start --port 3000 --hostname 127.0.0.1
 ```
 
-Access from any machine on the network at `http://<hostname>:3000`. Run behind nginx or Tailscale for HTTPS or external access.
+On macOS, HSM listens on loopback only. Reach it from another machine through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 <host>`, then open `http://localhost:3000`) or through a Cloudflare Tunnel behind Cloudflare Access. On Linux it keeps listening on all interfaces, because there `host.docker.internal` is the Docker bridge IP and agents could not reach a loopback listener; firewall port 3000 or set `HSM_BIND_HOST` to the bridge IP.
 
-Set `ALLOWED_DEV_ORIGINS` in `.env` for dev mode on remote machines (see Configuration).
+`HSM_BIND_HOST` overrides the default. pm2 reads it from the shell that runs `pm2 start`, not from `.env`. pm2 also caches the start arguments, so after upgrading or changing the binding run `pnpm pm2:reapply`; a plain `pm2 restart` keeps the old binding.
+
+**Cloudflare Access at the origin.** When HSM sits behind Cloudflare Access, set `CF_ACCESS_TEAM_DOMAIN` (for example `yourteam.cloudflareaccess.com`) and `CF_ACCESS_AUD` (the Access application's audience tag). HSM then checks the signed `Cf-Access-Jwt-Assertion` on every request that arrives through Cloudflare and refuses it if the token is missing or invalid, so a broken or deleted Access policy fails closed instead of open. Requests made directly on the host (agents, gates) are unaffected and still need the operator session for gated routes.
+
+Agent ports follow the same rule: published on `127.0.0.1` on macOS, all interfaces on Linux. The `apiBindHost` setting (a bare IP) overrides it. Existing agents switch on their next recreate, rebuild or start.
+
+For dev mode from another machine, set `HSM_BIND_HOST` and `ALLOWED_DEV_ORIGINS` (see Configuration), or use an SSH tunnel and skip both.
 
 ---
 

@@ -32,7 +32,7 @@ Swarm Map (SM) — formerly Hermes Swarm Map — is an open-source admin GUI + R
 
 **New agents get standalone compose.** Created via wizard or API, each gets `~/.hermes-swarm-map/compose/{name}/docker-compose.yml`. This is the only compose file Swarm Map writes.
 
-**Designed for headless operation.** Runs on a small always-on macOS or Linux host, accessible over the network via `--hostname 0.0.0.0`. The smart dev script (`bin/dev.sh`) auto-detects free ports and kills zombie processes.
+**Designed for headless operation.** Runs on a small always-on macOS or Linux host, listening on loopback (`127.0.0.1`) on macOS and reached remotely through an SSH tunnel or a Cloudflare Tunnel behind Access. Linux keeps all interfaces (`host.docker.internal` is the bridge IP there). `HSM_BIND_HOST` overrides; see README. The smart dev script (`bin/dev.sh`) auto-detects free ports and kills zombie processes.
 
 ## Key Patterns
 
@@ -189,10 +189,10 @@ pnpm dev         # starts at http://localhost:3000 (or next free port)
 
 ```bash
 pnpm build
-npx next start --port 3002 --hostname 0.0.0.0
+npx next start --port 3002 --hostname 127.0.0.1
 ```
 
-Access from any machine on the LAN at `http://<hostname>:3002`.
+Reach it from another machine with `ssh -L 3002:127.0.0.1:3002 <host>`. Binding `0.0.0.0` exposes HSM to the whole LAN without the Access login.
 
 ## Testing
 

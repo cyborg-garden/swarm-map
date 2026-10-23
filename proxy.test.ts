@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { NextRequest } from 'next/server'
-import { proxy } from './proxy'
+import { proxy, config as proxyConfig } from './proxy'
 import { SESSION_COOKIE, computeSessionValue } from '@/lib/auth/session'
 
 const TOKEN = 'super-secret-operator-token'
@@ -129,5 +129,113 @@ describe('proxy auth gate — token UNSET (fail-closed)', () => {
   })
   it('GET /api/health/docker does NOT leak the gate to other health paths', async () => {
     expect((await proxy(req('/api/health', 'GET'))).status).toBe(503)
+  })
+})
+
+// --- Layer 0: Cloudflare Access JWT at the origin -------------------------
+
+describe('proxy — Cloudflare Access at the origin', () => {
+  const TEAM = 'testteam.cloudflareaccess.com'
+  const AUD = 'aud-tag-123'
+  let keys: CryptoKeyPair
+  let jwk: JsonWebKey
+
+  const b64url = (bytes: Uint8Array | string): string => {
+    const raw = typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes
+    let bin = ''
+    for (const b of raw) bin += String.fromCharCode(b)
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  }
+  const jwt = async (over: Record<string, unknown> = {}): Promise<string> => {
+    const h = b64url(JSON.stringify({ alg: 'RS256', kid: 'k1' }))
+    const p = b64url(JSON.stringify({ iss: `https://${TEAM}`, aud: [AUD], exp: Math.floor(Date.now() / 1000) + 300, ...over }))
+    const s = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', keys.privateKey, new TextEncoder().encode(`${h}.${p}`))
+    return `${h}.${p}.${b64url(new Uint8Array(s))}`
+  }
+  const edgeReq = (path: string, method: string, extra: Record<string, string> = {}, cookie?: string): NextRequest => {
+    const headers = new Headers({ 'cf-ray': '8abc-AKL', 'cf-connecting-ip': '203.0.113.9', ...extra })
+    if (cookie) headers.set('cookie', `${SESSION_COOKIE}=${cookie}`)
+    return new NextRequest(new URL(`https://hsm.example.org${path}`), { method, headers })
+  }
+
+  beforeEach(async () => {
+    const { __resetAccessJwksCache } = await import('@/lib/auth/cf-access')
+    __resetAccessJwksCache()
+    keys ??= await crypto.subtle.generateKey(
+      { name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+      true,
+      ['sign', 'verify'],
+    )
+    jwk ??= await crypto.subtle.exportKey('jwk', keys.publicKey)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ keys: [{ ...jwk, kid: 'k1' }] }))))
+    process.env.HSM_OPERATOR_TOKEN = TOKEN
+    process.env.CF_ACCESS_TEAM_DOMAIN = TEAM
+    process.env.CF_ACCESS_AUD = AUD
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete process.env.HSM_OPERATOR_TOKEN
+    delete process.env.CF_ACCESS_TEAM_DOMAIN
+    delete process.env.CF_ACCESS_AUD
+  })
+
+  it('edge request with no JWT → 403, even on a page', async () => {
+    const res = await proxy(edgeReq('/', 'GET'))
+    expect(res.status).toBe(403)
+    expect(passedThrough(res)).toBe(false)
+  })
+  it('edge request with no JWT → 403 on an agent-exempt path (agents never use the tunnel)', async () => {
+    expect((await proxy(edgeReq(AGENT_POLICY, 'GET'))).status).toBe(403)
+    expect((await proxy(edgeReq(AGENT_GROUPS, 'POST'))).status).toBe(403)
+  })
+  it('edge request with a JWT for another app → 403', async () => {
+    const res = await proxy(edgeReq('/', 'GET', { 'cf-access-jwt-assertion': await jwt({ aud: ['other'] }) }))
+    expect(res.status).toBe(403)
+  })
+  it('edge request with a valid JWT → page passes', async () => {
+    const res = await proxy(edgeReq('/', 'GET', { 'cf-access-jwt-assertion': await jwt() }))
+    expect(passedThrough(res)).toBe(true)
+  })
+  it('valid JWT does NOT replace the operator session for gated API routes', async () => {
+    const res = await proxy(edgeReq('/api/harnesses', 'GET', { 'cf-access-jwt-assertion': await jwt() }))
+    expect(res.status).toBe(401)
+  })
+  it('valid JWT + valid session → gated API passes', async () => {
+    const good = await computeSessionValue(TOKEN)
+    const res = await proxy(edgeReq('/api/harnesses', 'GET', { 'cf-access-jwt-assertion': await jwt() }, good))
+    expect(passedThrough(res)).toBe(true)
+  })
+  it('on-host request (no Cloudflare headers) skips the JWT layer: agent paths still pass', async () => {
+    expect(passedThrough(await proxy(req(AGENT_POLICY, 'GET')))).toBe(true)
+    expect(passedThrough(await proxy(req('/', 'GET')))).toBe(true)
+  })
+  it('on-host request still hits the session gate', async () => {
+    expect((await proxy(req('/api/harnesses', 'GET'))).status).toBe(401)
+  })
+  it('half-configured Access → edge requests refused with 503 (fail closed)', async () => {
+    delete process.env.CF_ACCESS_AUD
+    expect((await proxy(edgeReq('/', 'GET', { 'cf-access-jwt-assertion': await jwt() }))).status).toBe(503)
+  })
+  it('Access not configured → edge requests fall through to the existing gates', async () => {
+    delete process.env.CF_ACCESS_AUD
+    delete process.env.CF_ACCESS_TEAM_DOMAIN
+    expect(passedThrough(await proxy(edgeReq('/', 'GET')))).toBe(true)
+    expect((await proxy(edgeReq('/api/harnesses', 'GET'))).status).toBe(401)
+  })
+  it('pages never hit the session gate (unchanged behaviour off the API)', async () => {
+    expect(passedThrough(await proxy(req('/settings', 'GET')))).toBe(true)
+  })
+})
+
+describe('proxy matcher covers pages, not static chunks', () => {
+  // Next compiles the matcher with path-to-regexp; the pattern is a plain
+  // regex group, so it can be checked the same way.
+  const re = new RegExp('^' + proxyConfig.matcher.replace('/((?!', '/(?!(?:').replace(').*)', ')).*') + '$')
+  it('matches pages and the API (the Access check must see them)', () => {
+    for (const p of ['/', '/settings', '/api/harnesses', '/api']) expect(re.test(p)).toBe(true)
+  })
+  it('skips static build output', () => {
+    expect(re.test('/_next/static/chunks/app.js')).toBe(false)
+    expect(re.test('/favicon.ico')).toBe(false)
   })
 })

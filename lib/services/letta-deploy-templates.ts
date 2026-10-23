@@ -24,6 +24,7 @@
 import fs from 'fs'
 import path from 'path'
 import type { DockerService } from './docker'
+import { defaultApiBindHost, isValidBindHost } from './harness-compose'
 import type { LettaService, CreateAgentConfig, LettaBlock } from './letta'
 
 /** Docker compose project name for the Letta server (stable across deploys). */
@@ -164,10 +165,18 @@ export interface EnsureLettaServerOptions {
   name?: string
   /**
    * Published REST port (spec §C1). Non-default ports are delivered to the
-   * compose via LETTA_PORT in the server .env ("${LETTA_PORT:-8283}:8283") and
+   * compose via LETTA_PORT in the server .env ("${LETTA_BIND_HOST:-127.0.0.1}:${LETTA_PORT:-8283}:8283") and
    * used for the health poll + returned baseUrl. Defaults to LETTA_DEFAULT_PORT.
    */
   port?: number
+  /**
+   * Host interface the REST port is published on. Defaults to
+   * defaultApiBindHost() (loopback on macOS, 0.0.0.0 on Linux, where the
+   * Letta door container reaches the brain through the bridge IP). Must be a
+   * bare IP. Written as LETTA_BIND_HOST only when it is not the compose's own
+   * 127.0.0.1 default.
+   */
+  bindHost?: string
 }
 
 export interface LettaServerInfo {
@@ -201,7 +210,7 @@ export async function ensureLettaServer(
   ).replace(/\/+$/, '')
   const serverDir = lettaServerDir(opts.swarmMapDataDir, opts.name)
   // LETTA_PORT is written only for a non-default port — the compose publishes
-  // "${LETTA_PORT:-8283}:8283", so the default instance needs (and gets) no
+  // "${LETTA_BIND_HOST:-127.0.0.1}:${LETTA_PORT:-8283}:8283", so the default instance needs (and gets) no
   // env line, preserving the "no keys → no env-file" behavior.
   const serverEnv: Record<string, string> = { ...(opts.serverEnv ?? {}) }
   if (port !== LETTA_DEFAULT_PORT) serverEnv.LETTA_PORT = String(port)
@@ -209,6 +218,9 @@ export async function ensureLettaServer(
   // the compose file's `container_name: ${LETTA_CONTAINER_NAME:-letta}` — the
   // default instance keeps the historical `letta` (no env line).
   if (opts.name) serverEnv.LETTA_CONTAINER_NAME = project
+  const bindHost = opts.bindHost || defaultApiBindHost()
+  if (!isValidBindHost(bindHost)) throw new Error(`Letta bindHost must be a bare IP address, got ${JSON.stringify(bindHost)}`)
+  if (bindHost !== '127.0.0.1') serverEnv.LETTA_BIND_HOST = bindHost
   const envFile = writeServerEnv(serverDir, serverEnv)
 
   // Pull the image first (best-effort): a first-run ~500MB fetch would otherwise
@@ -300,6 +312,8 @@ export interface DeployLettaAgentInput {
   /** Server-wide provider key (paste from the wizard Keys step), injected into the server .env. */
   serverKey?: string
   swarmMapDataDir: string
+  /** Host interface for the Letta REST port; see ensureLettaServer's bindHost. */
+  bindHost?: string
   baseUrl?: string
   composeFile?: string
   timeoutMs?: number
@@ -348,6 +362,7 @@ export async function deployLettaAgent(input: DeployLettaAgentInput): Promise<De
       timeoutMs: input.timeoutMs,
       name: input.instance?.name,
       port: input.instance?.port,
+      bindHost: input.bindHost,
     })
   } catch (err) {
     return { status: 502, body: { ok: false, error: err instanceof Error ? err.message : 'Failed to start the Letta server' } }

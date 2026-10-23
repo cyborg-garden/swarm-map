@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { toHarnessSlug } from '@/lib/services/harness'
+import { toHarnessSlug, parsePublishedPorts } from '@/lib/services/harness'
 import { installBaselineTemplates } from '@/lib/services/templates'
 import { defaultEnabledPlugins } from '@/lib/services/artifacts-manifest'
 import { getUseCaseTemplate, installUseCaseTemplate, templateEnabledPlugins } from '@/lib/services/usecase-templates'
@@ -41,10 +41,10 @@ function nextAvailablePort(): number {
       `docker ps --format '{{.Ports}}'`,
       { stdio: 'pipe', timeout: 5000 }
     ).toString()
-    // Parse port mappings like "0.0.0.0:8642->8642/tcp"
-    const portMatches = output.matchAll(/0\.0\.0\.0:(\d+)/g)
-    for (const m of portMatches) {
-      usedPorts.add(parseInt(m[1]))
+    // Parse port mappings like "127.0.0.1:8642->8642/tcp" or "0.0.0.0:8642->…"
+    // — any host IP (agents publish on loopback now).
+    for (const port of parsePublishedPorts(output)) {
+      usedPorts.add(port)
     }
   } catch {}
 
@@ -236,6 +236,7 @@ export async function POST(request: Request) {
         persona,
         serverKey: llmKey,
         swarmMapDataDir,
+        bindHost: lettaSettings.apiBindHost,
       })
       if (result.status < 200 || result.status >= 300) {
         return NextResponse.json(result.body, { status: result.status })
@@ -574,7 +575,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
     const agentComposeDir = path.join(composeBaseDir, slug)
     fs.mkdirSync(agentComposeDir, { recursive: true })
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
-    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama }), 'utf-8')
+    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama, apiBindHost: settings.apiBindHost }), 'utf-8')
 
     // Start the container.
     //
