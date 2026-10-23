@@ -57,6 +57,8 @@ export const RESERVED_EXTRA_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   // Set by the generated `environment:` block that extraEnv is appended to.
   'HOME',
   'HERMES_HOME',
+  'HERMES_UID',
+  'HERMES_GID',
   // The agent's identity to HSM policy (swarm_map_policy allowlist + admin
   // lookups) and to lifecycle notifications. Overriding it lets one agent
   // impersonate another — the same hazard the duplicate path resets it for.
@@ -498,6 +500,22 @@ ${embedded}
 export const DEFAULT_CAMOFOX_IMAGE =
   'ghcr.io/jo-inc/camofox-browser:1.13.0@sha256:64b30ffdbbc4ae0e28200a66dfbd6f55ac4188229eb34ef769afcf7be40faa6e'
 
+/**
+ * The uid/gid to run the agent runtime as: the Swarm Map process's own.
+ * hermes-agent-mt's s6-overlay stage2 hook remaps its baked 10000 `hermes`
+ * user to HERMES_UID/HERMES_GID via usermod/groupmod when they are set (its
+ * own compose documents `HERMES_UID=$(id -u) HERMES_GID=$(id -g)`), which is
+ * what keeps files created in-container readable/writable on a Linux bind
+ * mount. On platforms without process uids (Windows) fall back to the image's
+ * baked 10000, which hermes also defaults to.
+ */
+function processUidGid(): { uid: string; gid: string } {
+  return {
+    uid: typeof process.getuid === 'function' ? String(process.getuid()) : '10000',
+    gid: typeof process.getgid === 'function' ? String(process.getgid()) : '10000',
+  }
+}
+
 export function generateStandaloneCompose(
   agentName: string,
   port: number,
@@ -505,6 +523,7 @@ export function generateStandaloneCompose(
   options?: ComposeOptions,
 ): string {
   const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages } = options ?? {}
+  const { uid, gid } = processUidGid()
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -519,10 +538,10 @@ export function generateStandaloneCompose(
   const hermesSourceBlock = renderHermesSourceBlock(resolved, extraAptPackages)
 
   if (vpnEnabled) {
-    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
+    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, uid, gid)
   }
 
-  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
+  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, uid, gid)
 }
 
 /** Render the hermes service's `deploy.resources.limits` block (8-space indented). */
@@ -585,6 +604,8 @@ function generatePlainCompose(
   extraMountLines: string = '',
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
+  uid = '10000',
+  gid = '10000',
 ): string {
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
@@ -616,6 +637,12 @@ ${hermesDepends}    extra_hosts:
       # data dir so every agent works regardless of image-level ENV.
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
+      # hermes-agent-mt's stage2 hook remaps its baked 10000 hermes user to
+      # HERMES_UID/HERMES_GID via usermod/groupmod. Without them a Linux bind
+      # mount owned by anyone else is unwritable to the gateway (crash-loop,
+      # 'SessionStore SQLite handle unavailable' while the container stays Up).
+      - HERMES_UID=${uid}
+      - HERMES_GID=${gid}
 ${extraEnvLines}    ports:
       - published: ${port}
         target: 8642
@@ -654,6 +681,8 @@ function generateVpnCompose(
   extraMountLines: string = '',
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
+  uid = '10000',
+  gid = '10000',
 ): string {
   const camofoxPort = port + 1000
   const vncPort = port + 2000
@@ -743,6 +772,10 @@ ${hermesDepends}    extra_hosts:
       # hit /root and fail with EACCES ("Provider authentication failed").
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
+      # See generatePlainCompose: remap the hermes user to the host owner so
+      # Linux bind mounts stay writable.
+      - HERMES_UID=${uid}
+      - HERMES_GID=${gid}
 ${extraEnvLines}    volumes:
       - ${agentDataDir}:/opt/data
       - ${stateVolumeName(agentName)}:/state

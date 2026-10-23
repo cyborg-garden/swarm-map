@@ -86,6 +86,12 @@ export function generateEnvContent(params: {
     '',
     keyLine,
     `API_SERVER_PORT=${port}`,
+    // Remap the container's hermes user to the host process owner (stage2
+    // usermod/groupmod) so Linux bind mounts stay readable/writable; hermes
+    // defaults to 10000 otherwise. Same contract as upstream's own compose
+    // (HERMES_UID=$(id -u) HERMES_GID=$(id -g)).
+    `HERMES_UID=${typeof process.getuid === 'function' ? process.getuid() : 10000}`,
+    `HERMES_GID=${typeof process.getgid === 'function' ? process.getgid() : 10000}`,
     '',
     `# Platform integration`,
   ]

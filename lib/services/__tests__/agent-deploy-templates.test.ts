@@ -159,6 +159,13 @@ describe('generateEnvContent', () => {
     expect(env).not.toContain('NOTION_TOKEN')
   })
 
+  it('pins HERMES_UID/HERMES_GID to the process owner (Linux bind-mount writability)', () => {
+    const env = generateEnvContent({ ...base })
+    expect(env).toMatch(/^HERMES_UID=\d+$/m)
+    expect(env).toMatch(/^HERMES_GID=\d+$/m)
+    expect(env).not.toContain('${')
+  })
+
   // ── B2: Letta-brain "door" env seam ───────────────────────────────────────
   // A Hermes gateway becomes a Letta-brained door when LETTA_BRAIN_URL +
   // LETTA_BRAIN_AGENT_ID are set (B1 contract, gateway/letta_brain.py reads

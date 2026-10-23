@@ -258,10 +258,23 @@ describe('generateStandaloneCompose', () => {
       expect(result).toContain('HERMES_HOME=/opt/data')
     })
 
+    it('pins HERMES_UID/HERMES_GID to the process owner in non-VPN compose (Linux bind-mount writability)', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir)
+      expect(result).toMatch(/HERMES_UID=\d+/)
+      expect(result).toMatch(/HERMES_GID=\d+/)
+      expect(result).toMatch(new RegExp(`HERMES_UID=${typeof process.getuid === 'function' ? process.getuid() : 10000}`))
+    })
+
     it('sets HOME and HERMES_HOME to /opt/data in VPN compose', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
       expect(result).toContain('HOME=/opt/data')
       expect(result).toContain('HERMES_HOME=/opt/data')
+    })
+
+    it('pins HERMES_UID/HERMES_GID to the process owner in VPN compose', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
+      expect(result).toMatch(new RegExp(`HERMES_UID=${typeof process.getuid === 'function' ? process.getuid() : 10000}`))
+      expect(result).toMatch(new RegExp(`HERMES_GID=${typeof process.getgid === 'function' ? process.getgid() : 10000}`))
     })
   })
 
