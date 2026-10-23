@@ -38,6 +38,13 @@
       "enabled": true,
       "tier": "pack",
       "pack": "papareo-transcription"
+    },
+    {
+      "name": "ovenmitt_bridge",
+      "source": "git:cyborg-garden/oven-mitt#v0.3.0:hermes-plugin",
+      "enabled": true,
+      "tier": "pack",
+      "pack": "protected-outputs"
     }
   ],
   "imagePlugins": [
@@ -66,6 +73,12 @@
       "source": "git:cyborg-garden/papareo-transcribe#v0.3.0:hermes-skill",
       "tier": "pack",
       "pack": "papareo-transcription"
+    },
+    {
+      "name": "ovenmitt",
+      "source": "git:cyborg-garden/oven-mitt#v0.3.0:hermes-skill",
+      "tier": "pack",
+      "pack": "protected-outputs"
     }
   ],
   "hooks": [
@@ -86,6 +99,10 @@
     },
     "papareo-transcription": {
       "description": "transcribe_recording: local whisper or Papa Reo (te reo Maori), the person picks. Without ovenmitt, Papa Reo files go only to platforms in PAPAREO_DIRECT_PLATFORMS. Install via POST /api/harnesses/:id/artifacts/pack. Needs PAPAREO_API_KEY and stt.enabled: false.",
+      "public": false
+    },
+    "protected-outputs": {
+      "description": "ovenmitt vault bridge: native ovenmitt_vault_* tools and the ovenmitt skill, for outputs that must never enter an LLM context. Install via POST /api/harnesses/:id/artifacts/pack. Inert until the agent has an ovenmitt daemon (OVENMITT_SOCKET) and consumer credential (OVENMITT_CONSUMER_CREDENTIAL); Swarm Map does not provision those yet.",
       "public": false
     }
   },
