@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execFileSync } from 'child_process'
 import Database from 'better-sqlite3'
@@ -63,7 +64,10 @@ function readMarker(dbPath: string): string {
   }
 }
 
-describe('STATE_INIT_SCRIPT (real script under sh)', () => {
+// These spawn a real /bin/sh and open real SQLite files. The first one also
+// pays for loading better-sqlite3's native binding, which on a busy CI runner
+// can take longer than vitest's 5s default (about 50ms locally).
+describe('STATE_INIT_SCRIPT (real script under sh)', { timeout: 20_000 }, () => {
   it('migrates regular DB files (with -wal/-shm) to the volume and symlinks back', () => {
     createWalDb(path.join(dataDir, 'state.db'), 'original')
     const out = runInitScript()
