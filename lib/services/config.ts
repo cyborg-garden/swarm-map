@@ -67,6 +67,7 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
       case 'onboarded':
       case 'useLocalBuild':
       case 'localApiEnabled':
+      case 'useStateVolume':
         if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`)
         out[key] = value
         break
@@ -188,6 +189,10 @@ const DEFAULT_SETTINGS: Settings = {
   // Pull the published image by default — a fresh install has no local hermes
   // source checkout to build from. Local build is an opt-in dev toggle (Settings).
   useLocalBuild: false,
+  // Plain bind mounts by default — the named-volume layout exists for macOS
+  // VirtioFS and breaks hermes-agent-mt's profile check on native Linux
+  // (gateway/run_runtime.py resolves the symlinked DBs outside the profile).
+  useStateVolume: false,
   vncBindHost: '127.0.0.1',
   controlBindHost: '127.0.0.1',
   apiBindHost: '127.0.0.1',

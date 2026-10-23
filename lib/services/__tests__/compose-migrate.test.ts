@@ -154,14 +154,26 @@ describe('addStateMigrationToCompose', () => {
     expect(out).toContain('      - hermes-state-sci:/state')
   })
 
-  it('is idempotent: already-migrated compose (incl. freshly generated) returns unchanged', () => {
+  it('is idempotent: already-migrated compose (incl. freshly generated with the layout opted in) returns unchanged', () => {
     const migrated = addStateMigrationToCompose(PRE_PR2_PLAIN, 'sci', '/home/u/.hermes-sci')
     expect(addStateMigrationToCompose(migrated, 'sci', '/home/u/.hermes-sci')).toBe(migrated)
 
-    const freshPlain = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', {})
+    // Opt-in generators already emit the migrated layout → untouched.
+    const freshPlain = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { useStateVolume: true })
     expect(addStateMigrationToCompose(freshPlain, 'sci', '/home/u/.hermes-sci')).toBe(freshPlain)
-    const freshDeploy = generateAgentCompose('sci', 8642, '/home/u/.hermes-sci', { image: 'ghcr.io/x:1' })
+    const freshDeploy = generateAgentCompose('sci', 8642, '/home/u/.hermes-sci', { image: 'ghcr.io/x:1' }, { useStateVolume: true })
     expect(addStateMigrationToCompose(freshDeploy, 'sci', '/home/u/.hermes-sci')).toBe(freshDeploy)
+  })
+
+  it('migrates a default (state-volume-off) fresh compose — the layout is inserted whole, then idempotent', () => {
+    const freshPlain = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', {})
+    expect(freshPlain).not.toContain('hermes-state-sci:')
+    const migrated = addStateMigrationToCompose(freshPlain, 'sci', '/home/u/.hermes-sci')
+    expect(migrated).toContain('  state-init-sci:')
+    expect(migrated).toContain('      - hermes-state-sci:/state')
+    expect(migrated).toMatch(/state-init-sci:\s*\n\s*condition: service_completed_successfully/)
+    expect(migrated).toMatch(/^volumes:\s*$/m)
+    expect(addStateMigrationToCompose(migrated, 'sci', '/home/u/.hermes-sci')).toBe(migrated)
   })
 
   it('REFUSES (throws) when anchors are missing — never falls through', () => {
