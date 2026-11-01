@@ -104,7 +104,12 @@ function readMarker(dbPath: string): string {
   }
 }
 
-describe('STATE_INIT_SCRIPT (real script under sh)', () => {
+// These tests spawn a real sh (plus sqlite and file copies) per case. That
+// usually takes well under a second, but a loaded CI runner once took 5.6s,
+// just past vitest's 5s default, so give them more headroom.
+const SHELL_TEST_TIMEOUT = 15_000
+
+describe('STATE_INIT_SCRIPT (real script under sh)', { timeout: SHELL_TEST_TIMEOUT }, () => {
   it('migrates regular DB files (with -wal/-shm) to the volume and symlinks back', () => {
     createWalDb(path.join(dataDir, 'state.db'), 'original')
     const out = runInitScript()
@@ -226,7 +231,7 @@ describe('STATE_INIT_SCRIPT (real script under sh)', () => {
   })
 })
 
-describe('STATE_INIT_SCRIPT /state ownership (resolved like the image\'s stage2)', () => {
+describe('STATE_INIT_SCRIPT /state ownership (resolved like the image\'s stage2)', { timeout: SHELL_TEST_TIMEOUT }, () => {
   it('chowns /state recursively to 10000:10000 when the image has no hermes user to ask', () => {
     const out = runInitScript()
     expect(chownCalls().map(([args]) => args)).toEqual([`-R 10000:10000 ${stateDir}`])
