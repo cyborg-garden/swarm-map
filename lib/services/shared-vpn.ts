@@ -391,6 +391,9 @@ function yamlChildren(lines: string[], from: number, to: number): YamlChild[] | 
     // Trailing gap lines belong to the next sibling, not this body.
     let bodyEnd = end
     while (bodyEnd > i + 1 && isGap(lines[bodyEnd - 1])) bodyEnd--
+    // PyYAML keeps the LAST duplicate; guessing which one hermes sees is
+    // exactly the kind of misread that false-accepts, so refuse the block.
+    if (out.some((c) => c.key === key)) return null
     out.push({ key, idx: i, inline, bodyStart: i + 1, bodyEnd })
     i = end - 1
   }
@@ -478,8 +481,12 @@ export function readApiServerConfig(configYaml: string): { enabled: boolean; por
   const { entries, unreadable } = readPlatformEntries(configYaml)
   const mine = entries.filter((e) => e.name === 'api_server')
   const out: { enabled: boolean; port?: number; unreadable?: true } = { enabled: mine.some((e) => e.enabled) }
-  const port = mine.find((e) => e.port !== undefined)?.port
-  if (port !== undefined) out.port = port
+  const ports = [...new Set(mine.map((e) => e.port).filter((p): p is number => p !== undefined))]
+  // Every block hermes merges must agree; a disagreement is reported as the
+  // first port that is not the only one, so the check can never pick the
+  // block hermes ignores.
+  if (ports.length > 1) out.unreadable = true
+  if (ports.length) out.port = ports[0]
   if (mine.some((e) => e.unreadable) || unreadable.some((u) => !u.includes('.') || u.endsWith('.api_server'))) {
     out.unreadable = true
   }
@@ -491,6 +498,19 @@ export function readApiServerConfig(configYaml: string): { enabled: boolean; por
  * does for the shapes that matter here: `export KEY=v`, quoted values, and an
  * inline ` # comment` after an unquoted value.
  */
+/**
+ * Every value assigned to `key` ANYWHERE in raw env text: any line, any form
+ * (`=` or `:`), mid-line (hermes splits accidentally joined lines), inside a
+ * multi-line quoted value. Over-collects on purpose: the checks require ALL
+ * of them to be acceptable, so they cannot pick a line hermes ignores.
+ */
+export function rawEnvAssignments(text: string, key: string): string[] {
+  // `(?<![A-Z0-9_])`: a key glued onto a lowercase/punctuated value still
+  // counts, but a longer name that merely CONTAINS it (INLINE_ ⊃ LINE_) does not.
+  const re = new RegExp(`(?<![A-Z0-9_])${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \\t]*[=:][ \\t]*['"]?([^\\s'"#]*)`, 'g')
+  return [...text.matchAll(re)].map((m) => m[1])
+}
+
 export function parseDotenv(text: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const raw of text.replace(/\r\n/g, '\n').split('\n')) {
@@ -503,6 +523,23 @@ export function parseDotenv(text: string): Record<string, string> {
     if (q) v = q[2]
     else v = v.replace(/\s+#.*$/, '').trim()
     out[m[1]] = v
+  }
+  return out
+}
+
+/** The hermes service's `env_file:` entries (list or scalar form). */
+export function readServiceEnvFiles(compose: string, agentName: string): string[] {
+  const lines = compose.split('\n')
+  const b = serviceBounds(lines, agentName)
+  if (!b) return []
+  const span = keySpan(lines, b[0] + 1, b[1], 'env_file')
+  if (!span) return []
+  const inline = lines[span[0]].replace(/^ {4}env_file:/, '').replace(/\s+#.*$/, '').trim()
+  const out: string[] = inline ? [unquote(inline)] : []
+  for (let i = span[0] + 1; i < span[1]; i++) {
+    const m = lines[i].match(/^\s+-\s+(.+?)\s*$/)
+    if (m) out.push(unquote(m[1].replace(/\s+#.*$/, '')))
+    else if (!isGap(lines[i])) out.push('(unreadable env_file entry)')
   }
   return out
 }
@@ -539,8 +576,17 @@ export function apiServerPortBlocker(opts: {
   configYaml: string
   env: Record<string, string>
   port: number
+  /** Raw .env text; every API_SERVER_PORT assignment in it must be `port`. */
+  envText?: string
 }): string | null {
-  const { configYaml, env, port } = opts
+  const { configYaml, env, port, envText } = opts
+  for (const v of envText ? rawEnvAssignments(envText, 'API_SERVER_PORT') : []) {
+    if (v !== String(port)) {
+      return `This agent's .env assigns API_SERVER_PORT=${v || '(empty)'} somewhere (a repeated, joined or ` +
+        `colon-form line counts). On the shared VPN it must use its own port ${port} everywhere, so leave ` +
+        `exactly one line, API_SERVER_PORT=${port}, then retry.`
+    }
+  }
   const envPort = (env.API_SERVER_PORT ?? '').trim()
   if (env.API_SERVER_PORT !== undefined && envPort === '') {
     return `This agent's environment sets an EMPTY API_SERVER_PORT, which hermes reads as "use 8642" — ` +
@@ -558,7 +604,9 @@ export function apiServerPortBlocker(opts: {
   if (cfg.port !== undefined && cfg.port !== port) {
     return `This agent's config.yaml sets api_server.extra.port to ${cfg.port}. ` +
       `Agents on the shared VPN share one network, so each needs its own port — remove that port line ` +
-      `(the shared VPN then assigns ${port}) or set it to ${port}.`
+      `(the shared VPN then assigns ${port}), then retry. Note: if this agent's API server is used from ` +
+      `the host, put the line back after turning the shared VPN off, since its published port maps to ` +
+      `${cfg.port} inside the container.`
   }
   return null
 }
@@ -585,7 +633,7 @@ const LISTENER_ENV_PREFIXES = [
  * is turned on; a later .env/config.yaml edit is not rechecked (documented
  * risk).
  */
-export function fixedPortPlatformBlocker(configYaml: string, env: Record<string, string> = {}): string | null {
+export function fixedPortPlatformBlocker(configYaml: string, env: Record<string, string> = {}, envText = ''): string | null {
   const { entries, unreadable } = readPlatformEntries(configYaml)
   if (unreadable.length) {
     return `Could not read ${unreadable.join(', ')} in this agent's config.yaml (an inline or unusual YAML ` +
@@ -606,6 +654,24 @@ export function fixedPortPlatformBlocker(configYaml: string, env: Record<string,
     if (!prefix || value.trim() === '') continue
     if (key.endsWith('_ENABLED') && !truthy(value)) continue
     on.add(key)
+  }
+  // Raw-text pass: a listener var hidden mid-line or in a multi-line value
+  // still counts (hermes' env sanitizer splits joined lines).
+  for (const prefix of LISTENER_ENV_PREFIXES) {
+    const re = new RegExp(`(?<![A-Z0-9_])(${prefix}[A-Z0-9_]*)[ \\t]*[=:][ \\t]*['"]?([^\\s'"#]*)`, 'g')
+    for (const m of envText.matchAll(re)) {
+      if (m[2] === '') continue
+      if (m[1].endsWith('_ENABLED') && !truthy(m[2])) continue
+      on.add(m[1])
+    }
+  }
+  // Allowlisted platforms that can still open a listener: any webhook-mode or
+  // explicit-port var under their prefix (e.g. Telegram webhook mode binds
+  // TELEGRAM_WEBHOOK_PORT, default 8443).
+  for (const [key, value] of Object.entries(env)) {
+    if (value.trim() === '') continue
+    if ([...OUTBOUND_ONLY_PLATFORMS].some((p) => key.startsWith(p.toUpperCase() + '_'))
+      && (/WEBHOOK/.test(key) || /_PORT$/.test(key))) on.add(key)
   }
   if (truthy(env.HERMES_DASHBOARD)) on.add('HERMES_DASHBOARD (dashboard)')
   if (!on.size) return null

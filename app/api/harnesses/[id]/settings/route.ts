@@ -28,6 +28,7 @@ import {
   fixedPortPlatformBlocker,
   generateSharedVpnCompose,
   parseDotenv,
+  readServiceEnvFiles,
   readServiceEnvironment,
   readServicePublishedPort,
   serviceNetworkMode,
@@ -944,9 +945,15 @@ export async function PUT(
         return refuse('This agent has a legacy gateway.json, whose platforms hermes also loads and swarm-map '
           + 'cannot check for the shared VPN. Move its settings into config.yaml first.')
       }
-      const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv)
+      const extraEnvFiles = readServiceEnvFiles(sharedCompose, sharedHarness.name)
+        .filter((f) => path.resolve(path.dirname(sharedHarness.composeFile!), f) !== path.join(dataDir, '.env'))
+      if (extraEnvFiles.length) {
+        return refuse(`This agent's compose loads other env files (${extraEnvFiles.join(', ')}) that the shared VPN `
+          + 'check cannot see. Fold them into its .env, or keep this agent off the shared VPN.')
+      }
+      const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv, content)
       if (listenerProblem) return refuse(listenerProblem)
-      const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort })
+      const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort, envText: content })
       if (portProblem) return refuse(portProblem)
     }
     if (sharedVpnChanged && !regenerates && sharedCompose && sharedHarness) {

@@ -26,6 +26,7 @@ import {
   fixedPortPlatformBlocker,
   readServicePublishedPort,
   readServiceEnvironment,
+  readServiceEnvFiles,
   parseDotenv,
   sharedVpnComposeBlocker,
 } from './shared-vpn'
@@ -451,6 +452,50 @@ describe('round-4 review regressions', () => {
 
   it('an empty API_SERVER_PORT= is refused (hermes falls back to 8642)', () => {
     expect(apiServerPortBlocker({ configYaml: '', env: { API_SERVER_PORT: '' }, port: PORT })).toMatch(/EMPTY/)
+  })
+})
+
+describe('round-5 review regressions', () => {
+  it('disagreeing api_server ports across merged blocks are refused, whichever comes first', () => {
+    const c = 'gateway:\n  platforms:\n    api_server:\n      extra:\n        port: 8722\nplatforms:\n  api_server:\n    extra:\n      port: 8642\n'
+    expect(apiServerPortBlocker({ configYaml: c, env: {}, port: PORT })).not.toBeNull()
+  })
+
+  it('duplicate sibling keys are unreadable (PyYAML keeps the last)', () => {
+    expect(apiServerPortBlocker({ configYaml: 'platforms:\n  api_server:\n    extra:\n      port: 8722\n  api_server:\n    extra:\n      port: 8642\n', env: {}, port: PORT })).toMatch(/Could not read/)
+    expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: false\n    enabled: true\n')).toMatch(/Could not read/)
+  })
+
+  it('telegram webhook mode is refused even though telegram is allowlisted', () => {
+    expect(fixedPortPlatformBlocker('', { TELEGRAM_WEBHOOK_URL: 'https://x', TELEGRAM_BOT_TOKEN: 't' })).toMatch(/TELEGRAM_WEBHOOK_URL/)
+    expect(fixedPortPlatformBlocker('', { TELEGRAM_BOT_TOKEN: 't' })).toBeNull()
+  })
+
+  it('every raw API_SERVER_PORT assignment must match (repeated, colon-form, joined, multi-line)', () => {
+    for (const text of [
+      'API_SERVER_PORT=8642\nAPI_SERVER_PORT: 8722\n',
+      `API_SERVER_PORT=${PORT}\nX="a\nAPI_SERVER_PORT=8642\n"\n`,
+      `X_TOKEN=abcAPI_SERVER_PORT=8642\nAPI_SERVER_PORT=${PORT}\n`,
+    ]) {
+      expect(apiServerPortBlocker({ configYaml: '', env: parseDotenv(text), port: PORT, envText: text })).not.toBeNull()
+    }
+    const ok = `API_SERVER_PORT=${PORT}\n`
+    expect(apiServerPortBlocker({ configYaml: '', env: parseDotenv(ok), port: PORT, envText: ok })).toBeNull()
+  })
+
+  it('a name that merely contains a prefix is not a listener (INLINE_MENTION is not LINE_)', () => {
+    const text = 'DISCORD_BOTS_REQUIRE_INLINE_MENTION=true\nDISCORD_THREAD_REQUIRE_MENTION=true\n'
+    expect(fixedPortPlatformBlocker('', parseDotenv(text), text)).toBeNull()
+  })
+
+  it('a listener var joined onto another line still counts', () => {
+    const text = 'X_TOKEN=abcWEBHOOK_ENABLED=true\n'
+    expect(fixedPortPlatformBlocker('', parseDotenv(text), text)).toMatch(/WEBHOOK_ENABLED/)
+  })
+
+  it('reads env_file entries', () => {
+    const c = deployBorn().replace('      - /Users/juni/.hermes-vera/.env\n', '      - /Users/juni/.hermes-vera/.env\n      - ../shared.env\n')
+    expect(readServiceEnvFiles(c, NAME)).toEqual(['/Users/juni/.hermes-vera/.env', '../shared.env'])
   })
 })
 

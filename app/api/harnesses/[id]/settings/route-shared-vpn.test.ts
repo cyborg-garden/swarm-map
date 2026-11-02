@@ -270,6 +270,13 @@ describe('Settings PUT — shared VPN', () => {
     expect((await res.json()).error).toMatch(/profiles/)
   })
 
+  it('refuses a compose that loads other env files', async () => {
+    writeAgent(readCompose().replace(`      - ${agentDir}/.env\n`, `      - ${agentDir}/.env\n      - /etc/shared.env\n`))
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/shared\.env/)
+  })
+
   it('refuses a legacy gateway.json (its platforms cannot be checked)', async () => {
     fs.writeFileSync(path.join(agentDir, 'gateway.json'), '{}')
     const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
