@@ -1012,6 +1012,9 @@ export async function PUT(
         const auth = generateControlAuthToml()
         const curAuth = fs.existsSync(vpn.controlAuthFile) ? fs.readFileSync(vpn.controlAuthFile, 'utf-8') : null
         if (curAuth !== auth) fs.writeFileSync(vpn.controlAuthFile, auth, { mode: 0o644 })
+        // Read back: a truncated file decodes as "no roles", which gluetun
+        // treats as its OPEN defaults. Fail rather than start on it.
+        if (fs.readFileSync(vpn.controlAuthFile, 'utf-8') !== auth) throw new Error('control auth file write did not stick')
         if (!fs.existsSync(vpn.composeFile)) {
           fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
         } else if (!fs.readFileSync(vpn.composeFile, 'utf-8').includes(`:${CONTROL_AUTH_CONTAINER_PATH}:ro`)) {

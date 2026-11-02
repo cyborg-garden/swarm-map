@@ -566,6 +566,13 @@ describe('comments and forbidden keys inside the service', () => {
     expect(removeSharedVpnFromCompose(on, NAME)).toBe(c)
   })
 
+  it('refuses privileged or network-admin capabilities on the agent service', () => {
+    expect(() => applySharedVpnToCompose(deployBorn().replace('    read_only: true\n', '    privileged: true\n    read_only: true\n'), NAME, PORT)).toThrow(/privileged/)
+    expect(() => applySharedVpnToCompose(deployBorn().replace('      - NET_BIND_SERVICE\n', '      - NET_BIND_SERVICE\n      - NET_ADMIN\n'), NAME, PORT)).toThrow(/capability/)
+    // cap_drop: ALL is the hardening itself and must not trip the check.
+    expect(() => applySharedVpnToCompose(deployBorn(), NAME, PORT)).not.toThrow()
+  })
+
   for (const key of ['hostname: x', 'dns:\n      - 192.0.2.53', 'expose:\n      - "9000"', 'mac_address: 02:42:ac:11:00:02', 'links:\n      - a']) {
     it(`refuses a service-level ${key.split(':')[0]} key`, () => {
       const c = deployBorn().replace('    command: gateway\n', `    ${key}\n    command: gateway\n`)

@@ -159,7 +159,8 @@ services:
     env_file:
       - ${envFile}
     environment:
-      # Outranks env_file, so the key file cannot point gluetun elsewhere.
+      # Outranks a plain env_file entry. (A *_SECRETFILE line in the key file
+      # could still override it; only the key file's owner can write that.)
       - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=${CONTROL_AUTH_CONTAINER_PATH}
     volumes:
       # Deny-all control-server auth (see generateControlAuthToml).
@@ -282,6 +283,16 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
   for (let i = start + 1; i < end; i++) {
     if (lines[i].includes(MARK) || lines[i].startsWith(STASH)) {
       throw new Error(`shared VPN: hermes-${agentName} carries leftover shared-vpn markers — fix the compose by hand`)
+    }
+  }
+  // Inside gluetun's namespace these would let the agent flush the kill switch
+  // or take tun0 down — the threat the control-server lockdown closes.
+  for (let i = start + 1; i < end; i++) {
+    if (/^ {4}privileged:\s*(true|yes|on)\b/i.test(lines[i]) || /^ {6}- ["']?(CAP_)?(NET_ADMIN|SYS_ADMIN|NET_RAW|ALL)["']?\s*$/.test(lines[i]) && (() => {
+      for (let j = i - 1; j > start; j--) if (/^ {4}\S/.test(lines[j])) return /^ {4}cap_add:/.test(lines[j])
+      return false
+    })()) {
+      throw new Error(`shared VPN: hermes-${agentName} is privileged or adds a network-admin capability, which inside the VPN namespace could disable the kill switch — remove it first`)
     }
   }
   // Keys Docker rejects (or silently ignores) on a service that joins another
