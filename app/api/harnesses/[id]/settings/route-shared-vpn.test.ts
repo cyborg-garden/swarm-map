@@ -26,7 +26,7 @@ vi.mock('@/lib/services', () => ({
     },
     config: { getSettings: vi.fn(() => ({ dataDir: holder.dataDir })) },
     surfaceAdmins: { syncFromAllowlist: vi.fn() },
-    docker: { upNoRecreate: vi.fn() },
+    docker: { upNoRecreate: vi.fn(), validateCompose: vi.fn() },
   },
 }))
 vi.mock('@/lib/resolvers', () => ({
@@ -37,6 +37,7 @@ vi.mock('@/lib/resolvers', () => ({
 }))
 
 import { GET, PUT } from './route'
+import { expandSignalAllowlist } from '@/lib/resolvers'
 import { services } from '@/lib/services'
 import { generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 import { generateStandaloneCompose } from '@/lib/services/harness-compose'
@@ -188,6 +189,64 @@ describe('Settings PUT — shared VPN', () => {
     expect(readEnv()).toBe(env)
     expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
     expect(services.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('a gluetun start failure returns a fixed 502 that never echoes docker output', async () => {
+    vi.mocked(services.docker.upNoRecreate).mockImplementationOnce(() => {
+      throw new Error('line 3: unexpected character "SECRETKEYMATERIAL" in variable name')
+    })
+    const compose = readCompose()
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(502)
+    expect(JSON.stringify(await res.json())).not.toContain('SECRETKEYMATERIAL')
+    expect(readCompose()).toBe(compose)
+    expect(services.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('refuses (nothing written) when docker compose rejects the transformed file, without echoing it', async () => {
+    vi.mocked(services.docker.validateCompose).mockImplementationOnce(() => { throw new Error('GITHUB_TOKEN=ghx') })
+    const compose = readCompose()
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect(JSON.stringify(await res.json())).not.toContain('ghx')
+    expect(readCompose()).toBe(compose)
+    expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
+  })
+
+  it('an in-flight stale PUT cannot undo a toggle that landed while it awaited the resolvers', async () => {
+    await PUT(put({ ...BASE, sharedVpn: false, surfaces: {} }), params()) // warm-up: .env stable
+    const v0 = (await (await GET(new Request('http://x'), params())).json()).version
+    // B (stale, sharedVpn:false) is mid-await when A turns the VPN on.
+    vi.mocked(expandSignalAllowlist).mockImplementationOnce(async (_id: string, users: string[]) => {
+      const a = await PUT(put({ ...BASE, sharedVpn: true }), params())
+      expect(a.status).toBe(200)
+      return users
+    })
+    const b = await PUT(put({
+      ...BASE, sharedVpn: false, version: v0,
+      surfaces: { signal: { allowedUsers: ['+15550000000'], adminUsers: [], allowedGroups: [], allowAll: false, allowAllGroups: false } },
+    }), params())
+    if (b.status === 200) {
+      // Only acceptable if B never touched the compose.
+      expect(composeSharedVpnState(readCompose(), NAME)).toBe('on')
+    } else {
+      expect(b.status).toBe(409)
+      expect(composeSharedVpnState(readCompose(), NAME)).toBe('on')
+    }
+  })
+
+  it('refuses an .env API_SERVER_PORT that disagrees with the agent\'s port', async () => {
+    writeAgent(readCompose(), 'API_SERVER_PORT=8642\nVPN_ENABLED=false\n')
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/API_SERVER_PORT=8642/)
+  })
+
+  it('refuses a fixed-port platform (webhook) enabled in config.yaml', async () => {
+    fs.writeFileSync(path.join(agentDir, 'config.yaml'), 'platforms:\n  webhook:\n    enabled: true\n')
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/webhook/)
   })
 
   it('refuses while the per-agent wireguard VPN is on', async () => {

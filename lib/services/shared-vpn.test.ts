@@ -23,6 +23,7 @@ import {
   sharedVpnPaths,
   readApiServerConfig,
   apiServerPortBlocker,
+  fixedPortPlatformBlocker,
   sharedVpnComposeBlocker,
 } from './shared-vpn'
 import { generateAgentCompose } from './agent-deploy-templates'
@@ -313,10 +314,15 @@ describe('API server port in the shared namespace', () => {
     expect(apiServerPortBlocker({ configYaml: yaml('  api_server:\n    enabled: true'), env: {}, port: PORT })).toBeNull()
   })
 
-  it('no blocker when the env enables it (gateway applies API_SERVER_PORT over config.yaml)', () => {
+  it('blocks a config.yaml port even when the env enables the API server (precedence differs across hermes versions)', () => {
     const c = yaml('  api_server:\n    enabled: true\n    extra:\n      port: 8642')
-    expect(apiServerPortBlocker({ configYaml: c, env: { API_SERVER_ENABLED: 'true' }, port: PORT })).toBeNull()
-    expect(apiServerPortBlocker({ configYaml: c, env: { API_SERVER_KEY: 'k' }, port: PORT })).toBeNull()
+    expect(apiServerPortBlocker({ configYaml: c, env: { API_SERVER_ENABLED: 'true' }, port: PORT })).toMatch(/8642/)
+    expect(apiServerPortBlocker({ configYaml: c, env: { API_SERVER_KEY: 'k' }, port: PORT })).toMatch(/8642/)
+  })
+
+  it('blocks an .env API_SERVER_PORT that disagrees (hermes reloads .env over the compose pin)', () => {
+    expect(apiServerPortBlocker({ configYaml: '', env: { API_SERVER_PORT: '8642' }, port: PORT })).toMatch(/API_SERVER_PORT=8642/)
+    expect(apiServerPortBlocker({ configYaml: '', env: { API_SERVER_PORT: String(PORT) }, port: PORT })).toBeNull()
   })
 
   it('blocks when config.yaml pins a port the env pin cannot override (every agent would bind 8642)', () => {
@@ -330,6 +336,45 @@ describe('API server port in the shared namespace', () => {
     const c = yaml(`  api_server:\n    enabled: true\n    extra:\n      port: ${PORT}`)
     expect(apiServerPortBlocker({ configYaml: c, env: {}, port: PORT })).toBeNull()
   })
+})
+
+describe('fixed-port platforms', () => {
+  it('refuses webhook/msgraph_webhook/a2a/teams enabled at top level, ignores disabled ones', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: true\n')).toMatch(/webhook/)
+    expect(fixedPortPlatformBlocker('platforms:\n  teams:\n    enabled: false\n  discord:\n    enabled: true\n')).toBeNull()
+    expect(fixedPortPlatformBlocker('x:\n  platforms:\n    webhook:\n      enabled: true\n')).toBeNull()
+  })
+})
+
+describe('comments and forbidden keys inside the service', () => {
+  const withShallowComment = deployBorn().replace('    env_file:\n', '  # a shallow comment inside the service\n    env_file:\n')
+
+  it('a shallow comment does not end the service: ports after it are still stashed, and it round-trips', () => {
+    const on = applySharedVpnToCompose(withShallowComment, NAME, PORT)
+    expect(hermesBlock(on)).toBeDefined()
+    expect(on).not.toMatch(/^ {4}ports:/m)
+    expect(removeSharedVpnFromCompose(on, NAME)).toBe(withShallowComment)
+  })
+
+  it('a hand-made network_mode after a shallow comment is still seen (foreign), so toggling refuses', () => {
+    const handMade = withShallowComment.replace('    command: gateway\n', '    network_mode: "container:gluetun-vera"\n    command: gateway\n')
+    expect(composeSharedVpnState(handMade, NAME)).toBe('foreign')
+    expect(() => applySharedVpnToCompose(handMade, NAME, PORT)).toThrow(/network_mode/)
+  })
+
+  it('a comment between list items does not split a stashed key', () => {
+    const c = deployBorn().replace('      - published: 8722\n', '  # odd comment\n      - published: 8722\n')
+    const on = applySharedVpnToCompose(c, NAME, PORT)
+    expect(on).not.toMatch(/^ {6}- published/m)
+    expect(removeSharedVpnFromCompose(on, NAME)).toBe(c)
+  })
+
+  for (const key of ['hostname: x', 'dns:\n      - 1.1.1.1', 'expose:\n      - "9000"', 'mac_address: 02:42:ac:11:00:02', 'links:\n      - a']) {
+    it(`refuses a service-level ${key.split(':')[0]} key`, () => {
+      const c = deployBorn().replace('    command: gateway\n', `    ${key}\n    command: gateway\n`)
+      expect(() => applySharedVpnToCompose(c, NAME, PORT)).toThrow(new RegExp(key.split(':')[0]))
+    })
+  }
 })
 
 describe('sharedVpnComposeBlocker', () => {

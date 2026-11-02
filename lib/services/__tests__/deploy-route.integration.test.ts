@@ -55,7 +55,7 @@ vi.mock('@/lib/services', () => ({
     docker: { isAvailable: () => true, pullImage: () => ({ ok: true }), healthCheck: h.healthCheck, start: h.dockerStart },
     config: { getSettings: () => ({ ...h.settings, dataDir: h.tmpData }) },
     keys: { getDecryptedValue: h.getDecryptedValue, list: h.list, update: h.update, setAssignment: h.setAssignment, add: h.add },
-    harness: { createOverlay: h.createOverlay },
+    harness: { createOverlay: h.createOverlay, list: () => [] },
     letta: { listAgents: h.listAgents, createAgent: h.createAgent, deleteAgent: h.deleteAgent },
   },
 }))
@@ -135,6 +135,20 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   })
 
   // ── Base package (v1) ─────────────────────────────────────────────────────
+  it('never re-hands the port of an agent on the shared VPN (it publishes nothing to docker ps)', async () => {
+    // A shared-VPN agent keeps its port only as the stashed `#~ published:`
+    // line in its compose; docker shows no published port for it.
+    const { generateAgentCompose } = await import('@/lib/services/agent-deploy-templates')
+    const dir = path.join(h.tmpData, 'compose', 'vera')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'docker-compose.yml'),
+      generateAgentCompose('vera', 8642, path.join(h.tmpHome, '.hermes-vera'), { image: 'x' }, { sharedVpn: true }))
+    const res = await deploy({ name: 'newbie', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
+    expect((await res.json()).ok).toBe(true)
+    const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-newbie', '.env'), 'utf-8')
+    expect(env).toMatch(/^API_SERVER_PORT=8652$/m)
+  })
+
   it('base package: passes the surface + packs to the shared injection point', async () => {
     baseline.install.mockClear()
     const res = await deploy({ name: 'pub', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', surface: 'public' })

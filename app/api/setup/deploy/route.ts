@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { toHarnessSlug } from '@/lib/services/harness'
+import { toHarnessSlug, nextAvailablePort } from '@/lib/services/harness'
 import { installBaselineTemplates } from '@/lib/services/templates'
 import { defaultEnabledPlugins } from '@/lib/services/artifacts-manifest'
 import { getUseCaseTemplate, installUseCaseTemplate, templateEnabledPlugins } from '@/lib/services/usecase-templates'
@@ -25,35 +25,8 @@ import path from 'path'
 import os from 'os'
 import { execSync, execFileSync } from 'child_process'
 
-const BASE_PORT = 8642
-const PORT_STEP = 10
-
 function expandPath(p: string): string {
   return p.replace(/^~/, os.homedir())
-}
-
-function nextAvailablePort(): number {
-  const usedPorts = new Set<number>()
-
-  // Query Docker directly for all ports in use
-  try {
-    const output = execSync(
-      `docker ps --format '{{.Ports}}'`,
-      { stdio: 'pipe', timeout: 5000 }
-    ).toString()
-    // Parse port mappings like "0.0.0.0:8642->8642/tcp"
-    const portMatches = output.matchAll(/0\.0\.0\.0:(\d+)/g)
-    for (const m of portMatches) {
-      usedPorts.add(parseInt(m[1]))
-    }
-  } catch {}
-
-  // Find next available in the hermes range (8642+, step 10)
-  let port = BASE_PORT
-  while (usedPorts.has(port)) {
-    port += PORT_STEP
-  }
-  return port
 }
 
 function generateConfigYaml(provider: string, primaryModel: string, fallbackModel?: string, browserEnabled?: boolean, mcpServers?: Record<string, McpServerConfig>, extraEnabledPlugins: string[] = [], enabledPlatforms: string[] = [], searchBackend?: string): string {
@@ -320,7 +293,17 @@ export async function POST(request: Request) {
       : path.join(os.homedir(), '.hermes-swarm-map')
     const composeBaseDir = path.join(swarmMapDataDir, 'compose')
 
-    const port = nextAvailablePort()
+    // The shared scan (compose files incl. a shared-VPN agent's stashed
+    // `published:` line, `docker ps -a`, every agent .env, persisted overlay
+    // ports). A `docker ps` of running containers alone misses stopped agents
+    // and every agent on the shared VPN (it publishes nothing), and would hand
+    // their ports out again.
+    const port = nextAvailablePort({
+      composeBaseDir,
+      reservedPorts: services.harness.list()
+        .map((h) => h.apiPort)
+        .filter((p): p is number => typeof p === 'number'),
+    })
 
     const agentDataDir = path.join(os.homedir(), `.hermes-${slug}`)
 

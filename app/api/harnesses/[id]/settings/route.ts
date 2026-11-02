@@ -25,6 +25,7 @@ import {
   applySharedVpnToCompose,
   apiServerPortBlocker,
   composeSharedVpnState,
+  fixedPortPlatformBlocker,
   generateSharedVpnCompose,
   removeSharedVpnFromCompose,
   sharedVpnComposeBlocker,
@@ -915,8 +916,11 @@ export async function PUT(
           '(mode 600), then turn the shared VPN on again.')
       }
       const configPath = path.join(dataDir, 'config.yaml')
+      const configYaml = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : ''
+      const listenerProblem = fixedPortPlatformBlocker(configYaml)
+      if (listenerProblem) return refuse(listenerProblem)
       const portProblem = apiServerPortBlocker({
-        configYaml: fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '',
+        configYaml,
         env: Object.fromEntries(content.split('\n').flatMap((line) => {
           const t = line.trim()
           const eq = t.indexOf('=')
@@ -934,6 +938,30 @@ export async function PUT(
       } catch (err) {
         return refuse(err instanceof Error ? err.message : String(err))
       }
+      // Ask compose itself before writing (same check as migrate-db). The
+      // error is NOT echoed: compose's messages can quote env_file lines, and
+      // the agent's .env holds its credentials.
+      try {
+        services.docker.validateCompose(sharedNextCompose, path.dirname(sharedHarness.composeFile!))
+      } catch {
+        return refuse('The shared-VPN version of this compose file does not validate with docker compose, '
+          + 'so nothing was changed. Check the file by hand (docker compose config -q).')
+      }
+    }
+    // The compose and the shared-VPN state were read AFTER the awaited
+    // allowlist resolvers, so a concurrent PUT may have toggled the VPN since
+    // this request's snapshot. The .env pre-write recheck below only runs when
+    // the .env changes; a compose write needs it too, or a stale
+    // whole-document PUT silently undoes the other toggle. Everything from
+    // here to the writes is synchronous.
+    if ((sharedVpnChanged || regenerates) && settingsVersion(envPath, id) !== snapshotVersion) {
+      return NextResponse.json(
+        {
+          error: 'Settings changed while this save was in flight — reload and re-apply your edit.',
+          currentVersion: settingsVersion(envPath, id),
+        },
+        { status: 409 },
+      )
     }
     if (sharedVpnChanged && sharedRequested) {
       // gluetun must exist before the agent is recreated into its namespace.
@@ -947,11 +975,13 @@ export async function PUT(
         const current = fs.existsSync(vpn.composeFile) ? fs.readFileSync(vpn.composeFile, 'utf-8') : null
         if (current !== next) fs.writeFileSync(vpn.composeFile, next, { mode: 0o600 })
         services.docker.upNoRecreate(vpn.composeFile, SHARED_VPN_PROJECT)
-      } catch (err) {
+      } catch {
+        // Fixed message on purpose: docker compose's error can quote lines of
+        // the env_file, which here is the WireGuard key file.
         return NextResponse.json(
           {
-            error: 'Could not start the shared VPN container (gluetun), so nothing was changed: '
-              + (err instanceof Error ? err.message : String(err)),
+            error: 'Could not start the shared VPN container (gluetun), so nothing was changed. '
+              + 'On the host, check `docker logs gluetun-shared` and that the key file has one KEY=value per line.',
           },
           { status: 502 },
         )

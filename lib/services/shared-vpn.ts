@@ -121,12 +121,28 @@ services:
 `
 }
 
+/**
+ * True when line i is a blank or comment line whose block continues: the next
+ * non-blank, non-comment line (before `to`) is indented at least `minIndent`.
+ * YAML comments carry no structure, so a `  # note` at any indent inside a
+ * service (or inside a key's list) must not end it.
+ */
+function gapContinues(lines: string[], i: number, to: number, minIndent: number): boolean {
+  if (!(lines[i].trim() === '' || /^\s*#/.test(lines[i]))) return false
+  for (let j = i + 1; j < to; j++) {
+    if (lines[j].trim() === '' || /^\s*#/.test(lines[j])) continue
+    return lines[j].match(/^( *)/)![1].length >= minIndent
+  }
+  return false
+}
+
 /** [start, end) of the `hermes-<name>` service block, or null. */
 function serviceBounds(lines: string[], agentName: string): [number, number] | null {
   const start = lines.findIndex((l) => l.trimEnd() === `  hermes-${agentName}:`)
   if (start < 0) return null
   let end = start + 1
-  while (end < lines.length && !/^ {0,3}\S/.test(lines[end])) end++
+  while (end < lines.length
+    && (!/^ {0,3}\S/.test(lines[end]) || gapContinues(lines, end, lines.length, 4))) end++
   // Trailing blank lines belong to the gap before the next key, not the service.
   while (end > start + 1 && lines[end - 1].trim() === '') end--
   return [start, end]
@@ -138,7 +154,7 @@ function keySpan(lines: string[], from: number, to: number, key: string): [numbe
   for (let i = from; i < to; i++) {
     if (re.test(lines[i])) {
       let end = i + 1
-      while (end < to && /^ {5,}\S/.test(lines[end])) end++
+      while (end < to && (/^ {5,}\S/.test(lines[end]) || gapContinues(lines, end, to, 5))) end++
       return [i, end]
     }
   }
@@ -193,8 +209,13 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
       throw new Error(`shared VPN: hermes-${agentName} carries leftover shared-vpn markers — fix the compose by hand`)
     }
   }
-  if (keySpan(lines, start + 1, end, 'networks')) {
-    throw new Error(`shared VPN: hermes-${agentName} has a service-level networks: key, which network_mode: container forbids`)
+  // Keys Docker rejects (or silently ignores) on a service that joins another
+  // container's network. ports/extra_hosts are stashed below; the rest are
+  // refused, since dropping them would change what the service means.
+  for (const key of ['networks', 'hostname', 'domainname', 'dns', 'dns_search', 'dns_opt', 'expose', 'links', 'mac_address']) {
+    if (keySpan(lines, start + 1, end, key)) {
+      throw new Error(`shared VPN: hermes-${agentName} has a service-level ${key}: key, which network_mode: container forbids — remove it first`)
+    }
   }
 
   const env = keySpan(lines, start + 1, end, 'environment')
@@ -231,7 +252,8 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
     }
     // Stashed lines stay where they were, so turning off restores them in place.
     if (inStash(i)) {
-      out.push(STASH + lines[i].slice(4))
+      // Raw line kept whole (any indent), so restore is exact.
+      out.push(STASH + lines[i])
       continue
     }
     out.push(lines[i])
@@ -260,7 +282,7 @@ export function removeSharedVpnFromCompose(compose: string, agentName: string): 
     if (l === `    environment: ${MARK}`) continue
     if (/^ {6}- API_SERVER_PORT=\d+ # shared-vpn$/.test(l)) continue
     if (l.startsWith(STASH)) {
-      out.push('    ' + l.slice(STASH.length))
+      out.push(l.slice(STASH.length))
       continue
     }
     out.push(l)
@@ -279,6 +301,13 @@ export function removeSharedVpnFromCompose(compose: string, agentName: string): 
  * nested `  platforms:` elsewhere is ignored.
  */
 export function readApiServerConfig(configYaml: string): { enabled: boolean; port?: number } {
+  return readPlatformConfig(configYaml, 'api_server')
+}
+
+/** `platforms.<name>.enabled` and `.extra.port` from config.yaml (top-level block only). */
+export function readPlatformConfig(configYaml: string, name: string): { enabled: boolean; port?: number } {
+  if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`invalid platform name '${name}'`)
+  const entryRe = new RegExp(`^\\s+${name}:[ \\t]*(#.*)?$`)
   const lines = configYaml.replace(/\r\n/g, '\n').split('\n')
   const top = lines.findIndex((l) => /^platforms:[ \t]*(#.*)?$/.test(l))
   if (top < 0) return { enabled: false }
@@ -294,7 +323,7 @@ export function readApiServerConfig(configYaml: string): { enabled: boolean; por
     // Direct children only: the first child's indent defines the level, so a
     // deeper `api_server:` under some other platform is not this entry.
     if (childIndent < 0) childIndent = indent
-    if (indent === childIndent && /^\s+api_server:[ \t]*(#.*)?$/.test(l)) {
+    if (indent === childIndent && entryRe.test(l)) {
       entry = i
       entryIndent = indent
       break
@@ -327,17 +356,19 @@ export function readApiServerConfig(configYaml: string): { enabled: boolean; por
   return port === undefined ? { enabled } : { enabled, port }
 }
 
-const TRUTHY = new Set(['1', 'true', 'yes', 'on'])
-
 /**
  * Null when the agent's API server, if it runs at all, will listen on `port`
  * inside the shared namespace; otherwise why not.
  *
- * Mirrors hermes' gateway: env API_SERVER_PORT is applied over config.yaml only
- * when API_SERVER_ENABLED is truthy or API_SERVER_KEY is set; otherwise a port
- * in `platforms.api_server.extra.port` wins and env is only the fallback. So
- * the one shape the compose pin cannot fix is "enabled in config.yaml with an
- * explicit extra.port" — every such agent would bind that same port.
+ * Deliberately does NOT emulate hermes' precedence between env and
+ * config.yaml: it differs across hermes versions (older gateways apply env
+ * API_SERVER_PORT when API_SERVER_ENABLED or a key is set; newer ones only
+ * with a usable key), and hermes re-loads the agent's own `.env` over the
+ * process environment, so the compose pin does not outrank `.env` either.
+ * Instead every source that can name a port must agree with `port`:
+ *   - `.env` API_SERVER_PORT, when set;
+ *   - config.yaml `platforms.api_server.extra.port`, when set.
+ * With neither set, every precedence order lands on the compose pin.
  */
 export function apiServerPortBlocker(opts: {
   configYaml: string
@@ -345,12 +376,32 @@ export function apiServerPortBlocker(opts: {
   port: number
 }): string | null {
   const { configYaml, env, port } = opts
-  const envOverrides = TRUTHY.has((env.API_SERVER_ENABLED ?? '').trim().toLowerCase())
-    || (env.API_SERVER_KEY ?? '').trim() !== ''
-  if (envOverrides) return null
+  const envPort = (env.API_SERVER_PORT ?? '').trim()
+  if (envPort !== '' && envPort !== String(port)) {
+    return `This agent's .env sets API_SERVER_PORT=${envPort}, but on the shared VPN it must use its own ` +
+      `port ${port} (agents there share one network). Set API_SERVER_PORT=${port} in its .env, then retry.`
+  }
   const cfg = readApiServerConfig(configYaml)
-  if (!cfg.enabled || cfg.port === undefined || cfg.port === port) return null
-  return `This agent's config.yaml enables the API server on port ${cfg.port} ` +
-    `(platforms.api_server.extra.port). Agents on the shared VPN share one network, so each needs ` +
-    `its own port — remove that port line (the shared VPN then assigns ${port}) or set it to ${port}.`
+  if (cfg.port !== undefined && cfg.port !== port) {
+    return `This agent's config.yaml sets platforms.api_server.extra.port to ${cfg.port}. ` +
+      `Agents on the shared VPN share one network, so each needs its own port — remove that port line ` +
+      `(the shared VPN then assigns ${port}) or set it to ${port}.`
+  }
+  return null
+}
+
+/**
+ * Gateway platforms that listen on a FIXED default port. Two VPN'd agents with
+ * the same one enabled would collide in the shared namespace, and nothing
+ * makes their ports unique yet, so they are refused.
+ */
+export const FIXED_PORT_PLATFORMS = ['webhook', 'msgraph_webhook', 'a2a', 'teams'] as const
+
+/** Enabled flags of top-level `platforms.<name>` entries (line-parsed, like readApiServerConfig). */
+export function fixedPortPlatformBlocker(configYaml: string): string | null {
+  const enabled = FIXED_PORT_PLATFORMS.filter((name) => readPlatformConfig(configYaml, name).enabled)
+  if (!enabled.length) return null
+  return `This agent enables ${enabled.join(', ')} in config.yaml, which listen on a fixed port. ` +
+    'Agents on the shared VPN share one network, so a second agent with the same platform would fail ' +
+    'to bind. Disable it for this agent, or keep this agent off the shared VPN.'
 }

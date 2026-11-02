@@ -1,5 +1,8 @@
 import { execFile, execFileSync, spawn } from 'child_process'
 import { promisify } from 'util'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import type { RestartMode } from '@/lib/types'
 
 const execFileAsync = promisify(execFile)
@@ -408,6 +411,26 @@ export class DockerService {
       stdio: 'pipe',
       timeout: 120000,
     })
+  }
+
+  /**
+   * Throw unless `compose` (text) validates with `docker compose config -q`.
+   * Written to a temp file; `projectDir` makes relative paths resolve as they
+   * will from the real location. Callers must not echo the error to clients:
+   * compose can quote env_file lines in it.
+   */
+  validateCompose(compose: string, projectDir: string): void {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hsm-compose-check-'))
+    const tmp = path.join(dir, 'docker-compose.yml')
+    try {
+      fs.writeFileSync(tmp, compose, { mode: 0o600 })
+      execFileSync('docker', ['compose', '--project-directory', projectDir, '-f', tmp, 'config', '-q'], {
+        stdio: 'pipe',
+        timeout: 30000,
+      })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   }
 
   stop(composeFile: string, service: string, projectName?: string): void {
