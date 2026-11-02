@@ -57,6 +57,10 @@ When agents are created, `SWARM_MAP_POLICY_URL=http://host.docker.internal:${POR
 
 Never hardcode agent ports. The deploy service queries Docker directly (`docker ps --format '{{.Ports}}'`) for all used ports, then picks the next available in the Hermes range (base 8642, step 10).
 
+### Shared VPN
+
+`sharedVpn` (settings PUT) puts an agent inside ONE shared gluetun container's network namespace (`gluetun-shared`, project `swarm-vpn`, compose at `<dataDir>/vpn/docker-compose.yml`). The WireGuard key lives in `<dataDir>/vpn/gluetun.env` (mode 600, written by the owner's key script); swarm-map only references it. The toggle is a surgical, exactly-reversible edit of the hermes service's networking lines, so deploy-born hardening is never re-rendered; both generators accept `sharedVpn` and emit the same bytes, so a regeneration keeps it. The compose file is the source of truth. Never recreate gluetun without recreating every joined agent afterwards: they keep a dead namespace. Details: `lib/services/shared-vpn.ts`.
+
 ### Image Fallback
 
 New agents try `nousresearch/hermes-agent:latest` from Docker Hub first. If pull fails (auth, network), falls back to a locally-built `hermes*` image, preferring the base build over agent-specific ones (name heuristic in `app/api/setup/deploy/route.ts`).

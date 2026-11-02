@@ -22,6 +22,7 @@ type Settings = {
   commandApprovalAdminOnly: boolean
   memoryScope: 'channel' | 'global'
   vpnEnabled: boolean
+  sharedVpn?: boolean
   capsolverConfigured: boolean
   resources?: { memory?: string; cpus?: string }
   surfaces: Record<string, SurfaceSettings>
@@ -107,6 +108,13 @@ function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
   function updateVpnEnabled(enabled: boolean) {
     if (!settings) return
     setSettings({ ...settings, vpnEnabled: enabled })
+    setDirty(true)
+    setSaved(false)
+  }
+
+  function updateSharedVpn(enabled: boolean) {
+    if (!settings) return
+    setSettings({ ...settings, sharedVpn: enabled })
     setDirty(true)
     setSaved(false)
   }
@@ -493,6 +501,41 @@ if (loading) {
         {settings.capsolverConfigured && (
           <p className="text-xs text-green-500">CapSolver API key configured — automatic CAPTCHA solving enabled.</p>
         )}
+      </div>
+
+      {/* Shared VPN (one gluetun container for the fleet) */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Shield className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-medium text-sm">Shared VPN (Mullvad via gluetun)</h3>
+        </div>
+        <div className="flex gap-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="sharedVpn"
+              checked={settings.sharedVpn === true}
+              onChange={() => updateSharedVpn(true)}
+              className="accent-[var(--accent)]"
+            />
+            Enabled
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="radio"
+              name="sharedVpn"
+              checked={settings.sharedVpn !== true}
+              onChange={() => updateSharedVpn(false)}
+              className="accent-[var(--accent)]"
+            />
+            Disabled
+          </label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {settings.sharedVpn
+            ? 'All of this agent\'s traffic goes through the shared VPN container. If the tunnel drops, the agent has no internet until it reconnects. Its API port is not reachable from the host while this is on.'
+            : 'Traffic uses the host network directly.'}
+        </p>
       </div>
 
       {/* Resource Limits (memory / cpu) */}
