@@ -1,8 +1,9 @@
 /**
- * Shared VPN: agents with it on join ONE gluetun container's network
- * namespace (`network_mode: "container:gluetun-shared"`), so the whole VPN'd
- * fleet exits through a single Mullvad device while the host itself stays off
- * VPN (its Cloudflare tunnel cannot run through Mullvad).
+ * Shared VPN: agents with it on join their VPN GROUP's gluetun container's
+ * network namespace (`network_mode: "container:gluetun-<group>"`), so each
+ * group exits through a single Mullvad device while the host itself stays off
+ * VPN (its Cloudflare tunnel cannot run through Mullvad). Groups split agents
+ * by trust (see VPN_GROUP_RE): members of one group share one localhost.
  *
  * Why this is separate from the per-agent VPN (`VPN_ENABLED`, wireguard +
  * camofox sidecars in harness-compose.ts): that one is a different product (a
@@ -23,7 +24,7 @@
  *     service with `network_mode: container:`); the commented lines are kept
  *     verbatim with a `#~` prefix and restored when the VPN is turned off.
  *     `host.docker.internal` now comes from gluetun's own extra_hosts.
- *   - adds `network_mode: "container:gluetun-shared"`.
+ *   - adds `network_mode: "container:gluetun-<group>"`.
  *   - pins `API_SERVER_PORT=<the agent's own port>` in `environment:`. Every
  *     agent's API server defaults to 8642; inside ONE namespace two of them
  *     would collide. The agent's allocated host port is already unique fleet
@@ -58,7 +59,7 @@
  * (DNS :53, health 127.0.0.1:9999, control :8000) are shared too; the control
  * server is locked down (generateControlAuthToml).
  *
- * Secrets: the WireGuard key lives in `<dataDir>/vpn/gluetun.env` (mode 600),
+ * Secrets: the WireGuard key lives in `<dataDir>/vpn/<group>/gluetun.env` (mode 600),
  * written by the owner's key script. Swarm-map only REFERENCES that path
  * (env_file) and checks it exists; it never reads, generates or prints it.
  */
@@ -66,10 +67,34 @@
 import path from 'path'
 import { assertNoNewline } from '@/lib/env-helpers'
 
-/** Container every VPN'd agent joins. Must NOT start with hermes-/seraph- (discovery). */
-export const SHARED_VPN_CONTAINER = 'gluetun-shared'
-/** Compose project name of the shared gluetun stack. */
-export const SHARED_VPN_PROJECT = 'swarm-vpn'
+/**
+ * VPN groups split agents by TRUST: agents in one group share one network
+ * namespace (and so each other's localhost servers), agents in different
+ * groups never do. A group is any name matching this pattern rather than a
+ * fixed list: the trust split is the owner's policy, not code, and a group
+ * only works once its key file exists (the owner's key script), so a typo
+ * cannot silently create a working namespace — it is refused for a missing
+ * key. The pattern keeps the name safe in container names, compose project
+ * names, file paths and YAML (lowercase alphanumerics only, no '-', '/', '.').
+ */
+export const VPN_GROUP_RE = /^[a-z][a-z0-9]{0,15}$/
+
+export function assertVpnGroup(group: unknown): string {
+  if (typeof group !== 'string' || !VPN_GROUP_RE.test(group)) {
+    throw new Error(`invalid VPN group '${String(group)}': use 1-16 lowercase letters/digits, starting with a letter`)
+  }
+  return group
+}
+
+/** The gluetun container a group's agents join. Must NOT start with hermes-/seraph- (discovery). */
+export function vpnContainerName(group: string): string {
+  return `gluetun-${assertVpnGroup(group)}`
+}
+
+/** Compose project name of a group's gluetun stack. */
+export function vpnProjectName(group: string): string {
+  return `swarm-vpn-${assertVpnGroup(group)}`
+}
 /**
  * Pinned by tag AND digest so the default can never silently drift. Digest is
  * the one the Mini resolved `qmcgaw/gluetun:v3.40.0` to on 2026-11-02 (the
@@ -79,23 +104,24 @@ export const SHARED_VPN_PROJECT = 'swarm-vpn'
 export const SHARED_VPN_IMAGE =
   'qmcgaw/gluetun:v3.40.0@sha256:2b42bfa046757145a5155acece417b65b4443c8033fb88661a8e9dcf7fda5a00'
 
-const NETWORK_MODE_LINE = `    network_mode: "container:${SHARED_VPN_CONTAINER}"`
+const networkModeLine = (group: string) => `    network_mode: "container:${vpnContainerName(group)}"`
 const MARK = '# shared-vpn'
-const HEADER = [
-  `    ${MARK}: on. Joined to ${SHARED_VPN_CONTAINER}; host.docker.internal comes from gluetun.`,
+const header = (group: string) => [
+  `    ${MARK}: on. Joined to ${vpnContainerName(group)}; host.docker.internal comes from gluetun.`,
   `    ${MARK}: '#~' lines are this service's own networking, restored when the VPN is turned off.`,
 ]
+const HEADER_RE = /^ {4}# shared-vpn: on\. Joined to gluetun-([a-z][a-z0-9]{0,15});/
 const STASH = '    #~'
 
 export type SharedVpnState = 'on' | 'off' | 'foreign'
 
-export function sharedVpnPaths(swarmMapDataDir: string): {
+export function sharedVpnPaths(swarmMapDataDir: string, group: string): {
   dir: string
   composeFile: string
   envFile: string
   controlAuthFile: string
 } {
-  const dir = path.join(swarmMapDataDir, 'vpn')
+  const dir = path.join(swarmMapDataDir, 'vpn', assertVpnGroup(group))
   return {
     dir,
     composeFile: path.join(dir, 'docker-compose.yml'),
@@ -134,23 +160,25 @@ routes = []
 }
 
 /** The shared gluetun compose. Publishes nothing; see the module doc. */
-export function generateSharedVpnCompose(opts: { envFile: string; controlAuthFile: string }): string {
+export function generateSharedVpnCompose(opts: { group: string; envFile: string; controlAuthFile: string }): string {
+  const group = assertVpnGroup(opts.group)
   const envFile = assertNoNewline(opts.envFile, 'shared VPN env file')
   const authFile = assertNoNewline(opts.controlAuthFile, 'shared VPN control auth file')
   for (const [what, p] of [['env file', envFile], ['control auth file', authFile]]) {
     if (!path.isAbsolute(p)) throw new Error(`shared VPN ${what} must be an absolute path, got '${p}'`)
     if (p.includes(':')) throw new Error(`shared VPN ${what}: a ':' in the path would forge a mount; refusing`)
   }
-  return `# Generated by hermes-swarm-map — shared VPN (gluetun).
-# Every agent with the shared VPN on joins this container's network namespace.
+  return `# Generated by hermes-swarm-map — shared VPN (gluetun), group "${group}".
+# Every agent in this group joins this container's network namespace, so
+# they share one localhost: only put agents of the same trust level here.
 # Do NOT recreate it (image bump, --force-recreate, down) without recreating
 # every joined agent afterwards: they keep the old, dead namespace otherwise.
 # The WireGuard key lives in the env_file below (mode 600, never in this file).
-name: ${SHARED_VPN_PROJECT}
+name: ${vpnProjectName(group)}
 services:
-  ${SHARED_VPN_CONTAINER}:
+  ${vpnContainerName(group)}:
     image: ${SHARED_VPN_IMAGE}
-    container_name: ${SHARED_VPN_CONTAINER}
+    container_name: ${vpnContainerName(group)}
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -237,16 +265,29 @@ export function serviceNetworkMode(compose: string, agentName: string): string |
   return null
 }
 
-export function composeSharedVpnState(compose: string, agentName: string): SharedVpnState {
+/**
+ * The VPN group this agent's service is joined to, or null. "Joined" means
+ * swarm-map's own marker header AND the matching network_mode line — a
+ * hand-made `container:gluetun-vera` is not a group named "vera".
+ */
+export function composeSharedVpnGroup(compose: string, agentName: string): string | null {
   const lines = compose.split('\n')
   const b = serviceBounds(lines, agentName)
-  if (!b) return 'off'
+  if (!b) return null
+  let headerGroup: string | null = null
+  let mode: string | null = null
   for (let i = b[0] + 1; i < b[1]; i++) {
-    if (/^ {4}network_mode:/.test(lines[i])) {
-      return lines[i].trimEnd() === NETWORK_MODE_LINE ? 'on' : 'foreign'
-    }
+    const h = lines[i].match(HEADER_RE)
+    if (h && headerGroup === null) headerGroup = h[1]
+    if (/^ {4}network_mode:/.test(lines[i]) && mode === null) mode = lines[i].trimEnd()
   }
-  return 'off'
+  if (headerGroup === null || mode === null) return null
+  return mode === networkModeLine(headerGroup) ? headerGroup : null
+}
+
+export function composeSharedVpnState(compose: string, agentName: string): SharedVpnState {
+  if (composeSharedVpnGroup(compose, agentName) !== null) return 'on'
+  return serviceNetworkMode(compose, agentName) !== null ? 'foreign' : 'off'
 }
 
 /**
@@ -259,14 +300,15 @@ export function sharedVpnComposeBlocker(compose: string, agentName: string): str
       'network — unreachable from the shared VPN namespace. Remove the sidecar first.'
   }
   try {
-    applySharedVpnToCompose(compose, agentName, 1)
+    applySharedVpnToCompose(compose, agentName, 1, 'probe')
     return null
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
   }
 }
 
-export function applySharedVpnToCompose(compose: string, agentName: string, port: number): string {
+export function applySharedVpnToCompose(compose: string, agentName: string, port: number, group: string): string {
+  assertVpnGroup(group)
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`shared VPN: invalid API port '${port}'`)
   }
@@ -333,7 +375,7 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
 
   for (let i = start; i < end; i++) {
     if (i === anchor) {
-      out.push(...HEADER, NETWORK_MODE_LINE)
+      out.push(...header(group), networkModeLine(group))
       if (!env) out.push(`    environment: ${MARK}`, pin)
     }
     // Stashed lines stay where they were, so turning off restores them in place.
@@ -347,7 +389,7 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
   }
   if (anchor === end) {
     // container_name was the last line of the service (unusual but legal).
-    out.push(...HEADER, NETWORK_MODE_LINE)
+    out.push(...header(group), networkModeLine(group))
     if (!env) out.push(`    environment: ${MARK}`, pin)
   }
 
@@ -355,9 +397,11 @@ export function applySharedVpnToCompose(compose: string, agentName: string, port
 }
 
 export function removeSharedVpnFromCompose(compose: string, agentName: string): string {
-  if (composeSharedVpnState(compose, agentName) !== 'on') {
+  const group = composeSharedVpnGroup(compose, agentName)
+  if (group === null) {
     throw new Error(`shared VPN: hermes-${agentName} is not on the shared VPN`)
   }
+  const NETWORK_MODE_LINE = networkModeLine(group)
   const lines = compose.split('\n')
   const [start, end] = serviceBounds(lines, agentName)!
   const out: string[] = []
