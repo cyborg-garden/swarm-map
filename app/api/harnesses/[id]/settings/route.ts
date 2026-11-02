@@ -27,6 +27,7 @@ import {
   composeSharedVpnState,
   fixedPortPlatformBlocker,
   generateSharedVpnCompose,
+  readServicePublishedPort,
   removeSharedVpnFromCompose,
   sharedVpnComposeBlocker,
   sharedVpnPaths,
@@ -903,11 +904,11 @@ export async function PUT(
       }
       const blocker = sharedVpnComposeBlocker(sharedCompose, sharedHarness.name)
       if (blocker) return refuse(blocker)
-      const portMatch = sharedCompose.match(/published:\s*(\d+)/)
-      if (!portMatch) {
+      const servicePort = readServicePublishedPort(sharedCompose, sharedHarness.name)
+      if (servicePort === null) {
         return refuse('Could not find this agent\'s port in its compose file, so it cannot be given its own API port on the shared VPN.')
       }
-      sharedPort = parseInt(portMatch[1], 10)
+      sharedPort = servicePort
       const vpn = sharedVpnPaths(swarmMapDataDir())
       // Existence only — the key file is never read here.
       if (!fs.existsSync(vpn.envFile)) {
@@ -917,17 +918,14 @@ export async function PUT(
       }
       const configPath = path.join(dataDir, 'config.yaml')
       const configYaml = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : ''
-      const listenerProblem = fixedPortPlatformBlocker(configYaml)
+      const agentEnv: Record<string, string> = Object.fromEntries(content.split('\n').flatMap((line) => {
+        const t = line.trim()
+        const eq = t.indexOf('=')
+        return !t || t.startsWith('#') || eq < 0 ? [] : [[t.slice(0, eq).trim(), t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')]]
+      }))
+      const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv)
       if (listenerProblem) return refuse(listenerProblem)
-      const portProblem = apiServerPortBlocker({
-        configYaml,
-        env: Object.fromEntries(content.split('\n').flatMap((line) => {
-          const t = line.trim()
-          const eq = t.indexOf('=')
-          return !t || t.startsWith('#') || eq < 0 ? [] : [[t.slice(0, eq).trim(), t.slice(eq + 1).trim()]]
-        })),
-        port: sharedPort,
-      })
+      const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort })
       if (portProblem) return refuse(portProblem)
     }
     if (sharedVpnChanged && !regenerates && sharedCompose && sharedHarness) {
@@ -972,8 +970,13 @@ export async function PUT(
       try {
         const next = generateSharedVpnCompose({ envFile: vpn.envFile })
         fs.mkdirSync(vpn.dir, { recursive: true, mode: 0o700 })
-        const current = fs.existsSync(vpn.composeFile) ? fs.readFileSync(vpn.composeFile, 'utf-8') : null
-        if (current !== next) fs.writeFileSync(vpn.composeFile, next, { mode: 0o600 })
+        // Written only when absent. An existing file is the operator's (it may
+        // carry hand edits, a re-verified image); overwriting it would also make
+        // it drift from the running container, whose next `up` would recreate
+        // gluetun and cut every joined agent off.
+        if (!fs.existsSync(vpn.composeFile)) {
+          fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
+        }
         services.docker.upNoRecreate(vpn.composeFile, SHARED_VPN_PROJECT)
       } catch {
         // Fixed message on purpose: docker compose's error can quote lines of

@@ -161,6 +161,22 @@ function keySpan(lines: string[], from: number, to: number, key: string): [numbe
   return null
 }
 
+/**
+ * The host port of THIS agent's hermes service: its first `published:` line,
+ * including a stashed `#~` one while on the shared VPN. Null when none. Scoped
+ * to the service so a multi-service file never yields a sibling's port.
+ */
+export function readServicePublishedPort(compose: string, agentName: string): number | null {
+  const lines = compose.split('\n')
+  const b = serviceBounds(lines, agentName)
+  if (!b) return null
+  for (let i = b[0] + 1; i < b[1]; i++) {
+    const m = lines[i].match(/published:\s*(\d+)/)
+    if (m) return parseInt(m[1], 10)
+  }
+  return null
+}
+
 export function composeSharedVpnState(compose: string, agentName: string): SharedVpnState {
   const lines = compose.split('\n')
   const b = serviceBounds(lines, agentName)
@@ -288,7 +304,8 @@ export function removeSharedVpnFromCompose(compose: string, agentName: string): 
     out.push(l)
   }
   const result = [...lines.slice(0, start), ...out, ...lines.slice(end)].join('\n')
-  if (result.includes(MARK) || composeSharedVpnState(result, agentName) !== 'off') {
+  // Scoped to THIS service: another agent in the same file may still be on.
+  if (out.some((l) => l.includes(MARK) || l.startsWith(STASH)) || composeSharedVpnState(result, agentName) !== 'off') {
     throw new Error('shared VPN: compose was hand-edited after the VPN was applied — restore it by hand')
   }
   return result
@@ -300,13 +317,16 @@ export function removeSharedVpnFromCompose(compose: string, agentName: string): 
  * lib/config-yaml-helpers.ts). Anchors to the column-0 `platforms:` key, so a
  * nested `  platforms:` elsewhere is ignored.
  */
-export function readApiServerConfig(configYaml: string): { enabled: boolean; port?: number } {
+export function readApiServerConfig(configYaml: string): { enabled: boolean; port?: number; unreadable?: true } {
   return readPlatformConfig(configYaml, 'api_server')
 }
 
 /** `platforms.<name>.enabled` and `.extra.port` from config.yaml (top-level block only). */
-export function readPlatformConfig(configYaml: string, name: string): { enabled: boolean; port?: number } {
+export function readPlatformConfig(configYaml: string, name: string): { enabled: boolean; port?: number; unreadable?: true } {
   if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`invalid platform name '${name}'`)
+  // Any inline value (flow mapping `{...}`, anchor, alias) after the entry key
+  // is a shape this line parser cannot read: report it, never guess "off".
+  const inlineRe = new RegExp(`^\\s+${name}:[ \\t]*[^\\s#]`)
   const entryRe = new RegExp(`^\\s+${name}:[ \\t]*(#.*)?$`)
   const lines = configYaml.replace(/\r\n/g, '\n').split('\n')
   const top = lines.findIndex((l) => /^platforms:[ \t]*(#.*)?$/.test(l))
@@ -323,6 +343,7 @@ export function readPlatformConfig(configYaml: string, name: string): { enabled:
     // Direct children only: the first child's indent defines the level, so a
     // deeper `api_server:` under some other platform is not this entry.
     if (childIndent < 0) childIndent = indent
+    if (indent === childIndent && inlineRe.test(l)) return { enabled: false, unreadable: true }
     if (indent === childIndent && entryRe.test(l)) {
       entry = i
       entryIndent = indent
@@ -332,6 +353,7 @@ export function readPlatformConfig(configYaml: string, name: string): { enabled:
   if (entry < 0) return { enabled: false }
   let enabled = false
   let port: number | undefined
+  let unreadable = false
   let inExtra = false
   let extraIndent = 0
   for (let j = entry + 1; j < lines.length; j++) {
@@ -343,17 +365,30 @@ export function readPlatformConfig(configYaml: string, name: string): { enabled:
     if (inExtra && indent <= extraIndent) inExtra = false
     if (!inExtra) {
       const en = val.match(/^enabled:\s*(.+)$/)
-      if (en) enabled = /^(true|yes|on)$/i.test(en[1].trim())
-      if (/^extra:\s*$/.test(val)) {
+      if (en) {
+        const v = en[1].trim().replace(/^(['"])(.*)\1$/, '$2').toLowerCase()
+        if (['true', 'yes', 'on'].includes(v)) enabled = true
+        else if (['false', 'no', 'off'].includes(v)) enabled = false
+        else unreadable = true
+      }
+      if (/^extra:/.test(val)) {
+        if (!/^extra:\s*$/.test(val)) unreadable = true
         inExtra = true
         extraIndent = indent
       }
     } else {
-      const p = val.match(/^port:\s*['"]?(\d+)['"]?$/)
-      if (p) port = parseInt(p[1], 10)
+      const p = val.match(/^port:\s*(.*)$/)
+      if (p) {
+        const m = p[1].trim().match(/^(['"]?)(\d+)\1$/)
+        if (m) port = parseInt(m[2], 10)
+        else unreadable = true
+      }
     }
   }
-  return port === undefined ? { enabled } : { enabled, port }
+  const out: { enabled: boolean; port?: number; unreadable?: true } = { enabled }
+  if (port !== undefined) out.port = port
+  if (unreadable) out.unreadable = true
+  return out
 }
 
 /**
@@ -382,6 +417,10 @@ export function apiServerPortBlocker(opts: {
       `port ${port} (agents there share one network). Set API_SERVER_PORT=${port} in its .env, then retry.`
   }
   const cfg = readApiServerConfig(configYaml)
+  if (cfg.unreadable) {
+    return 'Could not read platforms.api_server in this agent\'s config.yaml (an inline or unusual YAML ' +
+      'form), so its API port cannot be checked for the shared VPN. Rewrite it in block form, then retry.'
+  }
   if (cfg.port !== undefined && cfg.port !== port) {
     return `This agent's config.yaml sets platforms.api_server.extra.port to ${cfg.port}. ` +
       `Agents on the shared VPN share one network, so each needs its own port — remove that port line ` +
@@ -391,17 +430,48 @@ export function apiServerPortBlocker(opts: {
 }
 
 /**
- * Gateway platforms that listen on a FIXED default port. Two VPN'd agents with
- * the same one enabled would collide in the shared namespace, and nothing
- * makes their ports unique yet, so they are refused.
+ * Gateway listeners on a FIXED default port. Two VPN'd agents with the same
+ * one on would collide in the shared namespace, and nothing makes their ports
+ * unique yet, so they are refused. Each can be switched on from config.yaml
+ * or from env vars alone (hermes gateway/config.py), so both are checked.
  */
-export const FIXED_PORT_PLATFORMS = ['webhook', 'msgraph_webhook', 'a2a', 'teams'] as const
+export const FIXED_PORT_PLATFORMS = ['webhook', 'msgraph_webhook', 'a2a', 'teams', 'bluebubbles', 'whatsapp_cloud'] as const
 
-/** Enabled flags of top-level `platforms.<name>` entries (line-parsed, like readApiServerConfig). */
-export function fixedPortPlatformBlocker(configYaml: string): string | null {
-  const enabled = FIXED_PORT_PLATFORMS.filter((name) => readPlatformConfig(configYaml, name).enabled)
-  if (!enabled.length) return null
-  return `This agent enables ${enabled.join(', ')} in config.yaml, which listen on a fixed port. ` +
-    'Agents on the shared VPN share one network, so a second agent with the same platform would fail ' +
-    'to bind. Disable it for this agent, or keep this agent off the shared VPN.'
+const truthy = (v?: string) => ['1', 'true', 'yes', 'on'].includes((v ?? '').trim().toLowerCase())
+const set = (v?: string) => (v ?? '').trim() !== ''
+
+/** Env-only ways to switch a fixed-port listener on (hermes gateway/config.py, s6 dashboard). */
+const ENV_LISTENERS: Array<[string, (env: Record<string, string>) => boolean]> = [
+  ['webhook', (e) => truthy(e.WEBHOOK_ENABLED) || set(e.WEBHOOK_PORT)],
+  ['msgraph_webhook', (e) => truthy(e.MSGRAPH_WEBHOOK_ENABLED) || set(e.MSGRAPH_WEBHOOK_PORT)
+    || set(e.MSGRAPH_WEBHOOK_CLIENT_STATE) || set(e.MSGRAPH_WEBHOOK_ACCEPTED_RESOURCES)],
+  ['teams', (e) => set(e.TEAMS_PORT)],
+  ['bluebubbles', (e) => set(e.BLUEBUBBLES_SERVER_URL) && set(e.BLUEBUBBLES_PASSWORD)],
+  ['whatsapp_cloud', (e) => set(e.WHATSAPP_CLOUD_PHONE_NUMBER_ID) && set(e.WHATSAPP_CLOUD_ACCESS_TOKEN)],
+  ['dashboard', (e) => truthy(e.HERMES_DASHBOARD)],
+]
+
+/**
+ * Null when no fixed-port listener is on; otherwise why the agent cannot join.
+ * Checked when the VPN is turned on. A later .env/config.yaml edit is not
+ * rechecked (see the PR risk notes): the symptom is the second agent's
+ * listener failing to bind, logged by that agent.
+ */
+export function fixedPortPlatformBlocker(configYaml: string, env: Record<string, string> = {}): string | null {
+  const unreadable: string[] = []
+  const on = new Set<string>()
+  for (const name of FIXED_PORT_PLATFORMS) {
+    const cfg = readPlatformConfig(configYaml, name)
+    if (cfg.unreadable) unreadable.push(name)
+    else if (cfg.enabled) on.add(name)
+  }
+  for (const [name, test] of ENV_LISTENERS) if (test(env)) on.add(name)
+  if (unreadable.length) {
+    return `Could not read platforms.${unreadable.join(', platforms.')} in this agent's config.yaml (an inline ` +
+      'or unusual YAML form), so its fixed-port listeners cannot be checked. Rewrite it in block form, then retry.'
+  }
+  if (!on.size) return null
+  return `This agent turns on ${[...on].join(', ')}, which listen on a fixed port. ` +
+    'Agents on the shared VPN share one network, so a second agent with the same listener would fail ' +
+    'to bind. Turn it off for this agent, or keep this agent off the shared VPN.'
 }

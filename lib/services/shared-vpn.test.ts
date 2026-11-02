@@ -24,6 +24,7 @@ import {
   readApiServerConfig,
   apiServerPortBlocker,
   fixedPortPlatformBlocker,
+  readServicePublishedPort,
   sharedVpnComposeBlocker,
 } from './shared-vpn'
 import { generateAgentCompose } from './agent-deploy-templates'
@@ -335,6 +336,49 @@ describe('API server port in the shared namespace', () => {
   it('no blocker when config.yaml already pins the agent\'s own port', () => {
     const c = yaml(`  api_server:\n    enabled: true\n    extra:\n      port: ${PORT}`)
     expect(apiServerPortBlocker({ configYaml: c, env: {}, port: PORT })).toBeNull()
+  })
+})
+
+describe('round-2 review regressions', () => {
+  it('an inline (flow) api_server mapping is unreadable and refused, never read as off', () => {
+    const c = 'platforms:\n  api_server: {enabled: true, extra: {port: 8642}}\n'
+    expect(readApiServerConfig(c).unreadable).toBe(true)
+    expect(apiServerPortBlocker({ configYaml: c, env: {}, port: PORT })).toMatch(/Could not read/)
+  })
+
+  it('a quoted enabled: "true" is read as on', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: "true"\n')).toMatch(/webhook/)
+  })
+
+  it('bluebubbles and whatsapp_cloud count, from config.yaml or env alone', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  bluebubbles:\n    enabled: true\n  whatsapp_cloud:\n    enabled: true\n'))
+      .toMatch(/bluebubbles.*whatsapp_cloud/)
+    expect(fixedPortPlatformBlocker('', { BLUEBUBBLES_SERVER_URL: 'http://x', BLUEBUBBLES_PASSWORD: 'p' })).toMatch(/bluebubbles/)
+    expect(fixedPortPlatformBlocker('', { WEBHOOK_ENABLED: 'true' })).toMatch(/webhook/)
+    expect(fixedPortPlatformBlocker('', { HERMES_DASHBOARD: '1' })).toMatch(/dashboard/)
+    expect(fixedPortPlatformBlocker('', { WEBHOOK_ENABLED: 'false', DISCORD_BOT_TOKEN: 'x' })).toBeNull()
+  })
+
+  const twoAgents = () => {
+    const a = generateAgentCompose('a', 8652, '/d/a', { image: 'x' })
+    const b = generateAgentCompose('b', 8662, '/d/b', { image: 'x' })
+    // One file, two services (monolithic shape).
+    const bServices = b.split('services:\n')[1].split('\nnetworks:')[0]
+    return a.replace('\nnetworks:', '\n' + bServices + '\nnetworks:')
+  }
+
+  it('reads the port of THIS agent\'s service, not the first in the file', () => {
+    const c = twoAgents()
+    expect(readServicePublishedPort(c, 'b')).toBe(8662)
+    expect(readServicePublishedPort(applySharedVpnToCompose(c, 'b', 8662), 'b')).toBe(8662)
+  })
+
+  it('two agents on the VPN in one file can each be turned off', () => {
+    const c = twoAgents()
+    const both = applySharedVpnToCompose(applySharedVpnToCompose(c, 'a', 8652), 'b', 8662)
+    const aOff = removeSharedVpnFromCompose(both, 'a')
+    expect(composeSharedVpnState(aOff, 'b')).toBe('on')
+    expect(removeSharedVpnFromCompose(aOff, 'b')).toBe(c)
   })
 })
 

@@ -249,6 +249,14 @@ describe('Settings PUT — shared VPN', () => {
     expect((await res.json()).error).toMatch(/webhook/)
   })
 
+  it('never overwrites an existing gluetun compose (operator edits survive)', async () => {
+    const vpnCompose = path.join(swarmDir, 'vpn', 'docker-compose.yml')
+    fs.writeFileSync(vpnCompose, '# operator edited\n')
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(200)
+    expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe('# operator edited\n')
+  })
+
   it('refuses while the per-agent wireguard VPN is on', async () => {
     writeAgent(readCompose(), `API_SERVER_PORT=${PORT}\nVPN_ENABLED=true\n`)
     const res = await PUT(put({ ...BASE, vpnEnabled: true, sharedVpn: true }), params())
