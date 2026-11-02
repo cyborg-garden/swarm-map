@@ -446,7 +446,7 @@ function readEntry(lines: string[], c: YamlChild): PlatformEntry {
 export function readPlatformEntries(configYaml: string): { entries: PlatformEntry[]; unreadable: string[] } {
   const lines = configYaml.replace(/^﻿/, '').replace(/\r\n/g, '\n').split('\n')
   const top = yamlChildren(lines, 0, lines.length)
-  if (!top) return { entries: [], unreadable: ['config.yaml'] }
+  if (!top) return { entries: [], unreadable: ['config'] }
   const entries: PlatformEntry[] = []
   const unreadable: string[] = []
   const readPlatforms = (c: YamlChild, where: string) => {
@@ -579,7 +579,8 @@ export function apiServerPortBlocker(opts: {
   /** Raw .env text; every API_SERVER_PORT assignment in it must be `port`. */
   envText?: string
 }): string | null {
-  const { configYaml, env, port, envText } = opts
+  const { configYaml, env, port } = opts
+  const envText = (opts.envText ?? '').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
   for (const v of envText ? rawEnvAssignments(envText, 'API_SERVER_PORT') : []) {
     if (v !== String(port)) {
       return `This agent's .env assigns API_SERVER_PORT=${v || '(empty)'} somewhere (a repeated, joined or ` +
@@ -634,6 +635,8 @@ const LISTENER_ENV_PREFIXES = [
  * risk).
  */
 export function fixedPortPlatformBlocker(configYaml: string, env: Record<string, string> = {}, envText = ''): string | null {
+  // Comment lines carry nothing hermes or compose loads.
+  envText = envText.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
   const { entries, unreadable } = readPlatformEntries(configYaml)
   if (unreadable.length) {
     return `Could not read ${unreadable.join(', ')} in this agent's config.yaml (an inline or unusual YAML ` +

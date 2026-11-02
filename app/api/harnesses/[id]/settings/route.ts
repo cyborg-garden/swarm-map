@@ -951,7 +951,10 @@ export async function PUT(
         return refuse(`This agent's compose loads other env files (${extraEnvFiles.join(', ')}) that the shared VPN `
           + 'check cannot see. Fold them into its .env, or keep this agent off the shared VPN.')
       }
+      // The gateway sees .env over compose environment, but the s6 dashboard
+      // sees compose environment over env_file, so check each source alone.
       const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv, content)
+        ?? fixedPortPlatformBlocker(configYaml, readServiceEnvironment(sharedCompose, sharedHarness.name))
       if (listenerProblem) return refuse(listenerProblem)
       const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort, envText: content })
       if (portProblem) return refuse(portProblem)

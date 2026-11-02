@@ -499,6 +499,18 @@ describe('round-5 review regressions', () => {
   })
 })
 
+describe('round-6 review regressions', () => {
+  it('an unparseable config.yaml refuses the port check too', () => {
+    expect(apiServerPortBlocker({ configYaml: 'toolsets:\n- x\nplatforms:\n  api_server:\n    extra:\n      port: 8642\n', env: {}, port: PORT })).toMatch(/Could not read/)
+  })
+
+  it('commented-out .env lines are ignored', () => {
+    const text = '# TEAMS_PORT=3978\n# API_SERVER_PORT=8642\n'
+    expect(fixedPortPlatformBlocker('', parseDotenv(text), text)).toBeNull()
+    expect(apiServerPortBlocker({ configYaml: '', env: parseDotenv(text), port: PORT, envText: text })).toBeNull()
+  })
+})
+
 describe('fixed-port platforms', () => {
   it('refuses webhook/msgraph_webhook/a2a/teams enabled at top level, ignores disabled ones', () => {
     expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: true\n')).toMatch(/webhook/)
