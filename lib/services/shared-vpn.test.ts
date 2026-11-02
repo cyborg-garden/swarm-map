@@ -25,6 +25,8 @@ import {
   apiServerPortBlocker,
   fixedPortPlatformBlocker,
   readServicePublishedPort,
+  readServiceEnvironment,
+  parseDotenv,
   sharedVpnComposeBlocker,
 } from './shared-vpn'
 import { generateAgentCompose } from './agent-deploy-templates'
@@ -353,8 +355,8 @@ describe('round-2 review regressions', () => {
   it('bluebubbles and whatsapp_cloud count, from config.yaml or env alone', () => {
     expect(fixedPortPlatformBlocker('platforms:\n  bluebubbles:\n    enabled: true\n  whatsapp_cloud:\n    enabled: true\n'))
       .toMatch(/bluebubbles.*whatsapp_cloud/)
-    expect(fixedPortPlatformBlocker('', { BLUEBUBBLES_SERVER_URL: 'http://x', BLUEBUBBLES_PASSWORD: 'p' })).toMatch(/bluebubbles/)
-    expect(fixedPortPlatformBlocker('', { WEBHOOK_ENABLED: 'true' })).toMatch(/webhook/)
+    expect(fixedPortPlatformBlocker('', { BLUEBUBBLES_SERVER_URL: 'http://x', BLUEBUBBLES_PASSWORD: 'p' })).toMatch(/bluebubbles/i)
+    expect(fixedPortPlatformBlocker('', { WEBHOOK_ENABLED: 'true' })).toMatch(/webhook/i)
     expect(fixedPortPlatformBlocker('', { HERMES_DASHBOARD: '1' })).toMatch(/dashboard/)
     expect(fixedPortPlatformBlocker('', { WEBHOOK_ENABLED: 'false', DISCORD_BOT_TOKEN: 'x' })).toBeNull()
   })
@@ -379,6 +381,51 @@ describe('round-2 review regressions', () => {
     const aOff = removeSharedVpnFromCompose(both, 'a')
     expect(composeSharedVpnState(aOff, 'b')).toBe('on')
     expect(removeSharedVpnFromCompose(aOff, 'b')).toBe(c)
+  })
+})
+
+describe('round-3 review regressions', () => {
+  it('whatsapp (local bridge on 127.0.0.1:3000) is refused, from config.yaml or env', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  whatsapp:\n    enabled: true\n')).toMatch(/whatsapp/)
+    expect(fixedPortPlatformBlocker('', { WHATSAPP_ENABLED: 'true' })).toMatch(/WHATSAPP/)
+  })
+
+  it('any platform outside the outbound-only allowlist is refused (sms, line, wecom, feishu, photon, unknown)', () => {
+    for (const p of ['sms', 'line', 'wecom', 'feishu', 'photon', 'something_new']) {
+      expect(fixedPortPlatformBlocker(`platforms:\n  ${p}:\n    enabled: true\n`)).toMatch(new RegExp(p))
+    }
+    expect(fixedPortPlatformBlocker('platforms:\n  discord:\n    enabled: true\n  signal:\n    enabled: true\n  telegram:\n    enabled: true\n')).toBeNull()
+  })
+
+  it('gateway.platforms (deep-merged by hermes) is checked too', () => {
+    const c = 'gateway:\n  platforms:\n    webhook:\n      enabled: true\n    api_server:\n      extra:\n        port: 8642\n'
+    expect(fixedPortPlatformBlocker(c)).toMatch(/webhook/)
+    expect(apiServerPortBlocker({ configYaml: c, env: {}, port: PORT })).toMatch(/8642/)
+  })
+
+  it('flow-form platforms is unreadable, never off', () => {
+    expect(fixedPortPlatformBlocker('platforms: {webhook: {enabled: true}}\n')).toMatch(/Could not read/)
+    expect(apiServerPortBlocker({ configYaml: 'platforms: {api_server: {extra: {port: 8642}}}\n', env: {}, port: PORT })).toMatch(/Could not read/)
+  })
+
+  it('quoted keys are read, and a nested enabled: false does not mask the entry\'s own enabled', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  "webhook":\n    enabled: true\n')).toMatch(/webhook/)
+    expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: true\n    foo:\n      enabled: false\n')).toMatch(/webhook/)
+  })
+
+  it('parses .env like python-dotenv: export prefix, inline comments, quotes', () => {
+    const env = parseDotenv('export API_SERVER_PORT=8642\nWEBHOOK_ENABLED=true # on\nX="a # b"\n# C=1\n')
+    expect(env).toEqual({ API_SERVER_PORT: '8642', WEBHOOK_ENABLED: 'true', X: 'a # b' })
+    expect(apiServerPortBlocker({ configYaml: '', env, port: PORT })).toMatch(/8642/)
+    expect(fixedPortPlatformBlocker('', env)).toMatch(/WEBHOOK/)
+  })
+
+  it('reads the hermes service environment (where extraEnv lands), excluding the shared-VPN pin', () => {
+    const c = applySharedVpnToCompose(generateStandaloneCompose(NAME, PORT, DATA, { extraEnv: { WEBHOOK_ENABLED: 'true' } }), NAME, PORT)
+    const env = readServiceEnvironment(c, NAME)
+    expect(env.WEBHOOK_ENABLED).toBe('true')
+    expect(env.API_SERVER_PORT).toBeUndefined()
+    expect(env.HOME).toBe('/opt/data')
   })
 })
 

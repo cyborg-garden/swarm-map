@@ -27,7 +27,10 @@ import {
   composeSharedVpnState,
   fixedPortPlatformBlocker,
   generateSharedVpnCompose,
+  parseDotenv,
+  readServiceEnvironment,
   readServicePublishedPort,
+  serviceNetworkMode,
   removeSharedVpnFromCompose,
   sharedVpnComposeBlocker,
   sharedVpnPaths,
@@ -871,8 +874,8 @@ export async function PUT(
   // setup) is reported as off, so a whole-document PUT carrying false is not a
   // change. The per-agent wireguard variant also has its own network_mode; it is
   // swarm-map's, and the standalone generator re-renders it.
-  const handMadeNetworkMode = sharedState === 'foreign'
-    && !/^ {4}network_mode: "service:wireguard"$/m.test(sharedCompose ?? '')
+  const handMadeNetworkMode = sharedState === 'foreign' && !!sharedCompose && !!sharedHarness
+    && serviceNetworkMode(sharedCompose, sharedHarness.name) !== 'network_mode: "service:wireguard"'
   const sharedVpnChanged = sharedRequested !== undefined && sharedState !== 'foreign'
     && sharedRequested !== (sharedState === 'on')
   const sharedVpnDesired = sharedVpnChanged ? sharedRequested === true : sharedState === 'on'
@@ -918,11 +921,17 @@ export async function PUT(
       }
       const configPath = path.join(dataDir, 'config.yaml')
       const configYaml = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : ''
-      const agentEnv: Record<string, string> = Object.fromEntries(content.split('\n').flatMap((line) => {
-        const t = line.trim()
-        const eq = t.indexOf('=')
-        return !t || t.startsWith('#') || eq < 0 ? [] : [[t.slice(0, eq).trim(), t.slice(eq + 1).trim().replace(/^["']|["']$/g, '')]]
-      }))
+      // Both env sources the container sees: the compose environment (incl.
+      // extraEnv) and the agent's .env, parsed the way hermes' dotenv loader
+      // reads it. .env wins on a clash — hermes reloads it with override.
+      const agentEnv: Record<string, string> = {
+        ...readServiceEnvironment(sharedCompose, sharedHarness.name),
+        ...parseDotenv(content),
+      }
+      if (fs.existsSync(path.join(dataDir, 'gateway.json'))) {
+        return refuse('This agent has a legacy gateway.json, whose platforms hermes also loads and swarm-map '
+          + 'cannot check for the shared VPN. Move its settings into config.yaml first.')
+      }
       const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv)
       if (listenerProblem) return refuse(listenerProblem)
       const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort })

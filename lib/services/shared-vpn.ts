@@ -177,6 +177,17 @@ export function readServicePublishedPort(compose: string, agentName: string): nu
   return null
 }
 
+/** The hermes service's `network_mode: ...` line (trimmed), or null. */
+export function serviceNetworkMode(compose: string, agentName: string): string | null {
+  const lines = compose.split('\n')
+  const b = serviceBounds(lines, agentName)
+  if (!b) return null
+  for (let i = b[0] + 1; i < b[1]; i++) {
+    if (/^ {4}network_mode:/.test(lines[i])) return lines[i].trim()
+  }
+  return null
+}
+
 export function composeSharedVpnState(compose: string, agentName: string): SharedVpnState {
   const lines = compose.split('\n')
   const b = serviceBounds(lines, agentName)
@@ -311,83 +322,183 @@ export function removeSharedVpnFromCompose(compose: string, agentName: string): 
   return result
 }
 
+// ---------------------------------------------------------------------------
+// What the agent listens on, read from its config.yaml and env.
+//
+// Inside ONE shared namespace every listener is shared: two agents on the same
+// fixed port fail to bind, and some adapters (whatsapp's local bridge) probe
+// localhost and silently ATTACH to whichever agent's bridge answers first —
+// a cross-agent message leak. So the check is an allowlist, not a denylist:
+// an agent may join only when every platform it enables is a known
+// outbound-only client, and its API server is on its own port.
+//
+// config.yaml is line-parsed (never round-tripped through a YAML parser here;
+// see lib/config-yaml-helpers.ts). Anything this parser cannot read with
+// confidence is reported as unreadable and refused — never guessed as "off".
+// ---------------------------------------------------------------------------
+
 /**
- * The top-level `platforms.api_server` of an agent's config.yaml, line-parsed
- * (config.yaml is never round-tripped through a YAML parser here; see
- * lib/config-yaml-helpers.ts). Anchors to the column-0 `platforms:` key, so a
- * nested `  platforms:` elsewhere is ignored.
+ * Platforms that only make outbound connections (bot gateways, the host's
+ * signal-cli HTTP API), so any number of agents can run them side by side in
+ * one namespace. Everything else enabled is refused.
  */
-export function readApiServerConfig(configYaml: string): { enabled: boolean; port?: number; unreadable?: true } {
-  return readPlatformConfig(configYaml, 'api_server')
+export const OUTBOUND_ONLY_PLATFORMS: ReadonlySet<string> = new Set([
+  'discord', 'signal', 'telegram', 'slack', 'mattermost', 'matrix', 'email',
+])
+
+type YamlChild = { key: string; idx: number; inline: string; bodyStart: number; bodyEnd: number }
+
+const isGap = (l: string) => l.trim() === '' || /^\s*#/.test(l)
+const indentOf = (l: string) => l.match(/^( *)/)![1].length
+const EMPTY_INLINE = new Set(['', '{}', 'null', '~'])
+const unquote = (v: string) => v.trim().replace(/^(['"])(.*)\1$/, '$2')
+
+/**
+ * Direct children of the mapping occupying lines [from, to). Null when the
+ * block is not a plain block mapping (a list, a tab-indented line, a key form
+ * this parser does not know) — callers treat null as unreadable.
+ */
+function yamlChildren(lines: string[], from: number, to: number): YamlChild[] | null {
+  const out: YamlChild[] = []
+  let childIndent = -1
+  for (let i = from; i < to; i++) {
+    const l = lines[i]
+    if (isGap(l)) continue
+    if (/^\s*\t/.test(l)) return null
+    const ind = indentOf(l)
+    if (childIndent < 0) childIndent = ind
+    if (ind < childIndent) return null
+    if (ind > childIndent) continue // body of the previous child
+    const m = l.slice(ind).match(/^(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_.-]+))[ \t]*:(?:[ \t]+(.*)|[ \t]*)$/)
+    if (!m) return null
+    const key = m[1] ?? m[2] ?? m[3]
+    const inline = (m[4] ?? '').replace(/\s+#.*$/, '').replace(/^#.*$/, '').trim()
+    let end = i + 1
+    while (end < to && (isGap(lines[end]) || indentOf(lines[end]) > childIndent)) end++
+    // Trailing gap lines belong to the next sibling, not this body.
+    let bodyEnd = end
+    while (bodyEnd > i + 1 && isGap(lines[bodyEnd - 1])) bodyEnd--
+    out.push({ key, idx: i, inline, bodyStart: i + 1, bodyEnd })
+    i = end - 1
+  }
+  return out
 }
 
-/** `platforms.<name>.enabled` and `.extra.port` from config.yaml (top-level block only). */
-export function readPlatformConfig(configYaml: string, name: string): { enabled: boolean; port?: number; unreadable?: true } {
-  if (!/^[a-z0-9_]+$/.test(name)) throw new Error(`invalid platform name '${name}'`)
-  // Any inline value (flow mapping `{...}`, anchor, alias) after the entry key
-  // is a shape this line parser cannot read: report it, never guess "off".
-  const inlineRe = new RegExp(`^\\s+${name}:[ \\t]*[^\\s#]`)
-  const entryRe = new RegExp(`^\\s+${name}:[ \\t]*(#.*)?$`)
-  const lines = configYaml.replace(/\r\n/g, '\n').split('\n')
-  const top = lines.findIndex((l) => /^platforms:[ \t]*(#.*)?$/.test(l))
-  if (top < 0) return { enabled: false }
-  let i = top + 1
-  let entry = -1
-  let entryIndent = 0
-  let childIndent = -1
-  for (; i < lines.length; i++) {
-    const l = lines[i]
-    if (l.trim() === '' || /^\s*#/.test(l)) continue
-    if (/^\S/.test(l)) break
-    const indent = l.match(/^(\s*)/)![1].length
-    // Direct children only: the first child's indent defines the level, so a
-    // deeper `api_server:` under some other platform is not this entry.
-    if (childIndent < 0) childIndent = indent
-    if (indent === childIndent && inlineRe.test(l)) return { enabled: false, unreadable: true }
-    if (indent === childIndent && entryRe.test(l)) {
-      entry = i
-      entryIndent = indent
-      break
+export type PlatformEntry = { name: string; enabled: boolean; port?: number; unreadable?: true }
+
+function parseBool(v: string): boolean | null {
+  const t = unquote(v).toLowerCase()
+  if (['true', 'yes', 'on'].includes(t)) return true
+  if (['false', 'no', 'off'].includes(t)) return false
+  return null
+}
+
+function readEntry(lines: string[], c: YamlChild): PlatformEntry {
+  const name = c.key
+  if (!EMPTY_INLINE.has(c.inline)) return { name, enabled: false, unreadable: true }
+  const kids = yamlChildren(lines, c.bodyStart, c.bodyEnd)
+  if (!kids) return { name, enabled: false, unreadable: true }
+  const e: PlatformEntry = { name, enabled: false }
+  for (const k of kids) {
+    if (k.key === '<<') return { name, enabled: false, unreadable: true }
+    if (k.key === 'enabled') {
+      const b = parseBool(k.inline)
+      if (b === null) return { name, enabled: false, unreadable: true }
+      e.enabled = b
     }
-  }
-  if (entry < 0) return { enabled: false }
-  let enabled = false
-  let port: number | undefined
-  let unreadable = false
-  let inExtra = false
-  let extraIndent = 0
-  for (let j = entry + 1; j < lines.length; j++) {
-    const l = lines[j]
-    if (l.trim() === '' || /^\s*#/.test(l)) continue
-    const indent = l.match(/^(\s*)/)![1].length
-    if (indent <= entryIndent) break
-    const val = l.trim().replace(/\s+#.*$/, '')
-    if (inExtra && indent <= extraIndent) inExtra = false
-    if (!inExtra) {
-      const en = val.match(/^enabled:\s*(.+)$/)
-      if (en) {
-        const v = en[1].trim().replace(/^(['"])(.*)\1$/, '$2').toLowerCase()
-        if (['true', 'yes', 'on'].includes(v)) enabled = true
-        else if (['false', 'no', 'off'].includes(v)) enabled = false
-        else unreadable = true
-      }
-      if (/^extra:/.test(val)) {
-        if (!/^extra:\s*$/.test(val)) unreadable = true
-        inExtra = true
-        extraIndent = indent
-      }
-    } else {
-      const p = val.match(/^port:\s*(.*)$/)
-      if (p) {
-        const m = p[1].trim().match(/^(['"]?)(\d+)\1$/)
-        if (m) port = parseInt(m[2], 10)
-        else unreadable = true
+    if (k.key === 'extra') {
+      if (!EMPTY_INLINE.has(k.inline)) return { name, enabled: false, unreadable: true }
+      const ex = yamlChildren(lines, k.bodyStart, k.bodyEnd)
+      if (!ex) return { name, enabled: false, unreadable: true }
+      for (const x of ex) {
+        if (x.key !== 'port') continue
+        const m = unquote(x.inline).match(/^\d+$/)
+        if (!m) return { name, enabled: false, unreadable: true }
+        e.port = parseInt(m[0], 10)
       }
     }
   }
-  const out: { enabled: boolean; port?: number; unreadable?: true } = { enabled }
+  return e
+}
+
+/**
+ * Every platform entry hermes would merge: top-level `platforms:` AND
+ * `gateway.platforms` (hermes deep-merges the latter in). `unreadable` lists
+ * the blocks this parser could not read with confidence.
+ */
+export function readPlatformEntries(configYaml: string): { entries: PlatformEntry[]; unreadable: string[] } {
+  const lines = configYaml.replace(/^﻿/, '').replace(/\r\n/g, '\n').split('\n')
+  const top = yamlChildren(lines, 0, lines.length)
+  if (!top) return { entries: [], unreadable: ['config.yaml'] }
+  const entries: PlatformEntry[] = []
+  const unreadable: string[] = []
+  const readPlatforms = (c: YamlChild, where: string) => {
+    if (!EMPTY_INLINE.has(c.inline)) { unreadable.push(where); return }
+    const kids = yamlChildren(lines, c.bodyStart, c.bodyEnd)
+    if (!kids) { unreadable.push(where); return }
+    for (const k of kids) {
+      const e = readEntry(lines, k)
+      if (e.unreadable) unreadable.push(`${where}.${e.name}`)
+      entries.push(e)
+    }
+  }
+  for (const c of top) {
+    if (c.key === 'platforms') readPlatforms(c, 'platforms')
+    if (c.key === 'gateway') {
+      if (!EMPTY_INLINE.has(c.inline)) { unreadable.push('gateway'); continue }
+      const kids = yamlChildren(lines, c.bodyStart, c.bodyEnd)
+      if (!kids) { unreadable.push('gateway'); continue }
+      for (const k of kids) if (k.key === 'platforms') readPlatforms(k, 'gateway.platforms')
+    }
+  }
+  return { entries, unreadable }
+}
+
+/** `platforms.api_server` merged across both sources. */
+export function readApiServerConfig(configYaml: string): { enabled: boolean; port?: number; unreadable?: true } {
+  const { entries, unreadable } = readPlatformEntries(configYaml)
+  const mine = entries.filter((e) => e.name === 'api_server')
+  const out: { enabled: boolean; port?: number; unreadable?: true } = { enabled: mine.some((e) => e.enabled) }
+  const port = mine.find((e) => e.port !== undefined)?.port
   if (port !== undefined) out.port = port
-  if (unreadable) out.unreadable = true
+  if (mine.some((e) => e.unreadable) || unreadable.some((u) => !u.includes('.') || u.endsWith('.api_server'))) {
+    out.unreadable = true
+  }
+  return out
+}
+
+/**
+ * Parse an env file the way python-dotenv (what hermes loads `.env` with)
+ * does for the shapes that matter here: `export KEY=v`, quoted values, and an
+ * inline ` # comment` after an unquoted value.
+ */
+export function parseDotenv(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const raw of text.replace(/\r\n/g, '\n').split('\n')) {
+    const m = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.*)$/)
+    if (!m) continue
+    let v = m[2]
+    const q = v.match(/^(['"])(.*?)\1/)
+    if (q) v = q[2]
+    else v = v.replace(/\s+#.*$/, '').trim()
+    out[m[1]] = v
+  }
+  return out
+}
+
+/** `- KEY=value` entries of the hermes service's environment: list (our pin excluded). */
+export function readServiceEnvironment(compose: string, agentName: string): Record<string, string> {
+  const lines = compose.split('\n')
+  const b = serviceBounds(lines, agentName)
+  const out: Record<string, string> = {}
+  if (!b) return out
+  const env = keySpan(lines, b[0] + 1, b[1], 'environment')
+  if (!env) return out
+  for (let i = env[0] + 1; i < env[1]; i++) {
+    if (lines[i].includes(MARK)) continue
+    const m = lines[i].match(/^ {6}- ["']?([A-Za-z_][A-Za-z0-9_]*)=(.*?)["']?\s*$/)
+    if (m) out[m[1]] = m[2].replace(/\s+#.*$/, '')
+  }
   return out
 }
 
@@ -396,14 +507,12 @@ export function readPlatformConfig(configYaml: string, name: string): { enabled:
  * inside the shared namespace; otherwise why not.
  *
  * Deliberately does NOT emulate hermes' precedence between env and
- * config.yaml: it differs across hermes versions (older gateways apply env
- * API_SERVER_PORT when API_SERVER_ENABLED or a key is set; newer ones only
- * with a usable key), and hermes re-loads the agent's own `.env` over the
- * process environment, so the compose pin does not outrank `.env` either.
- * Instead every source that can name a port must agree with `port`:
- *   - `.env` API_SERVER_PORT, when set;
- *   - config.yaml `platforms.api_server.extra.port`, when set.
- * With neither set, every precedence order lands on the compose pin.
+ * config.yaml: it differs across hermes versions, and hermes re-loads the
+ * agent's own `.env` over the process environment, so the compose pin does
+ * not outrank `.env` either. Instead every source that can name a port must
+ * agree with `port` (.env / compose environment API_SERVER_PORT, and
+ * api_server.extra.port in either config.yaml block). With none set, every
+ * precedence order lands on the compose pin.
  */
 export function apiServerPortBlocker(opts: {
   configYaml: string
@@ -413,65 +522,60 @@ export function apiServerPortBlocker(opts: {
   const { configYaml, env, port } = opts
   const envPort = (env.API_SERVER_PORT ?? '').trim()
   if (envPort !== '' && envPort !== String(port)) {
-    return `This agent's .env sets API_SERVER_PORT=${envPort}, but on the shared VPN it must use its own ` +
+    return `This agent's environment sets API_SERVER_PORT=${envPort}, but on the shared VPN it must use its own ` +
       `port ${port} (agents there share one network). Set API_SERVER_PORT=${port} in its .env, then retry.`
   }
   const cfg = readApiServerConfig(configYaml)
   if (cfg.unreadable) {
-    return 'Could not read platforms.api_server in this agent\'s config.yaml (an inline or unusual YAML ' +
+    return 'Could not read the platforms settings in this agent\'s config.yaml (an inline or unusual YAML ' +
       'form), so its API port cannot be checked for the shared VPN. Rewrite it in block form, then retry.'
   }
   if (cfg.port !== undefined && cfg.port !== port) {
-    return `This agent's config.yaml sets platforms.api_server.extra.port to ${cfg.port}. ` +
+    return `This agent's config.yaml sets api_server.extra.port to ${cfg.port}. ` +
       `Agents on the shared VPN share one network, so each needs its own port — remove that port line ` +
       `(the shared VPN then assigns ${port}) or set it to ${port}.`
   }
   return null
 }
 
-/**
- * Gateway listeners on a FIXED default port. Two VPN'd agents with the same
- * one on would collide in the shared namespace, and nothing makes their ports
- * unique yet, so they are refused. Each can be switched on from config.yaml
- * or from env vars alone (hermes gateway/config.py), so both are checked.
- */
-export const FIXED_PORT_PLATFORMS = ['webhook', 'msgraph_webhook', 'a2a', 'teams', 'bluebubbles', 'whatsapp_cloud'] as const
-
 const truthy = (v?: string) => ['1', 'true', 'yes', 'on'].includes((v ?? '').trim().toLowerCase())
-const set = (v?: string) => (v ?? '').trim() !== ''
 
-/** Env-only ways to switch a fixed-port listener on (hermes gateway/config.py, s6 dashboard). */
-const ENV_LISTENERS: Array<[string, (env: Record<string, string>) => boolean]> = [
-  ['webhook', (e) => truthy(e.WEBHOOK_ENABLED) || set(e.WEBHOOK_PORT)],
-  ['msgraph_webhook', (e) => truthy(e.MSGRAPH_WEBHOOK_ENABLED) || set(e.MSGRAPH_WEBHOOK_PORT)
-    || set(e.MSGRAPH_WEBHOOK_CLIENT_STATE) || set(e.MSGRAPH_WEBHOOK_ACCEPTED_RESOURCES)],
-  ['teams', (e) => set(e.TEAMS_PORT)],
-  ['bluebubbles', (e) => set(e.BLUEBUBBLES_SERVER_URL) && set(e.BLUEBUBBLES_PASSWORD)],
-  ['whatsapp_cloud', (e) => set(e.WHATSAPP_CLOUD_PHONE_NUMBER_ID) && set(e.WHATSAPP_CLOUD_ACCESS_TOKEN)],
-  ['dashboard', (e) => truthy(e.HERMES_DASHBOARD)],
+/**
+ * Env-var prefixes of hermes platforms that open a local listener or bridge.
+ * Any non-empty value under one counts as "on" (conservative), except an
+ * explicit falsy `<PREFIX>ENABLED`. Platforms in OUTBOUND_ONLY_PLATFORMS are
+ * deliberately absent.
+ */
+const LISTENER_ENV_PREFIXES = [
+  'WEBHOOK_', 'MSGRAPH_WEBHOOK_', 'TEAMS_', 'BLUEBUBBLES_', 'WHATSAPP_', 'SMS_', 'LINE_',
+  'WECOM_', 'FEISHU_', 'PHOTON_', 'A2A_',
 ]
 
 /**
- * Null when no fixed-port listener is on; otherwise why the agent cannot join.
- * Checked when the VPN is turned on. A later .env/config.yaml edit is not
- * rechecked (see the PR risk notes): the symptom is the second agent's
- * listener failing to bind, logged by that agent.
+ * Null when every listener-capable platform this agent turns on is safe in a
+ * shared namespace; otherwise why the agent cannot join. Checked when the VPN
+ * is turned on; a later .env/config.yaml edit is not rechecked (documented
+ * risk).
  */
 export function fixedPortPlatformBlocker(configYaml: string, env: Record<string, string> = {}): string | null {
-  const unreadable: string[] = []
-  const on = new Set<string>()
-  for (const name of FIXED_PORT_PLATFORMS) {
-    const cfg = readPlatformConfig(configYaml, name)
-    if (cfg.unreadable) unreadable.push(name)
-    else if (cfg.enabled) on.add(name)
-  }
-  for (const [name, test] of ENV_LISTENERS) if (test(env)) on.add(name)
+  const { entries, unreadable } = readPlatformEntries(configYaml)
   if (unreadable.length) {
-    return `Could not read platforms.${unreadable.join(', platforms.')} in this agent's config.yaml (an inline ` +
-      'or unusual YAML form), so its fixed-port listeners cannot be checked. Rewrite it in block form, then retry.'
+    return `Could not read ${unreadable.join(', ')} in this agent's config.yaml (an inline or unusual YAML ` +
+      'form), so its listeners cannot be checked for the shared VPN. Rewrite it in block form, then retry.'
   }
+  const on = new Set<string>()
+  for (const e of entries) {
+    if (e.enabled && e.name !== 'api_server' && !OUTBOUND_ONLY_PLATFORMS.has(e.name)) on.add(e.name)
+  }
+  for (const [key, value] of Object.entries(env)) {
+    const prefix = LISTENER_ENV_PREFIXES.find((p) => key.startsWith(p))
+    if (!prefix || value.trim() === '') continue
+    if (key.endsWith('_ENABLED') && !truthy(value)) continue
+    on.add(key)
+  }
+  if (truthy(env.HERMES_DASHBOARD)) on.add('HERMES_DASHBOARD (dashboard)')
   if (!on.size) return null
-  return `This agent turns on ${[...on].join(', ')}, which listen on a fixed port. ` +
-    'Agents on the shared VPN share one network, so a second agent with the same listener would fail ' +
-    'to bind. Turn it off for this agent, or keep this agent off the shared VPN.'
+  return `This agent turns on ${[...on].join(', ')}, which open a local listener or bridge. Agents on the ` +
+    'shared VPN share one network, so a second agent would collide with it (or attach to its bridge). ' +
+    'Turn it off for this agent, or keep this agent off the shared VPN.'
 }

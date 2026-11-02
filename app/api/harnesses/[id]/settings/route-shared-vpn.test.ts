@@ -257,6 +257,19 @@ describe('Settings PUT — shared VPN', () => {
     expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe('# operator edited\n')
   })
 
+  it('refuses an `export`-prefixed .env port that hermes would honor over the pin', async () => {
+    writeAgent(readCompose(), 'export API_SERVER_PORT=8642\nVPN_ENABLED=false\n')
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+  })
+
+  it('refuses a legacy gateway.json (its platforms cannot be checked)', async () => {
+    fs.writeFileSync(path.join(agentDir, 'gateway.json'), '{}')
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/gateway\.json/)
+  })
+
   it('refuses while the per-agent wireguard VPN is on', async () => {
     writeAgent(readCompose(), `API_SERVER_PORT=${PORT}\nVPN_ENABLED=true\n`)
     const res = await PUT(put({ ...BASE, vpnEnabled: true, sharedVpn: true }), params())
