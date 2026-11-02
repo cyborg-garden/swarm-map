@@ -26,7 +26,7 @@ vi.mock('@/lib/services', () => ({
     },
     config: { getSettings: vi.fn(() => ({ dataDir: holder.dataDir })) },
     surfaceAdmins: { syncFromAllowlist: vi.fn() },
-    docker: { upNoRecreate: vi.fn(), validateCompose: vi.fn() },
+    docker: { upNoRecreate: vi.fn(), validateCompose: vi.fn(), waitHealthy: vi.fn(() => true) },
   },
 }))
 vi.mock('@/lib/resolvers', () => ({
@@ -153,7 +153,7 @@ describe('Settings PUT — shared VPN', () => {
     vi.clearAllMocks()
     const res = await PUT(put({ ...BASE, sharedVpn: 'public' }), params())
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/gluetun-public/)
+    expect((await res.json()).error).toMatch(/group "public"/)
     expect(readCompose()).toBe(on)
     expect(fs.existsSync(path.join(pub, 'control-server-auth.toml'))).toBe(false)
     expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
@@ -167,6 +167,7 @@ describe('Settings PUT — shared VPN', () => {
     const data = await res.json()
     expect(data.restarted).toBe(false)
     expect(data.error).toMatch(/OLD networking/)
+    expect(data.version).toBeDefined()
   })
 
   it('a move to a group without a key file refuses and leaves the agent on its current group', async () => {
@@ -314,16 +315,38 @@ describe('Settings PUT — shared VPN', () => {
     expect((await res.json()).error).toMatch(/webhook/)
   })
 
-  it('never overwrites an existing gluetun compose (operator edits survive)', async () => {
-    const vpnCompose = path.join(swarmDir, 'vpn', 'private', 'docker-compose.yml')
+  it('refuses (never overwrites) an existing group compose that differs from the generated one', async () => {
     const dir = path.join(swarmDir, 'vpn', 'private')
-    const edited = '# operator edited\n' + generateSharedVpnCompose({
+    const vpnCompose = path.join(dir, 'docker-compose.yml')
+    const edited = generateSharedVpnCompose({
       group: 'private', envFile: path.join(dir, 'gluetun.env'), controlAuthFile: path.join(dir, 'control-server-auth.toml'),
-    }).replace('    restart: unless-stopped', '    restart: unless-stopped\n    sysctls:\n      - net.ipv6.conf.all.disable_ipv6=1')
+    }).replace('    restart: unless-stopped', '    restart: unless-stopped\n    network_mode: "container:gluetun-other"')
     fs.writeFileSync(vpnCompose, edited)
+    const compose = readCompose()
+    const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
+    expect(res.status).toBe(409)
+    expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe(edited)
+    expect(readCompose()).toBe(compose)
+    expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
+  })
+
+  it('accepts an existing group compose identical to the generated one', async () => {
+    const dir = path.join(swarmDir, 'vpn', 'private')
+    fs.writeFileSync(path.join(dir, 'docker-compose.yml'), generateSharedVpnCompose({
+      group: 'private', envFile: path.join(dir, 'gluetun.env'), controlAuthFile: path.join(dir, 'control-server-auth.toml'),
+    }))
     const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
     expect(res.status).toBe(200)
-    expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe(edited)
+  })
+
+  it('does not move the agent when the group gluetun never becomes healthy (bad key)', async () => {
+    vi.mocked(services.docker.waitHealthy).mockReturnValueOnce(false)
+    const compose = readCompose()
+    const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
+    expect(res.status).toBe(502)
+    expect((await res.json()).error).toMatch(/not moved/)
+    expect(readCompose()).toBe(compose)
+    expect(services.harness.restart).not.toHaveBeenCalled()
   })
 
   it('writes the deny-all control-server auth file and mounts it', async () => {
@@ -340,7 +363,7 @@ describe('Settings PUT — shared VPN', () => {
     const compose = readCompose()
     const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/control-server lockdown mount/)
+    expect((await res.json()).error).toMatch(/control-server\s+lockdown/)
     expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
     expect(readCompose()).toBe(compose)
   })

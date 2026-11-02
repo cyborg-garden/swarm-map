@@ -1049,33 +1049,23 @@ export async function PUT(
         // carry hand edits, a re-verified image); overwriting it would also make
         // it drift from the running container, whose next `up` would recreate
         // gluetun and cut every joined agent off.
-        // An existing group compose must be THIS group's: its project, its
-        // container, its key file, and the lockdown mount. A copied
-        // vpn/private → vpn/public would otherwise start a second container
-        // on the private key under the public project, and leave the agent
-        // pointing at a gluetun-public that never exists. Checked before
-        // anything is written.
+        // An existing group compose must be EXACTLY what swarm-map generates
+        // for this group. A line-based check of a hand-edited file is
+        // bypassable (an extra service on another key, a network_mode into
+        // another group, a second env_file, an env override of the lockdown
+        // path), and each of those breaks the trust split. A differing file
+        // is refused, never overwritten. Checked before anything is written.
         const existing = fs.existsSync(vpn.composeFile) ? fs.readFileSync(vpn.composeFile, 'utf-8') : null
-        if (existing !== null) {
-          const lines = existing.split('\n').map((l) => l.trimEnd())
-          const problems = [
-            [`name: ${vpnProjectName(group)}`, `project name ${vpnProjectName(group)}`],
-            [`    container_name: ${vpnContainerName(group)}`, `container ${vpnContainerName(group)}`],
-            [`      - ${vpn.envFile}`, `key file ${vpn.envFile}`],
-            [`      - ${vpn.controlAuthFile}:${CONTROL_AUTH_CONTAINER_PATH}:ro`, 'the control-server lockdown mount'],
-          ].filter(([line]) => !lines.includes(line)).map(([, what]) => what)
-          const otherContainers = lines.filter((l) => /^ {4}container_name:/.test(l)
-            && l !== `    container_name: ${vpnContainerName(group)}`)
-          if (otherContainers.length) problems.push(`no other containers (found ${otherContainers.map((l) => l.trim()).join(', ')})`)
-          if (problems.length) {
-            return NextResponse.json(
-              {
-                error: `The existing compose for VPN group "${group}" (${vpn.composeFile}) is not this group's: it lacks `
-                  + `${problems.join('; ')}. Move it aside so swarm-map can generate it, then try again. Nothing was changed.`,
-              },
-              { status: 409 },
-            )
-          }
+        if (existing !== null && existing !== next) {
+          return NextResponse.json(
+            {
+              error: `The existing compose for VPN group "${group}" (${vpn.composeFile}) is not the one swarm-map `
+                + 'generates for this group (it was edited, copied from another group, or predates the control-server '
+                + 'lockdown). Move it aside so swarm-map can generate it, then recreate that group\'s gluetun and its '
+                + 'agents. Nothing was changed.',
+            },
+            { status: 409 },
+          )
         }
         // The deny-all auth file is (re)written when it differs: it is ours,
         // carries no secret, and a missing one would reopen the control server.
@@ -1092,12 +1082,17 @@ export async function PUT(
         // joined agent off.
         if (existing === null) fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
         services.docker.upNoRecreate(vpn.composeFile, vpnProjectName(group))
+        // `up` returns once the container exists, not once the tunnel works
+        // (a bad key crash-loops it). Only move the agent into a namespace
+        // whose gluetun reports healthy.
+        if (!services.docker.waitHealthy(vpnContainerName(group))) throw new Error('not healthy')
       } catch {
         // Fixed message on purpose: docker compose's error can quote lines of
         // the env_file, which here is the WireGuard key file.
         return NextResponse.json(
           {
-            error: `Could not start the VPN container for group "${group}", so nothing was changed. `
+            error: `The VPN container for group "${group}" did not start or did not become healthy, so this agent `
+              + 'was not moved (nothing in its compose changed). '
               + `On the host, check \`docker logs ${vpnContainerName(group)}\` and that the key file has one KEY=value per line.`,
           },
           { status: 502 },
@@ -1257,8 +1252,8 @@ export async function PUT(
     return NextResponse.json(
       {
         error: `The compose now puts this agent ${sharedVpnDesired ? `in VPN group "${sharedVpnDesired}"` : 'off the shared VPN'}, `
-          + 'but recreating the agent failed, so it is still running with its OLD networking. Recreate it now '
-          + '(Settings → restart, or docker compose up -d --force-recreate).',
+          + 'but the recreate could not be started, so the running agent may still have its OLD networking. '
+          + 'Recreate it now (Settings → restart, or docker compose up -d --force-recreate).',
         written: true,
         restarted: false,
         version: settingsVersion(envPath, id),

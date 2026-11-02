@@ -170,6 +170,11 @@ function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
         }
       } else {
         toast.error(data.error || 'Failed to save')
+        // Some failures (a written-but-not-applied VPN group change) still
+        // carry a fresh token; adopt it so the next save does not 409.
+        if (data.version) {
+          setSettings(prev => (prev ? { ...prev, version: data.version } : prev))
+        }
       }
     } catch {
       toast.error('Network error')

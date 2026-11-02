@@ -414,6 +414,30 @@ export class DockerService {
   }
 
   /**
+   * Wait (synchronously, polling) until a container reports Docker health
+   * "healthy". False on timeout, or as soon as it is neither running nor
+   * starting. Used before moving an agent into a VPN group's namespace, so an
+   * agent is never recreated into a gluetun that has no working tunnel.
+   */
+  waitHealthy(container: string, timeoutMs: number = 90000): boolean {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      let out = ''
+      try {
+        out = execFileSync('docker', ['inspect', container, '--format',
+          '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.State.Running}}'],
+        { stdio: 'pipe', timeout: 10000 }).toString().trim()
+      } catch {
+        out = ''
+      }
+      const [health, running] = out.split('|')
+      if (health === 'healthy' && running === 'true') return true
+      try { execFileSync('sleep', ['2'], { stdio: 'pipe' }) } catch {}
+    }
+    return false
+  }
+
+  /**
    * Throw unless `compose` (text) validates with `docker compose config -q`.
    * Written to a temp file; `projectDir` makes relative paths resolve as they
    * will from the real location. Callers must not echo the error to clients:
