@@ -251,10 +251,30 @@ describe('Settings PUT — shared VPN', () => {
 
   it('never overwrites an existing gluetun compose (operator edits survive)', async () => {
     const vpnCompose = path.join(swarmDir, 'vpn', 'docker-compose.yml')
-    fs.writeFileSync(vpnCompose, '# operator edited\n')
+    const edited = '# operator edited\n    volumes:\n      - /x:/gluetun/auth/config.toml:ro\n'
+    fs.writeFileSync(vpnCompose, edited)
     const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
     expect(res.status).toBe(200)
-    expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe('# operator edited\n')
+    expect(fs.readFileSync(vpnCompose, 'utf-8')).toBe(edited)
+  })
+
+  it('writes the deny-all control-server auth file and mounts it', async () => {
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(200)
+    const auth = fs.readFileSync(path.join(swarmDir, 'vpn', 'control-server-auth.toml'), 'utf-8')
+    expect(auth).toMatch(/^routes = \[\]$/m)
+    expect(fs.readFileSync(path.join(swarmDir, 'vpn', 'docker-compose.yml'), 'utf-8'))
+      .toContain(`${path.join(swarmDir, 'vpn', 'control-server-auth.toml')}:/gluetun/auth/config.toml:ro`)
+  })
+
+  it('refuses to start an existing gluetun compose that lacks the control-server lockdown', async () => {
+    fs.writeFileSync(path.join(swarmDir, 'vpn', 'docker-compose.yml'), '# old, no auth mount\n')
+    const compose = readCompose()
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/control-server lockdown/)
+    expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
+    expect(readCompose()).toBe(compose)
   })
 
   it('refuses an `export`-prefixed .env port that hermes would honor over the pin', async () => {

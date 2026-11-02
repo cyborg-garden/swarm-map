@@ -26,6 +26,8 @@ import {
   apiServerPortBlocker,
   composeSharedVpnState,
   fixedPortPlatformBlocker,
+  CONTROL_AUTH_CONTAINER_PATH,
+  generateControlAuthToml,
   generateSharedVpnCompose,
   parseDotenv,
   readServiceEnvFiles,
@@ -999,14 +1001,28 @@ export async function PUT(
       // step refuses (gluetun just runs with one agent fewer).
       const vpn = sharedVpnPaths(swarmMapDataDir())
       try {
-        const next = generateSharedVpnCompose({ envFile: vpn.envFile })
+        const next = generateSharedVpnCompose({ envFile: vpn.envFile, controlAuthFile: vpn.controlAuthFile })
         fs.mkdirSync(vpn.dir, { recursive: true, mode: 0o700 })
         // Written only when absent. An existing file is the operator's (it may
         // carry hand edits, a re-verified image); overwriting it would also make
         // it drift from the running container, whose next `up` would recreate
         // gluetun and cut every joined agent off.
+        // The deny-all auth file is (re)written when it differs: it is ours,
+        // carries no secret, and a missing one would reopen the control server.
+        const auth = generateControlAuthToml()
+        const curAuth = fs.existsSync(vpn.controlAuthFile) ? fs.readFileSync(vpn.controlAuthFile, 'utf-8') : null
+        if (curAuth !== auth) fs.writeFileSync(vpn.controlAuthFile, auth, { mode: 0o644 })
         if (!fs.existsSync(vpn.composeFile)) {
           fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
+        } else if (!fs.readFileSync(vpn.composeFile, 'utf-8').includes(`:${CONTROL_AUTH_CONTAINER_PATH}:ro`)) {
+          return NextResponse.json(
+            {
+              error: `The existing shared VPN compose (${vpn.composeFile}) does not mount the control-server lockdown, `
+                + 'so any agent could stop the tunnel. Regenerate it (move it aside and turn the shared VPN on again), '
+                + 'then recreate gluetun and every agent on it.',
+            },
+            { status: 409 },
+          )
         }
         services.docker.upNoRecreate(vpn.composeFile, SHARED_VPN_PROJECT)
       } catch {

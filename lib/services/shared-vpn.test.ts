@@ -20,6 +20,8 @@ import {
   removeSharedVpnFromCompose,
   composeSharedVpnState,
   generateSharedVpnCompose,
+  generateControlAuthToml,
+  CONTROL_AUTH_CONTAINER_PATH,
   sharedVpnPaths,
   readApiServerConfig,
   apiServerPortBlocker,
@@ -253,7 +255,25 @@ describe('generators honor sharedVpn (a regen keeps the VPN)', () => {
 
 describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
   const envFile = '/Users/juni/.hermes-swarm-map/vpn/gluetun.env'
-  const out = generateSharedVpnCompose({ envFile })
+  const controlAuthFile = '/Users/juni/.hermes-swarm-map/vpn/control-server-auth.toml'
+  const out = generateSharedVpnCompose({ envFile, controlAuthFile })
+
+  it('locks the control server: deny-all auth mounted read-only, path pinned over env_file', () => {
+    expect(out).toContain(`      - ${controlAuthFile}:${CONTROL_AUTH_CONTAINER_PATH}:ro`)
+    expect(out).toContain(`      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=${CONTROL_AUTH_CONTAINER_PATH}`)
+    expect(CONTROL_AUTH_CONTAINER_PATH).toBe('/gluetun/auth/config.toml')
+  })
+
+  it('the auth config has exactly one role and it grants no route (every route 401 in v3.40.0)', () => {
+    const toml = generateControlAuthToml()
+    expect(toml.match(/^\[\[roles\]\]$/gm)).toHaveLength(1)
+    expect(toml).toMatch(/^routes = \[\]$/m)
+    expect(toml).toMatch(/^auth = "none"$/m)
+    // Only the keys gluetun's strict decoder knows (DisallowUnknownFields).
+    const keys = toml.split('\n').filter((l) => /^[a-z_]+ =/.test(l)).map((l) => l.split(' ')[0])
+    expect(keys.sort()).toEqual(['auth', 'name', 'routes'])
+    expect(toml).not.toMatch(/apikey|password|username/i)
+  })
 
   it('declares the gluetun container the agents join', () => {
     expect(out).toContain(`name: ${SHARED_VPN_PROJECT}`)
@@ -269,7 +289,9 @@ describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
 
   it('references the secret env file and never inlines VPN settings', () => {
     expect(out).toContain(`    env_file:\n      - ${envFile}`)
-    expect(out).not.toMatch(/WIREGUARD_|PRIVATE_KEY|VPN_SERVICE_PROVIDER|environment:/)
+    expect(out).not.toMatch(/WIREGUARD_|PRIVATE_KEY|VPN_SERVICE_PROVIDER/)
+    // The only inline env is the auth-config path (no VPN settings).
+    expect(out.match(/^ {6}- [A-Z_]+=/gm)).toEqual(['      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH='])
   })
 
   it('pins the image by tag AND digest', () => {
@@ -286,8 +308,9 @@ describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
   })
 
   it('refuses an env-file path that could inject YAML', () => {
-    expect(() => generateSharedVpnCompose({ envFile: '/x\n    privileged: true' })).toThrow()
-    expect(() => generateSharedVpnCompose({ envFile: 'relative/gluetun.env' })).toThrow(/absolute/)
+    expect(() => generateSharedVpnCompose({ envFile: '/x\n    privileged: true', controlAuthFile })).toThrow()
+    expect(() => generateSharedVpnCompose({ envFile: 'relative/gluetun.env', controlAuthFile })).toThrow(/absolute/)
+    expect(() => generateSharedVpnCompose({ envFile, controlAuthFile: '/a:/etc/passwd' })).toThrow(/':'/)
   })
 })
 
@@ -297,6 +320,7 @@ describe('sharedVpnPaths', () => {
     expect(p.dir).toBe('/Users/juni/.hermes-swarm-map/vpn')
     expect(p.composeFile).toBe('/Users/juni/.hermes-swarm-map/vpn/docker-compose.yml')
     expect(p.envFile).toBe('/Users/juni/.hermes-swarm-map/vpn/gluetun.env')
+    expect(p.controlAuthFile).toBe('/Users/juni/.hermes-swarm-map/vpn/control-server-auth.toml')
   })
 })
 
@@ -475,7 +499,7 @@ describe('round-5 review regressions', () => {
     for (const text of [
       'API_SERVER_PORT=8642\nAPI_SERVER_PORT: 8722\n',
       `API_SERVER_PORT=${PORT}\nX="a\nAPI_SERVER_PORT=8642\n"\n`,
-      `X_TOKEN=abcAPI_SERVER_PORT=8642\nAPI_SERVER_PORT=${PORT}\n`,
+      `X_NOTE=abcAPI_SERVER_PORT=8642\nAPI_SERVER_PORT=${PORT}\n`,
     ]) {
       expect(apiServerPortBlocker({ configYaml: '', env: parseDotenv(text), port: PORT, envText: text })).not.toBeNull()
     }
@@ -489,7 +513,7 @@ describe('round-5 review regressions', () => {
   })
 
   it('a listener var joined onto another line still counts', () => {
-    const text = 'X_TOKEN=abcWEBHOOK_ENABLED=true\n'
+    const text = 'X_NOTE=abcWEBHOOK_ENABLED=true\n'
     expect(fixedPortPlatformBlocker('', parseDotenv(text), text)).toMatch(/WEBHOOK_ENABLED/)
   })
 
@@ -542,7 +566,7 @@ describe('comments and forbidden keys inside the service', () => {
     expect(removeSharedVpnFromCompose(on, NAME)).toBe(c)
   })
 
-  for (const key of ['hostname: x', 'dns:\n      - 1.1.1.1', 'expose:\n      - "9000"', 'mac_address: 02:42:ac:11:00:02', 'links:\n      - a']) {
+  for (const key of ['hostname: x', 'dns:\n      - 192.0.2.53', 'expose:\n      - "9000"', 'mac_address: 02:42:ac:11:00:02', 'links:\n      - a']) {
     it(`refuses a service-level ${key.split(':')[0]} key`, () => {
       const c = deployBorn().replace('    command: gateway\n', `    ${key}\n    command: gateway\n`)
       expect(() => applySharedVpnToCompose(c, NAME, PORT)).toThrow(new RegExp(key.split(':')[0]))
