@@ -397,6 +397,19 @@ export class DockerService {
     })
   }
 
+  /**
+   * Start a project's services if they are not running, NEVER recreating a
+   * container that already exists (`up -d --no-recreate`). Used for the shared
+   * VPN's gluetun: recreating it would leave every agent joined to its network
+   * namespace without networking until each agent is recreated too.
+   */
+  upNoRecreate(composeFile: string, projectName: string): void {
+    execFileSync('docker', ['compose', '-p', projectName, '-f', composeFile, 'up', '-d', '--no-recreate'], {
+      stdio: 'pipe',
+      timeout: 120000,
+    })
+  }
+
   stop(composeFile: string, service: string, projectName?: string): void {
     const projArgs = projectName ? ['-p', projectName] : []
     execFileSync('docker', ['compose', ...projArgs, '-f', composeFile, 'stop', service], {

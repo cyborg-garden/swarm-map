@@ -5,7 +5,8 @@
  */
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { applySharedVpnToCompose } from './shared-vpn'
 import { assertNoNewline } from '@/lib/env-helpers'
 
 export function generateEnvContent(params: {
@@ -276,8 +277,18 @@ export function generateAgentCompose(
     ollamaImage?: string
     memory?: string
     cpus?: string
+    /** Join the shared gluetun VPN (lib/services/shared-vpn.ts). */
+    sharedVpn?: boolean
   },
 ): string {
+  if (options?.sharedVpn) {
+    assertSharedVpnCompatible({ bundledOllama: options.bundledOllama })
+    // Same bytes as toggling it on an existing deploy-born file: the transform
+    // touches only the networking lines, so the hardening below is untouched.
+    return applySharedVpnToCompose(
+      generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { ...options, sharedVpn: false }),
+      slug, port)
+  }
   // githubMcpEnabled is accepted for API compatibility but no longer used here:
   // the github MCP token is delivered via the agent .env (env_file), not a compose
   // `environment:` override (which resolves from the empty process env and blanks it).

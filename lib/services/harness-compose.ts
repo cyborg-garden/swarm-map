@@ -11,6 +11,7 @@ import os from 'os'
 import { assertNoNewline } from '@/lib/env-helpers'
 import { ALL_SURFACE_VARS } from '@/lib/surfaces/derive'
 import type { ExtraMount } from '@/lib/types'
+import { applySharedVpnToCompose } from './shared-vpn'
 
 /**
  * Expand a leading `~` in a HOST path to this user's home directory.
@@ -332,6 +333,14 @@ export interface ComposeOptions {
    * HERMES_EXTRA_APT_PACKAGES build arg on the hermes service.
    */
   extraAptPackages?: string[]
+  /**
+   * Join the ONE shared gluetun container's network namespace (see
+   * lib/services/shared-vpn.ts). Rendered by applying the same transform the
+   * settings toggle applies to an existing file, so a regeneration and a toggle
+   * can never disagree — and a regeneration never drops the VPN. Mutually
+   * exclusive with the per-agent wireguard `vpnEnabled` and with `bundledOllama`.
+   */
+  sharedVpn?: boolean
 }
 
 /** Model the bundled ollama sidecar pulls and serves on boot (tiny, CPU-friendly). */
@@ -504,7 +513,7 @@ export function generateStandaloneCompose(
   agentDataDir: string,
   options?: ComposeOptions,
 ): string {
-  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages } = options ?? {}
+  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn } = options ?? {}
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -518,11 +527,32 @@ export function generateStandaloneCompose(
   // script, so it has no use for the extra packages.
   const hermesSourceBlock = renderHermesSourceBlock(resolved, extraAptPackages)
 
+  if (sharedVpn) {
+    assertSharedVpnCompatible({ vpnEnabled, bundledOllama })
+    return applySharedVpnToCompose(
+      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock),
+      agentName, port)
+  }
+
   if (vpnEnabled) {
     return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
   }
 
   return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
+}
+
+/**
+ * Refuse option combinations the shared VPN cannot honor. Shared by both
+ * generators so they fail identically.
+ */
+export function assertSharedVpnCompatible(opts: { vpnEnabled?: boolean; bundledOllama?: boolean }): void {
+  if (opts.vpnEnabled) {
+    throw new Error('sharedVpn and the per-agent wireguard VPN (vpnEnabled) are mutually exclusive')
+  }
+  if (opts.bundledOllama) {
+    throw new Error('sharedVpn cannot be combined with a bundled ollama sidecar: the agent reaches it by ' +
+      'service name on its own network, which the shared VPN namespace cannot resolve')
+  }
 }
 
 /** Render the hermes service's `deploy.resources.limits` block (8-space indented). */
