@@ -263,6 +263,13 @@ describe('Settings PUT — shared VPN', () => {
     expect(res.status).toBe(409)
   })
 
+  it('refuses an agent with profiles (each runs its own unchecked gateway)', async () => {
+    fs.mkdirSync(path.join(agentDir, 'profiles', 'side'), { recursive: true })
+    const res = await PUT(put({ ...BASE, sharedVpn: true }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/profiles/)
+  })
+
   it('refuses a legacy gateway.json (its platforms cannot be checked)', async () => {
     fs.writeFileSync(path.join(agentDir, 'gateway.json'), '{}')
     const res = await PUT(put({ ...BASE, sharedVpn: true }), params())

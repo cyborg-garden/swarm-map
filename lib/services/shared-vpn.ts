@@ -346,6 +346,19 @@ export const OUTBOUND_ONLY_PLATFORMS: ReadonlySet<string> = new Set([
   'discord', 'signal', 'telegram', 'slack', 'mattermost', 'matrix', 'email',
 ])
 
+/**
+ * Every platform name hermes knows (gateway Platform enum + plugins/platforms,
+ * hermes-agent-mt, 2026-11). Used to find top-level `<platform>:` blocks,
+ * which hermes also honors (and which beat the `platforms:` value), and to
+ * derive the env prefixes that can switch a platform on.
+ */
+export const KNOWN_PLATFORMS: readonly string[] = [
+  'telegram', 'discord', 'whatsapp', 'whatsapp_cloud', 'slack', 'signal', 'mattermost', 'matrix',
+  'homeassistant', 'email', 'sms', 'dingtalk', 'api_server', 'webhook', 'msgraph_webhook', 'feishu',
+  'wecom', 'wecom_callback', 'weixin', 'bluebubbles', 'qqbot', 'yuanbao', 'relay', 'google_chat', 'irc',
+  'line', 'ntfy', 'photon', 'raft', 'simplex', 'teams', 'a2a',
+]
+
 type YamlChild = { key: string; idx: number; inline: string; bodyStart: number; bodyEnd: number }
 
 const isGap = (l: string) => l.trim() === '' || /^\s*#/.test(l)
@@ -384,7 +397,7 @@ function yamlChildren(lines: string[], from: number, to: number): YamlChild[] | 
   return out
 }
 
-export type PlatformEntry = { name: string; enabled: boolean; port?: number; unreadable?: true }
+export type PlatformEntry = { name: string; enabled: boolean; explicitlyDisabled?: true; port?: number; unreadable?: true }
 
 function parseBool(v: string): boolean | null {
   const t = unquote(v).toLowerCase()
@@ -405,6 +418,7 @@ function readEntry(lines: string[], c: YamlChild): PlatformEntry {
       const b = parseBool(k.inline)
       if (b === null) return { name, enabled: false, unreadable: true }
       e.enabled = b
+      if (!b) e.explicitlyDisabled = true
     }
     if (k.key === 'extra') {
       if (!EMPTY_INLINE.has(k.inline)) return { name, enabled: false, unreadable: true }
@@ -443,6 +457,11 @@ export function readPlatformEntries(configYaml: string): { entries: PlatformEntr
     }
   }
   for (const c of top) {
+    if (KNOWN_PLATFORMS.includes(c.key)) {
+      const e = readEntry(lines, c)
+      if (e.unreadable) unreadable.push(e.name)
+      entries.push(e)
+    }
     if (c.key === 'platforms') readPlatforms(c, 'platforms')
     if (c.key === 'gateway') {
       if (!EMPTY_INLINE.has(c.inline)) { unreadable.push('gateway'); continue }
@@ -475,7 +494,9 @@ export function readApiServerConfig(configYaml: string): { enabled: boolean; por
 export function parseDotenv(text: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const raw of text.replace(/\r\n/g, '\n').split('\n')) {
-    const m = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(.*)$/)
+    // `=` or `:` — docker compose's env_file parser accepts both, and the
+    // container gets whatever compose passes.
+    const m = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*[=:]\s*(.*)$/)
     if (!m) continue
     let v = m[2]
     const q = v.match(/^(['"])(.*?)\1/)
@@ -521,6 +542,10 @@ export function apiServerPortBlocker(opts: {
 }): string | null {
   const { configYaml, env, port } = opts
   const envPort = (env.API_SERVER_PORT ?? '').trim()
+  if (env.API_SERVER_PORT !== undefined && envPort === '') {
+    return `This agent's environment sets an EMPTY API_SERVER_PORT, which hermes reads as "use 8642" — ` +
+      `a port other agents on the shared VPN may use. Set API_SERVER_PORT=${port} in its .env (or remove the line), then retry.`
+  }
   if (envPort !== '' && envPort !== String(port)) {
     return `This agent's environment sets API_SERVER_PORT=${envPort}, but on the shared VPN it must use its own ` +
       `port ${port} (agents there share one network). Set API_SERVER_PORT=${port} in its .env, then retry.`
@@ -547,8 +572,11 @@ const truthy = (v?: string) => ['1', 'true', 'yes', 'on'].includes((v ?? '').tri
  * deliberately absent.
  */
 const LISTENER_ENV_PREFIXES = [
-  'WEBHOOK_', 'MSGRAPH_WEBHOOK_', 'TEAMS_', 'BLUEBUBBLES_', 'WHATSAPP_', 'SMS_', 'LINE_',
-  'WECOM_', 'FEISHU_', 'PHOTON_', 'A2A_',
+  ...KNOWN_PLATFORMS
+    .filter((p) => p !== 'api_server' && p !== 'relay' && !OUTBOUND_ONLY_PLATFORMS.has(p))
+    .map((p) => p.toUpperCase() + '_'),
+  // Env names that switch a platform on without its own prefix.
+  'TWILIO_', 'HASS_',
 ]
 
 /**
@@ -564,8 +592,14 @@ export function fixedPortPlatformBlocker(configYaml: string, env: Record<string,
       'form), so its listeners cannot be checked for the shared VPN. Rewrite it in block form, then retry.'
   }
   const on = new Set<string>()
-  for (const e of entries) {
-    if (e.enabled && e.name !== 'api_server' && !OUTBOUND_ONLY_PLATFORMS.has(e.name)) on.add(e.name)
+  // Conservative: a non-allowlisted platform block counts as on unless every
+  // block for it says `enabled: false` (hermes can also enable a platform from
+  // credentials alone, and a top-level block beats the platforms: value).
+  const byName = new Map<string, PlatformEntry[]>()
+  for (const e of entries) byName.set(e.name, [...(byName.get(e.name) ?? []), e])
+  for (const [name, es] of byName) {
+    if (name === 'api_server' || OUTBOUND_ONLY_PLATFORMS.has(name)) continue
+    if (!es.every((e) => e.explicitlyDisabled)) on.add(name)
   }
   for (const [key, value] of Object.entries(env)) {
     const prefix = LISTENER_ENV_PREFIXES.find((p) => key.startsWith(p))

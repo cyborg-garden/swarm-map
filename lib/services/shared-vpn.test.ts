@@ -429,6 +429,31 @@ describe('round-3 review regressions', () => {
   })
 })
 
+describe('round-4 review regressions', () => {
+  it('a top-level <platform>: block is read (hermes honors it over platforms:)', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: false\nwebhook:\n  enabled: true\n')).toMatch(/webhook/)
+    expect(fixedPortPlatformBlocker('whatsapp:\n  enabled: true\n')).toMatch(/whatsapp/)
+    expect(fixedPortPlatformBlocker('discord:\n  enabled: true\n')).toBeNull()
+  })
+
+  it('a non-allowlisted platform block counts as on unless explicitly disabled', () => {
+    expect(fixedPortPlatformBlocker('platforms:\n  sms:\n    extra:\n      port: 1\n')).toMatch(/sms/)
+    expect(fixedPortPlatformBlocker('platforms:\n  sms:\n    enabled: false\n')).toBeNull()
+  })
+
+  it('SMS via TWILIO_* env alone is refused', () => {
+    expect(fixedPortPlatformBlocker('', { TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 't' })).toMatch(/TWILIO_/)
+  })
+
+  it('reads KEY: value lines (compose env_file accepts them)', () => {
+    expect(parseDotenv('WEBHOOK_ENABLED: true\n')).toEqual({ WEBHOOK_ENABLED: 'true' })
+  })
+
+  it('an empty API_SERVER_PORT= is refused (hermes falls back to 8642)', () => {
+    expect(apiServerPortBlocker({ configYaml: '', env: { API_SERVER_PORT: '' }, port: PORT })).toMatch(/EMPTY/)
+  })
+})
+
 describe('fixed-port platforms', () => {
   it('refuses webhook/msgraph_webhook/a2a/teams enabled at top level, ignores disabled ones', () => {
     expect(fixedPortPlatformBlocker('platforms:\n  webhook:\n    enabled: true\n')).toMatch(/webhook/)

@@ -928,6 +928,18 @@ export async function PUT(
         ...readServiceEnvironment(sharedCompose, sharedHarness.name),
         ...parseDotenv(content),
       }
+      // Each profile runs its own gateway (own .env/config.yaml, API on 8642
+      // by default) inside the same container — unchecked here, so refused.
+      const profilesDir = path.join(dataDir, 'profiles')
+      let profiles: string[] = []
+      try {
+        profiles = fs.readdirSync(profilesDir, { withFileTypes: true })
+          .filter((d) => d.isDirectory() && !d.name.startsWith('.')).map((d) => d.name)
+      } catch {}
+      if (profiles.length) {
+        return refuse(`This agent has profiles (${profiles.join(', ')}), each running its own gateway and `
+          + 'listeners that the shared VPN check cannot see. Remove them, or keep this agent off the shared VPN.')
+      }
       if (fs.existsSync(path.join(dataDir, 'gateway.json'))) {
         return refuse('This agent has a legacy gateway.json, whose platforms hermes also loads and swarm-map '
           + 'cannot check for the shared VPN. Move its settings into config.yaml first.')
