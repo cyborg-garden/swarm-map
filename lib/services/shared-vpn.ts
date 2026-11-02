@@ -51,9 +51,8 @@
  *
  * Shared localhost: joined agents share ONE loopback. Hermes itself listens
  * only on its API port (when enabled, key-protected). But agents spawn ad-hoc
- * servers at runtime — on the live fleet (2026-11-02): `python3 -m
- * http.server` in mare (0.0.0.0:8742-8744) and matilde (127.0.0.1:8766),
- * serving dirs under /opt/data. On the shared VPN, a server one agent bound to
+ * servers at runtime — seen on a live fleet (2026-11): `python3 -m
+ * http.server` on 0.0.0.0 and on 127.0.0.1, serving dirs under /opt/data. On the shared VPN, a server one agent bound to
  * 127.0.0.1 is reachable by every other VPN'd agent, and one started from
  * /opt/data itself would serve that agent's .env. Gluetun's own listeners
  * (DNS :53, health 127.0.0.1:9999, control :8000) are shared too; the control
