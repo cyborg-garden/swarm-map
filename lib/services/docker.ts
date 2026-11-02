@@ -421,6 +421,7 @@ export class DockerService {
    */
   waitHealthy(container: string, timeoutMs: number = 90000): boolean {
     const deadline = Date.now() + timeoutMs
+    let notRunningSince: number | null = null
     while (Date.now() < deadline) {
       let out = ''
       try {
@@ -432,6 +433,16 @@ export class DockerService {
       }
       const [health, running] = out.split('|')
       if (health === 'healthy' && running === 'true') return true
+      // No container, or an image without a healthcheck: "healthy" can never
+      // come, so do not burn the whole timeout.
+      if (out === '' || health === 'none') return false
+      // Not running past gluetun's start window = crash-looping (bad key).
+      if (running !== 'true') {
+        notRunningSince ??= Date.now()
+        if (Date.now() - notRunningSince > 20000) return false
+      } else {
+        notRunningSince = null
+      }
       try { execFileSync('sleep', ['2'], { stdio: 'pipe' }) } catch {}
     }
     return false
