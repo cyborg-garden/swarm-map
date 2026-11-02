@@ -44,6 +44,7 @@ import { generateStandaloneCompose } from '@/lib/services/harness-compose'
 import {
   applySharedVpnToCompose,
   composeSharedVpnState,
+  generateSharedVpnCompose,
   vpnProjectName,
 } from '@/lib/services/shared-vpn'
 
@@ -142,6 +143,32 @@ describe('Settings PUT — shared VPN', () => {
     expect((await (await GET(new Request('http://x'), params())).json()).sharedVpn).toBe('public')
   })
 
+  it('refuses an existing group compose that is not this group\'s (copied vpn/private → vpn/public), writing nothing', async () => {
+    await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
+    const on = readCompose()
+    const pub = path.join(swarmDir, 'vpn', 'public')
+    fs.mkdirSync(pub, { recursive: true })
+    fs.writeFileSync(path.join(pub, 'gluetun.env'), 'VPN_SERVICE_PROVIDER=mullvad\n', { mode: 0o600 })
+    fs.copyFileSync(path.join(swarmDir, 'vpn', 'private', 'docker-compose.yml'), path.join(pub, 'docker-compose.yml'))
+    vi.clearAllMocks()
+    const res = await PUT(put({ ...BASE, sharedVpn: 'public' }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toMatch(/gluetun-public/)
+    expect(readCompose()).toBe(on)
+    expect(fs.existsSync(path.join(pub, 'control-server-auth.toml'))).toBe(false)
+    expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
+    expect(services.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('a group change whose recreate fails reports 502, not success', async () => {
+    vi.mocked(services.harness.restart).mockImplementationOnce(() => { throw new Error('busy') })
+    const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
+    expect(res.status).toBe(502)
+    const data = await res.json()
+    expect(data.restarted).toBe(false)
+    expect(data.error).toMatch(/OLD networking/)
+  })
+
   it('a move to a group without a key file refuses and leaves the agent on its current group', async () => {
     await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
     const on = readCompose()
@@ -156,7 +183,7 @@ describe('Settings PUT — shared VPN', () => {
 
   it('rejects a boolean or malformed group with 400, writing nothing', async () => {
     const compose = readCompose()
-    for (const bad of [true, 'Private', '../x', 'a b', 42]) {
+    for (const bad of [true, false, 'Private', '../x', 'a b', 42]) {
       const res = await PUT(put({ ...BASE, sharedVpn: bad }), params())
       expect(res.status).toBe(400)
     }
@@ -289,7 +316,10 @@ describe('Settings PUT — shared VPN', () => {
 
   it('never overwrites an existing gluetun compose (operator edits survive)', async () => {
     const vpnCompose = path.join(swarmDir, 'vpn', 'private', 'docker-compose.yml')
-    const edited = '# operator edited\n    volumes:\n      - /x:/gluetun/auth/config.toml:ro\n'
+    const dir = path.join(swarmDir, 'vpn', 'private')
+    const edited = '# operator edited\n' + generateSharedVpnCompose({
+      group: 'private', envFile: path.join(dir, 'gluetun.env'), controlAuthFile: path.join(dir, 'control-server-auth.toml'),
+    }).replace('    restart: unless-stopped', '    restart: unless-stopped\n    sysctls:\n      - net.ipv6.conf.all.disable_ipv6=1')
     fs.writeFileSync(vpnCompose, edited)
     const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
     expect(res.status).toBe(200)
@@ -310,7 +340,7 @@ describe('Settings PUT — shared VPN', () => {
     const compose = readCompose()
     const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
     expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/control-server lockdown/)
+    expect((await res.json()).error).toMatch(/control-server lockdown mount/)
     expect(services.docker.upNoRecreate).not.toHaveBeenCalled()
     expect(readCompose()).toBe(compose)
   })

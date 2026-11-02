@@ -884,11 +884,12 @@ export async function PUT(
     ? composeSharedVpnGroup(sharedCompose, sharedHarness.name)
     : null
   // undefined = not in this request; null/false = off; otherwise a group name.
-  // `true` (the #280 shape) is refused: there is no implicit group.
+  // Booleans (the #280 shape) are refused: there is no implicit group, and
+  // off is spelled null.
   let sharedRequested: string | null | undefined
   const rawShared: unknown = (body as { sharedVpn?: unknown }).sharedVpn
   if (rawShared === undefined) sharedRequested = undefined
-  else if (rawShared === null || rawShared === false) sharedRequested = null
+  else if (rawShared === null) sharedRequested = null
   else {
     try {
       sharedRequested = assertVpnGroup(rawShared)
@@ -1044,31 +1045,52 @@ export async function PUT(
       const vpn = sharedVpnPaths(swarmMapDataDir(), group)
       try {
         const next = generateSharedVpnCompose({ group, envFile: vpn.envFile, controlAuthFile: vpn.controlAuthFile })
-        fs.mkdirSync(vpn.dir, { recursive: true, mode: 0o700 })
         // Written only when absent. An existing file is the operator's (it may
         // carry hand edits, a re-verified image); overwriting it would also make
         // it drift from the running container, whose next `up` would recreate
         // gluetun and cut every joined agent off.
+        // An existing group compose must be THIS group's: its project, its
+        // container, its key file, and the lockdown mount. A copied
+        // vpn/private → vpn/public would otherwise start a second container
+        // on the private key under the public project, and leave the agent
+        // pointing at a gluetun-public that never exists. Checked before
+        // anything is written.
+        const existing = fs.existsSync(vpn.composeFile) ? fs.readFileSync(vpn.composeFile, 'utf-8') : null
+        if (existing !== null) {
+          const lines = existing.split('\n').map((l) => l.trimEnd())
+          const problems = [
+            [`name: ${vpnProjectName(group)}`, `project name ${vpnProjectName(group)}`],
+            [`    container_name: ${vpnContainerName(group)}`, `container ${vpnContainerName(group)}`],
+            [`      - ${vpn.envFile}`, `key file ${vpn.envFile}`],
+            [`      - ${vpn.controlAuthFile}:${CONTROL_AUTH_CONTAINER_PATH}:ro`, 'the control-server lockdown mount'],
+          ].filter(([line]) => !lines.includes(line)).map(([, what]) => what)
+          const otherContainers = lines.filter((l) => /^ {4}container_name:/.test(l)
+            && l !== `    container_name: ${vpnContainerName(group)}`)
+          if (otherContainers.length) problems.push(`no other containers (found ${otherContainers.map((l) => l.trim()).join(', ')})`)
+          if (problems.length) {
+            return NextResponse.json(
+              {
+                error: `The existing compose for VPN group "${group}" (${vpn.composeFile}) is not this group's: it lacks `
+                  + `${problems.join('; ')}. Move it aside so swarm-map can generate it, then try again. Nothing was changed.`,
+              },
+              { status: 409 },
+            )
+          }
+        }
         // The deny-all auth file is (re)written when it differs: it is ours,
         // carries no secret, and a missing one would reopen the control server.
+        fs.mkdirSync(vpn.dir, { recursive: true, mode: 0o700 })
         const auth = generateControlAuthToml()
         const curAuth = fs.existsSync(vpn.controlAuthFile) ? fs.readFileSync(vpn.controlAuthFile, 'utf-8') : null
         if (curAuth !== auth) fs.writeFileSync(vpn.controlAuthFile, auth, { mode: 0o644 })
         // Read back: a truncated file decodes as "no roles", which gluetun
         // treats as its OPEN defaults. Fail rather than start on it.
         if (fs.readFileSync(vpn.controlAuthFile, 'utf-8') !== auth) throw new Error('control auth file write did not stick')
-        if (!fs.existsSync(vpn.composeFile)) {
-          fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
-        } else if (!fs.readFileSync(vpn.composeFile, 'utf-8').includes(`:${CONTROL_AUTH_CONTAINER_PATH}:ro`)) {
-          return NextResponse.json(
-            {
-              error: `The existing shared VPN compose (${vpn.composeFile}) does not mount the control-server lockdown, `
-                + 'so any agent could stop the tunnel. Regenerate it (move it aside and turn the shared VPN on again), '
-                + 'then recreate gluetun and every agent on it.',
-            },
-            { status: 409 },
-          )
-        }
+        // Written only when absent. An existing (validated) file is the
+        // operator's; overwriting it would also make it drift from the running
+        // container, whose next `up` would recreate gluetun and cut every
+        // joined agent off.
+        if (existing === null) fs.writeFileSync(vpn.composeFile, next, { mode: 0o600, flag: 'wx' })
         services.docker.upNoRecreate(vpn.composeFile, vpnProjectName(group))
       } catch {
         // Fixed message on purpose: docker compose's error can quote lines of
@@ -1227,6 +1249,22 @@ export async function PUT(
   let restarted = false
   if (!envUnchanged || vpnChanged || resourcesChanged || sharedVpnChanged) {
     try { services.harness.restart(id, 'recreate'); restarted = true } catch {}
+  }
+  // A group change that was written but not applied leaves the RUNNING agent
+  // in its old namespace (a trust-boundary mismatch) while the file and GET
+  // report the new one. Say so instead of reporting success.
+  if (sharedVpnChanged && !restarted) {
+    return NextResponse.json(
+      {
+        error: `The compose now puts this agent ${sharedVpnDesired ? `in VPN group "${sharedVpnDesired}"` : 'off the shared VPN'}, `
+          + 'but recreating the agent failed, so it is still running with its OLD networking. Recreate it now '
+          + '(Settings → restart, or docker compose up -d --force-recreate).',
+        written: true,
+        restarted: false,
+        version: settingsVersion(envPath, id),
+      },
+      { status: 502 },
+    )
   }
 
   return NextResponse.json({
