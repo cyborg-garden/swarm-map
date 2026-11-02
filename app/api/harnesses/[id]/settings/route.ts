@@ -21,8 +21,11 @@ import {
 import { adapterForRuntime } from '@/lib/services/harness'
 import { isDeployBornCompose, validateExtraMounts, validateExtraEnv, validateExtraAptPackages } from '@/lib/services/harness-compose'
 import {
-  SHARED_VPN_PROJECT,
   applySharedVpnToCompose,
+  assertVpnGroup,
+  composeSharedVpnGroup,
+  vpnContainerName,
+  vpnProjectName,
   apiServerPortBlocker,
   composeSharedVpnState,
   fixedPortPlatformBlocker,
@@ -149,7 +152,9 @@ type SettingsResponse = {
   // Shared VPN (lib/services/shared-vpn.ts): the agent joins the ONE gluetun
   // container's network namespace. Read from the compose file itself — the
   // file is the source of truth, there is no second flag to drift.
-  sharedVpn?: boolean
+  // The VPN group this agent is joined to (null = off). Groups split agents by
+  // trust: one group shares one network namespace and so one localhost.
+  sharedVpn?: string | null
   capsolverConfigured: boolean
   // Per-harness compose resource limits. These are NOT env vars — they live in
   // the compose deploy.resources.limits, so they persist on the harness record
@@ -191,16 +196,16 @@ function readDiscordThreadGate(dataDir: string, envContent: string) {
 // per-harness mtime). Any concurrent settings write moves one of the two
 // components, so a stale tab 409s instead of silently reverting it.
 /**
- * Shared-VPN state of the agent's compose. 'off' when there is no readable
- * compose: nothing to join, nothing to drop.
+ * The VPN group the agent's compose is joined to, or null when off (or when
+ * there is no readable compose: nothing to join, nothing to drop).
  */
-function sharedVpnStateFor(id: string): SharedVpnState {
+function sharedVpnGroupFor(id: string): string | null {
   const harness = services.harness.get(id)
-  if (!harness?.composeFile) return 'off'
+  if (!harness?.composeFile) return null
   try {
-    return composeSharedVpnState(fs.readFileSync(harness.composeFile, 'utf-8'), harness.name)
+    return composeSharedVpnGroup(fs.readFileSync(harness.composeFile, 'utf-8'), harness.name)
   } catch {
-    return 'off'
+    return null
   }
 }
 
@@ -221,7 +226,10 @@ function settingsVersion(envPath: string, id: string): string {
     // alone would not move: a client holding a pre-toggle snapshot could then
     // PUT the whole document back and silently revert it. Only present when
     // on, so every pre-existing token stays valid.
-    ...(sharedVpnStateFor(id) === 'on' ? { sharedVpn: true } : {}),
+    ...(() => {
+      const group = sharedVpnGroupFor(id)
+      return group !== null ? { sharedVpn: group } : {}
+    })(),
   })
   return `${String(fs.statSync(envPath).mtimeMs)}:${fingerprint}`
 }
@@ -397,7 +405,7 @@ export async function GET(
     commandApprovalAdminOnly,
     memoryScope,
     vpnEnabled,
-    sharedVpn: sharedVpnStateFor(id) === 'on',
+    sharedVpn: sharedVpnGroupFor(id),
     capsolverConfigured,
     resources,
     surfaces,
@@ -872,7 +880,25 @@ export async function PUT(
   const sharedState: SharedVpnState = sharedCompose && sharedHarness
     ? composeSharedVpnState(sharedCompose, sharedHarness.name)
     : 'off'
-  const sharedRequested = typeof body.sharedVpn === 'boolean' ? body.sharedVpn : undefined
+  const sharedGroup = sharedState === 'on' && sharedCompose && sharedHarness
+    ? composeSharedVpnGroup(sharedCompose, sharedHarness.name)
+    : null
+  // undefined = not in this request; null/false = off; otherwise a group name.
+  // `true` (the #280 shape) is refused: there is no implicit group.
+  let sharedRequested: string | null | undefined
+  const rawShared: unknown = (body as { sharedVpn?: unknown }).sharedVpn
+  if (rawShared === undefined) sharedRequested = undefined
+  else if (rawShared === null || rawShared === false) sharedRequested = null
+  else {
+    try {
+      sharedRequested = assertVpnGroup(rawShared)
+    } catch (err) {
+      return NextResponse.json(
+        { error: `sharedVpn must be a VPN group name or null: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 400 },
+      )
+    }
+  }
   // A network_mode swarm-map did not write (the hand-made container:gluetun-vera
   // setup) is reported as off, so a whole-document PUT carrying false is not a
   // change. The per-agent wireguard variant also has its own network_mode; it is
@@ -880,8 +906,11 @@ export async function PUT(
   const handMadeNetworkMode = sharedState === 'foreign' && !!sharedCompose && !!sharedHarness
     && serviceNetworkMode(sharedCompose, sharedHarness.name) !== 'network_mode: "service:wireguard"'
   const sharedVpnChanged = sharedRequested !== undefined && sharedState !== 'foreign'
-    && sharedRequested !== (sharedState === 'on')
-  const sharedVpnDesired = sharedVpnChanged ? sharedRequested === true : sharedState === 'on'
+    && sharedRequested !== sharedGroup
+  // The group the compose should end on (null = off).
+  const sharedVpnDesired: string | null = sharedVpnChanged ? sharedRequested ?? null : sharedGroup
+  // Joining or moving to a group (vs. turning off).
+  const sharedJoining = sharedVpnChanged && sharedVpnDesired !== null
   const resourcesWillChange = body.resources !== undefined && (() => {
     const norm = (r?: { memory?: string; cpus?: string }) => `${r?.memory ?? ''}|${r?.cpus ?? ''}`
     return norm(services.harness.get(id)?.resources) !== norm(body.resources)
@@ -891,7 +920,7 @@ export async function PUT(
   let sharedPort = 0
   {
     const refuse = (error: string) => NextResponse.json({ error }, { status: 409 })
-    if (sharedRequested === true && sharedState === 'foreign') {
+    if (typeof sharedRequested === 'string' && sharedState === 'foreign') {
       return refuse(
         'This agent already has its own network_mode (a hand-made VPN or the per-agent WireGuard VPN). ' +
         'Turn that off, or restore the compose from its backup, before turning on the shared VPN.')
@@ -901,26 +930,36 @@ export async function PUT(
         'This agent\'s compose has a hand-made network_mode. Regenerating it for VPN/resource changes ' +
         'would silently drop it — migrate it to the shared VPN (or restore the backup) first.')
     }
-    if (sharedVpnDesired && /^VPN_ENABLED=true$/m.test(content)) {
+    if (sharedVpnDesired !== null && /^VPN_ENABLED=true$/m.test(content)) {
       return refuse('The shared VPN and the per-agent WireGuard VPN cannot both be on. Turn one off first.')
     }
-    if (sharedVpnChanged && sharedRequested) {
-      if (!sharedCompose || !sharedHarness) {
+    // A move between groups is judged on the agent's OWN (off) form, so the
+    // checks see its real networking, not the current group's.
+    let sharedBase = sharedCompose
+    if (sharedJoining && sharedGroup !== null && sharedCompose && sharedHarness) {
+      try {
+        sharedBase = removeSharedVpnFromCompose(sharedCompose, sharedHarness.name)
+      } catch (err) {
+        return refuse(err instanceof Error ? err.message : String(err))
+      }
+    }
+    if (sharedJoining) {
+      if (!sharedBase || !sharedHarness) {
         return refuse('This agent has no compose file swarm-map can edit, so it cannot join the shared VPN.')
       }
-      const blocker = sharedVpnComposeBlocker(sharedCompose, sharedHarness.name)
+      const blocker = sharedVpnComposeBlocker(sharedBase, sharedHarness.name)
       if (blocker) return refuse(blocker)
-      const servicePort = readServicePublishedPort(sharedCompose, sharedHarness.name)
+      const servicePort = readServicePublishedPort(sharedBase, sharedHarness.name)
       if (servicePort === null) {
         return refuse('Could not find this agent\'s port in its compose file, so it cannot be given its own API port on the shared VPN.')
       }
       sharedPort = servicePort
-      const vpn = sharedVpnPaths(swarmMapDataDir())
+      const vpn = sharedVpnPaths(swarmMapDataDir(), sharedVpnDesired!)
       // Existence only — the key file is never read here.
       if (!fs.existsSync(vpn.envFile)) {
         return refuse(
-          `The shared VPN key file ${vpn.envFile} does not exist. Run the Mullvad key script to create it ` +
-          '(mode 600), then turn the shared VPN on again.')
+          `The key file for VPN group "${sharedVpnDesired}" (${vpn.envFile}) does not exist. Run the Mullvad ` +
+          'key script to create it (mode 600), then try again. Nothing was changed.')
       }
       const configPath = path.join(dataDir, 'config.yaml')
       const configYaml = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : ''
@@ -928,7 +967,7 @@ export async function PUT(
       // extraEnv) and the agent's .env, parsed the way hermes' dotenv loader
       // reads it. .env wins on a clash — hermes reloads it with override.
       const agentEnv: Record<string, string> = {
-        ...readServiceEnvironment(sharedCompose, sharedHarness.name),
+        ...readServiceEnvironment(sharedBase, sharedHarness.name),
         ...parseDotenv(content),
       }
       // Each profile runs its own gateway (own .env/config.yaml, API on 8642
@@ -947,7 +986,7 @@ export async function PUT(
         return refuse('This agent has a legacy gateway.json, whose platforms hermes also loads and swarm-map '
           + 'cannot check for the shared VPN. Move its settings into config.yaml first.')
       }
-      const extraEnvFiles = readServiceEnvFiles(sharedCompose, sharedHarness.name)
+      const extraEnvFiles = readServiceEnvFiles(sharedBase, sharedHarness.name)
         .filter((f) => path.resolve(path.dirname(sharedHarness.composeFile!), f) !== path.join(dataDir, '.env'))
       if (extraEnvFiles.length) {
         return refuse(`This agent's compose loads other env files (${extraEnvFiles.join(', ')}) that the shared VPN `
@@ -956,15 +995,15 @@ export async function PUT(
       // The gateway sees .env over compose environment, but the s6 dashboard
       // sees compose environment over env_file, so check each source alone.
       const listenerProblem = fixedPortPlatformBlocker(configYaml, agentEnv, content)
-        ?? fixedPortPlatformBlocker(configYaml, readServiceEnvironment(sharedCompose, sharedHarness.name))
+        ?? fixedPortPlatformBlocker(configYaml, readServiceEnvironment(sharedBase, sharedHarness.name))
       if (listenerProblem) return refuse(listenerProblem)
       const portProblem = apiServerPortBlocker({ configYaml, env: agentEnv, port: sharedPort, envText: content })
       if (portProblem) return refuse(portProblem)
     }
     if (sharedVpnChanged && !regenerates && sharedCompose && sharedHarness) {
       try {
-        sharedNextCompose = sharedRequested
-          ? applySharedVpnToCompose(sharedCompose, sharedHarness.name, sharedPort)
+        sharedNextCompose = sharedJoining
+          ? applySharedVpnToCompose(sharedBase!, sharedHarness.name, sharedPort, sharedVpnDesired!)
           : removeSharedVpnFromCompose(sharedCompose, sharedHarness.name)
       } catch (err) {
         return refuse(err instanceof Error ? err.message : String(err))
@@ -994,14 +1033,17 @@ export async function PUT(
         { status: 409 },
       )
     }
-    if (sharedVpnChanged && sharedRequested) {
-      // gluetun must exist before the agent is recreated into its namespace.
+    if (sharedJoining) {
+      // The target group's gluetun must exist before the agent is recreated
+      // into its namespace — so a join or a move never leaves the agent
+      // pointing at a missing container.
       // `--no-recreate`: an already-running gluetun is never recreated, which
       // would cut every other joined agent off. Idempotent; harmless if a later
       // step refuses (gluetun just runs with one agent fewer).
-      const vpn = sharedVpnPaths(swarmMapDataDir())
+      const group = sharedVpnDesired!
+      const vpn = sharedVpnPaths(swarmMapDataDir(), group)
       try {
-        const next = generateSharedVpnCompose({ envFile: vpn.envFile, controlAuthFile: vpn.controlAuthFile })
+        const next = generateSharedVpnCompose({ group, envFile: vpn.envFile, controlAuthFile: vpn.controlAuthFile })
         fs.mkdirSync(vpn.dir, { recursive: true, mode: 0o700 })
         // Written only when absent. An existing file is the operator's (it may
         // carry hand edits, a re-verified image); overwriting it would also make
@@ -1027,14 +1069,14 @@ export async function PUT(
             { status: 409 },
           )
         }
-        services.docker.upNoRecreate(vpn.composeFile, SHARED_VPN_PROJECT)
+        services.docker.upNoRecreate(vpn.composeFile, vpnProjectName(group))
       } catch {
         // Fixed message on purpose: docker compose's error can quote lines of
         // the env_file, which here is the WireGuard key file.
         return NextResponse.json(
           {
-            error: 'Could not start the shared VPN container (gluetun), so nothing was changed. '
-              + 'On the host, check `docker logs gluetun-shared` and that the key file has one KEY=value per line.',
+            error: `Could not start the VPN container for group "${group}", so nothing was changed. `
+              + `On the host, check \`docker logs ${vpnContainerName(group)}\` and that the key file has one KEY=value per line.`,
           },
           { status: 502 },
         )

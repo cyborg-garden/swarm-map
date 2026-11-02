@@ -142,7 +142,7 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     const dir = path.join(h.tmpData, 'compose', 'vera')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'docker-compose.yml'),
-      generateAgentCompose('vera', 8642, path.join(h.tmpHome, '.hermes-vera'), { image: 'x' }, { sharedVpn: true }))
+      generateAgentCompose('vera', 8642, path.join(h.tmpHome, '.hermes-vera'), { image: 'x' }, { sharedVpn: 'private' }))
     const res = await deploy({ name: 'newbie', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
     expect((await res.json()).ok).toBe(true)
     const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-newbie', '.env'), 'utf-8')

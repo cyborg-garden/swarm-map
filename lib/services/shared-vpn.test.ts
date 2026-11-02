@@ -13,9 +13,11 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  SHARED_VPN_CONTAINER,
   SHARED_VPN_IMAGE,
-  SHARED_VPN_PROJECT,
+  vpnContainerName,
+  vpnProjectName,
+  assertVpnGroup,
+  composeSharedVpnGroup,
   applySharedVpnToCompose,
   removeSharedVpnFromCompose,
   composeSharedVpnState,
@@ -87,9 +89,9 @@ networks:
 
 describe('applySharedVpnToCompose on a deploy-born compose', () => {
   it('joins the shared gluetun namespace and drops ports + extra_hosts from the service', () => {
-    const out = applySharedVpnToCompose(deployBorn(), NAME, PORT)
+    const out = applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private')
     const block = hermesBlock(out)
-    expect(block).toContain(`    network_mode: "container:${SHARED_VPN_CONTAINER}"`)
+    expect(block).toContain(`    network_mode: "container:${vpnContainerName('private')}"`)
     // network_mode: container: forbids these on the joined service.
     expect(block).not.toMatch(/^ {4}ports:/m)
     expect(block).not.toMatch(/^ {4}extra_hosts:/m)
@@ -98,7 +100,7 @@ describe('applySharedVpnToCompose on a deploy-born compose', () => {
 
   it('keeps every deploy-born hardening line byte-identical', () => {
     const before = deployBorn()
-    const out = applySharedVpnToCompose(before, NAME, PORT)
+    const out = applySharedVpnToCompose(before, NAME, PORT, 'private')
     for (const line of [
       '    read_only: true',
       '    cap_drop:',
@@ -119,13 +121,13 @@ describe('applySharedVpnToCompose on a deploy-born compose', () => {
   })
 
   it('pins API_SERVER_PORT to the agent\'s own port so agents in one namespace do not collide', () => {
-    const block = hermesBlock(applySharedVpnToCompose(deployBorn(), NAME, PORT))
+    const block = hermesBlock(applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private'))
     expect(block).toMatch(/^ {4}environment:/m)
     expect(block).toMatch(new RegExp(`^ {6}- API_SERVER_PORT=${PORT}\\b`, 'm'))
   })
 
   it('appends the pin LAST in an existing environment list so it outranks earlier entries', () => {
-    const out = applySharedVpnToCompose(HAND_EDITED, NAME, PORT)
+    const out = applySharedVpnToCompose(HAND_EDITED, NAME, PORT, 'private')
     const block = hermesBlock(out).split('\n')
     const envIdx = block.findIndex((l) => l === '    environment:')
     const items = []
@@ -137,13 +139,13 @@ describe('applySharedVpnToCompose on a deploy-born compose', () => {
   })
 
   it('keeps the agent\'s published port discoverable so port allocation never hands it out', () => {
-    const out = applySharedVpnToCompose(deployBorn(), NAME, PORT)
+    const out = applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private')
     // collectUsedPorts and the settings route both read /published:\s*(\d+)/.
     expect(out.match(/published:\s*(\d+)/)?.[1]).toBe(String(PORT))
   })
 
   it('withholds a Google OAuth publish too (nothing may publish from a joined service)', () => {
-    const out = applySharedVpnToCompose(deployBornGoogle(), NAME, PORT)
+    const out = applySharedVpnToCompose(deployBornGoogle(), NAME, PORT, 'private')
     expect(hermesBlock(out)).not.toMatch(/^ {4}ports:/m)
     expect(out).toContain('/opt/google-multiplayer-mcp:ro')
     expect(isDeployBornCompose(out)).toBe(true)
@@ -151,7 +153,7 @@ describe('applySharedVpnToCompose on a deploy-born compose', () => {
 
   it('leaves state-init and the top-level network/volume trailers alone', () => {
     const before = deployBorn()
-    const out = applySharedVpnToCompose(before, NAME, PORT)
+    const out = applySharedVpnToCompose(before, NAME, PORT, 'private')
     expect(out).toContain('  state-init-vera:')
     expect(out).toContain('networks:\n  default:\n    name: hermes-vera')
     expect(out).toContain('volumes:\n  hermes-state-vera:\n    name: hermes-state-vera')
@@ -167,7 +169,7 @@ describe('removeSharedVpnFromCompose', () => {
   ] as const) {
     it(`restores the original bytes exactly (${label})`, () => {
       const before = make()
-      const on = applySharedVpnToCompose(before, NAME, PORT)
+      const on = applySharedVpnToCompose(before, NAME, PORT, 'private')
       expect(on).not.toBe(before)
       expect(removeSharedVpnFromCompose(on, NAME)).toBe(before)
     })
@@ -180,8 +182,8 @@ describe('removeSharedVpnFromCompose', () => {
 
 describe('applySharedVpnToCompose refusals (never render something that means more than it says)', () => {
   it('refuses a compose already on the shared VPN', () => {
-    const on = applySharedVpnToCompose(deployBorn(), NAME, PORT)
-    expect(() => applySharedVpnToCompose(on, NAME, PORT)).toThrow(/network_mode/)
+    const on = applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private')
+    expect(() => applySharedVpnToCompose(on, NAME, PORT, 'private')).toThrow(/network_mode/)
   })
 
   it('refuses a hand-made network_mode (e.g. the original container:gluetun-vera)', () => {
@@ -189,32 +191,32 @@ describe('applySharedVpnToCompose refusals (never render something that means mo
       '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
       '    network_mode: "container:gluetun-vera"\n',
     )
-    expect(() => applySharedVpnToCompose(vera, NAME, PORT)).toThrow(/network_mode/)
+    expect(() => applySharedVpnToCompose(vera, NAME, PORT, 'private')).toThrow(/network_mode/)
   })
 
   it('refuses a service-level networks: key (forbidden with network_mode: container)', () => {
     const c = deployBorn().replace('    command: gateway\n', '    networks:\n      - other\n    command: gateway\n')
-    expect(() => applySharedVpnToCompose(c, NAME, PORT)).toThrow(/networks/)
+    expect(() => applySharedVpnToCompose(c, NAME, PORT, 'private')).toThrow(/networks/)
   })
 
   it('refuses a map-form environment block', () => {
     const c = HAND_EDITED.replace('      - HOME=/opt/data\n      - HERMES_HOME=/opt/data\n', '      HOME: /opt/data\n')
-    expect(() => applySharedVpnToCompose(c, NAME, PORT)).toThrow(/environment/)
+    expect(() => applySharedVpnToCompose(c, NAME, PORT, 'private')).toThrow(/environment/)
   })
 
   it('refuses when the hermes service is missing', () => {
-    expect(() => applySharedVpnToCompose(deployBorn(), 'someone-else', PORT)).toThrow(/hermes-someone-else/)
+    expect(() => applySharedVpnToCompose(deployBorn(), 'someone-else', PORT, 'private')).toThrow(/hermes-someone-else/)
   })
 
   it('refuses a non-integer port', () => {
-    expect(() => applySharedVpnToCompose(deployBorn(), NAME, Number.NaN)).toThrow(/port/)
+    expect(() => applySharedVpnToCompose(deployBorn(), NAME, Number.NaN, 'private')).toThrow(/port/)
   })
 })
 
 describe('composeSharedVpnState', () => {
   it('reports off / on / foreign', () => {
     expect(composeSharedVpnState(deployBorn(), NAME)).toBe('off')
-    expect(composeSharedVpnState(applySharedVpnToCompose(deployBorn(), NAME, PORT), NAME)).toBe('on')
+    expect(composeSharedVpnState(applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private'), NAME)).toBe('on')
     const handMade = deployBorn().replace(
       '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
       '    network_mode: "container:gluetun-vera"\n',
@@ -231,32 +233,32 @@ describe('composeSharedVpnState', () => {
 describe('generators honor sharedVpn (a regen keeps the VPN)', () => {
   it('generateAgentCompose({ sharedVpn }) === the toggle applied to the plain deploy-born compose', () => {
     const plain = generateAgentCompose(NAME, PORT, DATA, { build: '/src/hermes-agent-mt' })
-    const vpn = generateAgentCompose(NAME, PORT, DATA, { build: '/src/hermes-agent-mt' }, { sharedVpn: true })
-    expect(vpn).toBe(applySharedVpnToCompose(plain, NAME, PORT))
+    const vpn = generateAgentCompose(NAME, PORT, DATA, { build: '/src/hermes-agent-mt' }, { sharedVpn: 'private' })
+    expect(vpn).toBe(applySharedVpnToCompose(plain, NAME, PORT, 'private'))
     expect(isDeployBornCompose(vpn)).toBe(true)
   })
 
   it('generateStandaloneCompose({ sharedVpn }) === the toggle applied to the plain standalone compose', () => {
     const plain = generateStandaloneCompose(NAME, PORT, DATA, { memory: '4G' })
-    const vpn = generateStandaloneCompose(NAME, PORT, DATA, { memory: '4G', sharedVpn: true })
-    expect(vpn).toBe(applySharedVpnToCompose(plain, NAME, PORT))
+    const vpn = generateStandaloneCompose(NAME, PORT, DATA, { memory: '4G', sharedVpn: 'private' })
+    expect(vpn).toBe(applySharedVpnToCompose(plain, NAME, PORT, 'private'))
     expect(composeSharedVpnState(vpn, NAME)).toBe('on')
   })
 
   it('refuses sharedVpn together with the per-agent wireguard VPN', () => {
-    expect(() => generateStandaloneCompose(NAME, PORT, DATA, { sharedVpn: true, vpnEnabled: true })).toThrow(/wireguard|vpnEnabled/i)
+    expect(() => generateStandaloneCompose(NAME, PORT, DATA, { sharedVpn: 'private', vpnEnabled: true })).toThrow(/wireguard|vpnEnabled/i)
   })
 
   it('refuses sharedVpn with a bundled ollama sidecar (unreachable by service name from the gluetun namespace)', () => {
-    expect(() => generateStandaloneCompose(NAME, PORT, DATA, { sharedVpn: true, bundledOllama: true })).toThrow(/ollama/i)
-    expect(() => generateAgentCompose(NAME, PORT, DATA, { image: 'x' }, { sharedVpn: true, bundledOllama: true })).toThrow(/ollama/i)
+    expect(() => generateStandaloneCompose(NAME, PORT, DATA, { sharedVpn: 'private', bundledOllama: true })).toThrow(/ollama/i)
+    expect(() => generateAgentCompose(NAME, PORT, DATA, { image: 'x' }, { sharedVpn: 'private', bundledOllama: true })).toThrow(/ollama/i)
   })
 })
 
 describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
-  const envFile = '/Users/juni/.hermes-swarm-map/vpn/gluetun.env'
-  const controlAuthFile = '/Users/juni/.hermes-swarm-map/vpn/control-server-auth.toml'
-  const out = generateSharedVpnCompose({ envFile, controlAuthFile })
+  const envFile = '/Users/juni/.hermes-swarm-map/vpn/private/gluetun.env'
+  const controlAuthFile = '/Users/juni/.hermes-swarm-map/vpn/private/control-server-auth.toml'
+  const out = generateSharedVpnCompose({ group: 'private', envFile, controlAuthFile })
 
   it('locks the control server: deny-all auth mounted read-only, path pinned over env_file', () => {
     expect(out).toContain(`      - ${controlAuthFile}:${CONTROL_AUTH_CONTAINER_PATH}:ro`)
@@ -276,9 +278,9 @@ describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
   })
 
   it('declares the gluetun container the agents join', () => {
-    expect(out).toContain(`name: ${SHARED_VPN_PROJECT}`)
-    expect(out).toContain(`  ${SHARED_VPN_CONTAINER}:`)
-    expect(out).toContain(`    container_name: ${SHARED_VPN_CONTAINER}`)
+    expect(out).toContain(`name: ${vpnProjectName('private')}`)
+    expect(out).toContain(`  ${vpnContainerName('private')}:`)
+    expect(out).toContain(`    container_name: ${vpnContainerName('private')}`)
     expect(out).toContain(`    image: ${SHARED_VPN_IMAGE}`)
     expect(out).toContain('      - NET_ADMIN')
     expect(out).toContain('      - /dev/net/tun:/dev/net/tun')
@@ -303,24 +305,25 @@ describe('generateSharedVpnCompose (the ONE gluetun container)', () => {
   })
 
   it('names nothing hermes-* or seraph-* (discovery would claim it as a phantom agent)', () => {
-    expect(SHARED_VPN_CONTAINER).not.toMatch(/^(hermes|seraph)-/)
+    expect(vpnContainerName('private')).not.toMatch(/^(hermes|seraph)-/)
     expect(out).not.toMatch(/command: gateway|\/opt\/data/)
   })
 
   it('refuses an env-file path that could inject YAML', () => {
-    expect(() => generateSharedVpnCompose({ envFile: '/x\n    privileged: true', controlAuthFile })).toThrow()
-    expect(() => generateSharedVpnCompose({ envFile: 'relative/gluetun.env', controlAuthFile })).toThrow(/absolute/)
-    expect(() => generateSharedVpnCompose({ envFile, controlAuthFile: '/a:/etc/passwd' })).toThrow(/':'/)
+    expect(() => generateSharedVpnCompose({ group: 'private', envFile: '/x\n    privileged: true', controlAuthFile })).toThrow()
+    expect(() => generateSharedVpnCompose({ group: 'private', envFile: 'relative/gluetun.env', controlAuthFile })).toThrow(/absolute/)
+    expect(() => generateSharedVpnCompose({ group: 'private', envFile, controlAuthFile: '/a:/etc/passwd' })).toThrow(/':'/)
   })
 })
 
 describe('sharedVpnPaths', () => {
   it('lives in the swarm-map data dir, outside compose/ (so discovery never sees it as an agent)', () => {
-    const p = sharedVpnPaths('/Users/juni/.hermes-swarm-map')
-    expect(p.dir).toBe('/Users/juni/.hermes-swarm-map/vpn')
-    expect(p.composeFile).toBe('/Users/juni/.hermes-swarm-map/vpn/docker-compose.yml')
-    expect(p.envFile).toBe('/Users/juni/.hermes-swarm-map/vpn/gluetun.env')
-    expect(p.controlAuthFile).toBe('/Users/juni/.hermes-swarm-map/vpn/control-server-auth.toml')
+    const p = sharedVpnPaths('/Users/juni/.hermes-swarm-map', 'private')
+    expect(p.dir).toBe('/Users/juni/.hermes-swarm-map/vpn/private')
+    expect(p.composeFile).toBe('/Users/juni/.hermes-swarm-map/vpn/private/docker-compose.yml')
+    expect(p.envFile).toBe('/Users/juni/.hermes-swarm-map/vpn/private/gluetun.env')
+    expect(p.controlAuthFile).toBe('/Users/juni/.hermes-swarm-map/vpn/private/control-server-auth.toml')
+    expect(() => sharedVpnPaths('/d', '../etc')).toThrow(/group/)
   })
 })
 
@@ -397,12 +400,12 @@ describe('round-2 review regressions', () => {
   it('reads the port of THIS agent\'s service, not the first in the file', () => {
     const c = twoAgents()
     expect(readServicePublishedPort(c, 'b')).toBe(8662)
-    expect(readServicePublishedPort(applySharedVpnToCompose(c, 'b', 8662), 'b')).toBe(8662)
+    expect(readServicePublishedPort(applySharedVpnToCompose(c, 'b', 8662, 'private'), 'b')).toBe(8662)
   })
 
   it('two agents on the VPN in one file can each be turned off', () => {
     const c = twoAgents()
-    const both = applySharedVpnToCompose(applySharedVpnToCompose(c, 'a', 8652), 'b', 8662)
+    const both = applySharedVpnToCompose(applySharedVpnToCompose(c, 'a', 8652, 'private'), 'b', 8662, 'private')
     const aOff = removeSharedVpnFromCompose(both, 'a')
     expect(composeSharedVpnState(aOff, 'b')).toBe('on')
     expect(removeSharedVpnFromCompose(aOff, 'b')).toBe(c)
@@ -446,7 +449,7 @@ describe('round-3 review regressions', () => {
   })
 
   it('reads the hermes service environment (where extraEnv lands), excluding the shared-VPN pin', () => {
-    const c = applySharedVpnToCompose(generateStandaloneCompose(NAME, PORT, DATA, { extraEnv: { WEBHOOK_ENABLED: 'true' } }), NAME, PORT)
+    const c = applySharedVpnToCompose(generateStandaloneCompose(NAME, PORT, DATA, { extraEnv: { WEBHOOK_ENABLED: 'true' } }), NAME, PORT, 'private')
     const env = readServiceEnvironment(c, NAME)
     expect(env.WEBHOOK_ENABLED).toBe('true')
     expect(env.API_SERVER_PORT).toBeUndefined()
@@ -523,6 +526,46 @@ describe('round-5 review regressions', () => {
   })
 })
 
+describe('VPN groups (split by trust)', () => {
+  it('accepts only short lowercase names', () => {
+    for (const ok of ['private', 'public', 'p2']) expect(assertVpnGroup(ok)).toBe(ok)
+    for (const bad of ['', 'Private', '2x', 'a-b', 'a_b', '../x', 'x'.repeat(17), 'shared\n']) {
+      expect(() => assertVpnGroup(bad)).toThrow(/group/)
+    }
+  })
+
+  it('each group has its own container, project and network_mode', () => {
+    expect(vpnContainerName('private')).toBe('gluetun-private')
+    expect(vpnContainerName('public')).toBe('gluetun-public')
+    expect(vpnProjectName('public')).toBe('swarm-vpn-public')
+    const pub = applySharedVpnToCompose(deployBorn(), NAME, PORT, 'public')
+    expect(pub).toContain('    network_mode: "container:gluetun-public"')
+    expect(composeSharedVpnGroup(pub, NAME)).toBe('public')
+    expect(composeSharedVpnGroup(deployBorn(), NAME)).toBeNull()
+    expect(generateSharedVpnCompose({ group: 'public', envFile: '/v/public/gluetun.env', controlAuthFile: '/v/public/a.toml' }))
+      .toContain('    container_name: gluetun-public')
+  })
+
+  it('moving between groups is remove + apply, and round-trips exactly', () => {
+    const before = deployBorn()
+    const moved = applySharedVpnToCompose(removeSharedVpnFromCompose(applySharedVpnToCompose(before, NAME, PORT, 'private'), NAME), NAME, PORT, 'public')
+    expect(moved).toBe(applySharedVpnToCompose(before, NAME, PORT, 'public'))
+    expect(removeSharedVpnFromCompose(moved, NAME)).toBe(before)
+  })
+
+  it('a hand-made container:gluetun-vera is foreign, not a group named vera', () => {
+    const handMade = deployBorn().replace('    extra_hosts:\n      - "host.docker.internal:host-gateway"\n', '    network_mode: "container:gluetun-vera"\n')
+    expect(composeSharedVpnState(handMade, NAME)).toBe('foreign')
+    expect(composeSharedVpnGroup(handMade, NAME)).toBeNull()
+  })
+
+  it('generators and transforms refuse an invalid group', () => {
+    expect(() => applySharedVpnToCompose(deployBorn(), NAME, PORT, 'Bad')).toThrow(/group/)
+    expect(() => generateStandaloneCompose(NAME, PORT, DATA, { sharedVpn: 'a b' })).toThrow(/group/)
+    expect(() => generateSharedVpnCompose({ group: 'x\ny', envFile: '/a', controlAuthFile: '/b' })).toThrow(/group/)
+  })
+})
+
 describe('round-6 review regressions', () => {
   it('an unparseable config.yaml refuses the port check too', () => {
     expect(apiServerPortBlocker({ configYaml: 'toolsets:\n- x\nplatforms:\n  api_server:\n    extra:\n      port: 8642\n', env: {}, port: PORT })).toMatch(/Could not read/)
@@ -547,7 +590,7 @@ describe('comments and forbidden keys inside the service', () => {
   const withShallowComment = deployBorn().replace('    env_file:\n', '  # a shallow comment inside the service\n    env_file:\n')
 
   it('a shallow comment does not end the service: ports after it are still stashed, and it round-trips', () => {
-    const on = applySharedVpnToCompose(withShallowComment, NAME, PORT)
+    const on = applySharedVpnToCompose(withShallowComment, NAME, PORT, 'private')
     expect(hermesBlock(on)).toBeDefined()
     expect(on).not.toMatch(/^ {4}ports:/m)
     expect(removeSharedVpnFromCompose(on, NAME)).toBe(withShallowComment)
@@ -556,27 +599,27 @@ describe('comments and forbidden keys inside the service', () => {
   it('a hand-made network_mode after a shallow comment is still seen (foreign), so toggling refuses', () => {
     const handMade = withShallowComment.replace('    command: gateway\n', '    network_mode: "container:gluetun-vera"\n    command: gateway\n')
     expect(composeSharedVpnState(handMade, NAME)).toBe('foreign')
-    expect(() => applySharedVpnToCompose(handMade, NAME, PORT)).toThrow(/network_mode/)
+    expect(() => applySharedVpnToCompose(handMade, NAME, PORT, 'private')).toThrow(/network_mode/)
   })
 
   it('a comment between list items does not split a stashed key', () => {
     const c = deployBorn().replace('      - published: 8722\n', '  # odd comment\n      - published: 8722\n')
-    const on = applySharedVpnToCompose(c, NAME, PORT)
+    const on = applySharedVpnToCompose(c, NAME, PORT, 'private')
     expect(on).not.toMatch(/^ {6}- published/m)
     expect(removeSharedVpnFromCompose(on, NAME)).toBe(c)
   })
 
   it('refuses privileged or network-admin capabilities on the agent service', () => {
-    expect(() => applySharedVpnToCompose(deployBorn().replace('    read_only: true\n', '    privileged: true\n    read_only: true\n'), NAME, PORT)).toThrow(/privileged/)
-    expect(() => applySharedVpnToCompose(deployBorn().replace('      - NET_BIND_SERVICE\n', '      - NET_BIND_SERVICE\n      - NET_ADMIN\n'), NAME, PORT)).toThrow(/capability/)
+    expect(() => applySharedVpnToCompose(deployBorn().replace('    read_only: true\n', '    privileged: true\n    read_only: true\n'), NAME, PORT, 'private')).toThrow(/privileged/)
+    expect(() => applySharedVpnToCompose(deployBorn().replace('      - NET_BIND_SERVICE\n', '      - NET_BIND_SERVICE\n      - NET_ADMIN\n'), NAME, PORT, 'private')).toThrow(/capability/)
     // cap_drop: ALL is the hardening itself and must not trip the check.
-    expect(() => applySharedVpnToCompose(deployBorn(), NAME, PORT)).not.toThrow()
+    expect(() => applySharedVpnToCompose(deployBorn(), NAME, PORT, 'private')).not.toThrow()
   })
 
   for (const key of ['hostname: x', 'dns:\n      - 192.0.2.53', 'expose:\n      - "9000"', 'mac_address: 02:42:ac:11:00:02', 'links:\n      - a']) {
     it(`refuses a service-level ${key.split(':')[0]} key`, () => {
       const c = deployBorn().replace('    command: gateway\n', `    ${key}\n    command: gateway\n`)
-      expect(() => applySharedVpnToCompose(c, NAME, PORT)).toThrow(new RegExp(key.split(':')[0]))
+      expect(() => applySharedVpnToCompose(c, NAME, PORT, 'private')).toThrow(new RegExp(key.split(':')[0]))
     })
   }
 })

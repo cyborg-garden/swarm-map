@@ -278,16 +278,16 @@ export function generateAgentCompose(
     memory?: string
     cpus?: string
     /** Join the shared gluetun VPN (lib/services/shared-vpn.ts). */
-    sharedVpn?: boolean
+    sharedVpn?: string | null
   },
 ): string {
-  if (options?.sharedVpn) {
+  if (options?.sharedVpn !== undefined && options?.sharedVpn !== null) {
     assertSharedVpnCompatible({ bundledOllama: options.bundledOllama })
     // Same bytes as toggling it on an existing deploy-born file: the transform
     // touches only the networking lines, so the hardening below is untouched.
     return applySharedVpnToCompose(
-      generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { ...options, sharedVpn: false }),
-      slug, port)
+      generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { ...options, sharedVpn: null }),
+      slug, port, options.sharedVpn)
   }
   // githubMcpEnabled is accepted for API compatibility but no longer used here:
   // the github MCP token is delivered via the agent .env (env_file), not a compose

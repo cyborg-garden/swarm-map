@@ -334,13 +334,13 @@ export interface ComposeOptions {
    */
   extraAptPackages?: string[]
   /**
-   * Join the ONE shared gluetun container's network namespace (see
+   * Join this VPN group's gluetun container's network namespace (see
    * lib/services/shared-vpn.ts). Rendered by applying the same transform the
    * settings toggle applies to an existing file, so a regeneration and a toggle
    * can never disagree — and a regeneration never drops the VPN. Mutually
    * exclusive with the per-agent wireguard `vpnEnabled` and with `bundledOllama`.
    */
-  sharedVpn?: boolean
+  sharedVpn?: string | null
 }
 
 /** Model the bundled ollama sidecar pulls and serves on boot (tiny, CPU-friendly). */
@@ -527,11 +527,11 @@ export function generateStandaloneCompose(
   // script, so it has no use for the extra packages.
   const hermesSourceBlock = renderHermesSourceBlock(resolved, extraAptPackages)
 
-  if (sharedVpn) {
+  if (sharedVpn !== undefined && sharedVpn !== null) {
     assertSharedVpnCompatible({ vpnEnabled, bundledOllama })
     return applySharedVpnToCompose(
       generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock),
-      agentName, port)
+      agentName, port, sharedVpn)
   }
 
   if (vpnEnabled) {
