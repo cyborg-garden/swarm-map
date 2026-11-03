@@ -128,7 +128,7 @@ export function checkBasePackageDrift(
       }
     }
   }
-  for (const name of basePluginNames(pkg, sel)) {
+  for (const name of basePluginNames(pkg, sel, dataDir)) {
     if (!enabled.has(name)) add('core-plugin-not-enabled', 'warn', `${name} is not in plugins.enabled.`)
   }
   for (const s of selected.skills) {

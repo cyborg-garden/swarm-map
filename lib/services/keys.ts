@@ -40,6 +40,15 @@ function fingerprintId(value: string): string {
 // is written to exactly one of these vars and the other is cleared.
 export const ANTHROPIC_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_TOKEN'] as const
 
+// An empty file with this name in an agent's data dir keeps Anthropic out of that
+// agent for good: no key written to its .env, however the write is triggered, and
+// no Claude router from the base package. For agents promised zero data retention.
+export const NO_ANTHROPIC_MARKER = '.hsm-no-anthropic'
+
+export function anthropicBlocked(dataDir: string): boolean {
+  return fs.existsSync(path.join(dataDir, NO_ANTHROPIC_MARKER))
+}
+
 export function anthropicEnvVarForValue(value: string): 'ANTHROPIC_API_KEY' | 'ANTHROPIC_TOKEN' {
   const v = (value ?? '').trim()
   if (v.startsWith('sk-ant-api')) return 'ANTHROPIC_API_KEY'
@@ -186,6 +195,12 @@ function idToName(id: string): string {
 }
 
 // Agent data directory mapping
+// A refused agent must not show as assigned on paper either.
+function withoutBlockedAgents(provider: string, assignedTo: string[]): string[] {
+  if (provider.trim().toLowerCase() !== 'anthropic') return assignedTo
+  return assignedTo.filter((h) => !anthropicBlocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)))
+}
+
 function agentDataDir(harnessName: string): string {
   if (harnessName === 'personal') {
     return path.join(os.homedir(), '.hermes')
@@ -410,7 +425,7 @@ export class KeysService {
       ...(input.identifier ? { identifier: input.identifier } : {}),
       maskedValue: maskValue(input.value),
       encryptedValue: this.encryption.encrypt(input.value),
-      assignedTo: input.assignedTo ?? [],
+      assignedTo: withoutBlockedAgents(input.provider, input.assignedTo ?? []),
       budgetUsd: input.budgetUsd,
       health: 'good',
       manuallyAdded: true,
@@ -466,6 +481,13 @@ export class KeysService {
     const original = content
 
     const varName = this.resolveEnvVar(provider, value, hints)
+    if (
+      (provider.trim().toLowerCase() === 'anthropic' || value.startsWith('sk-ant-') || /^(ANTHROPIC|CLAUDE)_/i.test(varName)) &&
+      anthropicBlocked(dataDir)
+    ) {
+      this.audit.append({ who: 'admin', what: 'key:refused-no-anthropic', target: name })
+      return false
+    }
     content = upsertEnvVar(content, varName, value)
 
     // Anthropic's credential belongs in exactly one var depending on its format;
@@ -592,7 +614,7 @@ export class KeysService {
     const before = this.list().find((k) => k.id === id)
     if (!before) return []
     const prev = before.assignedTo ?? []
-    const next = assignedTo ?? []
+    const next = withoutBlockedAgents(before.provider, assignedTo ?? [])
     const added = next.filter((h) => !prev.includes(h))
     const removed = prev.filter((h) => !next.includes(h))
 
@@ -672,7 +694,7 @@ export class KeysService {
     const newFpId = fingerprintId(newValue)
 
     // Determine final assignedTo (from updates or existing)
-    const finalAssignedTo = updates?.assignedTo ?? key.assignedTo
+    const finalAssignedTo = withoutBlockedAgents(key.provider, updates?.assignedTo ?? key.assignedTo)
 
     // Update stored entry with new value + fingerprint-based ID + any metadata updates
     stored[index] = {

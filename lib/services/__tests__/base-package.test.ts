@@ -122,6 +122,23 @@ describe('orientation block', () => {
   })
 })
 
+describe('an agent marked no-anthropic', () => {
+  it('does not get the Claude router back from a sync, or get flagged for lacking it', async () => {
+    seedAgent({ config: 'model:\n  default: x\nplugins:\n  enabled:\n    - observability\n' })
+    fs.writeFileSync(path.join(dataDir, '.hsm-no-anthropic'), '')
+    applyBasePackageToDir(dataDir, pkg, { surface: 'team', packs: [] }, repoRoot)
+    const enabled = readBlockList(read('config.yaml'), 'plugins', 'enabled')
+    expect(enabled).not.toContain('intelligent_routing')
+    expect(enabled).toContain('observability')
+  })
+
+  it('other agents still get it', () => {
+    seedAgent({ config: 'model:\n  default: x\nplugins:\n  enabled:\n    - observability\n' })
+    applyBasePackageToDir(dataDir, pkg, { surface: 'team', packs: [] }, repoRoot)
+    expect(readBlockList(read('config.yaml'), 'plugins', 'enabled')).toContain('intelligent_routing')
+  })
+})
+
 describe('applyBasePackageToDir — create-time injection', () => {
   it('writes the stamp, enables core plugins as a block list, adds orientation', async () => {
     seedAgent()

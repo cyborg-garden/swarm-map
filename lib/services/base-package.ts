@@ -31,7 +31,7 @@ import {
 } from './artifacts-manifest'
 import { planArtifactSync, applyArtifactSync, type SyncResult } from './artifacts-sync'
 import { ensureBlockList, readBlockList } from '../yaml-block-list'
-import { upsertEnvVar } from './keys'
+import { anthropicBlocked, upsertEnvVar } from './keys'
 import type { Key } from '@/lib/types'
 
 export const SURFACES = ['private', 'team', 'public'] as const
@@ -141,8 +141,13 @@ export function selectArtifacts(pkg: BasePackage, sel: Selection): ArtifactsMani
 }
 
 /** Every name that belongs in plugins.enabled: enabled local plugins + image plugins. */
-export function basePluginNames(pkg: BasePackage, sel: Selection): string[] {
-  return Array.from(new Set([...enabledPluginNames(selectArtifacts(pkg, sel)), ...pkg.imagePlugins]))
+// Plugins that only exist to reach Claude: not added where Anthropic is blocked.
+const ANTHROPIC_PLUGINS = ['intelligent_routing']
+
+export function basePluginNames(pkg: BasePackage, sel: Selection, dataDir?: string): string[] {
+  const names = new Set([...enabledPluginNames(selectArtifacts(pkg, sel)), ...pkg.imagePlugins])
+  if (dataDir && anthropicBlocked(dataDir)) for (const n of ANTHROPIC_PLUGINS) names.delete(n)
+  return Array.from(names)
 }
 
 export function orientationBlock(repoRoot: string = process.cwd()): string {
@@ -281,7 +286,7 @@ export function applyBasePackageToDir(
   let configChanged = false
   if (config !== null) {
     const lists: [StepKind, string, string, string[]][] = [
-      ['plugins', 'plugins', 'enabled', basePluginNames(pkg, sel)],
+      ['plugins', 'plugins', 'enabled', basePluginNames(pkg, sel, dataDir)],
       ['toolsets', 'agent', 'disabled_toolsets', profile.disabledToolsets],
       ['skills', 'skills', 'disabled', profile.disabledSkills],
     ]
