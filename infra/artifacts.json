@@ -34,7 +34,7 @@
     },
     {
       "name": "papareo_transcribe",
-      "source": "git:cyborg-garden/papareo-transcribe#v0.3.0:hermes-plugin",
+      "source": "git:cyborg-garden/papareo-transcribe#v0.4.2:hermes-plugin",
       "enabled": true,
       "tier": "pack",
       "pack": "papareo-transcription"
@@ -63,7 +63,7 @@
     },
     {
       "name": "papareo-transcribe",
-      "source": "git:cyborg-garden/papareo-transcribe#v0.3.0:hermes-skill",
+      "source": "git:cyborg-garden/papareo-transcribe#v0.4.2:hermes-skill",
       "tier": "pack",
       "pack": "papareo-transcription"
     }
