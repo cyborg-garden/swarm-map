@@ -35,6 +35,7 @@ case "$1" in
   compose)
     n=$(ls "$FD" | grep -c '^recreate-')
     cp "$AGENT_HOME/.env" "$FD/recreate-$n.env"
+    if [ -f "$FD/write-during-recreate" ]; then cat "$FD/write-during-recreate" >> "$AGENT_HOME/.env"; rm "$FD/write-during-recreate"; fi
     exit $(cat "$FD/compose.rc" 2>/dev/null || echo 0) ;;
   exec)
     case "$*" in
@@ -319,6 +320,58 @@ describe('rollout', () => {
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
     expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
     expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
+  })
+
+  it('undo brings back only the GitHub lines, keeping everything changed since', async () => {
+    await rollout(opts({ apply: true }))
+    fs.writeFileSync(path.join(home, '.env'), 'DISCORD_BOT_TOKEN=ROTATED\nHERMES_AGENT_NAME=mare\nNEW_SURFACE=added-later\n')
+    expect((await undo(opts())).ok).toBe(true)
+    const after = fs.readFileSync(path.join(home, '.env'), 'utf-8')
+    expect(after).toContain('DISCORD_BOT_TOKEN=ROTATED\n')
+    expect(after).toContain('NEW_SURFACE=added-later\n')
+    expect(after).not.toContain('keep-me')
+    expect(after).toContain(`GITHUB_TOKEN=${FAKE_PAT}\n`)
+    expect(after).toContain(`GITHUB_APP_PRIVATE_KEY_B64=${FAKE_KEY}\n`)
+    expect(scanEnvText(after)).toEqual(scanEnvText(ENV))
+  })
+
+  it('undo does not replace or duplicate a GitHub line set since', async () => {
+    await rollout(opts({ apply: true }))
+    fs.appendFileSync(path.join(home, '.env'), 'GITHUB_TOKEN=newer\n')
+    await undo(opts())
+    const lines = fs.readFileSync(path.join(home, '.env'), 'utf-8').split('\n')
+    expect(lines.filter((l) => l.startsWith('GITHUB_TOKEN='))).toEqual(['GITHUB_TOKEN=newer'])
+    expect(lines).toContain('GITHUB_APP_ID=1')
+  })
+
+  it('undo adds a line break before the GitHub lines when the file has none', async () => {
+    await rollout(opts({ apply: true }))
+    fs.writeFileSync(path.join(home, '.env'), 'ONLY=one')
+    await undo(opts())
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8').split('\n')).toContain('ONLY=one')
+  })
+
+  it('a failed roll keeps a line written while it was verifying', async () => {
+    writeFd('write-during-recreate', 'WRITTEN_DURING_VERIFY=yes\n')
+    writeFd('verify.out', 'gh-failed\n')
+    writeFd('verify.rc', '13')
+    const r = await rollout(opts({ apply: true }))
+    expect(r.ok).toBe(false)
+    const after = fs.readFileSync(path.join(home, '.env'), 'utf-8')
+    expect(after).toContain('WRITTEN_DURING_VERIFY=yes\n')
+    expect(after).toContain(`GITHUB_TOKEN=${FAKE_PAT}\n`)
+    expect(after).toContain('DISCORD_BOT_TOKEN=keep-me\n')
+  })
+
+  it('undo brings back a copy removed since, and leaves one that is still there', async () => {
+    fs.writeFileSync(path.join(home, '.env.bak'), ENV)
+    fs.writeFileSync(path.join(home, '.env.old'), ENV)
+    await rollout(opts({ apply: true }))
+    fs.rmSync(path.join(home, '.env.bak'))
+    fs.appendFileSync(path.join(home, '.env.old'), 'MINE=1\n')
+    await undo(opts())
+    expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe(ENV)
+    expect(fs.readFileSync(path.join(home, '.env.old'), 'utf-8')).toContain('MINE=1\n')
   })
 
   it('undo with no backup says so and changes nothing', async () => {

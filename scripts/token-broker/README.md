@@ -46,7 +46,7 @@ In each agent's home: `github-broker.json` (URL and secret) and an empty
 | `ghkey` | Change the App key. Click Generate on GitHub first. |
 | `ghkey setup <app_id> <installation_id>` | Install or update the broker on the host. |
 | `ghkey roll <agent> [--apply] [--accept-loss]` | Move one agent. A dry run without `--apply`. |
-| `ghkey undo <agent>` | Put an agent back as it was. |
+| `ghkey undo <agent>` | Put an agent's GitHub lines back and take it off the broker. Other changes to its `.env` since the move stay. |
 | `ghkey check` | Show the health result: credentials found, agents left to move, key age. |
 | `ghkey purge` | Delete the `.env` backups. |
 

@@ -110,10 +110,37 @@ function makeBackup({ dir, agent, home }) {
   return where
 }
 
+/**
+ * Put a backup's GitHub lines back into a file that may have moved on. HSM can rotate
+ * a key or add a surface after a roll, so the rest of the file wins and only the lines
+ * the strip took come back. A GitHub line set since also wins. With nothing changed
+ * since the roll, the backup comes back byte for byte.
+ */
+export function restoreCredentialLines(current, backup) {
+  if (stripGithubCredentials(backup) === current) return backup
+  const live = (line) => (/^[ \t]*#/.test(line) ? null : credentialName(line))
+  const held = new Set(current.split('\n').map(live).filter(Boolean))
+  const missing = backup.split('\n').filter((line) => credentialName(line) && !held.has(credentialName(line)))
+  if (!missing.length) return current
+  const gap = current === '' || current.endsWith('\n') ? '' : '\n'
+  return `${current}${gap}${missing.join('\n')}\n`
+}
+
 function restoreBackup(where, home) {
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true })
     .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
-  for (const f of walk(where)) writeLikeOriginal(path.join(home, path.relative(where, f)), fs.readFileSync(f))
+  for (const f of walk(where)) {
+    const target = path.join(home, path.relative(where, f))
+    const saved = fs.readFileSync(f, 'utf-8')
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      writeLikeOriginal(target, saved)
+      continue
+    }
+    const current = fs.readFileSync(target, 'utf-8')
+    const merged = restoreCredentialLines(current, saved)
+    if (merged !== current) writeLikeOriginal(target, merged)
+  }
 }
 
 function newestBackup(dir, agent) {
@@ -306,7 +333,7 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
   const started = recreate(run, locate(run, homeRoot, agent))
   return {
     ok: started,
-    lines: [started ? `Undone: ${agent} is back on its old setup.` : `Restored ${agent}'s files, but the container would not start and may be down.`],
+    lines: [started ? `Undone: ${agent} has its GitHub lines back. Any other change to its .env since the move is kept.` : `Restored ${agent}'s files, but the container would not start and may be down.`],
   }
 }
 
