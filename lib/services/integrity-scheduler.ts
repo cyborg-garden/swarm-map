@@ -8,6 +8,7 @@
 
 import { services } from '@/lib/services'
 import { runFleetIntegritySweep, sweepTargetFor, type SweepTarget } from './integrity'
+import { checkGithubCredentials } from './github-credential-check'
 
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6h
 const INITIAL_DELAY_MS = 30 * 1000 // let the server finish booting first
@@ -22,7 +23,10 @@ export function sweepTargets(): SweepTarget[] {
 
 export async function runScheduledSweep(): Promise<void> {
   try {
-    await runFleetIntegritySweep(sweepTargets())
+    const targets = sweepTargets()
+    const github = checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir })) })
+    if (github.status === 'fail' || github.status === 'key-old') console.error(`[github-credentials] ${github.message}`)
+    await runFleetIntegritySweep(targets)
   } catch (err) {
     // A failed sweep must never take the server down; stale cache beats a crash.
     console.error('[integrity] fleet sweep failed:', err)

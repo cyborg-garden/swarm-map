@@ -22,6 +22,7 @@ type FleetDbHealth = {
     integrity: DbIntegritySummary | null
     writeFailures: DbWriteFailureSummary | null
   }>
+  githubCredentials?: { status: 'ok' | 'pending' | 'key-old' | 'fail'; message: string }
 }
 
 export default function HarnessesPage() {
@@ -163,8 +164,18 @@ export default function HarnessesPage() {
     }
   }
 
+  const githubCredentials = dbHealth?.githubCredentials
+
   return (
     <div>
+      {(githubCredentials?.status === 'fail' || githubCredentials?.status === 'key-old') && (
+        <div
+          role="alert"
+          className={`mb-4 rounded-md px-3 py-2 text-sm ${githubCredentials.status === 'fail' ? 'bg-red-500/10 text-red-600' : 'bg-orange-500/10 text-orange-500'}`}
+        >
+          {githubCredentials.message}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-semibold">Harnesses</h2>
         <div className="flex items-center gap-2">
