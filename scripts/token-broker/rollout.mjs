@@ -544,6 +544,35 @@ function githubUsers(home) {
   return found
 }
 
+// Boot only rewrites a file it wrote, so one it didn't keeps that tool off the broker. Keep in
+// step with is_managed_gitconfig and is_managed_gh_hosts in hermes_cli/git_credentials_boot.py.
+// A .gitconfig that already calls the helper works however it was written.
+const BOOT_MARKER = '# managed-by: hermes git_credentials_boot'
+
+function bootKeepsGitconfig(text) {
+  return text.includes(BOOT_MARKER) || text.includes('hermes_cli.github_app_token') ||
+    (text.includes('insteadOf = git@github.com:') && text.includes('insteadOf = ssh://git@github.com/') && text.includes('helper = store'))
+}
+
+// What matters is the file as the roll leaves it. A roll deletes one with nothing else in it.
+function bootKeepsGhHosts(text) {
+  const left = ghHostsHoldToken(text) ? stripGhHosts(text) : text
+  if (ghHostsHoldToken(text) && !left.split('\n').some((line) => line.trim() && !line.startsWith('#'))) return true
+  return left.includes(BOOT_MARKER) || left.includes('user: x-access-token')
+}
+
+/** The login files in one tool HOME that would stay out of boot's hands. Names only. */
+function handWrittenLoginFiles(toolHome) {
+  const files = [
+    [path.join(toolHome, '.gitconfig'), bootKeepsGitconfig, 'git'],
+    [path.join(toolHome, '.config', 'gh', 'hosts.yml'), bootKeepsGhHosts, 'gh'],
+  ]
+  return files.flatMap(([file, keeps, tool]) => {
+    const text = readTextIfSmall(file)
+    return text === null || keeps(text) ? [] : [{ file, tool }]
+  })
+}
+
 const AGENT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const REBUILD_HINT = 'its image lacks the broker code. Rebuild through HSM first (mode "rebuild"), not by hand, so the drift check keeps working'
 
@@ -578,6 +607,14 @@ async function preflight({ dir, root, agent, home, run, acceptLoss }) {
     const vars = USER_VARS.filter((v) => usesVar(config, v))
     if (vars.length) lossy.push(`${rel} uses ${vars.join(', ')}, as an MCP server or other setting`)
     if (/copilot/i.test(config)) lossy.push(`${rel} mentions copilot, which can auth with GITHUB_TOKEN`)
+  }
+  for (const { file, tool } of handWrittenLoginFiles(path.join(home, 'home'))) {
+    problems.push(`${path.relative(home, file)} wasn't written by Hermes, so Hermes won't change it and ${tool} can't reach the broker. The move would fail. Move that file aside first`)
+  }
+  for (const d of homeAndProfiles(home).slice(1)) {
+    for (const { file, tool } of handWrittenLoginFiles(path.join(d, 'home'))) {
+      warnings.push(`${path.relative(home, file)} wasn't written by Hermes, so ${tool} in that profile can't reach the broker`)
+    }
   }
   for (const l of lossy) (acceptLoss ? warnings : problems).push(`${l}${acceptLoss ? '; continuing as asked' : '. It would stop working; pass --accept-loss to go ahead anyway'}`)
   return { problems, warnings, port, c }

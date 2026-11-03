@@ -88,6 +88,9 @@ agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on th
   blocks unless you pass `--accept-loss`.
 - A PAT in a `.netrc` or a repo's `.git/config` URL anywhere under the agent's home. The
   roll leaves it, and whatever uses it stops once that PAT is revoked.
+- A `.gitconfig` or gh `hosts.yml` in the agent's tool HOME that Hermes didn't write. Boot
+  won't touch it, so git or gh can't reach the broker and the roll would always fail. This
+  blocks. In a profile it only warns, because the roll's check runs at the root.
 
 ## Rules worth knowing
 

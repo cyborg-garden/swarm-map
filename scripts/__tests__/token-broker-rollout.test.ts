@@ -922,6 +922,59 @@ describe('rollout', () => {
       fs.writeFileSync(hostsFile(), hosts(PAT))
     }
 
+    describe('a login file boot will not rewrite', () => {
+      const MANAGED = '# managed-by: hermes git_credentials_boot\n'
+      const gitconfig = () => path.join(home, 'home', '.gitconfig')
+      const write = (file: string, text: string) => {
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(file, text)
+      }
+
+      it('blocks on a hand-written .gitconfig and names it, before changing anything', async () => {
+        write(gitconfig(), '[user]\n\tname = someone\n')
+        const r = await rollout(opts({ apply: true }))
+        expect(r.ok).toBe(false)
+        expect(r.lines.join('\n')).toMatch(/BLOCKED: home\/\.gitconfig /)
+        expect(calls()).not.toContain('compose -p')
+        expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+      })
+
+      it('blocks on an empty .gitconfig too, since boot leaves that alone as well', async () => {
+        write(gitconfig(), '')
+        expect((await rollout(opts())).lines.join('\n')).toMatch(/BLOCKED: home\/\.gitconfig /)
+      })
+
+      it.each([
+        ['stamped by boot', `${MANAGED}[user]\n\tname = mare\n`],
+        ['from before the stamp', '[credential]\n\thelper = store\n[url "https://github.com/"]\n\tinsteadOf = git@github.com:\n\tinsteadOf = ssh://git@github.com/\n'],
+        ['by hand but already using the helper', '[credential]\n\thelper = "!python -m hermes_cli.github_app_token get-credential"\n'],
+      ])('lets a .gitconfig %s through', async (_name, text) => {
+        write(gitconfig(), text)
+        expect((await rollout(opts())).lines.join('\n')).not.toContain('.gitconfig')
+      })
+
+      it('only warns about a profile, since the check at the end covers the root', async () => {
+        write(path.join(home, 'profiles', 'p', 'home', '.gitconfig'), '[user]\n\tname = someone\n')
+        const r = await rollout(opts())
+        expect(r.ok).toBe(true)
+        expect(r.lines.join('\n')).toMatch(/warning: profiles\/p\/home\/\.gitconfig /)
+      })
+
+      it('blocks on a hosts.yml that still holds another host after the strip', async () => {
+        write(hostsFile(), `${hosts(PAT)}ghe.example:\n    oauth_token: other-host-value\n`)
+        const text = (await rollout(opts())).lines.join('\n')
+        expect(text).toMatch(/BLOCKED: home\/\.config\/gh\/hosts\.yml /)
+        expect(text).not.toContain('other-host-value')
+      })
+
+      it('lets a hosts.yml through when the strip empties it or boot wrote it', async () => {
+        write(hostsFile(), hosts(PAT))
+        expect((await rollout(opts())).lines.join('\n')).not.toContain('BLOCKED')
+        write(hostsFile(), `${MANAGED}${hosts(SHORT)}`)
+        expect((await rollout(opts())).lines.join('\n')).not.toContain('BLOCKED')
+      })
+    })
+
     it('shows both files in the dry run, without the value, and changes nothing', async () => {
       plant()
       const text = (await rollout(opts())).lines.join('\n')
