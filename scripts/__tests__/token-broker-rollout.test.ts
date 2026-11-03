@@ -38,6 +38,7 @@ case "$1" in
   compose)
     n=$(ls "$FD" | grep -c '^recreate-')
     cp "$AGENT_HOME/.env" "$FD/recreate-$n.env"
+    if [ -f "$FD/on-recreate.sh" ]; then sh "$FD/on-recreate.sh"; fi
     if [ -f "$FD/lock-home-during-recreate" ]; then chmod 500 "$AGENT_HOME"; fi
     if [ -f "$FD/write-during-recreate" ]; then cat "$FD/write-during-recreate" >> "$AGENT_HOME/.env"; rm "$FD/write-during-recreate"; fi
     exit $(cat "$FD/compose.rc" 2>/dev/null || echo 0) ;;
@@ -972,6 +973,78 @@ describe('rollout', () => {
         expect((await rollout(opts())).lines.join('\n')).not.toContain('BLOCKED')
         write(hostsFile(), `${MANAGED}${hosts(SHORT)}`)
         expect((await rollout(opts())).lines.join('\n')).not.toContain('BLOCKED')
+      })
+    })
+
+    describe('the tokens the broker left behind', () => {
+      const cacheFile = (base = home) => path.join(base, 'home', '.cache', 'hermes', 'github_broker_token.json')
+      const brokerHosts = `# managed-by: hermes git_credentials_boot\n${hosts(SHORT)}`
+      const leave = (base = home) => {
+        fs.mkdirSync(path.dirname(cacheFile(base)), { recursive: true })
+        fs.writeFileSync(cacheFile(base), JSON.stringify({ token: SHORT }))
+        fs.mkdirSync(path.join(base, 'home', '.config', 'gh'), { recursive: true })
+        fs.writeFileSync(path.join(base, 'home', '.config', 'gh', 'hosts.yml'), brokerHosts)
+      }
+
+      it('undo deletes them for an agent that had no PAT', async () => {
+        fs.writeFileSync(path.join(home, '.env'), 'KEEP=1\n')
+        await rollout(opts({ apply: true }))
+        leave()
+        expect((await undo(opts())).ok).toBe(true)
+        expect(fs.existsSync(cacheFile())).toBe(false)
+        expect(fs.existsSync(hostsFile())).toBe(false)
+      })
+
+      it('undo deletes them in profiles too', async () => {
+        const profile = path.join(home, 'profiles', 'p')
+        await rollout(opts({ apply: true }))
+        leave()
+        leave(profile)
+        await undo(opts())
+        expect(fs.existsSync(cacheFile(profile))).toBe(false)
+        expect(fs.existsSync(path.join(profile, 'home', '.config', 'gh', 'hosts.yml'))).toBe(false)
+      })
+
+      it('undo keeps another host in hosts.yml', async () => {
+        await rollout(opts({ apply: true }))
+        leave()
+        const other = 'ghe.example:\n    oauth_token: other-host-value\n'
+        fs.appendFileSync(hostsFile(), other)
+        await undo(opts())
+        expect(fs.readFileSync(hostsFile(), 'utf-8')).not.toContain(SHORT)
+        expect(fs.readFileSync(hostsFile(), 'utf-8')).toContain(other)
+      })
+
+      it('undo deletes the cache and still brings a PAT back into hosts.yml', async () => {
+        plant()
+        await rollout(opts({ apply: true }))
+        leave()
+        await undo(opts())
+        expect(fs.existsSync(cacheFile())).toBe(false)
+        expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(PAT))
+      })
+
+      it('a failed first roll deletes what boot wrote before it failed', async () => {
+        writeFd('on-recreate.sh', `mkdir -p "$AGENT_HOME/home/.cache/hermes" "$AGENT_HOME/home/.config/gh"
+touch "$AGENT_HOME/home/.cache/hermes/github_broker_token.json"
+printf 'github.com:\\n    oauth_token: ${SHORT}\\n' > "$AGENT_HOME/home/.config/gh/hosts.yml"
+rm "$FD/on-recreate.sh"
+`)
+        writeFd('verify.rc', '12')
+        writeFd('verify.out', 'git-no-token\n')
+        expect((await rollout(opts({ apply: true }))).ok).toBe(false)
+        expect(fs.existsSync(cacheFile())).toBe(false)
+        expect(fs.existsSync(hostsFile())).toBe(false)
+      })
+
+      it('a failed re-run on an agent already on the broker keeps them', async () => {
+        await rollout(opts({ apply: true }))
+        leave()
+        writeFd('verify.rc', '12')
+        writeFd('verify.out', 'git-no-token\n')
+        expect((await rollout(opts({ apply: true }))).ok).toBe(false)
+        expect(fs.existsSync(cacheFile())).toBe(true)
+        expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(brokerHosts)
       })
     })
 

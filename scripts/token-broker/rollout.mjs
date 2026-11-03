@@ -159,6 +159,12 @@ export function ghHostsHoldToken(text) {
   })
 }
 
+function ghHostsHoldBrokerToken(text) {
+  const lines = text.split('\n')
+  const flags = ghBlockFlags(lines)
+  return !ghHostsHoldToken(text) && lines.some((line, i) => flags[i] && GH_TOKEN_RE.exec(line)?.[1].startsWith('ghs_'))
+}
+
 export function stripGhHosts(text) {
   const lines = text.split('\n')
   const flags = ghBlockFlags(lines)
@@ -238,6 +244,21 @@ function stripLoginFile(file) {
   const left = LOGIN_FILES[path.basename(file)].strip(readBytes(file))
   if (left.split('\n').some((line) => line.trim() && !line.startsWith('#'))) writeLikeOriginal(file, left)
   else fs.rmSync(file)
+}
+
+// A broker token stays good for up to an hour, so an agent coming off the broker mustn't keep
+// one. Runs after any restore, so a hosts.yml still holding one has nothing to bring back. The
+// running container can't write them again once it has no broker config.
+function dropBrokerTokens(home) {
+  for (const d of [home, ...profileDirs(home)]) {
+    const cache = path.join(d, 'home', '.cache', 'hermes', 'github_broker_token.json')
+    fs.rmSync(cache, { force: true })
+    fs.rmSync(`${cache}.tmp`, { force: true })
+    for (const base of [d, path.join(d, 'home')]) {
+      const hosts = path.join(base, '.config', 'gh', 'hosts.yml')
+      if (fs.statSync(hosts, { throwIfNoEntry: false })?.isFile() && ghHostsHoldBrokerToken(readBytes(hosts))) stripLoginFile(hosts)
+    }
+  }
 }
 
 function writeLikeOriginal(file, content) {
@@ -714,6 +735,7 @@ export async function rollout({
         // A registry it can't update: deleting the secret is what ends this identity.
         fs.rmSync(path.join(home, AGENT_CONFIG_FILE), { force: true })
       }
+      dropBrokerTokens(home)
       fs.rmSync(path.join(home, MARKER), { force: true })
     }
   } catch (err) {
@@ -752,6 +774,7 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
     // Marker last: HSM must not write keys into a half-restored .env.
     for (const backup of backups) restoreBackup(backup, home)
     unenrollAgent({ dir, agent, home })
+    dropBrokerTokens(home)
     fs.rmSync(path.join(home, MARKER), { force: true })
     for (const backup of backups) retireBackup(dir, backup)
     audit(dir, 'rollout-undone', { agent })
