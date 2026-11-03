@@ -1175,7 +1175,7 @@ rm "$FD/on-recreate.sh"
     const before = calls().split('\n').filter((l) => l.startsWith('compose')).length
     const r = await undo(opts())
     expect(r.ok).toBe(true)
-    expect(r.lines.join()).toContain('no GitHub lines to bring back')
+    expect(r.lines.join()).toContain('no backup to restore')
     expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
     expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
     expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
@@ -1193,6 +1193,13 @@ rm "$FD/on-recreate.sh"
     const r = await undo(opts())
     expect(r.ok).toBe(false)
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+  })
+
+  it('undo after a purge does not claim the agent never had GitHub lines', async () => {
+    expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+    purgeBackups({ dir })
+    const r = await undo(opts())
+    expect(r.lines.join()).toContain('ghkey purge deleted them')
   })
 
   it('purges backups', async () => {

@@ -786,7 +786,7 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
     ok: started,
     lines: [started ? (backups.length
       ? `Undone: ${agent} has its GitHub lines back. Any other change to its .env since the move is kept.`
-      : `Undone: ${agent} is off the broker. It had no GitHub lines to bring back, so it has no GitHub access now.`) : `Restored ${agent}'s files, but the container would not start and may be down.`],
+      : `Undone: ${agent} is off the broker. There was no backup to restore: it had no GitHub lines when it moved, or ghkey purge deleted them. So it has no GitHub access now.`) : `Restored ${agent}'s files, but the container would not start and may be down.`],
   }
 }
 
