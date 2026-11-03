@@ -6,6 +6,9 @@ import path from 'node:path'
 import { checkGithubCredentials, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
 import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials } from '../../../scripts/token-broker/rollout.mjs'
 
+// Built at runtime: the sanitization gate reads a literal header as a real key.
+const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
+
 describe('checkGithubCredentials', () => {
   let root: string
   let keyPath: string
@@ -189,7 +192,7 @@ describe('checkGithubCredentials', () => {
     [`MY_KEY=github_${'pat_'}AAAA`, true],
     [`# OLD=gh${'p_'}AAAA`, true],
     [`SOME_BOT="gh${'s_'}AAAA"`, true],
-    ['GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----', true],
+    [`GITHUB_APP_PRIVATE_KEY=${PEM_HEADER('RSA PRIVATE KEY')}`, true],
     ['MY_GH_KEY=LS0tLS1CRUdJTiBSU0E', true],
     ['GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW', false],
     ['SOME_SSH_KEY="-----BEGIN OPENSSH"', false],

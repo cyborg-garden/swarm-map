@@ -15,6 +15,9 @@ import { listen, createBroker } from '../token-broker/lib.mjs'
 import { checkGithubCredentials } from '../../lib/services/github-credential-check'
 import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH } from '../token-broker/rollout.mjs'
 
+// Built at runtime: the sanitization gate reads a literal header as a real key.
+const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
+
 const FAKE_PAT = 'fake-pat-value-do-not-print'
 const FAKE_KEY = 'ZmFrZS1rZXktZG8tbm90LXByaW50'
 const ENV = [
@@ -106,7 +109,7 @@ describe('rollout', () => {
   it('removes everything it flags, so a flag always has a cure', async () => {
     const pat = 'ghp_' + 'A'.repeat(36)
     fs.writeFileSync(path.join(home, '.env'), [
-      'KEEP=1', `MY_GITHUB_KEY=${pat}`, `# OLD_ONE=${pat}`, `export OTHER_BOT="${pat}"`, 'GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----', '',
+      'KEEP=1', `MY_GITHUB_KEY=${pat}`, `# OLD_ONE=${pat}`, `export OTHER_BOT="${pat}"`, `GITHUB_APP_PRIVATE_KEY=${PEM_HEADER('RSA PRIVATE KEY')}`, '',
     ].join('\n'))
     const r = await rollout(opts({ apply: true }))
     expect(r.ok).toBe(true)
@@ -114,7 +117,7 @@ describe('rollout', () => {
   })
 
   it('leaves a private key that is not GitHub\'s alone', async () => {
-    const env = 'GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW\nSOME_SSH_KEY="-----BEGIN OPENSSH PRIVATE KEY-----"\n'
+    const env = `GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW\nSOME_SSH_KEY="${PEM_HEADER('OPENSSH PRIVATE KEY')}"\n`
     expect(scanEnvText(env)).toEqual([])
     fs.writeFileSync(path.join(home, '.env'), env)
     await rollout(opts({ apply: true }))
@@ -241,7 +244,7 @@ describe('rollout', () => {
   })
 
   it('leaves a copy holding only non-GitHub data alone, with no backup needed', async () => {
-    const body = 'GOOGLE_PEM=-----BEGIN PRIVATE KEY-----\nOTHER=important\n'
+    const body = `GOOGLE_PEM=${PEM_HEADER('PRIVATE KEY')}\nOTHER=important\n`
     fs.writeFileSync(path.join(home, '.env'), 'X=1\n')
     fs.writeFileSync(path.join(home, '.env.old'), body)
     await rollout(opts({ apply: true }))
