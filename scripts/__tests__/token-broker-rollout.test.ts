@@ -591,6 +591,50 @@ describe('rollout', () => {
     })
   })
 
+  describe('a PAT outside the files a roll edits', () => {
+    const put = (rel: string, content: string) => {
+      const f = path.join(home, rel)
+      fs.mkdirSync(path.dirname(f), { recursive: true })
+      fs.writeFileSync(f, content)
+      return f
+    }
+    const out = async () => (await rollout(opts())).lines.join('\n')
+
+    it.each([
+      ['home/.netrc', `machine github.com login x password ${FAKE_PAT}\n`],
+      ['home/.netrc', `machine api.github.com\n  login x\n  password ${FAKE_PAT}\n`],
+      ['.netrc', `machine github.com password ${FAKE_PAT}\n`],
+      ['home/repos/a/.git/config', `[remote "origin"]\n\turl = https://x-access-token:${FAKE_PAT}@github.com/o/a.git\n`],
+      ['deep/er/b/.git/config', `[remote "origin"]\n  url = https://${FAKE_PAT}@github.com/o/b\n`],
+      ['home/c/.git/modules/sub/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}@github.com/o/s\n`],
+    ])('names %s by file only', async (rel, content) => {
+      put(rel, content)
+      const text = await out()
+      expect(text).toContain(`warning: a GitHub PAT in ${rel}`)
+      expect(text).not.toContain(FAKE_PAT)
+    })
+
+    it.each([
+      ['home/.netrc', `machine example.com login x password ${FAKE_PAT}\n`],
+      ['home/.netrc', 'machine github.com login x password ghs_shortlived\n'],
+      ['home/r/.git/config', '[remote "origin"]\n\turl = https://github.com/o/a.git\n'],
+      ['home/r/.git/config', '[remote "origin"]\n\turl = https://x-access-token:ghs_short@github.com/o/a.git\n'],
+      ['home/r/.git/config', '[remote "origin"]\n\turl = https://u:pw@gitlab.example.com/o/a.git\n'],
+      ['home/r/.git/config', '[remote "origin"]\n\turl = git@github.com:o/a.git\n'],
+      ['home/node_modules/x/.git/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}@github.com/o/s\n`],
+      ['home/notes/config', `url = https://u:${FAKE_PAT}@github.com/o/s\n`],
+    ])('stays quiet about %s when it holds no PAT for GitHub', async (rel, content) => {
+      put(rel, content)
+      expect(await out()).not.toContain('a GitHub PAT in')
+    })
+
+    it('leaves the file alone on a roll', async () => {
+      const f = put('home/.netrc', `machine github.com password ${FAKE_PAT}\n`)
+      expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+      expect(fs.readFileSync(f, 'utf-8')).toContain(FAKE_PAT)
+    })
+  })
+
   it('rejects an agent name that could escape the home root', async () => {
     const r = await rollout(opts({ agent: '../evil', apply: true }))
     expect(r.ok).toBe(false)

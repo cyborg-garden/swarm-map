@@ -431,6 +431,40 @@ function walkFiles(dir, skipDir) {
   })
 }
 
+function netrcHoldsToken(text) {
+  const words = text.split(/\s+/).filter(Boolean)
+  let github = false
+  return words.some((word, i) => {
+    const next = words[i + 1] ?? ''
+    if (word === 'machine') github = /^(?:[^\s]*\.)?github\.com$/i.test(next)
+    if (word === 'default') github = false
+    if (!github) return false
+    return (word === 'password' && !!next && !next.startsWith('ghs_')) || (word === 'login' && TOKEN_RE.test(next))
+  })
+}
+
+// A URL may carry just a username, which is no secret. A bare token is long or says so.
+function gitConfigHoldsToken(text) {
+  return text.split('\n').some((line) => {
+    const url = /^\s*(?:push)?url\s*=\s*(.+?)\s*$/i.exec(line)?.[1]
+    const login = url && GIT_LOGIN_RE.exec(url)?.[1]
+    if (!login || login.startsWith('ghs_')) return false
+    return login.includes(':') ? gitLoginIsLongLived(url) : (TOKEN_RE.test(login) || login.length >= 20)
+  })
+}
+
+/** Files a roll leaves alone that can still hold a PAT. Their names, never their contents. */
+function strayPatFiles(home) {
+  const skip = (full, name) => (name !== '.git' && IGNORED_DIRS.has(name)) ||
+    (['objects', 'refs', 'hooks', 'logs', 'lfs'].includes(name) && full.includes(`${path.sep}.git${path.sep}`))
+  return walkFiles(home, skip).filter((file) => {
+    const netrc = path.basename(file) === '.netrc'
+    if (!netrc && !(path.basename(file) === 'config' && file.includes(`${path.sep}.git${path.sep}`))) return false
+    const text = readTextIfSmall(file)
+    return text !== null && (netrc ? netrcHoldsToken(text) : gitConfigHoldsToken(text))
+  }).map((file) => path.relative(home, file))
+}
+
 // For a look that shouldn't stop a roll. Reading the .env files reports this failure.
 function homeAndProfiles(home) {
   try {
@@ -545,6 +579,7 @@ export async function rollout({
   const wasMoved = fs.existsSync(path.join(home, MARKER)) || fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
   const wasEnrolled = agentEnrolled({ dir, agent, home })
   if (wasMoved && !wasEnrolled) lines.push(`Marked as on the broker but not enrolled, so it gets no tokens. --apply enrols it again.`)
+  for (const f of strayPatFiles(home)) lines.push(`warning: a GitHub PAT in ${f}. The move leaves it there. Whatever uses it stops working once that PAT is revoked.`)
   const users = githubUsers(home)
   for (const u of users.willBreak) lines.push(`WILL BREAK: ${u}. It reads a GitHub line that this move removes from .env.`)
   for (const u of users.check) lines.push(`Check: ${u}. These notes mention it with .env, so they may tell the agent to read a line this move removes.`)
