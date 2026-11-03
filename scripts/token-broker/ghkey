@@ -8,7 +8,8 @@ set -euo pipefail
 
 host="${GHKEY_SSH_HOST:-garden-lan}"
 downloads="${GHKEY_DOWNLOADS:-$HOME/Downloads}"
-glob="hermes-fleet-git.*.private-key.pem"
+# A browser names a second download "...private-key (1).pem" or "...private-key-1.pem".
+glob="hermes-fleet-git.*.private-key*.pem"
 settings="https://github.com/organizations/cyborg-garden/settings/apps/hermes-fleet-git"
 remote='$HOME/bin/github-broker'
 
@@ -41,10 +42,12 @@ change_key() {
     exit 1
   fi
 
+  echo "Using $(basename "$newest")."
   local out
   if ! out="$(ssh "$host" "$remote adopt-key" < "$newest" 2>&1)"; then
     echo "$out"
-    echo "Key not changed. Your file is still in Downloads."
+    echo "Key not changed. $(basename "$newest") is still in Downloads."
+    echo "Run ghkey to try it again, or click Generate first and ghkey will use the newer file."
     exit 1
   fi
   echo "$out"
@@ -54,7 +57,8 @@ change_key() {
   local others
   others="$(find "$downloads" -maxdepth 1 -name "$glob" | wc -l | tr -d ' ')"
   if [ "$others" != "0" ]; then
-    echo "$others older key file(s) still in Downloads. Delete them when you can."
+    echo "$others older key file(s) still in Downloads, not used. Delete them when you can:"
+    find "$downloads" -maxdepth 1 -name "$glob" -exec basename {} \;
   fi
   case "$out" in
     *HOLD:*) echo "Don't delete the old key on GitHub yet. Delete it after the last agent has moved:"; echo "$settings" ;;

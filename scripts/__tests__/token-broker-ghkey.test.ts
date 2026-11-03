@@ -116,6 +116,40 @@ describe('ghkey', () => {
     expect(out).not.toContain('settings/apps/hermes-fleet-git')
   })
 
+  it('uses a second download the browser named (1), not the file GitHub rejected', async () => {
+    trusted = [keyOld.publicKey]
+    const rejected = drop('hermes-fleet-git.2026-11-03.private-key.pem', keyNew.pem)
+    const first = await run()
+    expect(first.code).toBe(1)
+    expect(first.out).toContain('hermes-fleet-git.2026-11-03.private-key.pem')
+    expect(first.out).toContain('still in Downloads')
+
+    const old = new Date(Date.now() - 60e3)
+    fs.utimesSync(rejected, old, old)
+    const keyThird = makeKey()
+    trusted = [keyOld.publicKey, keyThird.publicKey]
+    const second = drop('hermes-fleet-git.2026-11-03.private-key (1).pem', keyThird.pem)
+    const { code, out } = await run()
+    expect(code).toBe(0)
+    expect(fs.readFileSync(path.join(dir, 'private-key.pem'), 'utf-8')).toBe(keyThird.pem)
+    expect(fs.existsSync(second)).toBe(false)
+    // The rejected file is named, not silently left behind.
+    expect(fs.existsSync(rejected)).toBe(true)
+    expect(out).toContain('hermes-fleet-git.2026-11-03.private-key.pem')
+    expect(out).toContain('1 older key file')
+    expect(out).not.toContain('PRIVATE KEY')
+  })
+
+  it('counts a leftover (1) file among the older ones', async () => {
+    const leftover = drop('hermes-fleet-git.2026-11-03.private-key (1).pem', 'an older file')
+    fs.utimesSync(leftover, new Date(Date.now() - 3600e3), new Date(Date.now() - 3600e3))
+    drop('hermes-fleet-git.2026-11-03.private-key (2).pem', keyNew.pem)
+    const { code, out } = await run()
+    expect(code).toBe(0)
+    expect(out).toContain('1 older key file')
+    expect(fs.existsSync(leftover)).toBe(true)
+  })
+
   it('holds back the delete link while an agent still carries the old key', async () => {
     fs.mkdirSync(path.join(root, '.hermes-mare'))
     fs.writeFileSync(path.join(root, '.hermes-mare/.env'), 'GITHUB_APP_PRIVATE_KEY_B64=x\n')
