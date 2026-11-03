@@ -164,6 +164,16 @@ git ls-remote "https://github.com/$repo" HEAD >/dev/null 2>&1 || { echo git-ls-r
 echo ok
 `
 
+// A PAT can reach repos outside the App's org; the broker can't. Show which owners
+// this agent has checked out so a repo about to go dark gets seen first. The sed
+// keeps only the part after github.com, so a token embedded in a URL can't print.
+export const OWNERS_SH = `find /opt/data -maxdepth 4 -path '*/.git/config' 2>/dev/null | xargs sed -n 's#.*url = .*github\\.com[:/]\\([A-Za-z0-9_.-]*\\)/.*#\\1#p' 2>/dev/null | sort -u`
+
+function checkoutOwners(run, c) {
+  const { out } = run(['exec', c.container, 'sh', '-c', OWNERS_SH])
+  return out.split('\n').filter((o) => /^[A-Za-z0-9_.-]+$/.test(o))
+}
+
 async function verify(run, c, { verifyDeadlineMs, pollMs }) {
   const args = ['exec', '-u', 'hermes', '-e', 'HOME=/opt/data/home', '-e', 'GIT_TERMINAL_PROMPT=0', c.container, 'sh', '-c', VERIFY_SH]
   const deadline = Date.now() + verifyDeadlineMs
@@ -219,6 +229,10 @@ export async function rollout({
   for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
     const names = scanEnvText(fs.readFileSync(f, 'utf-8'))
     lines.push(`${path.relative(home, f)}: ${names.length ? names.join(', ') : 'clean'}`)
+  }
+  if (c.running) {
+    const owners = checkoutOwners(run, c)
+    if (owners.length) lines.push(`Repo owners in its checkouts: ${owners.join(', ')}. The broker only reaches the App's own org.`)
   }
   for (const w of warnings) lines.push(`warning: ${w}`)
   for (const p of problems) lines.push(`BLOCKED: ${p}`)

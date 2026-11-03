@@ -5,13 +5,14 @@
  * gone by recreate time" is checked rather than assumed. No real container runs.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { listen, createBroker } from '../token-broker/lib.mjs'
-import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey } from '../token-broker/rollout.mjs'
+import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH } from '../token-broker/rollout.mjs'
 
 const FAKE_PAT = 'fake-pat-value-do-not-print'
 const FAKE_KEY = 'ZmFrZS1rZXktZG8tbm90LXByaW50'
@@ -37,6 +38,7 @@ case "$1" in
   exec)
     case "$*" in
       *read_broker_config*) exit $(cat "$FD/module.rc" 2>/dev/null || echo 0) ;;
+      *"find /opt/data"*) cat "$FD/owners.out" 2>/dev/null; exit 0 ;;
       *) cat "$FD/verify.out" 2>/dev/null; exit $(cat "$FD/verify.rc" 2>/dev/null || echo 0) ;;
     esac ;;
 esac
@@ -109,6 +111,23 @@ describe('rollout', () => {
     const text = r.lines.join('\n')
     expect(text).toContain('GITHUB_TOKEN')
     expect(text).toContain('DRY RUN')
+  })
+
+  it('shows repo owners in the agent checkouts, dropping anything that is not a plain name', async () => {
+    // URLs are built at runtime: the sanitization gate reads a literal as a real one.
+    writeFd('owners.out', ['cyborg-garden', 'someone-else', ['https', '//x', 'leak@bad'].join(':'), ''].join('\n'))
+    const text = (await rollout(opts())).lines.join('\n')
+    expect(text).toContain('cyborg-garden, someone-else')
+    expect(text).not.toContain('leak')
+  })
+
+  it('extracts only the owner from a real git config line, never an embedded token', () => {
+    const repo = path.join(root, 'cfg')
+    fs.mkdirSync(repo)
+    fs.writeFileSync(path.join(repo, 'config'), `\turl = ${['https', '//x-access-token', 'leak-value'].join(':')}${'@'}github.com/some-owner/some-repo.git\n\turl = git${'@'}github.com:other-owner/r.git\n`)
+    const sed = /sed -n '([^']+)'/.exec(OWNERS_SH)?.[1] ?? ''
+    const r = spawnSync('sed', ['-n', sed, path.join(repo, 'config')], { encoding: 'utf-8' })
+    expect(r.stdout.trim().split('\n')).toEqual(['some-owner', 'other-owner'])
   })
 
   it('applies: backs up outside the agent mount, strips, marks, enrols and recreates without building', async () => {
