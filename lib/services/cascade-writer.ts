@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { services } from '@/lib/services'
+import { anthropicBlocked } from '@/lib/services/keys'
 import { validateCascadeEntries, yamlPlainScalarError, type CascadeEntry } from '@/lib/model-catalog'
 import {
   readFallbackProviders,
@@ -383,6 +384,19 @@ export function applyCascadeToHarness(
 
   if (cascade.length === 0) {
     return { ok: false, status: 400, error: 'At least one model is required' }
+  }
+
+  // Through any provider: OpenRouter or a custom base_url reach Claude just the same.
+  if (
+    anthropicBlocked(dataDir) &&
+    chainToWrite.some(
+      (e) =>
+        e.provider.toLowerCase() === 'anthropic' ||
+        /(^|\/)(claude|anthropic)/i.test(e.model) ||
+        /anthropic\.com/i.test(e.base_url ?? ''),
+    )
+  ) {
+    return { ok: false, status: 400, error: 'This agent is marked no-Anthropic, so Claude models are refused' }
   }
 
   // Guard the write/restart path before touching config.yaml. Two checks:

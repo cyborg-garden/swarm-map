@@ -75,6 +75,28 @@ describe('applyCascadeToHarness', () => {
     expect(fs.existsSync(configPath())).toBe(false)
   })
 
+  it.each([
+    [{ provider: 'openrouter', model: 'anthropic/claude-opus-4.8' }],
+    [{ provider: 'custom', model: 'x', base_url: 'https://api.anthropic.com' }],
+    [{ provider: 'anthropic', model: 'claude-sonnet-4-6' }],
+    [{ provider: 'openrouter', model: 'moonshotai/kimi-k3.1-pro' }, { provider: 'openrouter', model: 'anthropic/claude-opus-4.8' }],
+  ])('refuses Claude however it is reached on a no-Anthropic agent: %j', (...chain) => {
+    fs.writeFileSync(path.join(tmpDir, '.hsm-no-anthropic'), '')
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_API_KEY']))
+    fs.writeFileSync(configPath(), 'model:\n  provider: openrouter\n  default: x\n')
+    const before = fs.readFileSync(configPath(), 'utf-8')
+    const res = applyCascadeToHarness('h_test', chain, { who: 'api' })
+    expect(res.ok).toBe(false)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(before)
+  })
+
+  it('still takes other models on a no-Anthropic agent', () => {
+    fs.writeFileSync(path.join(tmpDir, '.hsm-no-anthropic'), '')
+    mockEnvVars.mockReturnValue(new Set<string>(['OPENROUTER_API_KEY']))
+    fs.writeFileSync(configPath(), 'model:\n  provider: openrouter\n  default: x\n')
+    expect(applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'moonshotai/kimi-k3.1-pro' }], { who: 'api' }).ok).toBe(true)
+  })
+
   // THE guard. An openrouter entry on an agent whose .env has only
   // ANTHROPIC_API_KEY must be refused before any byte hits config.yaml.
   it('returns 400 with the validation message and writes NOTHING when a provider has no credential', () => {

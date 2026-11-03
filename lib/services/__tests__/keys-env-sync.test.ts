@@ -66,6 +66,18 @@ describe('keys .env sync (assign / unassign / remove)', () => {
       expect(readEnv('zdr')).toBe('')
     })
 
+    it('refuses by target variable and by any spelling of the provider', () => {
+      expect(keys.writeKeyToEnv('h_zdr', 'custom', 'cc-abc', { envVar: 'ANTHROPIC_TOKEN' })).toBe(false)
+      expect(keys.writeKeyToEnv('h_zdr', 'Anthropic', 'eyJabc')).toBe(false)
+      expect(readEnv('zdr')).toBe('')
+    })
+
+    it('add and rotate do not record the agent either', () => {
+      const key = keys.add({ provider: 'anthropic', value: ANT, assignedTo: ['h_zdr', 'h_other'] })
+      expect(key.assignedTo).toEqual(['h_other'])
+      expect(keys.rotateValue(key.id, ANT + 'X', { assignedTo: ['h_zdr', 'h_other'] })?.assignedTo).toEqual(['h_other'])
+    })
+
     it('still takes other keys', () => {
       expect(keys.writeKeyToEnv('h_zdr', 'github', GH)).toBe(true)
       expect(readEnv('zdr')).toMatch(/^GITHUB_TOKEN=/m)
