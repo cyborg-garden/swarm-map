@@ -75,6 +75,7 @@ function validScope(s) {
   const reposOk = s.repos === 'all' || (Array.isArray(s.repos) && s.repos.length > 0 && s.repos.every((r) => typeof r === 'string' && r))
   const permsOk = s.permissions === 'all' ||
     (s.permissions && typeof s.permissions === 'object' && !Array.isArray(s.permissions) &&
+      Object.keys(s.permissions).length > 0 &&
       Object.values(s.permissions).every((v) => ['read', 'write', 'admin'].includes(v)))
   return reposOk && permsOk
 }

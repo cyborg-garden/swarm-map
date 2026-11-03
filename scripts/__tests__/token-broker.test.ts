@@ -375,6 +375,15 @@ describe('token broker', () => {
       expect(readStatus().agents.mare).toEqual({ failures: 1, status: 'bad-scope' })
     })
 
+    it('refuses empty permissions and an empty repo list without asking GitHub', async () => {
+      const noPerms = enroll('mare', { permissions: {} })
+      const noRepos = enroll('vera', { repos: [] })
+      const broker = createBroker({ dir })
+      expect((await broker.requestToken(noPerms)).status).toBe(403)
+      expect((await broker.requestToken(noRepos)).status).toBe(403)
+      expect(gh.mints).toHaveLength(0)
+    })
+
     it('the monitor reports at once and keeps reporting', async () => {
       const broker = createBroker({ dir })
       const stop = startMonitor(broker, { heartbeatMs: 10, keyCheckMs: 10 })
