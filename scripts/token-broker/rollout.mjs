@@ -149,10 +149,21 @@ function restoreBackup(where, home) {
   }
 }
 
-function newestBackup(dir, agent) {
-  if (!fs.existsSync(backupRoot(dir))) return null
-  const all = fs.readdirSync(backupRoot(dir)).filter((n) => n.startsWith(`${agent}--`)).sort()
-  return all.length ? path.join(backupRoot(dir), all.at(-1)) : null
+// Newest first, so where two backups hold the same name the later value wins. A roll
+// only backs up what is in .env at that moment, so a re-roll's backup can hold just a
+// line that came back, and the original credentials are in an older one.
+function unusedBackups(dir, agent) {
+  if (!fs.existsSync(backupRoot(dir))) return []
+  return fs.readdirSync(backupRoot(dir)).filter((n) => n.startsWith(`${agent}--`)).sort().reverse()
+    .map((n) => path.join(backupRoot(dir), n))
+}
+
+// Kept until purge for by-hand recovery. It leaves the undo list, or a later undo would
+// bring back a line she removed after this one.
+function retireBackup(dir, where) {
+  const used = path.join(backupRoot(dir), 'used')
+  fs.mkdirSync(used, { recursive: true, mode: 0o700 })
+  fs.renameSync(where, path.join(used, path.basename(where)))
 }
 
 function brokerConfig(dir) {
@@ -301,8 +312,7 @@ export async function rollout({
   try {
     const hasCreds = [...envFiles(home), ...strayEnvCopies(home)]
       .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
-    // A re-run on a clean agent has nothing to save, and a clean copy would become
-    // the newest backup and take undo away from the real original.
+    // A re-run on a clean agent has nothing to save.
     if (hasCreds) backup = makeBackup({ dir, agent, home })
 
     fs.writeFileSync(path.join(home, MARKER), '')
@@ -360,14 +370,15 @@ export async function rollout({
 export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
   if (!AGENT_RE.test(agent ?? '')) return { ok: false, lines: ['bad agent name'] }
   const home = homeFor(homeRoot, agent)
-  const backup = newestBackup(dir, agent)
-  if (!backup) return { ok: false, lines: [`no backup for ${agent}`] }
+  const backups = unusedBackups(dir, agent)
+  if (!backups.length) return { ok: false, lines: [`no backup for ${agent}`] }
   const run = dockerClient({ docker, dockerEnv })
   try {
     // Marker last: HSM must not write keys into a half-restored .env.
-    restoreBackup(backup, home)
+    for (const backup of backups) restoreBackup(backup, home)
     unenrollAgent({ dir, agent, home })
     fs.rmSync(path.join(home, MARKER), { force: true })
+    for (const backup of backups) retireBackup(dir, backup)
     audit(dir, 'rollout-undone', { agent })
   } catch (err) {
     return { ok: false, lines: [`Could not finish undoing ${agent} (${errorName(err)}). Its backup is safe. Fix that, then run: ghkey undo ${agent}`] }

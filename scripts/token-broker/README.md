@@ -32,7 +32,7 @@ On the host, in `~/.config/hermes/github-app/`:
 | `private-key.pem` | The App key, 0600. Read per mint, so a change needs no restart. |
 | `registry.json` | Agent to secret hash, repos and permissions. Read per request. A typo keeps the last good copy in use and turns the check red. See `registry.example.json`. |
 | `audit.jsonl` | Every mint, cache hit and denial. Events only, never a value. |
-| `env-backups/` | Each agent's old `.env`, for undo. Holds real secrets, so `ghkey purge` it once settled. |
+| `env-backups/` | Each agent's old `.env`, one per roll that found a credential. Undo uses all of them, then moves them to `used/`. Holds real secrets, so `ghkey purge` it once settled. |
 
 In each agent's home: `github-broker.json` (URL and secret) and an empty
 `.hsm-github-broker` marker. HSM won't write a GitHub credential to a marked agent.

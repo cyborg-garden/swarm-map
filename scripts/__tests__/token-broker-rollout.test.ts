@@ -459,6 +459,56 @@ describe('rollout', () => {
     })
   })
 
+  describe('after a credential came back and the agent was rolled again', () => {
+    const FAKE_RETURNED = 'fake-returned-value'
+    const rollTwice = async () => {
+      await rollout(opts({ apply: true }))
+      fs.appendFileSync(path.join(home, '.env'), `GH_TOKEN=${FAKE_RETURNED}\n`)
+      await rollout(opts({ apply: true }))
+    }
+
+    it('undo brings back the original credentials too, not just the returned line', async () => {
+      await rollTwice()
+      const r = await undo(opts())
+      expect(r.ok).toBe(true)
+      const text = fs.readFileSync(path.join(home, '.env'), 'utf-8')
+      expect(scanEnvText(text).sort()).toEqual([...scanEnvText(ENV), 'GH_TOKEN'].sort())
+      expect(text).toContain(FAKE_PAT)
+      expect(text).toContain(FAKE_KEY)
+      expect(text).toContain(FAKE_RETURNED)
+    })
+
+    it('the newest value wins when a name is in more than one backup', async () => {
+      await rollout(opts({ apply: true }))
+      fs.appendFileSync(path.join(home, '.env'), 'GITHUB_TOKEN=fake-newer-value\n')
+      await rollout(opts({ apply: true }))
+      await undo(opts())
+      const text = fs.readFileSync(path.join(home, '.env'), 'utf-8')
+      expect(text).toContain('GITHUB_TOKEN=fake-newer-value')
+      expect(text).not.toContain(`GITHUB_TOKEN=${FAKE_PAT}`)
+    })
+
+    it('a line she removed between an undo and the next roll stays gone', async () => {
+      await rollout(opts({ apply: true }))
+      await undo(opts())
+      const envPath = path.join(home, '.env')
+      fs.writeFileSync(envPath, fs.readFileSync(envPath, 'utf-8').replace(`GITHUB_PERSONAL_ACCESS_TOKEN=${FAKE_PAT}\n`, ''))
+      await rollout(opts({ apply: true }))
+      await undo(opts())
+      expect(scanEnvText(fs.readFileSync(envPath, 'utf-8'))).not.toContain('GITHUB_PERSONAL_ACCESS_TOKEN')
+    })
+
+    it('a used backup stays on disk until purge', async () => {
+      await rollTwice()
+      await undo(opts())
+      const all = fs.readdirSync(path.join(dir, 'env-backups'), { recursive: true }) as string[]
+      expect(all.filter((f) => f.endsWith('.env'))).toHaveLength(2)
+      expect((await undo(opts())).lines.join('\n')).toMatch(/no backup/)
+      purgeBackups({ dir })
+      expect(fs.existsSync(path.join(dir, 'env-backups'))).toBe(false)
+    })
+  })
+
   it('undo with no backup says so and changes nothing', async () => {
     const r = await undo(opts())
     expect(r.ok).toBe(false)
