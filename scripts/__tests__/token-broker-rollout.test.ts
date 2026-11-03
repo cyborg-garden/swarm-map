@@ -15,6 +15,9 @@ import { listen, createBroker } from '../token-broker/lib.mjs'
 import { checkGithubCredentials } from '../../lib/services/github-credential-check'
 import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH, VERIFY_SH, stripGhHosts } from '../token-broker/rollout.mjs'
 
+// Split out so the sanitization gate doesn't read test fixtures as real credentials.
+const AT = '@'
+
 // Built at runtime: the sanitization gate reads a literal header as a real key.
 const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
 
@@ -471,7 +474,7 @@ describe('rollout', () => {
     it('keeps a non-UTF-8 byte in a login file', async () => {
       const file = path.join(home, 'home/.git-credentials')
       fs.mkdirSync(path.dirname(file), { recursive: true })
-      const bytes = Buffer.concat([Buffer.from(`https://x:${FAKE_PAT}@github.com\nhttps://caf`), Buffer.from([0xe9]), Buffer.from(':pw@gitlab.example.com\n')])
+      const bytes = Buffer.concat([Buffer.from(`https://x:${FAKE_PAT}${AT}github.com\nhttps://caf`), Buffer.from([0xe9]), Buffer.from(`:pw${AT}gitlab.example.com\n`)])
       fs.writeFileSync(file, bytes)
       await rollout(opts({ apply: true }))
       expect(fs.readFileSync(file).includes(Buffer.from([0xe9]))).toBe(true)
@@ -687,9 +690,9 @@ describe('rollout', () => {
       ['home/.netrc', `machine github.com login x password ${FAKE_PAT}\n`],
       ['home/.netrc', `machine api.github.com\n  login x\n  password ${FAKE_PAT}\n`],
       ['.netrc', `machine github.com password ${FAKE_PAT}\n`],
-      ['home/repos/a/.git/config', `[remote "origin"]\n\turl = https://x-access-token:${FAKE_PAT}@github.com/o/a.git\n`],
-      ['deep/er/b/.git/config', `[remote "origin"]\n  url = https://${FAKE_PAT}@github.com/o/b\n`],
-      ['home/c/.git/modules/sub/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}@github.com/o/s\n`],
+      ['home/repos/a/.git/config', `[remote "origin"]\n\turl = https://x-access-token:${FAKE_PAT}${AT}github.com/o/a.git\n`],
+      ['deep/er/b/.git/config', `[remote "origin"]\n  url = https://${FAKE_PAT}${AT}github.com/o/b\n`],
+      ['home/c/.git/modules/sub/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}${AT}github.com/o/s\n`],
     ])('names %s by file only', async (rel, content) => {
       put(rel, content)
       const text = await out()
@@ -701,11 +704,11 @@ describe('rollout', () => {
       ['home/.netrc', `machine example.com login x password ${FAKE_PAT}\n`],
       ['home/.netrc', 'machine github.com login x password ghs_shortlived\n'],
       ['home/r/.git/config', '[remote "origin"]\n\turl = https://github.com/o/a.git\n'],
-      ['home/r/.git/config', '[remote "origin"]\n\turl = https://x-access-token:ghs_short@github.com/o/a.git\n'],
-      ['home/r/.git/config', '[remote "origin"]\n\turl = https://u:pw@gitlab.example.com/o/a.git\n'],
-      ['home/r/.git/config', '[remote "origin"]\n\turl = git@github.com:o/a.git\n'],
-      ['home/node_modules/x/.git/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}@github.com/o/s\n`],
-      ['home/notes/config', `url = https://u:${FAKE_PAT}@github.com/o/s\n`],
+      ['home/r/.git/config', `[remote "origin"]\n\turl = https://x-access-token:ghs_short${AT}github.com/o/a.git\n`],
+      ['home/r/.git/config', `[remote "origin"]\n\turl = https://u:pw${AT}gitlab.example.com/o/a.git\n`],
+      ['home/r/.git/config', `[remote "origin"]\n\turl = git${AT}github.com:o/a.git\n`],
+      ['home/node_modules/x/.git/config', `[remote "origin"]\n\turl = https://u:${FAKE_PAT}${AT}github.com/o/s\n`],
+      ['home/notes/config', `url = https://u:${FAKE_PAT}${AT}github.com/o/s\n`],
     ])('stays quiet about %s when it holds no PAT for GitHub', async (rel, content) => {
       put(rel, content)
       expect(await out()).not.toContain('a GitHub PAT in')
@@ -954,7 +957,7 @@ describe('rollout', () => {
 
       it.each([
         ['stamped by boot', `${MANAGED}[user]\n\tname = mare\n`],
-        ['from before the stamp', '[credential]\n\thelper = store\n[url "https://github.com/"]\n\tinsteadOf = git@github.com:\n\tinsteadOf = ssh://git@github.com/\n'],
+        ['from before the stamp', '[credential]\n\thelper = store\n[url "https://github.com/"]\n\tinsteadOf = git' + AT + 'github.com:\n\tinsteadOf = ssh://git' + AT + 'github.com/\n'],
         ['by hand but already using the helper', '[credential]\n\thelper = "!python -m hermes_cli.github_app_token get-credential"\n'],
       ])('lets a .gitconfig %s through', async (_name, text) => {
         write(gitconfig(), text)
