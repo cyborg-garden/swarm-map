@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adoptKey, createBroker, enrollAgent, listen, mintBody, scopeHash, signAppJwt, startMonitor } from '../token-broker/lib.mjs'
+import { adoptKey, createBroker, enrollAgent, listen, mintBody, scopeHash, signAppJwt, startMonitor, unenrollAgent } from '../token-broker/lib.mjs'
 import { checkGithubCredentials } from '../../lib/services/github-credential-check'
 
 const APP_ID = '111'
@@ -382,6 +382,30 @@ describe('token broker', () => {
       expect((await broker.requestToken(noPerms)).status).toBe(403)
       expect((await broker.requestToken(noRepos)).status).toBe(403)
       expect(gh.mints).toHaveLength(0)
+    })
+
+    it('drops an agent from the report once it is unenrolled', async () => {
+      const secret = enroll('mare')
+      const other = enroll('vera')
+      const broker = createBroker({ dir })
+      gh.fail(422)
+      await broker.requestToken(secret)
+      await broker.requestToken(other)
+      broker.writeStatus()
+      expect(Object.keys(readStatus().agents).sort()).toEqual(['mare', 'vera'])
+      unenrollAgent({ dir, agent: 'mare', home: path.join(homes, 'mare') })
+      broker.writeStatus()
+      expect(Object.keys(readStatus().agents)).toEqual(['vera'])
+    })
+
+    it('keeps its failure list when the registry has a typo', async () => {
+      const secret = enroll('mare')
+      const broker = createBroker({ dir })
+      gh.fail(422)
+      await broker.requestToken(secret)
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{oops')
+      broker.writeStatus()
+      expect(Object.keys(readStatus().agents)).toEqual(['mare'])
     })
 
     it('the monitor reports at once and keeps reporting', async () => {

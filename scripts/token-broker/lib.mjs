@@ -263,6 +263,12 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
   }
 
   function writeStatus() {
+    // An agent taken off the broker can't recover by getting a token, so it would stay
+    // here until a restart. A registry that can't be read says nothing about who left.
+    try {
+      const { agents = {} } = readRegistry(dir)
+      for (const agent of failingAgents.keys()) if (!agents[agent]) failingAgents.delete(agent)
+    } catch { /* keep the list */ }
     writePrivate(path.join(dir, STATUS_FILE), JSON.stringify({
       at: new Date(now()).toISOString(), key: keyHealth, agents: Object.fromEntries(failingAgents),
     }))
