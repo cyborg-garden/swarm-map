@@ -221,11 +221,13 @@ echo ok
 // A PAT can reach repos outside the App's org; the broker can't. Show which owners
 // this agent has checked out so a repo about to go dark gets seen first. The sed
 // keeps only the part after github.com, so a token embedded in a URL can't print.
-export const OWNERS_SH = `find /opt/data -maxdepth 4 -path '*/.git/config' 2>/dev/null | xargs sed -n 's#.*url = .*github\\.com[:/]\\([A-Za-z0-9_.-]*\\)/.*#\\1#p' 2>/dev/null | sort -u`
+// Any depth, because a repo this misses is one she loses without being told. It skips
+// only trees that can't hold her own checkouts, and git's objects, to stay quick.
+export const OWNERS_SH = `find /opt/data \\( -name node_modules -o -name .venv -o -name .cache -o \\( -name objects -path '*/.git/*' \\) \\) -prune -o -type f \\( -path '*/.git/config' -o -path '*/.git/modules/*/config' \\) -exec sed -n 's#.*url = .*github\\.com[:/]\\([A-Za-z0-9_.-]*\\)/.*#\\1#p' {} + 2>/dev/null | sort -u`
 
 function checkoutOwners(run, c) {
-  const { out } = run(['exec', c.container, 'sh', '-c', OWNERS_SH])
-  return out.split('\n').filter((o) => /^[A-Za-z0-9_.-]+$/.test(o))
+  const { rc, out } = run(['exec', c.container, 'sh', '-c', OWNERS_SH])
+  return { listed: rc === 0, owners: out.split('\n').filter((o) => /^[A-Za-z0-9_.-]+$/.test(o)) }
 }
 
 async function verify(run, c, { verifyDeadlineMs, pollMs }) {
@@ -292,7 +294,8 @@ export async function rollout({
     problems.push(`could not read its .env files (${errorName(err)})`)
   }
   if (c.running) {
-    const owners = checkoutOwners(run, c)
+    const { listed, owners } = checkoutOwners(run, c)
+    if (!listed) lines.push(`warning: Could not list the repo owners in its checkouts, so a repo outside the App's org may not show here.`)
     if (owners.length) lines.push(`Repo owners in its checkouts: ${owners.join(', ')}. The broker only reaches the App's own org.`)
   }
   for (const w of warnings) lines.push(`warning: ${w}`)

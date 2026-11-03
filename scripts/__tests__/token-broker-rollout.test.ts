@@ -44,7 +44,7 @@ case "$1" in
   exec)
     case "$*" in
       *read_broker_config*) exit $(cat "$FD/module.rc" 2>/dev/null || echo 0) ;;
-      *"find /opt/data"*) cat "$FD/owners.out" 2>/dev/null; exit 0 ;;
+      *"find /opt/data"*) cat "$FD/owners.out" 2>/dev/null; exit $(cat "$FD/owners.rc" 2>/dev/null || echo 0) ;;
       *) cat "$FD/verify.out" 2>/dev/null; exit $(cat "$FD/verify.rc" 2>/dev/null || echo 0) ;;
     esac ;;
 esac
@@ -174,6 +174,31 @@ describe('rollout', () => {
     const sed = /sed -n '([^']+)'/.exec(OWNERS_SH)?.[1] ?? ''
     const r = spawnSync('sed', ['-n', sed, path.join(repo, 'config')], { encoding: 'utf-8' })
     expect(r.stdout.trim().split('\n')).toEqual(['some-owner', 'other-owner'])
+  })
+
+  it('finds an owner at any depth, and in a path with a space, without printing a token', () => {
+    const tree = path.join(root, 'data')
+    const repo = (rel: string, url: string, config = '.git/config') => {
+      const f = path.join(tree, rel, config)
+      fs.mkdirSync(path.dirname(f), { recursive: true })
+      fs.writeFileSync(f, `[remote "origin"]\n\turl = ${url}\n`)
+    }
+    const github = (owner: string) => `https://github.com/${owner}/r.git`
+    repo('workspace/a', github('shallow-org'))
+    repo('home/repos/b', github('depth5-org'))
+    repo('home/work/x/y/z/q/c', github('depth9-org'))
+    repo('home/my repos/d', github('spaced-org'))
+    repo('home/e', github('submodule-org'), '.git/modules/sub/config')
+    repo('home/f', ['https', '//x-access-token', 'leak-value'].join(':') + '@github.com/token-org/f.git')
+    repo('home/g/node_modules/h', github('vendored-org'))
+    const r = spawnSync('sh', ['-c', OWNERS_SH.replace('/opt/data', tree)], { encoding: 'utf-8' })
+    expect(r.stdout.trim().split('\n')).toEqual(['depth5-org', 'depth9-org', 'shallow-org', 'spaced-org', 'submodule-org', 'token-org'])
+  })
+
+  it('says so when it could not list the owners, rather than showing none', async () => {
+    writeFd('owners.rc', '1')
+    const text = (await rollout(opts())).lines.join('\n')
+    expect(text).toMatch(/Could not list the repo owners/)
   })
 
   it('applies: backs up outside the agent mount, strips, marks, enrols and recreates without building', async () => {
