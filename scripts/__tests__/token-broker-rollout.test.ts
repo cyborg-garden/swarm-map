@@ -312,6 +312,13 @@ describe('rollout', () => {
     expect(calls()).not.toMatch(/^compose/m)
   })
 
+  it('says the broker code must reach the build branch, or a rebuild changes nothing', async () => {
+    writeFd('module.rc', '1')
+    const out = (await rollout(opts())).lines.join('\n')
+    expect(out).toMatch(/merged into .*fleet-live/)
+    expect(out).toMatch(/then rebuild through HSM/i)
+  })
+
   it('--accept-loss proceeds past an MCP or copilot dependency', async () => {
     fs.appendFileSync(path.join(home, 'config.yaml'), 'x: ${GITHUB_PERSONAL_ACCESS_TOKEN}\n')
     expect((await rollout(opts({ apply: true, acceptLoss: true }))).ok).toBe(true)

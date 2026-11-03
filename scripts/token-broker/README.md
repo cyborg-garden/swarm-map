@@ -95,7 +95,9 @@ agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on th
 ## Rules worth knowing
 
 - `roll` never builds. If an image lacks the broker code it stops and asks for an
-  HSM rebuild, because a hand-run build blinds the drift check.
+  HSM rebuild, because a hand-run build blinds the drift check. A rebuild uses the
+  branch the build source is on (`fleet-live` on the Mini), so the code has to be
+  merged there first or the rebuild changes nothing.
 - `roll` checks git and gh as the `hermes` user with `HOME=/opt/data/home`, where
   agents really run them, against a private repo. Any failure restores the agent.
 - A broker failure doesn't fall back to App credentials in `.env`, so a broken setup

@@ -595,7 +595,7 @@ function handWrittenLoginFiles(toolHome) {
 }
 
 const AGENT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const REBUILD_HINT = 'its image lacks the broker code. Rebuild through HSM first (mode "rebuild"), not by hand, so the drift check keeps working'
+const REBUILD_HINT = 'its image lacks the broker code. Check the code is merged into the branch the Mini builds from (fleet-live), then rebuild through HSM (mode "rebuild"), not by hand, so the drift check keeps working'
 
 async function preflight({ dir, root, agent, home, run, acceptLoss }) {
   const problems = []
