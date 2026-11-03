@@ -1,0 +1,107 @@
+#!/bin/bash
+# ghkey: the laptop side of the token broker. With no arguments it changes the App
+# key: click Generate on GitHub, then run this. See README.md.
+#
+# The key goes by pipe from the file straight into ssh. It is never put in a
+# variable, printed, or passed as an argument.
+set -euo pipefail
+
+host="${GHKEY_SSH_HOST:-garden-lan}"
+downloads="${GHKEY_DOWNLOADS:-$HOME/Downloads}"
+# A browser names a second download "...private-key (1).pem" or "...private-key-1.pem".
+glob="hermes-fleet-git.*.private-key*.pem"
+settings="https://github.com/organizations/cyborg-garden/settings/apps/hermes-fleet-git"
+remote='$HOME/bin/github-broker'
+
+self="$0"
+if [ -L "$self" ]; then self="$(readlink "$self")"; fi
+here="$(cd "$(dirname "$self")" && pwd)"
+
+agent_arg() {
+  case "${1:-}" in
+    ''|*[!a-z0-9-]*) echo "Need an agent name, like: ghkey roll mare" >&2; exit 2 ;;
+  esac
+}
+
+change_key() {
+  local newest
+  # shellcheck disable=SC2086
+  newest="$(ls -t "$downloads"/$glob 2>/dev/null | head -1 || true)"
+  if [ -z "$newest" ]; then
+    echo "No key file in $downloads. Click Generate a private key here, then run ghkey again:"
+    echo "$settings"
+    exit 1
+  fi
+  if [ -z "$(find "$newest" -mmin -1440)" ]; then
+    echo "Newest key file is over a day old, so it is probably not the one you meant."
+    echo "Generate a new one, or delete the old file: $(basename "$newest")"
+    exit 1
+  fi
+  if ! grep -q 'PRIVATE KEY-----' "$newest"; then
+    echo "$(basename "$newest") does not look like a private key. Nothing sent."
+    exit 1
+  fi
+
+  echo "Using $(basename "$newest")."
+  local out
+  if ! out="$(ssh "$host" "$remote adopt-key" < "$newest" 2>&1)"; then
+    echo "$out"
+    echo "Key not changed. $(basename "$newest") is still in Downloads."
+    echo "Run ghkey to try it again, or click Generate first and ghkey will use the newer file."
+    exit 1
+  fi
+  echo "$out"
+  rm -f "$newest"
+  echo "Deleted the copy in Downloads."
+
+  local others
+  others="$(find "$downloads" -maxdepth 1 -name "$glob" | wc -l | tr -d ' ')"
+  if [ "$others" != "0" ]; then
+    echo "$others older key file(s) still in Downloads, not used. Delete them when you can:"
+    find "$downloads" -maxdepth 1 -name "$glob" -exec basename {} \;
+  fi
+  case "$out" in
+    *HOLD:*) echo "Don't delete the old key on GitHub yet. Delete it after the last agent has moved:"; echo "$settings" ;;
+    *) echo "Last step: delete the older key here:"; echo "$settings" ;;
+  esac
+}
+
+case "${1:-}" in
+  '') change_key ;;
+  install)
+    mkdir -p "$HOME/.local/share/token-broker" "$HOME/bin"
+    cp "$here"/broker.mjs "$here"/lib.mjs "$here"/rollout.mjs "$here"/setup-mini.sh "$here"/ghkey "$HOME/.local/share/token-broker/"
+    chmod 755 "$HOME/.local/share/token-broker/ghkey"
+    ln -sf "$HOME/.local/share/token-broker/ghkey" "$HOME/bin/ghkey"
+    echo "Installed: ~/bin/ghkey"
+    ;;
+  setup)
+    case "${2:-}${3:-}" in
+      ''|*[!0-9]*) echo "usage: ghkey setup <app_id> <installation_id>" >&2; exit 2 ;;
+    esac
+    tar -C "$here" -cf - broker.mjs lib.mjs rollout.mjs setup-mini.sh |
+      ssh "$host" "mkdir -p \$HOME/.config/hermes/github-app/bin && tar -xf - -C \$HOME/.config/hermes/github-app/bin && bash \$HOME/.config/hermes/github-app/bin/setup-mini.sh $2 $3"
+    ;;
+  roll)
+    agent_arg "${2:-}"
+    for flag in "${@:3}"; do
+      case "$flag" in --apply|--accept-loss) ;; *) echo "Unknown option: $flag" >&2; exit 2 ;; esac
+    done
+    ssh "$host" "$remote rollout ${*:2}"
+    ;;
+  undo)
+    agent_arg "${2:-}"
+    ssh "$host" "$remote undo $2"
+    ;;
+  purge)
+    ssh "$host" "$remote purge-backups"
+    ;;
+  check)
+    ssh "$host" '$HOME/bin/hsm-api GET /api/integrity' |
+      python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("githubCredentials"), indent=2))'
+    ;;
+  *)
+    echo "usage: ghkey | ghkey install | ghkey setup <app_id> <install_id> | ghkey roll <agent> [--apply] | ghkey undo <agent> | ghkey check | ghkey purge" >&2
+    exit 2
+    ;;
+esac

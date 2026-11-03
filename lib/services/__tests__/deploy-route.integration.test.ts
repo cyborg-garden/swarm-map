@@ -5,6 +5,7 @@
 // else (the route logic, .env + compose templating, fs writes) runs for real
 // against temp dirs. This exercises the full Phase 1 wiring end-to-end in-process
 // — the only thing not covered is the actual `docker compose up` (no Docker here).
+import { scanEnvText } from '../../../scripts/token-broker/rollout.mjs'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
@@ -177,6 +178,26 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     }
     const res = await deploy({ name: 'bad', provider: 'anthropic', primaryModel: 'claude-opus-4-6', surface: 'galaxy' })
     expect(res.status).toBe(400)
+  })
+
+  it('refuses a GitHub token on a host that runs the token broker, before writing anything', async () => {
+    fs.mkdirSync(path.join(h.tmpHome, '.config/hermes/github-app'), { recursive: true })
+    fs.writeFileSync(path.join(h.tmpHome, '.config/hermes/github-app/private-key.pem'), 'unused')
+    const res = await deploy({ name: 'brokered', provider: 'anthropic', primaryModel: 'm', llmKey: 'k', githubToken: 'not-a-real-token' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/ghkey roll brokered/)
+    expect(fs.existsSync(path.join(h.tmpHome, '.hermes-brokered'))).toBe(false)
+  })
+
+  it('writes no GitHub credential for a new agent on a broker host, so a roll has nothing to strip', async () => {
+    fs.mkdirSync(path.join(h.tmpHome, '.config/hermes/github-app'), { recursive: true })
+    fs.writeFileSync(path.join(h.tmpHome, '.config/hermes/github-app/private-key.pem'), 'unused')
+    const res = await deploy({ name: 'sprite', provider: 'anthropic', primaryModel: 'm', llmKey: 'k' })
+    expect((await res.json()).ok).toBe(true)
+    const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-sprite', '.env'), 'utf-8')
+    expect(env).not.toMatch(/GITHUB|GH_TOKEN/)
+    expect(fs.readFileSync(path.join(h.tmpHome, '.hermes-sprite', 'config.yaml'), 'utf-8')).not.toMatch(/GITHUB_PERSONAL_ACCESS_TOKEN/)
+    expect(scanEnvText(env)).toEqual([])
   })
 
   it('base package: SOUL is the shared default (no false per-group memory isolation claim)', async () => {

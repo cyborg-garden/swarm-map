@@ -432,7 +432,7 @@ export function getWriteFailureSignal(harnessId: string): DbWriteFailureSignal {
 
 // --- Fleet sweep + cache ----------------------------------------------------
 
-export type SweepTarget = { harnessId: string; name: string; dataDir: string; containerName: string }
+export type SweepTarget = { harnessId: string; name: string; dataDir: string; containerName: string; composeFile?: string }
 
 const SWEEP_STAGGER_MS = 250
 

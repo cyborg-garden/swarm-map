@@ -1189,6 +1189,22 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
       .toHaveLength(0)
   })
 
+  it('REFUSES (400) a GitHub credential in extraEnv on an agent on the token broker', async () => {
+    vi.mocked(services.harness.get).mockReturnValue({
+      name: 'iris',
+      runtime: 'hermes',
+      composeFile: '/tmp/iris.yml',
+      extraEnv: { GH_TOKEN: 'x' },
+    } as never)
+    vi.spyOn(fs, 'existsSync').mockImplementation(((p: string) => String(p).endsWith('.hsm-github-broker') || String(p).endsWith('.env')) as never)
+
+    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_iris'))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/GitHub token broker/)
+    expect((fs.writeFileSync as unknown as { mock: { calls: unknown[][] } }).mock.calls)
+      .toHaveLength(0)
+  })
+
   it('accepts a ~-prefixed host path — the spelling every other host path takes', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
       name: 'iris',

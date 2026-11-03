@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { KeysService } from '../keys'
+import { GITHUB_BROKER_MARKER, KeysService } from '../keys'
 import { Storage } from '../storage'
 import { AuditService } from '../audit'
 import fs from 'fs'
@@ -205,5 +205,71 @@ describe('bluesky pair .env sync (assign / unassign / remove)', () => {
     const env = readEnv('iris')
     expect(env).toMatch(/^BLUESKY_APP_PASSWORD=qrst-uvwx-yzab-cdef$/m)
     expect(env).toMatch(/^BLUESKY_IDENTIFIER=new\.handle$/m)
+  })
+})
+
+// An agent moved onto the token broker holds no GitHub credential. A key resync,
+// rotation or reassignment must not put one back.
+describe('agents on the GitHub token broker', () => {
+  let tmpHome: string
+  let tmpStore: string
+  let prevHome: string | undefined
+  let keys: KeysService
+  // Built at runtime: the sanitization gate reads a literal prefix as a real token.
+  const GH = 'gh' + 'p_' + 'A'.repeat(36)
+
+  const envFor = (name: string) => path.join(tmpHome, `.hermes-${name}`, '.env')
+  const mark = (name: string) => {
+    fs.mkdirSync(path.dirname(envFor(name)), { recursive: true })
+    fs.writeFileSync(path.join(path.dirname(envFor(name)), GITHUB_BROKER_MARKER), '')
+    fs.writeFileSync(envFor(name), 'OTHER=1\n')
+  }
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-broker-home-'))
+    tmpStore = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-broker-store-'))
+    prevHome = process.env.HOME
+    process.env.HOME = tmpHome
+    const storage = new Storage(tmpStore)
+    keys = new KeysService(storage, new AuditService(storage))
+  })
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    fs.rmSync(tmpHome, { recursive: true, force: true })
+    fs.rmSync(tmpStore, { recursive: true, force: true })
+  })
+
+  it('refuses a github key on a marked agent and leaves its .env alone', () => {
+    mark('a')
+    expect(keys.writeKeyToEnv('a', 'github', GH)).toBe(false)
+    expect(fs.readFileSync(envFor('a'), 'utf-8')).toBe('OTHER=1\n')
+  })
+
+  it('refuses a token aimed at a GitHub variable under another provider name', () => {
+    mark('a')
+    expect(keys.writeKeyToEnv('a', 'custom', 'x', { envVar: 'GITHUB_PERSONAL_ACCESS_TOKEN' })).toBe(false)
+    expect(keys.writeKeyToEnv('a', 'custom', 'x', { envVar: 'GITHUB_APP_PRIVATE_KEY_B64' })).toBe(false)
+  })
+
+  it('refuses a token-shaped value under any variable', () => {
+    mark('a')
+    expect(keys.writeKeyToEnv('a', 'custom', GH, { envVar: 'SOME_BOT_KEY' })).toBe(false)
+    expect(fs.readFileSync(envFor('a'), 'utf-8')).toBe('OTHER=1\n')
+  })
+
+  it('still writes other keys to a marked agent, and github keys to unmarked ones', () => {
+    mark('a')
+    expect(keys.writeKeyToEnv('a', 'brave', 'brave-value')).toBe(true)
+    expect(keys.writeKeyToEnv('b', 'github', GH)).toBe(true)
+    expect(fs.readFileSync(envFor('b'), 'utf-8')).toContain('GITHUB_TOKEN=')
+  })
+
+  it('does not show a marked agent as assigned, through add, assign or rotate', () => {
+    mark('a')
+    const key = keys.add({ provider: 'github', name: 'gh', value: GH, assignedTo: ['a', 'b'] })
+    expect(key.assignedTo).toEqual(['b'])
+    keys.setAssignment(key.id, ['a', 'b'])
+    expect(fs.readFileSync(envFor('a'), 'utf-8')).toBe('OTHER=1\n')
   })
 })

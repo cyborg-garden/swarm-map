@@ -6,12 +6,14 @@ import {
   runFleetIntegritySweep,
 } from '@/lib/services/integrity'
 import { sweepTargets } from '@/lib/services/integrity-scheduler'
+import { checkGithubCredentials } from '@/lib/services/github-credential-check'
 
 // Fleet DB health view (#204, PR1): cached quick_check results from the
 // scheduled sweep + a per-harness write-failure signal from errors.log.
 function fleetView() {
   const snapshot = getFleetIntegritySnapshot()
-  const harnesses = sweepTargets().map((t) => ({
+  const targets = sweepTargets()
+  const harnesses = targets.map((t) => ({
     harnessId: t.harnessId,
     name: t.name,
     // null until the first sweep has covered this harness.
@@ -22,6 +24,8 @@ function fleetView() {
     lastSweepAt: snapshot.lastSweepAt,
     sweepInProgress: snapshot.sweepInProgress,
     harnesses,
+    // Read fresh: a credential coming back should show on the next poll.
+    githubCredentials: checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir, composeFile: t.composeFile })) }),
   }
 }
 

@@ -482,7 +482,7 @@ export async function PUT(
   {
     const configured = services.harness.get(id)
     const problem =
-      validateExtraMounts(configured?.extraMounts) ?? validateExtraEnv(configured?.extraEnv)
+      validateExtraMounts(configured?.extraMounts) ?? validateExtraEnv(configured?.extraEnv, dataDir)
       ?? validateExtraAptPackages(configured?.extraAptPackages)
     if (problem) {
       return NextResponse.json(

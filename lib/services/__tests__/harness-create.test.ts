@@ -132,6 +132,19 @@ describe('HarnessService.importFromDir', () => {
     vi.restoreAllMocks()
   })
 
+  it('leaves the source agent\'s broker identity behind', async () => {
+    // Otherwise the import asks for tokens as its source, gets the source's scope,
+    // and the audit log blames the source.
+    fs.writeFileSync(path.join(hermesDir, 'github-broker.json'), '{"url":"http://unused","secret":"not-a-real-secret"}')
+    fs.writeFileSync(path.join(hermesDir, '.hsm-github-broker'), '')
+    await service.importFromDir(hermesDir, 'broker-import')
+    const dest = path.join(tmpDir, '.hermes-broker-import')
+    expect(fs.existsSync(path.join(dest, '.env'))).toBe(true)
+    expect(fs.existsSync(path.join(dest, 'github-broker.json'))).toBe(false)
+    expect(fs.existsSync(path.join(dest, '.hsm-github-broker'))).toBe(false)
+    expect(fs.existsSync(path.join(hermesDir, 'github-broker.json'))).toBe(true)
+  })
+
   it('imports a harness from a data directory', async () => {
     storage.write('harnesses.json', [])
     const result = await service.importFromDir(hermesDir, 'imported-agent')
