@@ -5,12 +5,14 @@
  * so "the broker signs with the key on disk" is proved rather than assumed.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { adoptKey, createBroker, enrollAgent, listen, mintBody, scopeHash, signAppJwt } from '../token-broker/lib.mjs'
 
 const APP_ID = '111'
@@ -207,6 +209,86 @@ describe('token broker', () => {
     fs.writeFileSync(regPath, JSON.stringify(reg))
     expect((await createBroker({ dir }).requestToken(secret)).status).toBe(403)
     expect(gh.mints).toHaveLength(0)
+  })
+
+  describe('a broken registry.json', () => {
+    const breakRegistry = () => fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"mare": {"secret_sha256": "typo-here",},}}')
+
+    it('keeps serving from the last good copy, and says so in the audit log', async () => {
+      const secret = enroll('mare')
+      const broker = createBroker({ dir })
+      expect((await broker.requestToken(secret)).status).toBe(200)
+      breakRegistry()
+      const r = await broker.requestToken(secret)
+      expect(r.status).toBe(200)
+      expect((await broker.requestToken('junk')).status).toBe(401)
+      expect(readAudit()).toContain('registry-unreadable')
+      expect(readAudit()).not.toContain('typo-here')
+    })
+
+    it('answers 503 and does not mint when it has never read a good copy', async () => {
+      const secret = enroll('mare')
+      breakRegistry()
+      const r = await createBroker({ dir }).requestToken(secret)
+      expect(r.status).toBe(503)
+      expect(gh.mints).toHaveLength(0)
+    })
+
+    it('treats JSON of the wrong shape as broken', async () => {
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"mare": null}}')
+      expect((await createBroker({ dir }).requestToken('junk')).status).toBe(503)
+      fs.writeFileSync(path.join(dir, 'registry.json'), 'null')
+      expect((await createBroker({ dir }).requestToken('junk')).status).toBe(503)
+    })
+
+    it('never overwrites a broken file on enrol', () => {
+      breakRegistry()
+      const before = fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')
+      expect(() => enroll('cyborg')).toThrow()
+      expect(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).toBe(before)
+    })
+  })
+
+  // The real CLI, because the failure was the process dying, which launchd then
+  // repeats on every request.
+  describe('the serve process', () => {
+    const cli = path.join(path.dirname(fileURLToPath(import.meta.url)), '../token-broker/broker.mjs')
+    let child: ChildProcess
+    let base: string
+
+    const serve = async () => {
+      const port = await new Promise<number>((resolve) => {
+        const probe = http.createServer().listen(0, '127.0.0.1', () => {
+          const p = (probe.address() as AddressInfo).port
+          probe.close(() => resolve(p))
+        })
+      })
+      fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ app_id: APP_ID, installation_id: INSTALL_ID, api_base: api, port }))
+      child = spawn(process.execPath, [cli, 'serve'], { env: { ...process.env, GITHUB_BROKER_DIR: dir }, stdio: ['ignore', 'pipe', 'ignore'] })
+      await new Promise((resolve, reject) => {
+        child.stdout!.once('data', resolve)
+        child.once('exit', reject)
+      })
+      base = `http://127.0.0.1:${port}`
+    }
+    const ask = (secret: string) => fetch(`${base}/v1/token`, { method: 'POST', headers: { authorization: `Bearer ${secret}` } })
+    afterEach(() => { child.kill() })
+
+    it('survives a request against a registry with a typo, even with a wrong secret', async () => {
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {},}')
+      await serve()
+      expect((await ask('junk')).status).toBe(503)
+      expect(child.exitCode).toBeNull()
+      expect((await fetch(`${base}/healthz`)).status).toBe(200)
+    })
+
+    it('survives a failed audit write', async () => {
+      fs.mkdirSync(path.join(dir, 'audit.jsonl'))
+      await serve()
+      expect((await ask('junk')).status).toBe(500)
+      expect(child.exitCode).toBeNull()
+      expect((await fetch(`${base}/healthz`)).status).toBe(200)
+    })
   })
 
   it('keeps the audit log free of tokens, secrets and key material', async () => {

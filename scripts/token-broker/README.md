@@ -30,7 +30,7 @@ On the host, in `~/.config/hermes/github-app/`:
 | File | What it is |
 | --- | --- |
 | `private-key.pem` | The App key, 0600. Read per mint, so a change needs no restart. |
-| `registry.json` | Agent to secret hash, repos and permissions. Read per request. See `registry.example.json`. |
+| `registry.json` | Agent to secret hash, repos and permissions. Read per request. A typo keeps the last good copy in use and turns the check red. See `registry.example.json`. |
 | `audit.jsonl` | Every mint, cache hit and denial. Events only, never a value. |
 | `env-backups/` | Each agent's old `.env`, for undo. Holds real secrets, so `ghkey purge` it once settled. |
 

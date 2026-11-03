@@ -122,6 +122,17 @@ describe('checkGithubCredentials', () => {
     expect([...GITHUB_CREDENTIAL_VARS].sort()).toEqual([...CREDENTIAL_VARS].sort())
   })
 
+  it('fails when the broker registry has a typo, and quotes nothing from the file', () => {
+    const reg = path.join(root, 'registry.json')
+    fs.writeFileSync(reg, '{"agents": {"quoted-text": {},},}')
+    const r = check([agent('a', 'OTHER=1\n', true)])
+    expect(r.status).toBe('fail')
+    expect(r.message).toMatch(/registry\.json/)
+    expect(r.message).not.toContain('quoted-text')
+    fs.writeFileSync(reg, '{"agents": {"a": {}}}')
+    expect(check([agent('a', 'OTHER=1\n', true)]).status).toBe('ok')
+  })
+
   it('survives an agent with no data dir', () => {
     expect(check([{ name: 'gone', dataDir: path.join(root, 'nope') }]).status).toBe('ok')
   })

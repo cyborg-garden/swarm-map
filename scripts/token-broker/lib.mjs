@@ -27,13 +27,25 @@ function writePrivate(file, content) {
   fs.renameSync(tmp, file)
 }
 
+function validRegistry(r) {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return false
+  if (r.agents === undefined) return true
+  return !!r.agents && typeof r.agents === 'object' && !Array.isArray(r.agents) &&
+    Object.values(r.agents).every((e) => e && typeof e === 'object' && !Array.isArray(e))
+}
+
+/** Throws on a bad file rather than guess, so enrol can never overwrite one. */
 function readRegistry(dir) {
+  let raw
   try {
-    return JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8'))
+    raw = fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')
   } catch (err) {
     if (err.code === 'ENOENT') return { agents: {} }
     throw err
   }
+  const registry = JSON.parse(raw)
+  if (!validRegistry(registry)) throw new SyntaxError('registry.json has the wrong shape')
+  return registry
 }
 
 export function audit(dir, event, fields = {}) {
@@ -139,9 +151,23 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
   const cache = new Map()
   const inFlight = new Map()
   const config = () => JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'))
+  let lastGoodRegistry = null
+
+  // This file is edited by hand, so a typo is an expected event. Agents keep working
+  // from the last good copy until it is fixed, and HSM's GitHub check goes red. The
+  // audit line has no error message because a JSON error quotes the file.
+  function currentRegistry() {
+    try {
+      lastGoodRegistry = readRegistry(dir)
+    } catch (err) {
+      audit(dir, 'registry-unreadable', { error: err.code ?? err.name, serving: lastGoodRegistry ? 'last-good' : 'nothing' })
+    }
+    return lastGoodRegistry
+  }
 
   async function requestToken(secret) {
-    const registry = readRegistry(dir)
+    const registry = currentRegistry()
+    if (!registry) return { status: 503, body: { error: 'broker registry unreadable' } }
     const agent = identify(registry, secret)
     if (!agent) {
       audit(dir, 'denied', { reason: 'unknown-secret' })
@@ -195,13 +221,21 @@ export function listen(broker, { host = '127.0.0.1', port = DEFAULT_PORT } = {})
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
       res.end(JSON.stringify(body))
     }
-    if (req.method === 'GET' && req.url === '/healthz') return send(200, { ok: true })
-    if (req.method === 'POST' && req.url === '/v1/token') {
-      const secret = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]
-      const { status, body } = await broker.requestToken(secret)
-      return send(status, body)
+    // One bad request must not take the broker down for the whole fleet. The message
+    // stays out of the log for the same reason as in currentRegistry.
+    try {
+      if (req.method === 'GET' && req.url === '/healthz') return send(200, { ok: true })
+      if (req.method === 'POST' && req.url === '/v1/token') {
+        const secret = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]
+        const { status, body } = await broker.requestToken(secret)
+        return send(status, body)
+      }
+      return send(404, { error: 'not found' })
+    } catch (err) {
+      console.error(`token broker: request failed (${err.code ?? err.name})`)
+      if (!res.headersSent) send(500, { error: 'broker error' })
+      else res.destroy()
     }
-    return send(404, { error: 'not found' })
   })
   return new Promise((resolve, reject) => {
     server.once('error', reject)

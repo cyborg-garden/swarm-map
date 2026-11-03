@@ -30,6 +30,7 @@ export type GithubCredentialReport = {
   failing: GithubCredentialFinding[]
   pending: GithubCredentialFinding[]
   key: { present: boolean; ageDays: number | null; over90: boolean }
+  registryBroken: boolean
 }
 
 export function defaultKeyPath(): string {
@@ -59,6 +60,21 @@ function envFilesIn(dataDir: string): string[] {
   return [...top, ...profiles]
 }
 
+// A typo here leaves the broker on its last good copy, so her edit silently isn't
+// applied. Same shape rule as scripts/token-broker/lib.mjs. The parse error stays out
+// of the report because it quotes the file.
+function registryBroken(file: string): boolean {
+  try {
+    const r = JSON.parse(fs.readFileSync(file, 'utf-8'))
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return true
+    if (r.agents === undefined) return false
+    if (!r.agents || typeof r.agents !== 'object' || Array.isArray(r.agents)) return true
+    return !Object.values(r.agents).every((e) => e && typeof e === 'object' && !Array.isArray(e))
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== 'ENOENT'
+  }
+}
+
 export function checkGithubCredentials(opts: {
   agents: { name: string; dataDir: string }[]
   keyPath?: string
@@ -84,9 +100,11 @@ export function checkGithubCredentials(opts: {
     }
   }
 
+  const keyPath = opts.keyPath ?? defaultKeyPath()
+  const badRegistry = registryBroken(path.join(path.dirname(keyPath), 'registry.json'))
   let ageDays: number | null = null
   try {
-    ageDays = Math.floor((now - fs.statSync(opts.keyPath ?? defaultKeyPath()).mtimeMs) / DAY_MS)
+    ageDays = Math.floor((now - fs.statSync(keyPath).mtimeMs) / DAY_MS)
   } catch {
     // no key on this host yet
   }
@@ -96,12 +114,13 @@ export function checkGithubCredentials(opts: {
   if (failing.length) {
     parts.push(`GitHub credential back in: ${failing.map((f) => `${f.agent} ${f.file} (${f.vars.join(', ')})`).join('; ')}. Remove it: ghkey roll <agent> --apply`)
   }
+  if (badRegistry) parts.push("The GitHub broker's registry.json has a typo, so edits to it aren't applied and a broker restart stops all tokens. Fix the file")
   if (anyBrokered && !key.present) parts.push('The GitHub App key is missing from this host, so agents get no tokens. Run ghkey')
   if (key.over90) parts.push(`The GitHub App key is ${ageDays} days old. Change it with ghkey`)
   if (pending.length) parts.push(`Not yet on the broker: ${[...new Set(pending.map((p) => p.agent))].join(', ')}`)
 
   const status: GithubCredentialReport['status'] =
-    failing.length || (anyBrokered && !key.present) ? 'fail' : key.over90 ? 'key-old' : pending.length ? 'pending' : 'ok'
-  return { status, message: parts.join('. ') || 'No GitHub credentials in agent .env files.', failing, pending, key }
+    failing.length || badRegistry || (anyBrokered && !key.present) ? 'fail' : key.over90 ? 'key-old' : pending.length ? 'pending' : 'ok'
+  return { status, message: parts.join('. ') || 'No GitHub credentials in agent .env files.', failing, pending, key, registryBroken: badRegistry }
 }
 
