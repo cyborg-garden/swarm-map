@@ -179,6 +179,15 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(res.status).toBe(400)
   })
 
+  it('refuses a GitHub token on a host that runs the token broker, before writing anything', async () => {
+    fs.mkdirSync(path.join(h.tmpHome, '.config/hermes/github-app'), { recursive: true })
+    fs.writeFileSync(path.join(h.tmpHome, '.config/hermes/github-app/private-key.pem'), 'unused')
+    const res = await deploy({ name: 'brokered', provider: 'anthropic', primaryModel: 'm', llmKey: 'k', githubToken: 'not-a-real-token' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/ghkey roll brokered/)
+    expect(fs.existsSync(path.join(h.tmpHome, '.hermes-brokered'))).toBe(false)
+  })
+
   it('base package: SOUL is the shared default (no false per-group memory isolation claim)', async () => {
     await deploy({ name: 'soul', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X', persona: 'Warm and curious.' })
     const soul = fs.readFileSync(path.join(h.tmpHome, '.hermes-soul', 'SOUL.md'), 'utf-8')

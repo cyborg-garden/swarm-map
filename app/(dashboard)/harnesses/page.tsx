@@ -168,7 +168,7 @@ export default function HarnessesPage() {
 
   return (
     <div>
-      {(githubCredentials?.status === 'fail' || githubCredentials?.status === 'key-old') && (
+      {githubCredentials && githubCredentials.status !== 'ok' && (
         <div
           role="alert"
           className={`mb-4 rounded-md px-3 py-2 text-sm ${githubCredentials.status === 'fail' ? 'bg-red-500/10 text-red-600' : 'bg-orange-500/10 text-orange-500'}`}

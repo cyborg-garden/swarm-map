@@ -25,7 +25,7 @@ export async function runScheduledSweep(): Promise<void> {
   try {
     const targets = sweepTargets()
     const github = checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir })) })
-    if (github.status === 'fail' || github.status === 'key-old') console.error(`[github-credentials] ${github.message}`)
+    if (github.status !== 'ok') console.error(`[github-credentials] ${github.message}`)
     await runFleetIntegritySweep(targets)
   } catch (err) {
     // A failed sweep must never take the server down; stale cache beats a crash.

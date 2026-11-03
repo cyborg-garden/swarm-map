@@ -113,9 +113,50 @@ describe('checkGithubCredentials', () => {
     expect(r.key.present).toBe(false)
   })
 
-  it('stays quiet about a missing key before anyone has moved', () => {
+  it('stays quiet on a host with no broker at all', () => {
     fs.rmSync(keyPath)
-    expect(check([agent('a', 'GITHUB_TOKEN=x\n')]).status).toBe('pending')
+    const r = check([agent('a', 'GITHUB_TOKEN=x\n')])
+    expect(r.status).toBe('ok')
+    expect(r.message).not.toMatch(/No GitHub credentials/)
+    expect(r.pending).toHaveLength(1)
+  })
+
+  it('names an unmoved agent holding a credential and says how to move it', () => {
+    const r = check([agent('newbie', 'GITHUB_TOKEN=x\n')])
+    expect(r.status).toBe('pending')
+    expect(r.message).toMatch(/newbie/)
+    expect(r.message).toMatch(/ghkey roll/)
+  })
+
+  it('still treats an agent as moved when only its marker has gone', () => {
+    const a = agent('a', 'GITHUB_TOKEN=x\n')
+    fs.writeFileSync(path.join(a.dataDir, 'github-broker.json'), '{}')
+    expect(check([a]).status).toBe('fail')
+  })
+
+  it.each([
+    ['CRLF line endings', '.env', 'GITHUB_TOKEN=x\r\nOTHER=1\r\n'],
+    ['spaces around the equals', '.env', 'GITHUB_TOKEN = x\n'],
+    ['a dash-named copy', '.env-old', 'GITHUB_TOKEN=x\n'],
+    ['an underscore-named copy', '.env_save', 'GITHUB_TOKEN=x\n'],
+    ['a copy in a profile', 'profiles/p/.env.bak', 'GITHUB_TOKEN=x\n'],
+  ])('catches %s', (_name, file, body) => {
+    const a = agent('a', 'OTHER=1\n', true)
+    fs.mkdirSync(path.dirname(path.join(a.dataDir, file)), { recursive: true })
+    fs.writeFileSync(path.join(a.dataDir, file), body)
+    const r = check([a])
+    expect(r.status).toBe('fail')
+    expect(r.failing).toEqual([{ agent: 'a', file, vars: ['GITHUB_TOKEN'] }])
+  })
+
+  it('fails on an .env it cannot read, rather than calling it clean', () => {
+    const a = agent('a', 'OTHER=1\n', true)
+    fs.chmodSync(path.join(a.dataDir, '.env'), 0)
+    const r = check([a])
+    fs.chmodSync(path.join(a.dataDir, '.env'), 0o600)
+    expect(r.status).toBe('fail')
+    expect(r.unreadable).toEqual([{ agent: 'a', file: '.env' }])
+    expect(r.message).toMatch(/a \.env/)
   })
 
   it('agrees with the rollout on which variables are credentials', () => {
@@ -152,6 +193,9 @@ describe('checkGithubCredentials', () => {
     ['MY_GH_KEY=LS0tLS1CRUdJTiBSU0E', true],
     ['GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW', false],
     ['SOME_SSH_KEY="-----BEGIN OPENSSH"', false],
+    ['GITHUB_TOKEN = spaced', true],
+    ['  # export GITHUB_TOKEN = spaced', true],
+    ['GITHUB_TOKEN=crlf\r', true],
     ['NOT_GITHUB_TOKEN=keep', false],
     ['GITHUB_WEBHOOK_SECRET=keep', false],
   ])('flags and strips %s the same way', (line, flagged) => {

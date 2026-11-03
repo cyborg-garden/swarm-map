@@ -51,7 +51,11 @@ In each agent's home: `github-broker.json` (URL and secret) and an empty
 | `ghkey purge` | Delete the `.env` backups. |
 
 The same health result is on `GET /api/integrity`, in a banner on the harnesses page,
-and in the pm2 error log. It names variables and never prints values.
+and in the pm2 error log. It names variables and never prints values. Once this host
+has the broker, any agent holding a GitHub credential raises it, marked or not. Agents
+still to move keep the banner up until they are moved. A host with no broker stays quiet.
+
+A deploy with a GitHub token is refused once the broker is on the host.
 
 ## Rules worth knowing
 

@@ -20,7 +20,7 @@ export const CREDENTIAL_VARS = [
   'GITHUB_TOKEN', 'GITHUB_PAT', 'GH_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN',
   'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_B64', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GITHUB_APP_INSTALLATION_ID',
 ]
-const LINE_RE = /^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+const LINE_RE = /^[ \t#]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
 // A GitHub token is recognisable under any name. A private key isn't: Google and SSH
 // keys look the same, so a key counts only under a name that says GitHub. Keep this in
 // step with lib/services/github-credential-check.ts. The check tells her to run
@@ -31,7 +31,7 @@ const PEM_RE = /^["']?(?:-----BEGIN|LS0tLS1CRUdJTi)/
 const GITHUB_NAME_RE = /GITHUB|(?:^|_)GH(?:_|$)/i
 
 function credentialName(line) {
-  const m = LINE_RE.exec(line)
+  const m = LINE_RE.exec(line.replace(/\r$/, ''))
   if (!m) return null
   const value = m[2].trim()
   const hit = CREDENTIAL_VARS.includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))
@@ -65,21 +65,24 @@ export function agentsHoldingAppKey(root) {
     .map((a) => a.agent)
 }
 
-function envFiles(home) {
+function profileDirs(home) {
   const profiles = path.join(home, 'profiles')
-  const nested = fs.existsSync(profiles)
-    ? fs.readdirSync(profiles).map((p) => path.join(profiles, p, '.env')).filter((f) => fs.existsSync(f))
-    : []
-  return [path.join(home, '.env'), ...nested].filter((f) => fs.existsSync(f))
+  if (!fs.existsSync(profiles)) return []
+  return fs.readdirSync(profiles, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => path.join(profiles, e.name))
 }
 
-// Copies like .env.bak hold the same secrets. They are moved rather than stripped,
-// since their only use is as a record.
+function envFiles(home) {
+  return [home, ...profileDirs(home)].map((d) => path.join(d, '.env')).filter((f) => fs.existsSync(f))
+}
+
+// Copies like .env.bak or .env-old hold the same secrets. They are moved rather than
+// stripped, since their only use is as a record. Same names as the health check.
 function strayEnvCopies(home) {
-  return fs.readdirSync(home)
-    .filter((n) => n.startsWith('.env.') && n !== '.env.example')
-    .map((n) => path.join(home, n))
-    .filter((f) => fs.statSync(f).isFile() && scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
+  return [home, ...profileDirs(home)]
+    .flatMap((d) => fs.readdirSync(d).filter((n) => n.startsWith('.env') && n !== '.env' && n !== '.env.example').map((n) => path.join(d, n)))
+    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
 }
 
 function writeLikeOriginal(file, content) {

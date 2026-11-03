@@ -4,13 +4,15 @@
  * backup), so this reads the .env files themselves. It reports variable names only
  * and also says when the App key is due for a change.
  *
- * An agent counts as moved once it has the .hsm-github-broker marker. Others show as
- * pending, so the check stays honest during a gradual rollout without crying wolf.
+ * An agent counts as moved once it has the .hsm-github-broker marker or its broker
+ * secret. On a host running the broker, any other agent holding a credential is
+ * pending. That is loud too, because a new deploy or a removed marker looks the same
+ * as an agent not yet moved. A host with no broker has nothing to report.
  */
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { githubBrokered } from './keys'
+import { GITHUB_BROKER_CONFIG, githubBrokered } from './keys'
 
 export const GITHUB_CREDENTIAL_VARS = [
   'GITHUB_TOKEN', 'GITHUB_PAT', 'GH_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN',
@@ -19,7 +21,7 @@ export const GITHUB_CREDENTIAL_VARS = [
 
 export const KEY_MAX_AGE_DAYS = 90
 const DAY_MS = 86_400_000
-const LINE_RE = /^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+const LINE_RE = /^[ \t#]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
 // Same rules as scripts/token-broker/rollout.mjs, because the advice below is to run
 // the rollout. A GitHub token is recognisable under any name. A private key isn't, so
 // it counts only under a name that says GitHub. "LS0tLS1CRUdJTi" is a base64 PEM header.
@@ -33,6 +35,7 @@ export type GithubCredentialReport = {
   message: string
   failing: GithubCredentialFinding[]
   pending: GithubCredentialFinding[]
+  unreadable: { agent: string; file: string }[]
   key: { present: boolean; ageDays: number | null; over90: boolean }
   registryBroken: boolean
 }
@@ -44,7 +47,7 @@ export function defaultKeyPath(): string {
 function credentialNames(text: string): string[] {
   const names = new Set<string>()
   for (const line of text.split('\n')) {
-    const m = LINE_RE.exec(line)
+    const m = LINE_RE.exec(line.replace(/\r$/, ''))
     if (!m || !m[2].trim()) continue
     const value = m[2].trim()
     if ((GITHUB_CREDENTIAL_VARS as readonly string[]).includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))) names.add(m[1])
@@ -52,6 +55,8 @@ function credentialNames(text: string): string[] {
   return [...names]
 }
 
+// Same names as scripts/token-broker/rollout.mjs. A file that exists and can't be read
+// is reported rather than skipped. A subdirectory or a file that just vanished isn't.
 function envFilesIn(dataDir: string): string[] {
   const list = (dir: string) => {
     try {
@@ -60,9 +65,10 @@ function envFilesIn(dataDir: string): string[] {
       return []
     }
   }
-  const top = list(dataDir).filter((n) => n === '.env' || (n.startsWith('.env.') && n !== '.env.example'))
-  const profiles = list(path.join(dataDir, 'profiles')).map((p) => path.join('profiles', p, '.env'))
-  return [...top, ...profiles]
+  const envs = (rel: string) => list(path.join(dataDir, rel))
+    .filter((n) => n.startsWith('.env') && n !== '.env.example')
+    .map((n) => path.join(rel, n))
+  return [...envs(''), ...list(path.join(dataDir, 'profiles')).flatMap((p) => envs(path.join('profiles', p)))]
 }
 
 // A typo here leaves the broker on its last good copy, so her edit silently isn't
@@ -88,16 +94,19 @@ export function checkGithubCredentials(opts: {
   const now = opts.now ?? Date.now()
   const failing: GithubCredentialFinding[] = []
   const pending: GithubCredentialFinding[] = []
+  const unreadable: GithubCredentialReport['unreadable'] = []
   let anyBrokered = false
 
   for (const { name, dataDir } of opts.agents) {
-    const brokered = githubBrokered(dataDir)
+    const brokered = githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG))
     anyBrokered ||= brokered
     for (const file of envFilesIn(dataDir)) {
       let text: string
       try {
         text = fs.readFileSync(path.join(dataDir, file), 'utf-8')
-      } catch {
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'EISDIR' && code !== 'ENOTDIR') unreadable.push({ agent: name, file })
         continue
       }
       const vars = credentialNames(text)
@@ -115,17 +124,22 @@ export function checkGithubCredentials(opts: {
   }
   const key = { present: ageDays !== null, ageDays, over90: ageDays !== null && ageDays > KEY_MAX_AGE_DAYS }
 
+  const brokerInUse = anyBrokered || key.present
+  const cantCheck = brokerInUse ? unreadable : []
+  const holding = brokerInUse ? pending : []
+
   const parts: string[] = []
   if (failing.length) {
     parts.push(`GitHub credential back in: ${failing.map((f) => `${f.agent} ${f.file} (${f.vars.join(', ')})`).join('; ')}. Remove it: ghkey roll <agent> --apply`)
   }
+  if (cantCheck.length) parts.push(`Could not read ${cantCheck.map((u) => `${u.agent} ${u.file}`).join('; ')}, so it can't be checked`)
   if (badRegistry) parts.push("The GitHub broker's registry.json has a typo, so edits to it aren't applied and a broker restart stops all tokens. Fix the file")
   if (anyBrokered && !key.present) parts.push('The GitHub App key is missing from this host, so agents get no tokens. Run ghkey')
   if (key.over90) parts.push(`The GitHub App key is ${ageDays} days old. Change it with ghkey`)
-  if (pending.length) parts.push(`Not yet on the broker: ${[...new Set(pending.map((p) => p.agent))].join(', ')}`)
+  if (holding.length) parts.push(`Not on the broker and holding GitHub credentials: ${[...new Set(holding.map((p) => p.agent))].join(', ')}. Move them: ghkey roll <agent> --apply`)
 
   const status: GithubCredentialReport['status'] =
-    failing.length || badRegistry || (anyBrokered && !key.present) ? 'fail' : key.over90 ? 'key-old' : pending.length ? 'pending' : 'ok'
-  return { status, message: parts.join('. ') || 'No GitHub credentials in agent .env files.', failing, pending, key, registryBroken: badRegistry }
+    failing.length || cantCheck.length || badRegistry || (anyBrokered && !key.present) ? 'fail' : key.over90 ? 'key-old' : holding.length ? 'pending' : 'ok'
+  const quiet = brokerInUse ? 'No GitHub credentials in agent .env files.' : 'The GitHub token broker is not set up on this host.'
+  return { status, message: parts.join('. ') || quiet, failing, pending, unreadable, key, registryBroken: badRegistry }
 }
-

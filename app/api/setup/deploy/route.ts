@@ -19,6 +19,7 @@ import {
   type Selection,
 } from '@/lib/services/base-package'
 import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-deploy-templates'
+import { defaultKeyPath } from '@/lib/services/github-credential-check'
 import { deployLettaAgent, serverKeyVarForModel, LETTA_DEFAULT_PORT } from '@/lib/services/letta-deploy-templates'
 import fs from 'fs'
 import path from 'path'
@@ -107,6 +108,12 @@ export async function POST(request: Request) {
     const slug = toHarnessSlug(name)
     if (!slug) {
       return NextResponse.json({ ok: false, error: 'Invalid name — could not slugify' }, { status: 400 })
+    }
+
+    // Agents on a broker host hold no GitHub token, and a new agent has no marker for
+    // the key sync to see. Refused here, before anything is written.
+    if (body.githubToken && fs.existsSync(defaultKeyPath())) {
+      return NextResponse.json({ ok: false, error: `This host uses the GitHub token broker, so agents hold no GitHub token. Deploy without one, then run: ghkey roll ${slug} --apply` }, { status: 400 })
     }
 
     // ── Google MCP preflight ───────────────────────────────────────────────

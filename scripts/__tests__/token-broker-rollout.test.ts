@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { listen, createBroker } from '../token-broker/lib.mjs'
+import { checkGithubCredentials } from '../../lib/services/github-credential-check'
 import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH } from '../token-broker/rollout.mjs'
 
 const FAKE_PAT = 'fake-pat-value-do-not-print'
@@ -116,6 +117,28 @@ describe('rollout', () => {
     fs.writeFileSync(path.join(home, '.env'), env)
     await rollout(opts({ apply: true }))
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(env)
+  })
+
+  it('strips CRLF and spaced lines, and leaves the line endings of the rest', async () => {
+    fs.writeFileSync(path.join(home, '.env'), `KEEP=1\r\nGITHUB_TOKEN=${FAKE_PAT}\r\nGH_TOKEN = ${FAKE_PAT}\r\nALSO=2\r\n`)
+    const r = await rollout(opts())
+    expect(r.lines).toContain('.env: GITHUB_TOKEN, GH_TOKEN')
+    await rollout(opts({ apply: true }))
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe('KEEP=1\r\nALSO=2\r\n')
+  })
+
+  it('finds copies anywhere the check looks, so its advice clears them', async () => {
+    fs.writeFileSync(path.join(home, '.env-old'), `GITHUB_TOKEN=${FAKE_PAT}\n`)
+    fs.mkdirSync(path.join(home, 'profiles/p'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'profiles/p/.env.bak'), `GITHUB_TOKEN=${FAKE_PAT}\n`)
+    fs.writeFileSync(path.join(home, 'profiles/not-a-dir'), '')
+    await rollout(opts({ apply: true }))
+    for (const f of ['.env', '.env-old', 'profiles/p/.env.bak']) {
+      const file = path.join(home, f)
+      expect(fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '').not.toContain(FAKE_PAT)
+    }
+    const keyPath = path.join(dir, 'private-key.pem')
+    expect(checkGithubCredentials({ agents: [{ name: 'mare', dataDir: home }], keyPath }).failing).toEqual([])
   })
 
   it('dry-runs by default: reports names and changes nothing', async () => {
