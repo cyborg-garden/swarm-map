@@ -346,6 +346,26 @@ export function enrollAgent({ dir, agent, home, url, scope = {} }) {
   audit(dir, 'enrolled', { agent })
 }
 
+/**
+ * Whether this agent's secret is the one the registry holds for it. A secret file alone
+ * proves nothing: the broker refuses a missing or stale entry. A registry that can't be
+ * read can't say, so a secret file then counts, and the check reports the typo itself.
+ */
+export function agentEnrolled({ dir, agent, home }) {
+  let secret
+  try {
+    ({ secret } = JSON.parse(fs.readFileSync(path.join(home, AGENT_CONFIG_FILE), 'utf-8')))
+  } catch {
+    return false
+  }
+  if (typeof secret !== 'string' || !secret) return false
+  try {
+    return readRegistry(dir).agents?.[agent]?.secret_sha256 === hashSecret(secret).toString('hex')
+  } catch {
+    return true
+  }
+}
+
 /** False when the registry can't be read, because then nobody can say. */
 export function agentRegistered({ dir, agent }) {
   try {

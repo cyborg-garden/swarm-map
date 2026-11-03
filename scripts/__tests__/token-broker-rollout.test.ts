@@ -336,6 +336,59 @@ describe('rollout', () => {
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).not.toContain('GITHUB')
   })
 
+  describe('an agent marked as moved but missing from the registry', () => {
+    const report = () => checkGithubCredentials({ agents: [{ name: 'mare', dataDir: home }], keyPath: path.join(dir, 'private-key.pem') })
+    const dropFromRegistry = () => {
+      const file = path.join(dir, 'registry.json')
+      const r = JSON.parse(fs.readFileSync(file, 'utf-8'))
+      delete r.agents.mare
+      fs.writeFileSync(file, JSON.stringify(r))
+    }
+
+    it('the advice the health check gives repairs it', async () => {
+      await rollout(opts({ apply: true }))
+      dropFromRegistry()
+      expect(report().broker.notEnrolled).toEqual(['mare'])
+      const dry = await rollout(opts())
+      expect(dry.lines.join('\n')).toContain('not enrolled')
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(true)
+      expect(report().broker.notEnrolled).toEqual([])
+    })
+
+    it('repairs a secret the registry no longer matches, keeping the scope', async () => {
+      await rollout(opts({ apply: true }))
+      const file = path.join(dir, 'registry.json')
+      const reg = JSON.parse(fs.readFileSync(file, 'utf-8'))
+      reg.agents.mare = { ...reg.agents.mare, secret_sha256: 'ab'.repeat(32), repos: ['one'] }
+      fs.writeFileSync(file, JSON.stringify(reg))
+      expect(report().broker.notEnrolled).toEqual(['mare'])
+      expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+      expect(report().broker.notEnrolled).toEqual([])
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8')).agents.mare.repos).toEqual(['one'])
+    })
+
+    it('if the repair fails it stays marked and enrolled, and says so', async () => {
+      await rollout(opts({ apply: true }))
+      dropFromRegistry()
+      writeFd('verify.rc', '12')
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).not.toContain('to how it was')
+      expect(r.lines.join('\n')).toContain('stays on the broker')
+      expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(true)
+      expect(report().broker.notEnrolled).toEqual([])
+    })
+
+    it('a registry with a typo does not cost a healthy agent its secret', async () => {
+      await rollout(opts({ apply: true }))
+      const secret = fs.readFileSync(path.join(home, 'github-broker.json'), 'utf-8')
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{oops')
+      await rollout(opts({ apply: true }))
+      expect(fs.readFileSync(path.join(home, 'github-broker.json'), 'utf-8')).toBe(secret)
+    })
+  })
+
   it('rejects an agent name that could escape the home root', async () => {
     const r = await rollout(opts({ agent: '../evil', apply: true }))
     expect(r.ok).toBe(false)

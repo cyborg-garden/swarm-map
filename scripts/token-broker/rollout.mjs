@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { AGENT_CONFIG_FILE, DEFAULT_PORT, agentRegistered, audit, enrollAgent, unenrollAgent } from './lib.mjs'
+import { AGENT_CONFIG_FILE, DEFAULT_PORT, agentEnrolled, agentRegistered, audit, enrollAgent, unenrollAgent } from './lib.mjs'
 
 export const MARKER = '.hsm-github-broker'
 export const CREDENTIAL_VARS = [
@@ -392,6 +392,10 @@ export async function rollout({
     if (!listed) lines.push(`warning: Could not list the repo owners in its checkouts, so a repo outside the App's org may not show here.`)
     if (owners.length) lines.push(`Repo owners in its checkouts: ${owners.join(', ')}. The broker only reaches the App's own org.`)
   }
+  // Same meaning of moved as the health check, whose advice for this case is to roll.
+  const wasMoved = fs.existsSync(path.join(home, MARKER)) || fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
+  const wasEnrolled = agentEnrolled({ dir, agent, home })
+  if (wasMoved && !wasEnrolled) lines.push(`Marked as on the broker but not enrolled, so it gets no tokens. --apply enrols it again.`)
   for (const w of warnings) lines.push(`warning: ${w}`)
   for (const p of problems) lines.push(`BLOCKED: ${p}`)
   if (problems.length) return { ok: false, applied: false, lines }
@@ -400,12 +404,12 @@ export async function rollout({
     return { ok: true, applied: false, lines }
   }
 
-  const wasEnrolled = fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
   const note = (event, fields) => {
     try { audit(dir, event, fields) } catch { /* the log must not undo the work */ }
   }
   let backup = null
   let result = null
+  let enrolledNow = false
   try {
     const logins = loginFilesWithToken(home)
     const hasCreds = logins.length > 0 || [...envFiles(home), ...strayEnvCopies(home)]
@@ -414,7 +418,10 @@ export async function rollout({
     if (hasCreds) backup = makeBackup({ dir, agent, home })
 
     fs.writeFileSync(path.join(home, MARKER), '')
-    if (!wasEnrolled) enrollAgent({ dir, agent, home, url: `http://host.docker.internal:${port}` })
+    if (!wasEnrolled) {
+      enrollAgent({ dir, agent, home, url: `http://host.docker.internal:${port}` })
+      enrolledNow = true
+    }
     for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
       const text = fs.readFileSync(f, 'utf-8')
       const stripped = stripGithubCredentials(text)
@@ -439,8 +446,9 @@ export async function rollout({
   note('rollout-failed', { agent, reason: result.reason })
   try {
     if (backup) restoreBackup(backup, home)
-    // An agent already on the broker before this run stays enrolled and marked.
-    if (!wasEnrolled) {
+    // An agent already on the broker before this run stays on it. One that was marked
+    // but not enrolled keeps its new enrolment, which is better than how it was.
+    if (!wasMoved) {
       try {
         unenrollAgent({ dir, agent, home })
       } catch {
@@ -456,11 +464,18 @@ export async function rollout({
     return { ok: false, applied: false, lines }
   }
   if (backup) fs.rmSync(backup, { recursive: true, force: true })
+  // Saying "how it was" about a broken agent would read as fixed.
+  let restored = `Restored ${agent} to how it was.`
+  if (wasMoved && !wasEnrolled) {
+    restored = enrolledNow
+      ? `Put ${agent}'s old lines back. It stays on the broker and is enrolled again, but the check above still failed.`
+      : `Restored ${agent}. It is still marked as on the broker but not enrolled, so it gets no tokens.`
+  }
   // The container was never recreated, so it is still running as it was.
-  if (result.untouched) lines.push(`Restored ${agent} to how it was.`)
+  if (result.untouched) lines.push(restored)
   else {
     lines.push(recreate(run, c)
-      ? `Restored ${agent} to how it was.`
+      ? restored
       : `Restored ${agent}'s files, but ${c.container} would not start and may be down.`)
   }
   return { ok: false, applied: false, lines }
