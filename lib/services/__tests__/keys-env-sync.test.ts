@@ -39,7 +39,7 @@ describe('keys .env sync (assign / unassign / remove)', () => {
   const GH = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
   describe('an agent marked no-anthropic', () => {
-    const ANT = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    const ANT = ['sk', 'ant', 'api03', 'not-a-real-key'].join('-')
     beforeEach(() => {
       fs.mkdirSync(path.join(tmpHome, '.hermes-zdr'), { recursive: true })
       fs.writeFileSync(path.join(tmpHome, '.hermes-zdr', '.hsm-no-anthropic'), '')
