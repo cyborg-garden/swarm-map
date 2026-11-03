@@ -408,6 +408,76 @@ async function verify(run, c, { verifyDeadlineMs, pollMs }) {
 // The code only: a message can quote the file it failed on.
 const errorName = (err) => err.code ?? err.name
 
+// What else on an agent may use GitHub, so a roll that says OK can't hide a loss.
+// Word edges keep COPILOT_GITHUB_TOKEN and the like out.
+const USER_VARS = ['GITHUB_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'GH_TOKEN']
+const usesVar = (text, name) => new RegExp(`(?:^|[^A-Za-z0-9_])${name}(?:[^A-Za-z0-9_]|$)`, 'm').test(text)
+const READS_ENV_FILE = /(?:^|[^A-Za-z0-9_])\.env\b|dotenv/
+const IGNORED_DIRS = new Set(['node_modules', '.venv', 'venv', '__pycache__', '.cache', '.git'])
+const MAX_SCAN_BYTES = 2 * 1024 * 1024
+
+/** Files under dir. Links aren't followed: what one points at may not be this agent's. */
+function walkFiles(dir, skipDir) {
+  let entries
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  return entries.flatMap((e) => {
+    const full = path.join(dir, e.name)
+    if (e.isDirectory()) return skipDir(full, e.name) ? [] : walkFiles(full, skipDir)
+    return e.isFile() ? [full] : []
+  })
+}
+
+// For a look that shouldn't stop a roll. Reading the .env files reports this failure.
+function homeAndProfiles(home) {
+  try {
+    return [home, ...profileDirs(home)]
+  } catch {
+    return [home]
+  }
+}
+
+function readTextIfSmall(file) {
+  try {
+    if (fs.statSync(file).size > MAX_SCAN_BYTES) return null
+    const text = readBytes(file)
+    return text.includes('\0') ? null : text
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Hermes already strips GITHUB_TOKEN and GH_TOKEN from tool and cron subprocesses, and
+ * gives GH_TOKEN back from the broker, so a script reading those from its environment
+ * loses nothing new. It passes GITHUB_PERSONAL_ACCESS_TOKEN through, and a script reading
+ * .env itself reads a line the strip removes, so those are what a roll really breaks.
+ * Names only: the contents decide a label and go no further.
+ */
+function githubUsers(home) {
+  const found = { willBreak: [], check: [], noLoss: [] }
+  for (const root of homeAndProfiles(home)) {
+    const skip = (full, name) => IGNORED_DIRS.has(name) || full === path.join(root, 'skills', '.archive') || full === path.join(root, 'cron', 'output')
+    for (const sub of ['scripts', 'skills', 'cron']) {
+      for (const file of walkFiles(path.join(root, sub), skip)) {
+        if (path.basename(file).startsWith('.env')) continue
+        const text = readTextIfSmall(file)
+        if (text === null) continue
+        const vars = USER_VARS.filter((v) => usesVar(text, v))
+        if (!vars.length) continue
+        const entry = `${path.relative(home, file)} (${vars.join(', ')})`
+        if (!READS_ENV_FILE.test(text) && !vars.includes('GITHUB_PERSONAL_ACCESS_TOKEN')) found.noLoss.push(entry)
+        else if (/\.(?:md|txt)$/i.test(file)) found.check.push(entry)
+        else found.willBreak.push(entry)
+      }
+    }
+  }
+  return found
+}
+
 const AGENT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const REBUILD_HINT = 'its image lacks the broker code. Rebuild through HSM first (mode "rebuild"), not by hand, so the drift check keeps working'
 
@@ -434,11 +504,15 @@ async function preflight({ dir, root, agent, home, run, acceptLoss }) {
     const names = composeCredentialNames(fs.readFileSync(c.file, 'utf-8'))
     if (names.length) problems.push(`${path.basename(c.file)} sets ${names.join(', ')}. That outranks .env and the move can't remove it. Take it out of this agent's extraEnv in harnesses.json and its compose file first`)
   } catch { /* no compose file to read here */ }
-  let config = ''
-  try { config = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8') } catch { /* no config is fine */ }
   const lossy = []
-  if (config.includes('GITHUB_PERSONAL_ACCESS_TOKEN')) lossy.push('an MCP server in config.yaml reads GITHUB_PERSONAL_ACCESS_TOKEN')
-  if (/copilot/i.test(config)) lossy.push('config.yaml mentions copilot, which can auth with GITHUB_TOKEN')
+  for (const d of homeAndProfiles(home)) {
+    let config = ''
+    try { config = fs.readFileSync(path.join(d, 'config.yaml'), 'utf-8') } catch { /* no config is fine */ }
+    const rel = path.relative(home, path.join(d, 'config.yaml'))
+    const vars = USER_VARS.filter((v) => usesVar(config, v))
+    if (vars.length) lossy.push(`${rel} uses ${vars.join(', ')}, as an MCP server or other setting`)
+    if (/copilot/i.test(config)) lossy.push(`${rel} mentions copilot, which can auth with GITHUB_TOKEN`)
+  }
   for (const l of lossy) (acceptLoss ? warnings : problems).push(`${l}${acceptLoss ? '; continuing as asked' : '. It would stop working; pass --accept-loss to go ahead anyway'}`)
   return { problems, warnings, port, c }
 }
@@ -471,6 +545,10 @@ export async function rollout({
   const wasMoved = fs.existsSync(path.join(home, MARKER)) || fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
   const wasEnrolled = agentEnrolled({ dir, agent, home })
   if (wasMoved && !wasEnrolled) lines.push(`Marked as on the broker but not enrolled, so it gets no tokens. --apply enrols it again.`)
+  const users = githubUsers(home)
+  for (const u of users.willBreak) lines.push(`WILL BREAK: ${u}. It reads a GitHub line that this move removes from .env.`)
+  for (const u of users.check) lines.push(`Check: ${u}. These notes mention it with .env, so they may tell the agent to read a line this move removes.`)
+  if (users.noLoss.length) lines.push(`No new loss: ${users.noLoss.join(', ')}. Hermes already hides these from tools and cron.`)
   for (const w of warnings) lines.push(`warning: ${w}`)
   for (const p of problems) lines.push(`BLOCKED: ${p}`)
   if (problems.length) return { ok: false, applied: false, lines }
@@ -514,6 +592,7 @@ export async function rollout({
   if (result.ok) {
     note('rolled-out', { agent })
     lines.push(`OK: ${agent} now gets git and gh from the broker.`)
+    if (users.willBreak.length) lines.push(`That check only covers git and gh. ${users.willBreak.length} file${users.willBreak.length === 1 ? '' : 's'} marked WILL BREAK above still need fixing.`)
     return { ok: true, applied: true, lines }
   }
 

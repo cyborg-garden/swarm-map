@@ -483,6 +483,114 @@ describe('rollout', () => {
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
   })
 
+  describe('other things on the agent that use GitHub', () => {
+    const put = (rel: string, content: string | Buffer) => {
+      const f = path.join(home, rel)
+      fs.mkdirSync(path.dirname(f), { recursive: true })
+      fs.writeFileSync(f, content)
+      return f
+    }
+    const out = async (extra = {}) => (await rollout(opts(extra))).lines.join('\n')
+
+    it('marks a script that reads the variable from .env as WILL BREAK', async () => {
+      put('scripts/digest.sh', 'TOKEN=$(grep ^GITHUB_TOKEN= ~/.hermes/.env | cut -d= -f2)\n')
+      put('skills/devops/gardener/scripts/run.py', 'from dotenv import load_dotenv\nload_dotenv()\nos.environ["GH_TOKEN"]\n')
+      const text = await out()
+      expect(text).toContain('WILL BREAK: scripts/digest.sh (GITHUB_TOKEN)')
+      expect(text).toContain('WILL BREAK: skills/devops/gardener/scripts/run.py (GH_TOKEN)')
+    })
+
+    it('marks a script reading the MCP token from its environment as WILL BREAK, since Hermes passes that one', async () => {
+      put('scripts/mcp.sh', 'curl -H "Authorization: token $GITHUB_PERSONAL_ACCESS_TOKEN" x\n')
+      expect(await out()).toContain('WILL BREAK: scripts/mcp.sh (GITHUB_PERSONAL_ACCESS_TOKEN)')
+    })
+
+    it('says no new loss for the variables Hermes already hides from tools and cron', async () => {
+      put('scripts/env-only.py', 'os.environ["GITHUB_TOKEN"]\n')
+      put('cron/jobs.json', '{"prompt":"use $GH_TOKEN"}')
+      const text = await out()
+      expect(text).not.toContain('WILL BREAK')
+      expect(text).toMatch(/No new loss: .*cron\/jobs\.json/)
+      expect(text).toMatch(/No new loss: .*scripts\/env-only\.py/)
+    })
+
+    it('asks for a check on notes that mention .env, rather than claiming a break', async () => {
+      put('skills/comms/pass/SKILL.md', 'Read GITHUB_TOKEN from ~/.hermes/.env\n')
+      const text = await out()
+      expect(text).not.toContain('WILL BREAK')
+      expect(text).toContain('Check: skills/comms/pass/SKILL.md (GITHUB_TOKEN)')
+    })
+
+    it('looks in profiles and skips the archive, cron output, binaries, links and lookalikes', async () => {
+      put('profiles/p1/scripts/a.sh', 'grep GH_TOKEN .env\n')
+      put('skills/.archive/old/run.sh', 'grep GH_TOKEN .env\n')
+      put('cron/output/job/1.md', 'grep GH_TOKEN .env\n')
+      put('scripts/db.bin', Buffer.concat([Buffer.from([0]), Buffer.from('GH_TOKEN .env')]))
+      put('scripts/other.sh', 'echo $COPILOT_GITHUB_TOKEN $GH_TOKEN_X .env\n')
+      const outside = put('elsewhere/x.sh', 'grep GH_TOKEN .env\n')
+      fs.symlinkSync(outside, path.join(home, 'scripts/link.sh'))
+      const text = await out()
+      expect(text).toContain('WILL BREAK: profiles/p1/scripts/a.sh (GH_TOKEN)')
+      for (const name of ['.archive', 'cron/output', 'db.bin', 'other.sh', 'link.sh', 'elsewhere']) expect(text).not.toContain(name)
+    })
+
+    it('never prints what those files hold', async () => {
+      put('scripts/leaky.sh', `GITHUB_TOKEN=${FAKE_PAT} # from .env\n`)
+      const text = await out()
+      expect(text).toContain('WILL BREAK: scripts/leaky.sh')
+      expect(text).not.toContain(FAKE_PAT)
+    })
+
+    it('does not block on them, and reminds on the way out', async () => {
+      put('scripts/digest.sh', 'grep GITHUB_TOKEN .env\n')
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(true)
+      expect(r.lines.join('\n')).toContain('1 file marked WILL BREAK above')
+    })
+
+    it('changes nothing on a dry run', async () => {
+      const f = put('scripts/digest.sh', 'grep GITHUB_TOKEN .env\n')
+      await out()
+      expect(fs.readFileSync(f, 'utf-8')).toBe('grep GITHUB_TOKEN .env\n')
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+    })
+
+    it.each([
+      ['config.yaml', 'GITHUB_TOKEN'], ['config.yaml', 'GH_TOKEN'], ['config.yaml', 'GITHUB_PERSONAL_ACCESS_TOKEN'],
+      ['profiles/p1/config.yaml', 'GITHUB_TOKEN'], ['profiles/p1/config.yaml', 'GITHUB_PERSONAL_ACCESS_TOKEN'],
+    ])('blocks on %s using %s, and --accept-loss goes past it', async (rel, name) => {
+      put(rel, `mcp_servers:\n  github:\n    env:\n      X: \${${name}}\n`)
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).toContain(`BLOCKED: ${rel} uses ${name}`)
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+      expect((await rollout(opts({ apply: true, acceptLoss: true }))).ok).toBe(true)
+    })
+
+    it('blocks on copilot in a profile config too', async () => {
+      put('profiles/p1/config.yaml', 'model: copilot/x\n')
+      const r = await rollout(opts())
+      expect(r.lines.join('\n')).toContain('BLOCKED: profiles/p1/config.yaml mentions copilot')
+    })
+
+    it('reports an unreadable profiles directory instead of throwing', async () => {
+      put('profiles/p1/.env', 'A=1\n')
+      fs.chmodSync(path.join(home, 'profiles'), 0o000)
+      try {
+        const r = await rollout(opts())
+        expect(r.ok).toBe(false)
+        expect(r.lines.join('\n')).toContain('could not read its .env files')
+      } finally {
+        fs.chmodSync(path.join(home, 'profiles'), 0o755)
+      }
+    })
+
+    it('does not block on a config that only has a lookalike name', async () => {
+      put('config.yaml', 'x: ${MY_GITHUB_TOKEN_NOTE}\n')
+      expect((await rollout(opts())).ok).toBe(true)
+    })
+  })
+
   it('rejects an agent name that could escape the home root', async () => {
     const r = await rollout(opts({ agent: '../evil', apply: true }))
     expect(r.ok).toBe(false)
