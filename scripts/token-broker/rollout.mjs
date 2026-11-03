@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
-import { AGENT_CONFIG_FILE, DEFAULT_PORT, audit, enrollAgent, unenrollAgent } from './lib.mjs'
+import { AGENT_CONFIG_FILE, DEFAULT_PORT, agentRegistered, audit, enrollAgent, unenrollAgent } from './lib.mjs'
 
 export const MARKER = '.hsm-github-broker'
 export const CREDENTIAL_VARS = [
@@ -470,7 +470,9 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
   if (!AGENT_RE.test(agent ?? '')) return { ok: false, lines: ['bad agent name'] }
   const home = homeFor(homeRoot, agent)
   const backups = unusedBackups(dir, agent)
-  if (!backups.length) return { ok: false, lines: [`no backup for ${agent}`] }
+  // An agent with no credentials when rolled left no backup, but it can still come off.
+  const onBroker = fs.existsSync(path.join(home, MARKER)) || fs.existsSync(path.join(home, AGENT_CONFIG_FILE)) || agentRegistered({ dir, agent })
+  if (!backups.length && !onBroker) return { ok: false, lines: [`no backup for ${agent}, and it isn't on the broker`] }
   const run = dockerClient({ docker, dockerEnv })
   try {
     // Marker last: HSM must not write keys into a half-restored .env.
@@ -485,7 +487,9 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
   const started = recreate(run, locate(run, homeRoot, agent))
   return {
     ok: started,
-    lines: [started ? `Undone: ${agent} has its GitHub lines back. Any other change to its .env since the move is kept.` : `Restored ${agent}'s files, but the container would not start and may be down.`],
+    lines: [started ? (backups.length
+      ? `Undone: ${agent} has its GitHub lines back. Any other change to its .env since the move is kept.`
+      : `Undone: ${agent} is off the broker. It had no GitHub lines to bring back, so it has no GitHub access now.`) : `Restored ${agent}'s files, but the container would not start and may be down.`],
   }
 }
 

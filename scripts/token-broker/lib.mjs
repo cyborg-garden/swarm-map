@@ -346,6 +346,15 @@ export function enrollAgent({ dir, agent, home, url, scope = {} }) {
   audit(dir, 'enrolled', { agent })
 }
 
+/** False when the registry can't be read, because then nobody can say. */
+export function agentRegistered({ dir, agent }) {
+  try {
+    return !!readRegistry(dir).agents?.[agent]
+  } catch {
+    return false
+  }
+}
+
 export function unenrollAgent({ dir, agent, home }) {
   const registry = readRegistry(dir)
   if (registry.agents?.[agent]) {

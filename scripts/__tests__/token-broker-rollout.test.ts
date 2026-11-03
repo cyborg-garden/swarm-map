@@ -662,6 +662,26 @@ describe('rollout', () => {
     expect(calls()).not.toContain('compose -p')
   })
 
+  it('undo takes an agent off the broker when it had no credentials to back up', async () => {
+    fs.writeFileSync(path.join(home, '.env'), 'DISCORD_BOT_TOKEN=keep-me\n')
+    expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+    const before = calls().split('\n').filter((l) => l.startsWith('compose')).length
+    const r = await undo(opts())
+    expect(r.ok).toBe(true)
+    expect(r.lines.join()).toContain('no GitHub lines to bring back')
+    expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
+    expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe('DISCORD_BOT_TOKEN=keep-me\n')
+    expect(calls().split('\n').filter((l) => l.startsWith('compose')).length).toBe(before + 1)
+  })
+
+  it('undo clears a registry entry left with no files in the home', async () => {
+    fs.writeFileSync(path.join(dir, 'registry.json'), JSON.stringify({ agents: { mare: { secret_sha256: 'aa', repos: 'all', permissions: 'all' } } }))
+    expect((await undo(opts())).ok).toBe(true)
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+  })
+
   it('undo with no backup says so and changes nothing', async () => {
     const r = await undo(opts())
     expect(r.ok).toBe(false)
