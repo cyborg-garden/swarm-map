@@ -13,7 +13,8 @@ import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adoptKey, createBroker, enrollAgent, listen, mintBody, scopeHash, signAppJwt } from '../token-broker/lib.mjs'
+import { adoptKey, createBroker, enrollAgent, listen, mintBody, scopeHash, signAppJwt, startMonitor } from '../token-broker/lib.mjs'
+import { checkGithubCredentials } from '../../lib/services/github-credential-check'
 
 const APP_ID = '111'
 const INSTALL_ID = '222'
@@ -46,7 +47,9 @@ function fakeGitHub(trusted: () => crypto.KeyObject[]) {
       const jwt = (req.headers.authorization ?? '').replace('Bearer ', '')
       const authed = trusted().some((k) => verifyJwt(jwt, k)?.iss === APP_ID)
       if (failWith) { res.writeHead(failWith); return res.end('{}') }
-      if (!authed || req.method !== 'POST') { res.writeHead(401); return res.end('{}') }
+      if (!authed) { res.writeHead(401); return res.end('{}') }
+      if (req.method === 'GET') { res.writeHead(200); return res.end('{}') }
+      if (req.method !== 'POST') { res.writeHead(401); return res.end('{}') }
       mints.push({ path: req.url ?? '', body: raw ? JSON.parse(raw) : undefined })
       n += 1
       res.writeHead(201, { 'content-type': 'application/json' })
@@ -288,6 +291,123 @@ describe('token broker', () => {
       expect((await ask('junk')).status).toBe(500)
       expect(child.exitCode).toBeNull()
       expect((await fetch(`${base}/healthz`)).status).toBe(200)
+    })
+  })
+
+  describe('reporting its own health', () => {
+    const readStatus = () => JSON.parse(fs.readFileSync(path.join(dir, 'status.json'), 'utf-8'))
+    const healthCheck = (secretHome?: string) => checkGithubCredentials({
+      agents: secretHome ? [{ name: 'mare', dataDir: secretHome }] : [],
+      keyPath: path.join(dir, 'private-key.pem'),
+    })
+
+    it('checks the key with GitHub without minting a token', async () => {
+      const broker = createBroker({ dir })
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(readStatus().key).toMatchObject({ ok: true, failures: 0, status: 200 })
+      expect(gh.mints).toHaveLength(0)
+    })
+
+    it('counts a key GitHub rejects, and recovers once it is accepted again', async () => {
+      const broker = createBroker({ dir })
+      trusted = []
+      await broker.checkKey()
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(readStatus().key).toMatchObject({ ok: false, failures: 2, status: 401 })
+      trusted = [keyA.publicKey]
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(readStatus().key).toMatchObject({ ok: true, failures: 0 })
+    })
+
+    it('records no answer from GitHub as a failure with no status', async () => {
+      const broker = createBroker({ dir, mintTimeoutMs: 50 })
+      gh.hang()
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(readStatus().key).toMatchObject({ ok: false, failures: 1, status: null })
+    })
+
+    it('leaves the key unknown, not bad, before the first key is installed', async () => {
+      fs.rmSync(path.join(dir, 'private-key.pem'))
+      const broker = createBroker({ dir })
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(readStatus().key.ok).toBeNull()
+    })
+
+    it('says on /healthz when the key is bad, and stays up', async () => {
+      const broker = createBroker({ dir })
+      const server = await listen(broker, { host: '127.0.0.1', port: 0 })
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/healthz`
+      expect(await (await fetch(url)).json()).toEqual({ ok: true, key_ok: null })
+      trusted = []
+      await broker.checkKey()
+      const res = await fetch(url)
+      expect(res.status).toBe(200)
+      expect(await res.json()).toEqual({ ok: true, key_ok: false })
+      await new Promise((r) => server.close(r))
+    })
+
+    it('tracks a failing agent and clears it on success, with no secret in the file', async () => {
+      const secret = enroll('mare')
+      const broker = createBroker({ dir })
+      gh.fail(422)
+      await broker.requestToken(secret)
+      await broker.requestToken(secret)
+      broker.writeStatus()
+      expect(readStatus().agents.mare).toEqual({ failures: 2, status: 422 })
+      expect(fs.readFileSync(path.join(dir, 'status.json'), 'utf-8')).not.toContain(secret)
+      expect(fs.statSync(path.join(dir, 'status.json')).mode & 0o777).toBe(0o600)
+      gh.fail(null)
+      await broker.requestToken(secret)
+      broker.writeStatus()
+      expect(readStatus().agents).toEqual({})
+    })
+
+    it('tracks an agent whose scope is invalid', async () => {
+      const secret = enroll('mare', { repos: [] })
+      const broker = createBroker({ dir })
+      await broker.requestToken(secret)
+      broker.writeStatus()
+      expect(readStatus().agents.mare).toEqual({ failures: 1, status: 'bad-scope' })
+    })
+
+    it('the monitor reports at once and keeps reporting', async () => {
+      const broker = createBroker({ dir })
+      const stop = startMonitor(broker, { heartbeatMs: 10, keyCheckMs: 10 })
+      try {
+        await expect.poll(() => fs.existsSync(path.join(dir, 'status.json')), { timeout: 2000 }).toBe(true)
+        const first = readStatus().at
+        await expect.poll(() => readStatus().at !== first && readStatus().key.ok === true, { timeout: 2000 }).toBe(true)
+      } finally {
+        stop()
+      }
+    })
+
+    it('the health check goes red on a key GitHub rejects, end to end', async () => {
+      enroll('mare')
+      const home = path.join(homes, 'mare')
+      fs.writeFileSync(path.join(home, '.hsm-github-broker'), '')
+      fs.writeFileSync(path.join(home, '.env'), 'OK=1\n')
+      const broker = createBroker({ dir })
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(healthCheck(home).status).toBe('ok')
+      trusted = []
+      await broker.checkKey()
+      await broker.checkKey()
+      broker.writeStatus()
+      expect(healthCheck(home).status).toBe('fail')
+    })
+
+    it('the health check goes red when nothing ever started the broker', () => {
+      enroll('mare')
+      const home = path.join(homes, 'mare')
+      fs.writeFileSync(path.join(home, '.hsm-github-broker'), '')
+      expect(healthCheck(home).broker.running).toBe(false)
     })
   })
 

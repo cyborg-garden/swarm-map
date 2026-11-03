@@ -253,14 +253,20 @@ function brokerConfig(dir) {
   return JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'))
 }
 
-function brokerHealthy(port) {
+function brokerHealth(port) {
   return new Promise((resolve) => {
     const req = http.get({ host: '127.0.0.1', port, path: '/healthz', timeout: 3000 }, (res) => {
-      res.resume()
-      resolve(res.statusCode === 200)
+      let raw = ''
+      res.setEncoding('utf-8')
+      res.on('data', (c) => { raw += c })
+      res.on('end', () => {
+        let keyOk = null
+        try { keyOk = JSON.parse(raw).key_ok ?? null } catch { /* older broker */ }
+        resolve({ up: res.statusCode === 200, keyOk })
+      })
     })
     req.on('timeout', () => req.destroy())
-    req.on('error', () => resolve(false))
+    req.on('error', () => resolve({ up: false, keyOk: null }))
   })
 }
 
@@ -345,7 +351,9 @@ async function preflight({ dir, root, agent, home, run, acceptLoss }) {
   } catch {
     problems.push('no broker config. Run ghkey setup first')
   }
-  if (!(await brokerHealthy(port))) problems.push(`the broker is not answering on port ${port}`)
+  const health = await brokerHealth(port)
+  if (!health.up) problems.push(`the broker is not answering on port ${port}`)
+  else if (health.keyOk === false) problems.push('the broker\'s last check of its App key with GitHub failed. Run ghkey if the key was deleted, or try again in 5 minutes if GitHub was down')
   const c = locate(run, root, agent)
   if (!c.running) problems.push(`${c.container} is not running`)
   else if (run(['exec', c.container, '/opt/hermes/.venv/bin/python', '-c', 'from hermes_cli.github_app_token import read_broker_config']).rc !== 0) {

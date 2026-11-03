@@ -10,6 +10,7 @@
  * pending. That is loud too, because a new deploy or a removed marker looks the same
  * as an agent not yet moved. A host with no broker has nothing to report.
  */
+import crypto from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -22,6 +23,11 @@ export const GITHUB_CREDENTIAL_VARS = [
 
 export const KEY_MAX_AGE_DAYS = 90
 const DAY_MS = 86_400_000
+// The broker writes status.json every minute and checks its key every five. One failed
+// check can be a network blip, and two still beat the 50 minutes a cached token lasts.
+const STATUS_STALE_MS = 5 * 60_000
+const FAILURES_BEFORE_ALARM = 2
+const KEY_REJECTED = new Set<unknown>([401, 403, 404, 'bad-key-file'])
 const LINE_RE = /^[ \t#]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
 // Same rules as scripts/token-broker/rollout.mjs, because the advice below is to run
 // the rollout. A GitHub token is recognisable under any name. A private key isn't, so
@@ -64,6 +70,7 @@ export type GithubCredentialReport = {
   unreadable: { agent: string; file: string }[]
   key: { present: boolean; ageDays: number | null; over90: boolean }
   registryBroken: boolean
+  broker: { running: boolean; keyRejected: boolean; githubUnreachable: boolean; notEnrolled: string[]; mintFailing: string[] }
 }
 
 export function defaultKeyPath(): string {
@@ -123,6 +130,36 @@ function registryBroken(file: string): boolean {
   }
 }
 
+type BrokerStatus = { at: string; key?: { ok?: boolean | null; failures?: number; status?: unknown }; agents?: Record<string, { failures?: number }> }
+
+function readBrokerStatus(file: string, now: number): BrokerStatus | null {
+  try {
+    const s = JSON.parse(fs.readFileSync(file, 'utf-8')) as BrokerStatus
+    return now - Date.parse(s.at) <= STATUS_STALE_MS ? s : null
+  } catch {
+    return null
+  }
+}
+
+function registeredSecretHashes(file: string): Set<string> {
+  try {
+    const agents = JSON.parse(fs.readFileSync(file, 'utf-8')).agents ?? {}
+    return new Set(Object.values(agents as Record<string, { secret_sha256?: string }>).map((e) => String(e.secret_sha256)))
+  } catch {
+    return new Set()
+  }
+}
+
+// By hash, not name: a stale secret gets refused just the same as a missing entry.
+function agentEnrolled(dataDir: string, hashes: Set<string>): boolean {
+  try {
+    const { secret } = JSON.parse(fs.readFileSync(path.join(dataDir, GITHUB_BROKER_CONFIG), 'utf-8'))
+    return typeof secret === 'string' && hashes.has(crypto.createHash('sha256').update(secret).digest('hex'))
+  } catch {
+    return false
+  }
+}
+
 export function checkGithubCredentials(opts: {
   agents: { name: string; dataDir: string }[]
   keyPath?: string
@@ -132,11 +169,13 @@ export function checkGithubCredentials(opts: {
   const failing: GithubCredentialFinding[] = []
   const pending: GithubCredentialFinding[] = []
   const unreadable: GithubCredentialReport['unreadable'] = []
+  const moved: { name: string; dataDir: string }[] = []
   let anyBrokered = false
 
   for (const { name, dataDir } of opts.agents) {
     const brokered = githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG))
     anyBrokered ||= brokered
+    if (brokered) moved.push({ name, dataDir })
     for (const file of envFilesIn(dataDir)) {
       let text: string
       try {
@@ -164,7 +203,8 @@ export function checkGithubCredentials(opts: {
   }
 
   const keyPath = opts.keyPath ?? defaultKeyPath()
-  const badRegistry = registryBroken(path.join(path.dirname(keyPath), 'registry.json'))
+  const brokerDir = path.dirname(keyPath)
+  const badRegistry = registryBroken(path.join(brokerDir, 'registry.json'))
   let ageDays: number | null = null
   try {
     ageDays = Math.floor((now - fs.statSync(keyPath).mtimeMs) / DAY_MS)
@@ -177,18 +217,39 @@ export function checkGithubCredentials(opts: {
   const cantCheck = brokerInUse ? unreadable : []
   const holding = brokerInUse ? pending : []
 
+  const brokerStatus = readBrokerStatus(path.join(brokerDir, 'status.json'), now)
+  const running = brokerStatus !== null
+  const keyFailing = brokerInUse && brokerStatus?.key?.ok === false && (brokerStatus.key.failures ?? 0) >= FAILURES_BEFORE_ALARM
+  const keyRejected = keyFailing && KEY_REJECTED.has(brokerStatus?.key?.status)
+  const githubUnreachable = keyFailing && !keyRejected
+  const mintFailing = brokerInUse
+    ? Object.entries(brokerStatus?.agents ?? {}).filter(([, a]) => (a.failures ?? 0) >= FAILURES_BEFORE_ALARM).map(([agent]) => agent)
+    : []
+  // A registry with a typo already has its own message, and can't say who is in it.
+  const hashes = registeredSecretHashes(path.join(brokerDir, 'registry.json'))
+  const notEnrolled = badRegistry ? [] : moved.filter((a) => !agentEnrolled(a.dataDir, hashes)).map((a) => a.name)
+
   const parts: string[] = []
   if (failing.length) {
     parts.push(`GitHub credential back in: ${failing.map((f) => `${f.agent} ${f.file} (${f.vars.join(', ')})`).join('; ')}. Remove it: ghkey roll <agent> --apply`)
   }
   if (cantCheck.length) parts.push(`Could not read ${cantCheck.map((u) => `${u.agent} ${u.file}`).join('; ')}, so it can't be checked`)
   if (badRegistry) parts.push("The GitHub broker's registry.json has a typo, so edits to it aren't applied and a broker restart stops all tokens. Fix the file")
+  if (brokerInUse && !running) parts.push('The GitHub broker is not running, so agents on it lose GitHub within the hour. Restart it with ghkey setup')
+  if (keyRejected) parts.push('GitHub is rejecting the App key, so agents on the broker lose GitHub within the hour. Click Generate a private key, then run ghkey')
+  if (githubUnreachable) parts.push("The GitHub broker can't reach GitHub, so agents on it lose GitHub within the hour if this lasts. Check the host's network")
+  if (notEnrolled.length) parts.push(`Marked as on the broker but not enrolled in it, so they get no tokens: ${notEnrolled.join(', ')}. Fix them: ghkey roll <agent> --apply`)
+  if (mintFailing.length) parts.push(`The GitHub broker can't get a token for: ${mintFailing.join(', ')}. Look at its audit.jsonl`)
   if (anyBrokered && !key.present) parts.push('The GitHub App key is missing from this host, so agents get no tokens. Run ghkey')
   if (key.over90) parts.push(`The GitHub App key is ${ageDays} days old. Change it with ghkey`)
   if (holding.length) parts.push(`Not on the broker and holding GitHub credentials: ${[...new Set(holding.map((p) => p.agent))].join(', ')}. Move them: ghkey roll <agent> --apply`)
 
   const status: GithubCredentialReport['status'] =
-    failing.length || cantCheck.length || badRegistry || (anyBrokered && !key.present) ? 'fail' : key.over90 ? 'key-old' : holding.length ? 'pending' : 'ok'
+    failing.length || cantCheck.length || badRegistry || (anyBrokered && !key.present) ||
+    (brokerInUse && !running) || keyFailing || notEnrolled.length || mintFailing.length ? 'fail' : key.over90 ? 'key-old' : holding.length ? 'pending' : 'ok'
   const quiet = brokerInUse ? 'No GitHub credentials in agent .env files.' : 'The GitHub token broker is not set up on this host.'
-  return { status, message: parts.join('. ') || quiet, failing, pending, unreadable, key, registryBroken: badRegistry }
+  return {
+    status, message: parts.join('. ') || quiet, failing, pending, unreadable, key, registryBroken: badRegistry,
+    broker: { running, keyRejected, githubUnreachable, notEnrolled, mintFailing },
+  }
 }

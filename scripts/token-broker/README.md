@@ -32,6 +32,7 @@ On the host, in `~/.config/hermes/github-app/`:
 | `private-key.pem` | The App key, 0600. Read per mint, so a change needs no restart. |
 | `registry.json` | Agent to secret hash, repos and permissions. Read per request. A typo keeps the last good copy in use and turns the check red. See `registry.example.json`. |
 | `audit.jsonl` | Every mint, cache hit and denial. Events only, never a value. |
+| `status.json` | The broker's own health, rewritten every minute: whether GitHub still takes the key (checked every 5 minutes, minting nothing) and any agent it keeps failing to get a token for. |
 | `env-backups/` | Each agent's old `.env`, one per roll that found a credential. Undo uses all of them, then moves them to `used/`. Holds real secrets, so `ghkey purge` it once settled. |
 
 In each agent's home: `github-broker.json` (URL and secret) and an empty
@@ -54,6 +55,11 @@ The same health result is on `GET /api/integrity`, in a banner on the harnesses 
 and in the pm2 error log. It names variables and never prints values. Once this host
 has the broker, any agent holding a GitHub credential raises it, marked or not. Agents
 still to move keep the banner up until they are moved. A host with no broker stays quiet.
+
+It also goes red when the broker has stopped working: no fresh `status.json`, GitHub
+rejecting the key or out of reach on two checks in a row, an agent it keeps failing to
+get a token for, or an agent marked as moved whose secret isn't in the registry. A
+running agent has at most 50 minutes of cached token, so this needs to show first.
 
 A deploy with a GitHub token is refused once the broker is on the host.
 

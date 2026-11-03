@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,9 +20,30 @@ describe('checkGithubCredentials', () => {
     const dataDir = path.join(root, name)
     fs.mkdirSync(dataDir, { recursive: true })
     fs.writeFileSync(path.join(dataDir, '.env'), env)
-    if (brokered) fs.writeFileSync(path.join(dataDir, '.hsm-github-broker'), '')
+    if (brokered) {
+      fs.writeFileSync(path.join(dataDir, '.hsm-github-broker'), '')
+      enrol(name, dataDir)
+    }
     return { name, dataDir }
   }
+  // What enrollAgent leaves behind: the secret in the home, its hash in the registry.
+  const enrol = (name: string, dataDir: string) => {
+    const secret = `fixture-secret-${name}`
+    fs.writeFileSync(path.join(dataDir, 'github-broker.json'), JSON.stringify({ url: 'http://unused', secret }))
+    const reg = path.join(root, 'registry.json')
+    let registry: { agents: Record<string, unknown> } = { agents: {} }
+    try {
+      registry = JSON.parse(fs.readFileSync(reg, 'utf-8'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return // a test's deliberate typo
+    }
+    registry.agents[name] = { secret_sha256: crypto.createHash('sha256').update(secret).digest('hex'), repos: 'all', permissions: 'all' }
+    fs.writeFileSync(reg, JSON.stringify(registry))
+  }
+  const status = (fields: Record<string, unknown> = {}) =>
+    fs.writeFileSync(path.join(root, 'status.json'), JSON.stringify({
+      at: new Date(NOW).toISOString(), key: { ok: true, failures: 0, status: 200 }, agents: {}, ...fields,
+    }))
   const setKeyAge = (days: number) => {
     fs.writeFileSync(keyPath, 'unused')
     const t = new Date(NOW - days * DAY)
@@ -33,6 +55,7 @@ describe('checkGithubCredentials', () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-check-'))
     keyPath = path.join(root, 'private-key.pem')
     setKeyAge(1)
+    status()
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
@@ -261,6 +284,83 @@ describe('checkGithubCredentials', () => {
       const hostsCases = [hosts(PAT), hosts(SHORT), `ghe.example:\n    oauth_token: ${PAT}\n`, '"github.com":\n    oauth_token: x\n', '']
       for (const c of hostsCases) expect(ghHostsHoldToken(c)).toBe(rolloutHosts(c))
       expect(hostsCases.map(ghHostsHoldToken)).toEqual([true, false, false, true, false])
+    })
+  })
+
+  describe('whether the broker is really working', () => {
+    it('fails when the broker has never reported in, as with nothing running', () => {
+      fs.rmSync(path.join(root, 'status.json'))
+      const r = check([agent('a', 'OK=1\n', true)])
+      expect(r.status).toBe('fail')
+      expect(r.broker.running).toBe(false)
+      expect(r.message).toMatch(/broker is not running/)
+    })
+
+    it('fails when its last report is over five minutes old', () => {
+      status({ at: new Date(NOW - 301_000).toISOString() })
+      expect(check([agent('a', 'OK=1\n', true)]).status).toBe('fail')
+      status({ at: new Date(NOW - 299_000).toISOString() })
+      expect(check([agent('a', 'OK=1\n', true)]).status).toBe('ok')
+    })
+
+    it('treats an unparseable report as not running, and quotes nothing from it', () => {
+      fs.writeFileSync(path.join(root, 'status.json'), '{"quoted-text"')
+      const r = check([agent('a', 'OK=1\n', true)])
+      expect(r.broker.running).toBe(false)
+      expect(r.message).not.toContain('quoted-text')
+    })
+
+    it('fails when GitHub keeps rejecting the key, and says what to do', () => {
+      status({ key: { ok: false, failures: 2, status: 401 } })
+      const r = check([agent('a', 'OK=1\n', true)])
+      expect(r.status).toBe('fail')
+      expect(r.broker.keyRejected).toBe(true)
+      expect(r.message).toMatch(/rejecting the App key/)
+      expect(r.message).toMatch(/ghkey/)
+    })
+
+    it('says GitHub is out of reach rather than blaming the key when there is no answer', () => {
+      status({ key: { ok: false, failures: 3, status: null } })
+      const r = check([agent('a', 'OK=1\n', true)])
+      expect(r.status).toBe('fail')
+      expect(r.message).toMatch(/can't reach GitHub/)
+      expect(r.message).not.toMatch(/rejecting/)
+    })
+
+    it('does not raise an alarm on one failed check', () => {
+      status({ key: { ok: false, failures: 1, status: 502 } })
+      expect(check([agent('a', 'OK=1\n', true)]).status).toBe('ok')
+    })
+
+    it('fails when a moved agent is not in the registry', () => {
+      const a = agent('a', 'OK=1\n', true)
+      fs.writeFileSync(path.join(root, 'registry.json'), '{"agents": {}}')
+      const r = check([a])
+      expect(r.status).toBe('fail')
+      expect(r.broker.notEnrolled).toEqual(['a'])
+      expect(r.message).toMatch(/a/)
+      expect(JSON.stringify(r)).not.toContain('fixture-secret')
+    })
+
+    it('fails when a marked agent has lost its secret file', () => {
+      const a = agent('a', 'OK=1\n', true)
+      fs.rmSync(path.join(a.dataDir, 'github-broker.json'))
+      expect(check([a]).broker.notEnrolled).toEqual(['a'])
+    })
+
+    it('fails when an agent keeps failing to get a token', () => {
+      status({ agents: { mare: { failures: 2, status: 422 }, once: { failures: 1, status: 502 } } })
+      const r = check([agent('a', 'OK=1\n', true)])
+      expect(r.status).toBe('fail')
+      expect(r.broker.mintFailing).toEqual(['mare'])
+      expect(r.message).toMatch(/mare/)
+      expect(r.message).not.toMatch(/once/)
+    })
+
+    it('stays quiet about the broker on a host with no broker', () => {
+      fs.rmSync(keyPath)
+      fs.rmSync(path.join(root, 'status.json'))
+      expect(check([agent('a', 'OK=1\n')]).status).toBe('ok')
     })
   })
 

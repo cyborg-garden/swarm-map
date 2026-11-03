@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_PORT, adoptKey, createBroker, listen } from './lib.mjs'
+import { DEFAULT_PORT, adoptKey, createBroker, listen, startMonitor } from './lib.mjs'
 import { agentsHoldingAppKey, purgeBackups, rollout, undo } from './rollout.mjs'
 
 const dir = process.env.GITHUB_BROKER_DIR ?? path.join(os.homedir(), '.config', 'hermes', 'github-app')
@@ -26,7 +26,9 @@ switch (cmd) {
   case 'serve': {
     const config = JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'))
     const port = config.port ?? DEFAULT_PORT
-    await listen(createBroker({ dir }), { host: '127.0.0.1', port })
+    const broker = createBroker({ dir })
+    await listen(broker, { host: '127.0.0.1', port })
+    startMonitor(broker)
     console.log(`token broker listening on 127.0.0.1:${port}`)
     break
   }

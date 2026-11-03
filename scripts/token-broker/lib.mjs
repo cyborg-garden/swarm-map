@@ -19,6 +19,7 @@ export const AGENT_CONFIG_FILE = 'github-broker.json'
 const MINT_TIMEOUT_MS = 10_000
 const AUDIT_MAX_BYTES = 10 * 1024 * 1024
 const KEY_FILE = 'private-key.pem'
+const STATUS_FILE = 'status.json'
 
 function writePrivate(file, content) {
   const tmp = `${file}.${process.pid}.tmp`
@@ -89,12 +90,12 @@ export function scopeHash({ repos, permissions }) {
  * succeeds. The AbortSignal is the wall-clock bound; a socket timeout alone resets
  * on every byte, so a slow-dripping peer would hold the mint open indefinitely.
  */
-function post(url, headers, body, timeoutMs) {
+function send(method, url, headers, body, timeoutMs) {
   const u = new URL(url)
   const payload = body === undefined ? null : JSON.stringify(body)
   return new Promise((resolve, reject) => {
     const req = (u.protocol === 'https:' ? https : http).request(u, {
-      method: 'POST',
+      method,
       signal: AbortSignal.timeout(timeoutMs),
       headers: {
         accept: 'application/vnd.github+json',
@@ -117,7 +118,7 @@ function post(url, headers, body, timeoutMs) {
 async function mint(config, pem, scope, timeoutMs = MINT_TIMEOUT_MS) {
   const base = config.api_base ?? 'https://api.github.com'
   const url = `${base}/app/installations/${config.installation_id}/access_tokens`
-  const res = await post(url, { authorization: `Bearer ${signAppJwt(config.app_id, pem)}` }, mintBody(scope), timeoutMs)
+  const res = await send('POST', url, { authorization: `Bearer ${signAppJwt(config.app_id, pem)}` }, mintBody(scope), timeoutMs)
   if (res.status !== 201) throw new MintError(res.status)
   const { token, expires_at: expiresAt } = JSON.parse(res.raw)
   const expiresMs = Date.parse(expiresAt)
@@ -130,6 +131,23 @@ class MintError extends Error {
     super(`mint failed: HTTP ${status}`)
     this.status = status
   }
+}
+
+/**
+ * Prove the key and the installation are still good, minting nothing. Throws with the
+ * HTTP status on a refusal, with none when GitHub didn't answer, and with 'bad-key-file'
+ * when the file on disk can't sign.
+ */
+async function proveKey(config, pem, timeoutMs) {
+  let jwt
+  try {
+    jwt = signAppJwt(config.app_id, pem)
+  } catch {
+    throw new MintError('bad-key-file')
+  }
+  const base = config.api_base ?? 'https://api.github.com'
+  const res = await send('GET', `${base}/app/installations/${config.installation_id}`, { authorization: `Bearer ${jwt}` }, undefined, timeoutMs)
+  if (res.status !== 200) throw new MintError(res.status)
 }
 
 function hashSecret(secret) {
@@ -152,6 +170,12 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
   const inFlight = new Map()
   const config = () => JSON.parse(fs.readFileSync(path.join(dir, 'config.json'), 'utf-8'))
   let lastGoodRegistry = null
+  // What status.json reports, so a failure reaches more than the audit log. Counts, HTTP
+  // statuses and agent names only.
+  let keyHealth = { ok: null, failures: 0, status: null }
+  const failingAgents = new Map()
+  const agentFailed = (agent, status) =>
+    failingAgents.set(agent, { failures: (failingAgents.get(agent)?.failures ?? 0) + 1, status })
 
   // This file is edited by hand, so a typo is an expected event. Agents keep working
   // from the last good copy until it is fixed, and HSM's GitHub check goes red. The
@@ -176,6 +200,7 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
     const entry = registry.agents[agent]
     const scope = { repos: entry.repos, permissions: entry.permissions }
     if (!validScope(scope)) {
+      agentFailed(agent, 'bad-scope')
       audit(dir, 'denied', { agent, reason: 'bad-scope' })
       return { status: 403, body: { error: 'no valid scope for this agent' } }
     }
@@ -187,6 +212,7 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
     }
     const cached = fresh()
     if (cached) {
+      failingAgents.delete(agent)
       audit(dir, 'served-cached', { agent, scope: scopeId, expires_at: cached.expiresAt })
       return { status: 200, body: { token: cached.token, expires_at: cached.expiresAt } }
     }
@@ -204,36 +230,87 @@ export function createBroker({ dir, now = Date.now, mintTimeoutMs = MINT_TIMEOUT
         inFlight.set(cacheKey, pending)
       }
       const t = await pending
+      failingAgents.delete(agent)
       return { status: 200, body: { token: t.token, expires_at: t.expiresAt } }
     } catch (err) {
+      agentFailed(agent, err.status ?? null)
       audit(dir, 'mint-failed', { agent, scope: scopeId, status: err.status ?? null })
       return { status: 502, body: { error: 'mint failed' } }
     }
   }
 
-  return { requestToken }
+  // Agents keep a cached token for up to 50 minutes, so a dead key has to be caught here
+  // rather than by waiting for one to fail. It never rejects: it runs on a timer.
+  async function checkKey() {
+    let pem
+    try {
+      pem = fs.readFileSync(path.join(dir, KEY_FILE), 'utf-8')
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        keyHealth = { ok: null, failures: 0, status: null } // no key installed yet
+        return
+      }
+      keyHealth = { ok: false, failures: keyHealth.failures + 1, status: 'bad-key-file' }
+      return
+    }
+    try {
+      await proveKey(config(), pem, mintTimeoutMs)
+      keyHealth = { ok: true, failures: 0, status: 200 }
+    } catch (err) {
+      keyHealth = { ok: false, failures: keyHealth.failures + 1, status: err.status ?? null }
+    }
+  }
+
+  function writeStatus() {
+    writePrivate(path.join(dir, STATUS_FILE), JSON.stringify({
+      at: new Date(now()).toISOString(), key: keyHealth, agents: Object.fromEntries(failingAgents),
+    }))
+  }
+
+  return { requestToken, checkKey, writeStatus, health: () => ({ ok: true, key_ok: keyHealth.ok }) }
+}
+
+/**
+ * Keep status.json fresh, which is how HSM's GitHub check knows this process is alive
+ * and its key still works. HSM reads the file because it shares this host, the same way
+ * it reads the key's age. Returns a function that stops it.
+ */
+export function startMonitor(broker, { heartbeatMs = 60_000, keyCheckMs = 300_000 } = {}) {
+  const beat = () => {
+    try {
+      broker.writeStatus()
+    } catch (err) {
+      console.error(`token broker: could not write its status (${err.code ?? err.name})`)
+    }
+  }
+  const check = () => broker.checkKey().then(beat)
+  beat()
+  void check()
+  const timers = [setInterval(beat, heartbeatMs), setInterval(check, keyCheckMs)]
+  return () => timers.forEach(clearInterval)
 }
 
 export function listen(broker, { host = '127.0.0.1', port = DEFAULT_PORT } = {}) {
   if (!['127.0.0.1', '::1'].includes(host)) return Promise.reject(new Error('the broker binds to loopback only'))
   const server = http.createServer(async (req, res) => {
-    const send = (status, body) => {
+    const reply = (status, body) => {
       res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
       res.end(JSON.stringify(body))
     }
     // One bad request must not take the broker down for the whole fleet. The message
     // stays out of the log for the same reason as in currentRegistry.
     try {
-      if (req.method === 'GET' && req.url === '/healthz') return send(200, { ok: true })
+      // 200 means this process is up. key_ok says whether GitHub still takes its key.
+      if (req.method === 'GET' && req.url === '/healthz') return reply(200, broker.health())
       if (req.method === 'POST' && req.url === '/v1/token') {
         const secret = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1]
         const { status, body } = await broker.requestToken(secret)
-        return send(status, body)
+        return reply(status, body)
       }
-      return send(404, { error: 'not found' })
+      return reply(404, { error: 'not found' })
     } catch (err) {
       console.error(`token broker: request failed (${err.code ?? err.name})`)
-      if (!res.headersSent) send(500, { error: 'broker error' })
+      if (!res.headersSent) reply(500, { error: 'broker error' })
       else res.destroy()
     }
   })

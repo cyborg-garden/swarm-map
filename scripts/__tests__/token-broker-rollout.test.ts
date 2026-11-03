@@ -650,6 +650,18 @@ describe('rollout', () => {
     })
   })
 
+  it('blocks a roll while GitHub is rejecting the App key', async () => {
+    const broker = createBroker({ dir })
+    await broker.checkKey() // the placeholder key can't sign, so this stops before any network call
+    const bad = await listen(broker, { host: '127.0.0.1', port: 0 })
+    fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ app_id: 'x', installation_id: 'y', port: (bad.address() as AddressInfo).port }))
+    const r = await rollout(opts({ apply: true }))
+    await new Promise((res) => bad.close(res))
+    expect(r.ok).toBe(false)
+    expect(r.lines.join('\n')).toMatch(/BLOCKED: .*App key/)
+    expect(calls()).not.toContain('compose -p')
+  })
+
   it('undo with no backup says so and changes nothing', async () => {
     const r = await undo(opts())
     expect(r.ok).toBe(false)
