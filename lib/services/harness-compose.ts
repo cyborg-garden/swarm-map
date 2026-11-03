@@ -7,11 +7,15 @@
  * Do NOT set read_only, no-new-privileges, or noexec tmpfs — s6 writes executables to /run.
  */
 
+import fs from 'fs'
 import os from 'os'
+import path from 'path'
 import { assertNoNewline } from '@/lib/env-helpers'
 import { ALL_SURFACE_VARS } from '@/lib/surfaces/derive'
 import type { ExtraMount } from '@/lib/types'
 import { applySharedVpnToCompose } from './shared-vpn'
+import { isGithubCredential } from './github-credential-check'
+import { GITHUB_BROKER_CONFIG, githubBrokered } from './keys'
 
 /**
  * Expand a leading `~` in a HOST path to this user's home directory.
@@ -126,12 +130,17 @@ function checkMounts(mounts?: ExtraMount[]): ResolvedMount[] {
   })
 }
 
-/** Validate + resolve every env entry, or throw on the first bad one. */
-function checkEnv(env?: Record<string, string>): Array<[string, string]> {
+/**
+ * Validate + resolve every env entry, or throw on the first bad one. Given the agent's
+ * data dir, an agent on the GitHub broker also can't take a GitHub credential here: it
+ * would outrank the broker, and the .env strip and HSM's key sync never see this file.
+ */
+function checkEnv(env?: Record<string, string>, dataDir?: string): Array<[string, string]> {
   if (env === undefined || env === null) return []
   if (typeof env !== 'object' || Array.isArray(env)) {
     throw new Error('extraEnv must be an object of NAME: value pairs')
   }
+  const onBroker = !!dataDir && (githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG)))
   return Object.entries(env).map(([key, value]) => {
     assertNoNewline(key, `extraEnv key '${key}'`)
     assertNoNewline(String(value), `extraEnv['${key}']`)
@@ -144,6 +153,11 @@ function checkEnv(env?: Record<string, string>): Array<[string, string]> {
         `or delivered through the agent's .env (env_file), and a compose 'environment:' ` +
         `entry silently outranks both. Refusing rather than shipping a container whose ` +
         `environment disagrees with its configuration.`)
+    }
+    if (onBroker && isGithubCredential(key, String(value))) {
+      throw new Error(
+        `extraEnv key '${key}' is refused: this agent is on the GitHub token broker and holds no ` +
+        `GitHub credential. Take it out of extraEnv.`)
     }
     return [key, String(value)] as [string, string]
   })
@@ -169,9 +183,9 @@ export function validateExtraMounts(mounts?: ExtraMount[]): string | null {
 }
 
 /** `validateExtraMounts` for `extraEnv`. See its doc for why this exists. */
-export function validateExtraEnv(env?: Record<string, string>): string | null {
+export function validateExtraEnv(env?: Record<string, string>, dataDir?: string): string | null {
   try {
-    checkEnv(env)
+    checkEnv(env, dataDir)
     return null
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
@@ -198,8 +212,8 @@ export function renderExtraMounts(mounts?: ExtraMount[]): string {
  * key or value could append arbitrary compose keys. Reserved names are refused
  * — see RESERVED_EXTRA_ENV_NAMES.
  */
-export function renderExtraEnv(env?: Record<string, string>): string {
-  return checkEnv(env)
+export function renderExtraEnv(env?: Record<string, string>, dataDir?: string): string {
+  return checkEnv(env, dataDir)
     .map(([key, value]) => `      - ${key}=${value}\n`)
     .join('')
 }
@@ -522,7 +536,7 @@ export function generateStandaloneCompose(
   // Rendered (and validated) once, before either variant, so a malformed mount
   // fails generation identically in VPN and plain mode.
   const mountLines = renderExtraMounts(extraMounts)
-  const envLines = renderExtraEnv(extraEnv)
+  const envLines = renderExtraEnv(extraEnv, agentDataDir)
   // The state-init service keeps the plain source: it only runs a shell
   // script, so it has no use for the extra packages.
   const hermesSourceBlock = renderHermesSourceBlock(resolved, extraAptPackages)

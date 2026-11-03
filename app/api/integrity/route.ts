@@ -25,7 +25,7 @@ function fleetView() {
     sweepInProgress: snapshot.sweepInProgress,
     harnesses,
     // Read fresh: a credential coming back should show on the next poll.
-    githubCredentials: checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir })) }),
+    githubCredentials: checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir, composeFile: t.composeFile })) }),
   }
 }
 

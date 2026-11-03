@@ -472,6 +472,17 @@ describe('rollout', () => {
     })
   })
 
+  it('blocks a credential in the compose file, which outranks .env and which it can not remove', async () => {
+    const composeFile = path.join(fd, 'docker-compose.yml')
+    fs.writeFileSync(composeFile, `services:\n  hermes-mare:\n    environment:\n      - GH_TOKEN=${FAKE_PAT}\n`)
+    writeFd('inspect.txt', `mare|${composeFile}|hermes-mare|true\n`)
+    const r = await rollout(opts({ apply: true, acceptLoss: true }))
+    expect(r.ok).toBe(false)
+    expect(r.lines.join('\n')).toMatch(/BLOCKED: docker-compose.yml sets GH_TOKEN/)
+    expect(r.lines.join('\n')).not.toContain(FAKE_PAT)
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+  })
+
   it('rejects an agent name that could escape the home root', async () => {
     const r = await rollout(opts({ agent: '../evil', apply: true }))
     expect(r.ok).toBe(false)

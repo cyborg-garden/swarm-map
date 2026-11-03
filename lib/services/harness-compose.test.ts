@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { generateStandaloneCompose, DEFAULT_CAMOFOX_IMAGE } from './harness-compose'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE } from './harness-compose'
 
 describe('generateStandaloneCompose', () => {
   const agentName = 'test-agent'
@@ -434,5 +437,42 @@ describe('generateStandaloneCompose', () => {
       expect(result).toContain('networks:')
       expect(result).toContain('name: hermes-myagent')
     })
+  })
+})
+
+describe('extraEnv on an agent on the GitHub broker', () => {
+  const fakeToken = ['gh', 'p_', 'x'.repeat(36)].join('')
+  let marked: string
+  let plain: string
+  beforeEach(() => {
+    marked = fs.mkdtempSync(path.join(os.tmpdir(), 'compose-marked-'))
+    fs.writeFileSync(path.join(marked, '.hsm-github-broker'), '')
+    plain = fs.mkdtempSync(path.join(os.tmpdir(), 'compose-plain-'))
+  })
+  afterEach(() => {
+    fs.rmSync(marked, { recursive: true, force: true })
+    fs.rmSync(plain, { recursive: true, force: true })
+  })
+
+  it.each(['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'GITHUB_APP_PRIVATE_KEY_B64'])('refuses %s, whatever it holds', (name) => {
+    expect(validateExtraEnv({ [name]: 'x' }, marked)).toMatch(/GitHub token broker/)
+    expect(() => generateStandaloneCompose('mare', 3000, marked, { extraEnv: { [name]: 'x' } })).toThrow(/GitHub token broker/)
+  })
+
+  it('refuses a GitHub token under any name, and does not print it', () => {
+    const problem = validateExtraEnv({ MY_THING: fakeToken }, marked)
+    expect(problem).toMatch(/MY_THING/)
+    expect(problem).not.toContain(fakeToken)
+  })
+
+  it('counts an agent with only the secret file as on the broker', () => {
+    fs.writeFileSync(path.join(plain, 'github-broker.json'), '{}')
+    expect(validateExtraEnv({ GH_TOKEN: 'x' }, plain)).toMatch(/GitHub token broker/)
+  })
+
+  it('leaves other variables and agents not on the broker alone', () => {
+    expect(validateExtraEnv({ IRIS_INTAKE_DIR: '/opt/x' }, marked)).toBeNull()
+    expect(validateExtraEnv({ GH_TOKEN: 'x' }, plain)).toBeNull()
+    expect(validateExtraEnv({ GH_TOKEN: 'x' })).toBeNull()
   })
 })

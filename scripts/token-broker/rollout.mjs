@@ -89,6 +89,32 @@ export function stripGithubCredentials(text) {
   return envEntries(text).filter((e) => !e.name).flatMap((e) => e.lines).join('\n')
 }
 
+/**
+ * Names in a compose `environment:` block, which outranks .env and which the strip can't
+ * reach. Keep in step with lib/services/github-credential-check.ts.
+ */
+export function composeCredentialNames(text) {
+  const names = new Set()
+  let envIndent = null
+  for (const raw of text.split('\n')) {
+    if (!raw.trim() || raw.trim().startsWith('#')) continue
+    const indent = raw.length - raw.trimStart().length
+    if (envIndent !== null && (indent < envIndent || (indent === envIndent && !raw.trim().startsWith('- ')))) envIndent = null
+    if (/^\s*environment:\s*(?:#.*)?$/.test(raw)) {
+      envIndent = indent
+      continue
+    }
+    if (envIndent === null) continue
+    const m = /^(-\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)(?:(=|:\s*|:$)(.*?))?["']?(?:\s+#.*)?$/.exec(raw.trim())
+    if (!m) continue
+    const value = (m[4] ?? '').replace(/^["']|["']$/g, '').trim()
+    // `- NAME` and `NAME:` pass the host's value through. `NAME=` is only a blank.
+    const passedThrough = m[3] === undefined ? !!m[1] : m[3].startsWith(':') && !value
+    if (isCredential(m[2], value) && (value || passedThrough)) names.add(m[2])
+  }
+  return [...names]
+}
+
 // Every byte of a file maps to one character and back, so a byte that isn't valid UTF-8
 // survives an edit and undo stays exact. All the patterns here only look at ASCII.
 const readBytes = (file) => fs.readFileSync(file, 'latin1')
@@ -404,6 +430,10 @@ async function preflight({ dir, root, agent, home, run, acceptLoss }) {
   else if (run(['exec', c.container, '/opt/hermes/.venv/bin/python', '-c', 'from hermes_cli.github_app_token import read_broker_config']).rc !== 0) {
     problems.push(`${c.container}: ${REBUILD_HINT}`)
   }
+  try {
+    const names = composeCredentialNames(fs.readFileSync(c.file, 'utf-8'))
+    if (names.length) problems.push(`${path.basename(c.file)} sets ${names.join(', ')}. That outranks .env and the move can't remove it. Take it out of this agent's extraEnv in harnesses.json and its compose file first`)
+  } catch { /* no compose file to read here */ }
   let config = ''
   try { config = fs.readFileSync(path.join(home, 'config.yaml'), 'utf-8') } catch { /* no config is fine */ }
   const lossy = []

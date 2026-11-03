@@ -4,11 +4,63 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { checkGithubCredentials, gitCredentialsHoldToken, ghHostsHoldToken, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
-import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials, gitCredentialsHoldToken as rolloutCreds, ghHostsHoldToken as rolloutHosts } from '../../../scripts/token-broker/rollout.mjs'
+import { checkGithubCredentials, composeCredentialNames, gitCredentialsHoldToken, ghHostsHoldToken, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
+import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials, gitCredentialsHoldToken as rolloutCreds, ghHostsHoldToken as rolloutHosts, composeCredentialNames as rolloutCompose } from '../../../scripts/token-broker/rollout.mjs'
 
 // Built at runtime: the sanitization gate reads a literal header as a real key.
 const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
+
+describe('a credential in the compose file', () => {
+  const PAT = ['gh', 'p_', 'y'.repeat(36)].join('')
+  let root: string
+  const setup = (compose: string, brokered: boolean) => {
+    const dataDir = path.join(root, 'mare')
+    fs.mkdirSync(dataDir, { recursive: true })
+    fs.writeFileSync(path.join(dataDir, '.env'), 'A=1\n')
+    if (brokered) fs.writeFileSync(path.join(dataDir, '.hsm-github-broker'), '')
+    const composeFile = path.join(root, 'docker-compose.yml')
+    fs.writeFileSync(composeFile, compose)
+    return checkGithubCredentials({ agents: [{ name: 'mare', dataDir, composeFile }], keyPath: path.join(root, 'private-key.pem') })
+  }
+  const service = (entries: string) => `services:\n  hermes-mare:\n    image: x\n    environment:\n${entries}    ports:\n      - "1:1"\n`
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-compose-')) })
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
+
+  it('fails a marked agent, naming the variable and not the value', () => {
+    const r = setup(service(`      - HOME=/opt/data/home\n      - GH_TOKEN=${PAT}\n`), true)
+    expect(r.status).toBe('fail')
+    expect(r.failing).toEqual([{ agent: 'mare', file: 'docker-compose.yml', vars: ['GH_TOKEN'], source: 'compose' }])
+    expect(r.message).toContain('extraEnv')
+    expect(r.message).not.toContain(PAT)
+    // roll can't remove this one, so it must not be the advice.
+    expect(r.message).not.toContain('Remove it: ghkey roll')
+  })
+
+  it('reads every form compose accepts', () => {
+    const names = composeCredentialNames(service(
+      '      - "GITHUB_TOKEN=a"\n      - GITHUB_APP_ID\n      GH_TOKEN: b\n      GITHUB_PAT:\n      - GITHUB_PERSONAL_ACCESS_TOKEN=${X}\n',
+    ))
+    expect(names.sort()).toEqual(['GH_TOKEN', 'GITHUB_APP_ID', 'GITHUB_PAT', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'GITHUB_TOKEN'])
+  })
+
+  it('ignores blanks, comments and text outside an environment block', () => {
+    expect(composeCredentialNames(service('      - GITHUB_TOKEN=\n      # GH_TOKEN=x\n      - HOME=/x\n'))).toEqual([])
+    expect(composeCredentialNames('services:\n  a:\n    labels:\n      - GH_TOKEN=x\n')).toEqual([])
+  })
+
+  it('counts an unmarked agent as pending', () => {
+    fs.writeFileSync(path.join(root, 'private-key.pem'), 'unused')
+    const r = setup(service('      - GITHUB_TOKEN=a\n'), false)
+    expect(r.pending.map((f) => f.vars)).toEqual([['GITHUB_TOKEN']])
+    expect(r.failing).toEqual([])
+  })
+
+  it('matches what roll looks for', () => {
+    const text = service(`      - GH_TOKEN=a\n      NOTE: ${PAT}\n      - KEEP=1\n`)
+    expect(composeCredentialNames(text)).toEqual(rolloutCompose(text))
+    expect(composeCredentialNames(text)).toEqual(['GH_TOKEN', 'NOTE'])
+  })
+})
 
 describe('a key pasted with its line breaks', () => {
   it('is flagged when its first line is only the opening quote, as the strip sees it', () => {

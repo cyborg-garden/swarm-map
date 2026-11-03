@@ -18,13 +18,13 @@ export function sweepTargets(): SweepTarget[] {
   return services.harness
     .list()
     .filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
-    .map((h) => sweepTargetFor(h.id, h.name, h.runtime))
+    .map((h) => ({ ...sweepTargetFor(h.id, h.name, h.runtime), composeFile: h.composeFile }))
 }
 
 export async function runScheduledSweep(): Promise<void> {
   try {
     const targets = sweepTargets()
-    const github = checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir })) })
+    const github = checkGithubCredentials({ agents: targets.map((t) => ({ name: t.name, dataDir: t.dataDir, composeFile: t.composeFile })) })
     if (github.status !== 'ok') console.error(`[github-credentials] ${github.message}`)
     await runFleetIntegritySweep(targets)
   } catch (err) {

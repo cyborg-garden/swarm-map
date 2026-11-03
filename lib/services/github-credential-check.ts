@@ -61,7 +61,30 @@ export function ghHostsHoldToken(text: string): boolean {
   })
 }
 
-export type GithubCredentialFinding = { agent: string; file: string; vars: string[] }
+/** A compose `environment:` entry outranks .env. Same rules as rollout.mjs, which blocks on these. */
+export function composeCredentialNames(text: string): string[] {
+  const names = new Set<string>()
+  let envIndent: number | null = null
+  for (const raw of text.split('\n')) {
+    if (!raw.trim() || raw.trim().startsWith('#')) continue
+    const indent = raw.length - raw.trimStart().length
+    if (envIndent !== null && (indent < envIndent || (indent === envIndent && !raw.trim().startsWith('- ')))) envIndent = null
+    if (/^\s*environment:\s*(?:#.*)?$/.test(raw)) {
+      envIndent = indent
+      continue
+    }
+    if (envIndent === null) continue
+    const m = /^(-\s+)?["']?([A-Za-z_][A-Za-z0-9_]*)(?:(=|:\s*|:$)(.*?))?["']?(?:\s+#.*)?$/.exec(raw.trim())
+    if (!m) continue
+    const value = (m[4] ?? '').replace(/^["']|["']$/g, '').trim()
+    // `- NAME` and `NAME:` pass the host's value through. `NAME=` is only a blank.
+    const passedThrough = m[3] === undefined ? !!m[1] : m[3].startsWith(':') && !value
+    if (isGithubCredential(m[2], value) && (value || passedThrough)) names.add(m[2])
+  }
+  return [...names]
+}
+
+export type GithubCredentialFinding = { agent: string; file: string; vars: string[]; source?: 'compose' }
 export type GithubCredentialReport = {
   status: 'ok' | 'pending' | 'key-old' | 'fail'
   message: string
@@ -77,6 +100,10 @@ export function defaultKeyPath(): string {
   return path.join(os.homedir(), '.config', 'hermes', 'github-app', 'private-key.pem')
 }
 
+export function isGithubCredential(name: string, value: string): boolean {
+  return (GITHUB_CREDENTIAL_VARS as readonly string[]).includes(name) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(name))
+}
+
 function credentialNames(text: string): string[] {
   const names = new Set<string>()
   const lines = text.split('\n')
@@ -85,7 +112,7 @@ function credentialNames(text: string): string[] {
     if (!m || !m[2].trim()) continue
     // Only the opening quote on this line: a pasted key starts on the next one.
     const value = /^["']$/.test(m[2].trim()) ? `${m[2].trim()}${lines[i + 1] ?? ''}` : m[2].trim()
-    if ((GITHUB_CREDENTIAL_VARS as readonly string[]).includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))) names.add(m[1])
+    if (isGithubCredential(m[1], value)) names.add(m[1])
   }
   return [...names]
 }
@@ -163,7 +190,7 @@ function agentEnrolled(dataDir: string, hashes: Set<string>): boolean {
 }
 
 export function checkGithubCredentials(opts: {
-  agents: { name: string; dataDir: string }[]
+  agents: { name: string; dataDir: string; composeFile?: string }[]
   keyPath?: string
   now?: number
 }): GithubCredentialReport {
@@ -174,7 +201,7 @@ export function checkGithubCredentials(opts: {
   const moved: { name: string; dataDir: string }[] = []
   let anyBrokered = false
 
-  for (const { name, dataDir } of opts.agents) {
+  for (const { name, dataDir, composeFile } of opts.agents) {
     const brokered = githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG))
     anyBrokered ||= brokered
     if (brokered) moved.push({ name, dataDir })
@@ -201,6 +228,14 @@ export function checkGithubCredentials(opts: {
       }
       const holds = path.basename(file) === '.git-credentials' ? gitCredentialsHoldToken(text) : ghHostsHoldToken(text)
       if (holds) (brokered ? failing : pending).push({ agent: name, file, vars: ['GitHub token'] })
+    }
+    const compose = composeFile?.replace(/^~(?=\/)/, os.homedir()) ?? path.join(path.dirname(dataDir), '.hermes-swarm-map', 'compose', name, 'docker-compose.yml')
+    try {
+      const vars = composeCredentialNames(fs.readFileSync(compose, 'utf-8'))
+      if (vars.length) (brokered ? failing : pending).push({ agent: name, file: path.basename(compose), vars, source: 'compose' })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'EISDIR' && code !== 'ENOTDIR') unreadable.push({ agent: name, file: path.basename(compose) })
     }
   }
 
@@ -232,9 +267,12 @@ export function checkGithubCredentials(opts: {
   const notEnrolled = badRegistry ? [] : moved.filter((a) => !agentEnrolled(a.dataDir, hashes)).map((a) => a.name)
 
   const parts: string[] = []
-  if (failing.length) {
-    parts.push(`GitHub credential back in: ${failing.map((f) => `${f.agent} ${f.file} (${f.vars.join(', ')})`).join('; ')}. Remove it: ghkey roll <agent> --apply`)
-  }
+  const describe = (list: GithubCredentialFinding[]) => list.map((f) => `${f.agent} ${f.file} (${f.vars.join(', ')})`).join('; ')
+  const inFiles = failing.filter((f) => f.source !== 'compose')
+  const inCompose = failing.filter((f) => f.source === 'compose')
+  if (inFiles.length) parts.push(`GitHub credential back in: ${describe(inFiles)}. Remove it: ghkey roll <agent> --apply`)
+  // Roll only edits .env and login files, so its advice wouldn't help here.
+  if (inCompose.length) parts.push(`GitHub credential in a compose file: ${describe(inCompose)}. It outranks the broker. Take it out of that agent's extraEnv in harnesses.json and its compose file, then recreate the agent`)
   if (cantCheck.length) parts.push(`Could not read ${cantCheck.map((u) => `${u.agent} ${u.file}`).join('; ')}, so it can't be checked`)
   if (badRegistry) parts.push("The GitHub broker's registry.json has a typo, so edits to it aren't applied and a broker restart stops all tokens. Fix the file")
   if (brokerInUse && !running) parts.push('The GitHub broker is not running, so agents on it lose GitHub within the hour. Restart it with ghkey setup')
