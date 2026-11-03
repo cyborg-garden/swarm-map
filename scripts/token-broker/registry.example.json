@@ -1,0 +1,15 @@
+{
+  "_comment": "Lives at ~/.config/hermes/github-app/registry.json on the host, mode 0600. enroll/rollout adds agents and writes secret_sha256, so this file only shows the shape. \"all\" means the installation's full reach. A narrower entry names repos without the owner and GitHub permission levels: read, write or admin. Edits apply on the next mint, with no restart.",
+  "agents": {
+    "first-cut-agent": {
+      "secret_sha256": "written by enroll",
+      "repos": "all",
+      "permissions": "all"
+    },
+    "narrowed-agent": {
+      "secret_sha256": "written by enroll",
+      "repos": ["example-repo"],
+      "permissions": { "contents": "write", "pull_requests": "write", "issues": "write", "metadata": "read" }
+    }
+  }
+}
