@@ -80,8 +80,9 @@ agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on th
   subprocesses and gives `GH_TOKEN` back from the broker, so reading those from the
   environment is `No new loss`. Reading `.env` itself, or the PAT variable Hermes does
   pass on, is `WILL BREAK`. So is a script that reads `.env` unless it's a shell `if` on
-  `gh auth status` or `gh auth token` with the `.env` read only in a later branch, like the
-  bundled `gh-env.sh`: a roll needs `gh` to work, so that's `No new loss`. Notes that only
+  `gh auth status` or `gh auth token` alone, with the `.env` read only in a later branch,
+  like the bundled `gh-env.sh`: a roll needs `gh` to work, so that's `No new loss`. A pipe,
+  an account flag or another condition on that `if` stays `WILL BREAK`. Notes that only
   mention it with `.env` get `Check`.
 - A root or profile `config.yaml` using those variables, or mentioning copilot. This
   blocks unless you pass `--accept-loss`.

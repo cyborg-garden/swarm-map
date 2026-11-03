@@ -415,6 +415,10 @@ const usesVar = (text, name) => new RegExp(`(?:^|[^A-Za-z0-9_])${name}(?:[^A-Za-
 const READS_ENV_FILE = /(?:^|[^A-Za-z0-9_])\.env\b|dotenv/
 const IGNORED_DIRS = new Set(['node_modules', '.venv', 'venv', '__pycache__', '.cache', '.git'])
 const MAX_SCAN_BYTES = 2 * 1024 * 1024
+// An if decided by gh auth alone. A pipe, an account flag or another condition means gh working
+// doesn't pick this branch. `command -v gh &&` is how the bundled gh-env.sh guards it.
+const REDIRECTS = String.raw`(?:\s+(?:&>|\d?>&?)\s*[^\s|&;]+)*`
+const GH_DECIDES_IF = new RegExp(String.raw`^\s*if\s+(?:command\s+-v\s+gh${REDIRECTS}\s*&&\s*)?gh\s+auth\s+(?:status|token)(?:\s+(?:--hostname[ =]|-h\s*)github\.com)?${REDIRECTS}\s*(?:;\s*then\s*)?$`)
 
 /** Files under dir. Links aren't followed: what one points at may not be this agent's. */
 function walkFiles(dir, skipDir) {
@@ -493,7 +497,7 @@ function triesGhFirst(file, text) {
   if (!/\.(?:sh|bash)$/i.test(file) && !/^#!.*\b(?:ba|z|k|da)?sh\b/.test(text)) return false
   // Whole-line comments only: a # inside a line may be part of a string.
   const lines = text.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l))
-  const start = lines.findIndex((l) => /^\s*if\s+(?!!)(?:(?!\|\|).)*\bgh\s+auth\s+(?:status|token)\b(?:(?!\|\|).)*$/.test(l))
+  const start = lines.findIndex((l) => GH_DECIDES_IF.test(l))
   if (start < 0) return false
   let depth = 0
   let inFallback = false

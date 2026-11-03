@@ -540,9 +540,33 @@ describe('rollout', () => {
         ['only checks gh, with no fallback branch', 'gh auth status || exit 1\nT=$(grep ^GITHUB_TOKEN= .env)\n'],
         ['has gh as one option of an or', 'if [ -z "$X" ] || gh auth status; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\nfi\n'],
         ['never closes its if', 'if gh auth status; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\n'],
+        ...[
+          ['checks one account through a pipe', 'gh auth status 2>&1 | grep -q someone'],
+          ['pipes straight after a redirect', 'gh auth status 2>/dev/null|grep -q someone'],
+          ['checks one account with a flag', 'gh auth status --user someone'],
+          ['checks another host', 'gh auth status --hostname ghe.example'],
+          ['has a condition before gh', '[ -n "$X" ] && gh auth status'],
+          ['has a condition after gh', 'gh auth status && [ -n "$X" ]'],
+          ['has a condition between the guard and gh', 'command -v gh && [ -n "$X" ] && gh auth status'],
+          ['only mentions gh in a string', 'echo gh auth status'],
+          ['only keeps the output of gh', 'T=$(gh auth token)'],
+        ].map(([name, cond]) => [name, `if ${cond}; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\nfi\n`]),
       ])('still says WILL BREAK for a script that %s', async (_name, script) => {
         put('scripts/s.sh', script)
         expect(await out()).toContain('WILL BREAK: scripts/s.sh (GITHUB_TOKEN)')
+      })
+
+      it.each([
+        'gh auth status',
+        'gh auth token >/dev/null 2>&1',
+        'gh auth status --hostname github.com &>/dev/null',
+        'command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1',
+        'command -v gh && gh auth status',
+      ])('says no new loss when the if is only: %s', async (cond) => {
+        put('scripts/s.sh', `if ${cond}; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\nfi\n`)
+        const text = await out()
+        expect(text).not.toContain('WILL BREAK')
+        expect(text).toContain('No new loss: scripts/s.sh (GITHUB_TOKEN)')
       })
 
       it('still says WILL BREAK for the same shape using the token Hermes passes through', async () => {
