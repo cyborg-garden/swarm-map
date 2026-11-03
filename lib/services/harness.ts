@@ -2110,6 +2110,8 @@ export class HarnessService {
       }
       copyDirRecursive(expandedSource, destDir)
       copied = true
+      // Same rule as duplicate: the broker secret is the source agent's identity.
+      for (const f of [GITHUB_BROKER_CONFIG, GITHUB_BROKER_MARKER]) fs.rmSync(path.join(destDir, f), { force: true })
     }
 
     const workDir = destDir
