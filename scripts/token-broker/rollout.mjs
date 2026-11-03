@@ -21,24 +21,30 @@ export const CREDENTIAL_VARS = [
   'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_B64', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GITHUB_APP_INSTALLATION_ID',
 ]
 const LINE_RE = /^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
-// A token or key under a name we do not manage still counts. "LS0tLS1CRUdJTi" is a
-// base64 PEM header.
-const VALUE_RE = /^["']?(?:gh[pousr]_|github_pat_|-----BEGIN|LS0tLS1CRUdJTi)/
+// A GitHub token is recognisable under any name. A private key isn't: Google and SSH
+// keys look the same, so a key counts only under a name that says GitHub. Keep this in
+// step with lib/services/github-credential-check.ts. The check tells her to run
+// `ghkey roll`, so everything flagged here has to be something the strip removes.
+// "LS0tLS1CRUdJTi" is a base64 PEM header.
+const TOKEN_RE = /^["']?(?:gh[pousr]_|github_pat_)/
+const PEM_RE = /^["']?(?:-----BEGIN|LS0tLS1CRUdJTi)/
+const GITHUB_NAME_RE = /GITHUB|(?:^|_)GH(?:_|$)/i
+
+function credentialName(line) {
+  const m = LINE_RE.exec(line)
+  if (!m) return null
+  const value = m[2].trim()
+  const hit = CREDENTIAL_VARS.includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))
+  return hit ? m[1] : null
+}
 
 /** Names of credential variables in a .env body. Names only, by construction. */
 export function scanEnvText(text) {
-  const names = []
-  for (const line of text.split('\n')) {
-    const m = LINE_RE.exec(line)
-    if (!m) continue
-    if (CREDENTIAL_VARS.includes(m[1])) names.push(m[1])
-    else if (VALUE_RE.test(m[2].trim()) && !line.trimStart().startsWith('#')) names.push(m[1])
-  }
-  return [...new Set(names)]
+  return [...new Set(text.split('\n').map(credentialName).filter(Boolean))]
 }
 
 export function stripGithubCredentials(text) {
-  return text.split('\n').filter((line) => !CREDENTIAL_VARS.includes(LINE_RE.exec(line)?.[1])).join('\n')
+  return text.split('\n').filter((line) => !credentialName(line)).join('\n')
 }
 
 function homeFor(root, agent) {
@@ -243,7 +249,7 @@ export async function rollout({
   }
 
   const hasCreds = [...envFiles(home), ...strayEnvCopies(home)]
-    .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).some((n) => CREDENTIAL_VARS.includes(n)))
+    .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
   const wasEnrolled = fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
   // A re-run on a clean agent has nothing to save, and a clean copy would become
   // the newest backup and take undo away from the real original.

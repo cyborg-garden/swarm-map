@@ -100,6 +100,24 @@ describe('rollout', () => {
     expect(JSON.stringify(hits)).not.toContain(pat)
   })
 
+  it('removes everything it flags, so a flag always has a cure', async () => {
+    const pat = 'ghp_' + 'A'.repeat(36)
+    fs.writeFileSync(path.join(home, '.env'), [
+      'KEEP=1', `MY_GITHUB_KEY=${pat}`, `# OLD_ONE=${pat}`, `export OTHER_BOT="${pat}"`, 'GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----', '',
+    ].join('\n'))
+    const r = await rollout(opts({ apply: true }))
+    expect(r.ok).toBe(true)
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe('KEEP=1\n')
+  })
+
+  it('leaves a private key that is not GitHub\'s alone', async () => {
+    const env = 'GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW\nSOME_SSH_KEY="-----BEGIN OPENSSH PRIVATE KEY-----"\n'
+    expect(scanEnvText(env)).toEqual([])
+    fs.writeFileSync(path.join(home, '.env'), env)
+    await rollout(opts({ apply: true }))
+    expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(env)
+  })
+
   it('dry-runs by default: reports names and changes nothing', async () => {
     const r = await rollout(opts())
     expect(r.ok).toBe(true)

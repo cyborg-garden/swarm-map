@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { checkGithubCredentials, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
-import { CREDENTIAL_VARS } from '../../../scripts/token-broker/rollout.mjs'
+import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials } from '../../../scripts/token-broker/rollout.mjs'
 
 describe('checkGithubCredentials', () => {
   let root: string
@@ -131,6 +131,34 @@ describe('checkGithubCredentials', () => {
     expect(r.message).not.toContain('quoted-text')
     fs.writeFileSync(reg, '{"agents": {"a": {}}}')
     expect(check([agent('a', 'OTHER=1\n', true)]).status).toBe('ok')
+  })
+
+  it('does not blame GitHub for a private key under another name', () => {
+    const r = check([agent('a', 'GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW\nSOME_SSH_KEY="-----BEGIN OPENSSH"\n', true)])
+    expect(r.status).toBe('ok')
+  })
+
+  // The check's advice is "run ghkey roll". That only holds if the check flags
+  // exactly what the rollout strips, so run every shape through both.
+  it.each([
+    ['GITHUB_TOKEN=x', true],
+    ['# GITHUB_PAT=old', true],
+    ['export GH_TOKEN=x', true],
+    [`MY_GITHUB_KEY=gh${'p_'}${'A'.repeat(36)}`, true],
+    [`MY_KEY=github_${'pat_'}AAAA`, true],
+    [`# OLD=gh${'p_'}AAAA`, true],
+    [`SOME_BOT="gh${'s_'}AAAA"`, true],
+    ['GITHUB_APP_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----', true],
+    ['MY_GH_KEY=LS0tLS1CRUdJTiBSU0E', true],
+    ['GOOGLE_PRIVATE_KEY_B64=LS0tLS1CRUdJTiBQUklW', false],
+    ['SOME_SSH_KEY="-----BEGIN OPENSSH"', false],
+    ['NOT_GITHUB_TOKEN=keep', false],
+    ['GITHUB_WEBHOOK_SECRET=keep', false],
+  ])('flags and strips %s the same way', (line, flagged) => {
+    const r = check([agent('a', `${line}\n`, true)])
+    expect(r.status === 'fail').toBe(flagged)
+    expect(scanEnvText(line).length > 0).toBe(flagged)
+    expect(stripGithubCredentials(line) === '').toBe(flagged)
   })
 
   it('survives an agent with no data dir', () => {

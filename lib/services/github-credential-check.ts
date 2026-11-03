@@ -20,8 +20,12 @@ export const GITHUB_CREDENTIAL_VARS = [
 export const KEY_MAX_AGE_DAYS = 90
 const DAY_MS = 86_400_000
 const LINE_RE = /^[ \t]*#?[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
-// Same shapes as scripts/token-broker/rollout.mjs. "LS0tLS1CRUdJTi" is a base64 PEM header.
-const VALUE_RE = /^["']?(?:gh[pousr]_|github_pat_|-----BEGIN|LS0tLS1CRUdJTi)/
+// Same rules as scripts/token-broker/rollout.mjs, because the advice below is to run
+// the rollout. A GitHub token is recognisable under any name. A private key isn't, so
+// it counts only under a name that says GitHub. "LS0tLS1CRUdJTi" is a base64 PEM header.
+const TOKEN_RE = /^["']?(?:gh[pousr]_|github_pat_)/
+const PEM_RE = /^["']?(?:-----BEGIN|LS0tLS1CRUdJTi)/
+const GITHUB_NAME_RE = /GITHUB|(?:^|_)GH(?:_|$)/i
 
 export type GithubCredentialFinding = { agent: string; file: string; vars: string[] }
 export type GithubCredentialReport = {
@@ -42,7 +46,8 @@ function credentialNames(text: string): string[] {
   for (const line of text.split('\n')) {
     const m = LINE_RE.exec(line)
     if (!m || !m[2].trim()) continue
-    if ((GITHUB_CREDENTIAL_VARS as readonly string[]).includes(m[1]) || VALUE_RE.test(m[2].trim())) names.add(m[1])
+    const value = m[2].trim()
+    if ((GITHUB_CREDENTIAL_VARS as readonly string[]).includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))) names.add(m[1])
   }
   return [...names]
 }
