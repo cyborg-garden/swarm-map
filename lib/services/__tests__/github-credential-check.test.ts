@@ -3,8 +3,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { checkGithubCredentials, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
-import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials } from '../../../scripts/token-broker/rollout.mjs'
+import { checkGithubCredentials, gitCredentialsHoldToken, ghHostsHoldToken, GITHUB_CREDENTIAL_VARS } from '../github-credential-check'
+import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials, gitCredentialsHoldToken as rolloutCreds, ghHostsHoldToken as rolloutHosts } from '../../../scripts/token-broker/rollout.mjs'
 
 // Built at runtime: the sanitization gate reads a literal header as a real key.
 const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
@@ -206,6 +206,62 @@ describe('checkGithubCredentials', () => {
     expect(r.status === 'fail').toBe(flagged)
     expect(scanEnvText(line).length > 0).toBe(flagged)
     expect(stripGithubCredentials(line) === '').toBe(flagged)
+  })
+
+  describe('a token in a git or gh login file', () => {
+    // Built at runtime: the sanitization gate reads a literal as a real credential.
+    const PAT = ['gh', 'p_', 'fakeLoginFileValue'].join('')
+    const SHORT = ['gh', 's_', 'fakeShortLived'].join('')
+    const url = (user: string, secret: string, host = 'github.com') => `https://${user}:${secret}${'@'}${host}\n`
+    const hosts = (token: string) => `# a comment\ngithub.com:\n    users:\n        me:\n            oauth_token: ${token}\n    oauth_token: ${token}\n`
+    const plant = (dataDir: string, rel: string, text: string) => {
+      fs.mkdirSync(path.dirname(path.join(dataDir, rel)), { recursive: true })
+      fs.writeFileSync(path.join(dataDir, rel), text)
+    }
+
+    it.each([
+      'home/.git-credentials', '.git-credentials', 'profiles/p/home/.git-credentials',
+    ])('fails on a PAT in %s, naming the file and not the value', (rel) => {
+      const dir = agent('a', 'OK=1\n', true)
+      plant(dir.dataDir, rel, url('login', PAT))
+      const r = check([dir])
+      expect(r.status).toBe('fail')
+      expect(r.failing).toEqual([{ agent: 'a', file: rel, vars: ['GitHub token'] }])
+      expect(r.message).toContain(rel)
+      expect(JSON.stringify(r)).not.toContain(PAT)
+    })
+
+    it.each([
+      'home/.config/gh/hosts.yml', '.config/gh/hosts.yml',
+    ])('fails on a PAT in %s', (rel) => {
+      const dir = agent('a', 'OK=1\n', true)
+      plant(dir.dataDir, rel, hosts(PAT))
+      expect(check([dir]).failing).toEqual([{ agent: 'a', file: rel, vars: ['GitHub token'] }])
+    })
+
+    it('is quiet about a broker token, and a login for another host', () => {
+      const dir = agent('a', 'OK=1\n', true)
+      plant(dir.dataDir, 'home/.git-credentials', url('x-access-token', SHORT) + url('me', 'v', 'gitlab.example'))
+      plant(dir.dataDir, 'home/.config/gh/hosts.yml', hosts(SHORT) + `ghe.example:\n    oauth_token: ${PAT}\n`)
+      expect(check([dir]).status).toBe('ok')
+    })
+
+    it('lists an agent not yet moved as pending', () => {
+      const dir = agent('a', 'OK=1\n')
+      plant(dir.dataDir, 'home/.git-credentials', url('login', PAT))
+      const r = check([dir])
+      expect(r.status).toBe('pending')
+      expect(r.message).toContain('a')
+    })
+
+    it('agrees with the rollout on what counts', () => {
+      const credsCases = [url('login', PAT), url('x-access-token', SHORT), url('me', PAT, 'gitlab.example'), url('me', PAT, 'github.com.evil.example'), url('me', PAT, 'gist.github.com'), '', `https://me${'@'}gitlab.example\n`]
+      for (const c of credsCases) expect(gitCredentialsHoldToken(c)).toBe(rolloutCreds(c))
+      expect(credsCases.map(gitCredentialsHoldToken)).toEqual([true, false, false, false, true, false, false])
+      const hostsCases = [hosts(PAT), hosts(SHORT), `ghe.example:\n    oauth_token: ${PAT}\n`, '"github.com":\n    oauth_token: x\n', '']
+      for (const c of hostsCases) expect(ghHostsHoldToken(c)).toBe(rolloutHosts(c))
+      expect(hostsCases.map(ghHostsHoldToken)).toEqual([true, false, false, true, false])
+    })
   })
 
   it('survives an agent with no data dir', () => {

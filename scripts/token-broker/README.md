@@ -57,6 +57,11 @@ still to move keep the banner up until they are moved. A host with no broker sta
 
 A deploy with a GitHub token is refused once the broker is on the host.
 
+A PAT outside `.env` counts too: a `.git-credentials` line or a gh `hosts.yml` login,
+in the agent's tool HOME or gateway HOME. The dry run names them, `roll` removes them,
+undo brings them back, and the check flags them if they return. Logins for other hosts
+and the broker's own short-lived tokens stay.
+
 ## Rules worth knowing
 
 - `roll` never builds. If an image lacks the broker code it stops and asks for an

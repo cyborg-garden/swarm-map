@@ -1,8 +1,9 @@
 /**
  * Tripwire for the GitHub token broker: agents moved onto it must hold no GitHub
  * credential. HSM can't see every way one could come back (a hand edit, a restored
- * backup), so this reads the .env files themselves. It reports variable names only
- * and also says when the App key is due for a change.
+ * backup, gh auth login), so this reads the .env files and the git and gh login files
+ * themselves. It reports variable and file names only, and also says when the App key
+ * is due for a change.
  *
  * An agent counts as moved once it has the .hsm-github-broker marker or its broker
  * secret. On a host running the broker, any other agent holding a credential is
@@ -28,6 +29,31 @@ const LINE_RE = /^[ \t#]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/
 const TOKEN_RE = /^["']?(?:gh[pousr]_|github_pat_)/
 const PEM_RE = /^["']?(?:-----BEGIN|LS0tLS1CRUdJTi)/
 const GITHUB_NAME_RE = /GITHUB|(?:^|_)GH(?:_|$)/i
+
+// Git and gh keep their logins outside .env. Same rules as rollout.mjs, which removes
+// what these flag. A short-lived ghs_ token is what the broker itself hands out.
+const LOGIN_FILES = ['.git-credentials', path.join('.config', 'gh', 'hosts.yml')]
+const GIT_LOGIN_RE = /^\s*https?:\/\/([^\s/]*)@(?:[^\s/@]*\.)?github\.com(?::\d+)?(?:\/\S*)?\s*$/i
+const GH_BLOCK_RE = /^["']?github\.com["']?\s*:/
+const GH_TOKEN_RE = /^\s+oauth_token:\s*["']?([^\s"']+)/
+
+export function gitCredentialsHoldToken(text: string): boolean {
+  return text.split('\n').some((line) => {
+    const m = GIT_LOGIN_RE.exec(line)
+    if (!m) return false
+    const secret = m[1].slice(m[1].indexOf(':') + 1)
+    return !!secret && !secret.startsWith('ghs_')
+  })
+}
+
+export function ghHostsHoldToken(text: string): boolean {
+  let inside = false
+  return text.split('\n').some((line) => {
+    if (/^[^\s#]/.test(line)) inside = GH_BLOCK_RE.test(line)
+    const m = inside ? GH_TOKEN_RE.exec(line) : null
+    return !!m && !m[1].startsWith('ghs_')
+  })
+}
 
 export type GithubCredentialFinding = { agent: string; file: string; vars: string[] }
 export type GithubCredentialReport = {
@@ -71,6 +97,17 @@ function envFilesIn(dataDir: string): string[] {
   return [...envs(''), ...list(path.join(dataDir, 'profiles')).flatMap((p) => envs(path.join('profiles', p)))]
 }
 
+// The tool HOME (home/) and the gateway HOME (the agent home itself), per profile.
+function loginFilesIn(dataDir: string): string[] {
+  let profiles: string[] = []
+  try {
+    profiles = fs.readdirSync(path.join(dataDir, 'profiles')).map((p) => path.join('profiles', p))
+  } catch {
+    // no profiles
+  }
+  return ['', ...profiles].flatMap((d) => [d, path.join(d, 'home')]).flatMap((base) => LOGIN_FILES.map((f) => path.join(base, f)))
+}
+
 // A typo here leaves the broker on its last good copy, so her edit silently isn't
 // applied. Same shape rule as scripts/token-broker/lib.mjs. The parse error stays out
 // of the report because it quotes the file.
@@ -111,6 +148,18 @@ export function checkGithubCredentials(opts: {
       }
       const vars = credentialNames(text)
       if (vars.length) (brokered ? failing : pending).push({ agent: name, file, vars })
+    }
+    for (const file of loginFilesIn(dataDir)) {
+      let text: string
+      try {
+        text = fs.readFileSync(path.join(dataDir, file), 'utf-8')
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT' && code !== 'EISDIR' && code !== 'ENOTDIR') unreadable.push({ agent: name, file })
+        continue
+      }
+      const holds = path.basename(file) === '.git-credentials' ? gitCredentialsHoldToken(text) : ghHostsHoldToken(text)
+      if (holds) (brokered ? failing : pending).push({ agent: name, file, vars: ['GitHub token'] })
     }
   }
 

@@ -13,7 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { listen, createBroker } from '../token-broker/lib.mjs'
 import { checkGithubCredentials } from '../../lib/services/github-credential-check'
-import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH } from '../token-broker/rollout.mjs'
+import { rollout, undo, purgeBackups, stripGithubCredentials, CREDENTIAL_VARS, scanEnvText, agentsHoldingAppKey, OWNERS_SH, VERIFY_SH, stripGhHosts } from '../token-broker/rollout.mjs'
 
 // Built at runtime: the sanitization gate reads a literal header as a real key.
 const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
@@ -531,6 +531,122 @@ describe('rollout', () => {
       expect((await undo(opts())).lines.join('\n')).toMatch(/no backup/)
       purgeBackups({ dir })
       expect(fs.existsSync(path.join(dir, 'env-backups'))).toBe(false)
+    })
+  })
+
+  describe('a PAT in a git or gh login file', () => {
+    // Built at runtime: the sanitization gate reads a literal as a real credential.
+    const PAT = ['gh', 'p_', 'fakeLoginFileValue'].join('')
+    const SHORT = ['gh', 's_', 'fakeShortLived'].join('')
+    const line = (user: string, secret: string, host = 'github.com') => `https://${user}:${secret}${'@'}${host}\n`
+    const hosts = (token: string) => `github.com:\n    users:\n        someone:\n            oauth_token: ${token}\n    git_protocol: https\n    oauth_token: ${token}\n    user: someone\n`
+    const creds = () => path.join(home, 'home', '.git-credentials')
+    const hostsFile = () => path.join(home, 'home', '.config', 'gh', 'hosts.yml')
+    const plant = () => {
+      fs.mkdirSync(path.dirname(hostsFile()), { recursive: true })
+      fs.writeFileSync(creds(), line('login', PAT) + line('me', 'other-host-value', 'gitlab.example'))
+      fs.writeFileSync(hostsFile(), hosts(PAT))
+    }
+
+    it('shows both files in the dry run, without the value, and changes nothing', async () => {
+      plant()
+      const text = (await rollout(opts())).lines.join('\n')
+      expect(text).toContain('home/.git-credentials: a GitHub token')
+      expect(text).toContain('home/.config/gh/hosts.yml: a GitHub token')
+      expect(text).not.toContain(PAT)
+      expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(PAT))
+    })
+
+    it('removes the PAT from both on apply, and keeps a line for another host', async () => {
+      plant()
+      expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+      expect(fs.readFileSync(creds(), 'utf-8')).toBe(line('me', 'other-host-value', 'gitlab.example'))
+      expect(fs.existsSync(hostsFile())).toBe(false)
+    })
+
+    it('checks the files in the gateway HOME and in profiles too', async () => {
+      const gateway = path.join(home, '.config', 'gh', 'hosts.yml')
+      const profile = path.join(home, 'profiles', 'p', 'home', '.git-credentials')
+      fs.mkdirSync(path.dirname(gateway), { recursive: true })
+      fs.mkdirSync(path.dirname(profile), { recursive: true })
+      fs.writeFileSync(gateway, hosts(PAT))
+      fs.writeFileSync(profile, line('login', PAT))
+      await rollout(opts({ apply: true }))
+      expect(fs.existsSync(gateway)).toBe(false)
+      expect(fs.existsSync(profile)).toBe(false)
+    })
+
+    it('leaves a short-lived broker token and a login for another host alone', async () => {
+      fs.mkdirSync(path.dirname(hostsFile()), { recursive: true })
+      const other = line('x-access-token', SHORT) + line('me', 'other-host-value', 'gitlab.example')
+      fs.writeFileSync(creds(), other)
+      fs.writeFileSync(hostsFile(), hosts(SHORT))
+      const text = (await rollout(opts({ apply: true }))).lines.join('\n')
+      expect(text).not.toContain('a GitHub token')
+      expect(fs.readFileSync(creds(), 'utf-8')).toBe(other)
+      expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(SHORT))
+    })
+
+    it('keeps another host in hosts.yml when it removes the GitHub block', () => {
+      const other = 'ghe.example:\n    oauth_token: other-host-value\n'
+      expect(stripGhHosts(hosts(PAT) + other)).toBe(other)
+    })
+
+    it('a failed roll puts both back byte for byte', async () => {
+      plant()
+      const before = fs.readFileSync(creds(), 'utf-8')
+      writeFd('verify.rc', '12')
+      writeFd('verify.out', 'git-no-token\n')
+      expect((await rollout(opts({ apply: true }))).ok).toBe(false)
+      expect(fs.readFileSync(creds(), 'utf-8')).toBe(before)
+      expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(PAT))
+    })
+
+    it('undo restores them over the broker-era hosts.yml that boot wrote', async () => {
+      plant()
+      const before = fs.readFileSync(creds(), 'utf-8')
+      await rollout(opts({ apply: true }))
+      fs.writeFileSync(hostsFile(), `# managed-by: hermes git_credentials_boot\n${hosts(SHORT)}`)
+      expect((await undo(opts())).ok).toBe(true)
+      expect(fs.readFileSync(creds(), 'utf-8')).toBe(before)
+      expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(PAT))
+    })
+
+    it('undo keeps a gh login made since, and a line added since', async () => {
+      plant()
+      const before = fs.readFileSync(creds(), 'utf-8')
+      await rollout(opts({ apply: true }))
+      const later = ['gh', 'o_', 'fakeLaterLogin'].join('')
+      fs.writeFileSync(hostsFile(), hosts(later))
+      fs.appendFileSync(creds(), line('new', 'new-host-value', 'codeberg.example'))
+      await undo(opts())
+      expect(fs.readFileSync(hostsFile(), 'utf-8')).toBe(hosts(later))
+      const text = fs.readFileSync(creds(), 'utf-8').split('\n')
+      expect(text).toEqual(expect.arrayContaining([...before.split('\n'), line('new', 'new-host-value', 'codeberg.example').trim()]))
+    })
+
+    describe('the verify step', () => {
+      const runVerify = (ghToken: string) => {
+        const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-bin-'))
+        fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\ncase "$1" in credential) echo password=${SHORT} ;; esac\nexit 0\n`, { mode: 0o755 })
+        fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\ncase "$1" in auth) echo ${ghToken} ;; api) echo o/r ;; esac\nexit 0\n`, { mode: 0o755 })
+        const r = spawnSync('sh', ['-c', VERIFY_SH], { encoding: 'utf-8', env: { PATH: `${bin}:/usr/bin:/bin`, NODE_ENV: 'test' } })
+        fs.rmSync(bin, { recursive: true, force: true })
+        return r
+      }
+
+      it('fails when gh is not using a broker token, without printing it', () => {
+        const r = runVerify(PAT)
+        expect(r.status).toBe(13)
+        expect(r.stdout.trim()).toBe('gh-token-not-from-broker')
+        expect(r.stdout + r.stderr).not.toContain(PAT)
+      })
+
+      it('passes when gh is using a broker token', () => {
+        const r = runVerify(SHORT)
+        expect(r.status).toBe(0)
+        expect(r.stdout.trim()).toBe('ok')
+      })
     })
   })
 

@@ -47,6 +47,74 @@ export function stripGithubCredentials(text) {
   return text.split('\n').filter((line) => !credentialName(line)).join('\n')
 }
 
+// Git and gh keep their logins outside .env. A short-lived ghs_ token is what the broker
+// itself hands out, so only anything else counts. Keep these in step with
+// lib/services/github-credential-check.ts.
+const GIT_LOGIN_RE = /^\s*https?:\/\/([^\s/]*)@(?:[^\s/@]*\.)?github\.com(?::\d+)?(?:\/\S*)?\s*$/i
+const GH_BLOCK_RE = /^["']?github\.com["']?\s*:/
+const GH_TOKEN_RE = /^\s+oauth_token:\s*["']?([^\s"']+)/
+
+function gitLoginIsLongLived(line) {
+  const m = GIT_LOGIN_RE.exec(line)
+  if (!m) return false
+  const secret = m[1].slice(m[1].indexOf(':') + 1)
+  return !!secret && !secret.startsWith('ghs_')
+}
+
+export function gitCredentialsHoldToken(text) {
+  return text.split('\n').some(gitLoginIsLongLived)
+}
+
+function stripGitCredentials(text) {
+  return text.split('\n').filter((line) => !gitLoginIsLongLived(line)).join('\n')
+}
+
+/** Which lines of a hosts.yml belong to the top-level github.com block. */
+function ghBlockFlags(lines) {
+  let inside = false
+  return lines.map((line) => {
+    if (/^[^\s#]/.test(line)) inside = GH_BLOCK_RE.test(line)
+    return inside
+  })
+}
+
+export function ghHostsHoldToken(text) {
+  const lines = text.split('\n')
+  const flags = ghBlockFlags(lines)
+  return lines.some((line, i) => {
+    const m = flags[i] && GH_TOKEN_RE.exec(line)
+    return !!m && !m[1].startsWith('ghs_')
+  })
+}
+
+export function stripGhHosts(text) {
+  const lines = text.split('\n')
+  const flags = ghBlockFlags(lines)
+  return lines.filter((_, i) => !flags[i]).join('\n')
+}
+
+// The newer line of a kind wins, as with .env, so a login made since the roll stays.
+const LOGIN_FILES = {
+  '.git-credentials': {
+    holds: gitCredentialsHoldToken,
+    strip: stripGitCredentials,
+    restore(current, saved) {
+      if (stripGitCredentials(saved) === current) return saved
+      const held = new Set(current.split('\n'))
+      const missing = saved.split('\n').filter((line) => line && !held.has(line))
+      if (!missing.length) return current
+      const gap = current === '' || current.endsWith('\n') ? '' : '\n'
+      return `${current}${gap}${missing.join('\n')}\n`
+    },
+  },
+  'hosts.yml': {
+    holds: ghHostsHoldToken,
+    strip: stripGhHosts,
+    // Boot writes a broker-era file here, so this replaces it rather than merging.
+    restore: (current, saved) => (ghHostsHoldToken(current) ? current : saved),
+  },
+}
+
 function homeFor(root, agent) {
   return agent === 'personal' ? path.join(root, '.hermes') : path.join(root, `.hermes-${agent}`)
 }
@@ -86,6 +154,20 @@ function strayEnvCopies(home) {
     .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
 }
 
+// Both the tool HOME (home/) and the gateway HOME (the agent home itself).
+function loginFilesWithToken(home) {
+  return [home, ...profileDirs(home)]
+    .flatMap((d) => [d, path.join(d, 'home')])
+    .flatMap((base) => [path.join(base, '.git-credentials'), path.join(base, '.config', 'gh', 'hosts.yml')])
+    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && LOGIN_FILES[path.basename(f)].holds(fs.readFileSync(f, 'utf-8')))
+}
+
+function stripLoginFile(file) {
+  const left = LOGIN_FILES[path.basename(file)].strip(fs.readFileSync(file, 'utf-8'))
+  if (left.split('\n').some((line) => line.trim() && !line.startsWith('#'))) writeLikeOriginal(file, left)
+  else fs.rmSync(file)
+}
+
 function writeLikeOriginal(file, content) {
   const tmp = `${file}.broker.tmp`
   fs.writeFileSync(tmp, content, { mode: 0o600 })
@@ -102,7 +184,7 @@ function makeBackup({ dir, agent, home }) {
   fs.mkdirSync(where, { recursive: true, mode: 0o700 })
   fs.chmodSync(backupRoot(dir), 0o700)
   try {
-    for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
+    for (const f of [...envFiles(home), ...strayEnvCopies(home), ...loginFilesWithToken(home)]) {
       const to = path.join(where, path.relative(home, f))
       fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 })
       fs.copyFileSync(f, to)
@@ -144,7 +226,8 @@ function restoreBackup(where, home) {
       continue
     }
     const current = fs.readFileSync(target, 'utf-8')
-    const merged = restoreCredentialLines(current, saved)
+    const login = LOGIN_FILES[path.basename(f)]
+    const merged = login ? login.restore(current, saved) : restoreCredentialLines(current, saved)
     if (merged !== current) writeLikeOriginal(target, merged)
   }
 }
@@ -209,9 +292,11 @@ const recreate = (run, c) =>
 
 // Prints a one-word reason only. gh output is the repo name, used then dropped.
 // A public repo answers ls-remote with no auth at all, so it picks a private one.
-const VERIFY_SH = `
+// gh auth token is compared, never printed, so a login file gh still prefers shows up.
+export const VERIFY_SH = `
 [ -z "\${GITHUB_TOKEN:-}\${GH_TOKEN:-}\${GITHUB_PERSONAL_ACCESS_TOKEN:-}\${GITHUB_APP_PRIVATE_KEY_B64:-}" ] || { echo env-still-has-credential; exit 11; }
 printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill 2>/dev/null | grep -q '^password=ghs_' || { echo git-no-token; exit 12; }
+gh auth token 2>/dev/null | grep -q '^ghs_' || { echo gh-token-not-from-broker; exit 13; }
 repo=$(gh api 'installation/repositories?per_page=100' --jq '([.repositories[]|select(.private)][0] // .repositories[0]).full_name' 2>/dev/null) || { echo gh-failed; exit 13; }
 [ -n "$repo" ] || { echo gh-no-repos; exit 13; }
 git ls-remote "https://github.com/$repo" HEAD >/dev/null 2>&1 || { echo git-ls-remote-failed; exit 14; }
@@ -290,6 +375,7 @@ export async function rollout({
       const names = scanEnvText(fs.readFileSync(f, 'utf-8'))
       lines.push(`${path.relative(home, f)}: ${names.length ? names.join(', ') : 'clean'}`)
     }
+    for (const f of loginFilesWithToken(home)) lines.push(`${path.relative(home, f)}: a GitHub token`)
   } catch (err) {
     problems.push(`could not read its .env files (${errorName(err)})`)
   }
@@ -313,7 +399,8 @@ export async function rollout({
   let backup = null
   let result = null
   try {
-    const hasCreds = [...envFiles(home), ...strayEnvCopies(home)]
+    const logins = loginFilesWithToken(home)
+    const hasCreds = logins.length > 0 || [...envFiles(home), ...strayEnvCopies(home)]
       .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
     // A re-run on a clean agent has nothing to save.
     if (hasCreds) backup = makeBackup({ dir, agent, home })
@@ -325,6 +412,7 @@ export async function rollout({
       const stripped = stripGithubCredentials(text)
       if (stripped !== text) writeLikeOriginal(f, stripped)
     }
+    for (const f of logins) stripLoginFile(f)
   } catch (err) {
     result = { ok: false, reason: `could not change its files (${errorName(err)})`, untouched: true }
   }
