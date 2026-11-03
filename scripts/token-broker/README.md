@@ -47,7 +47,7 @@ In each agent's home: `github-broker.json` (URL and secret) and an empty
 | `ghkey` | Change the App key. Click Generate on GitHub first. |
 | `ghkey setup <app_id> <installation_id>` | Install or update the broker on the host. |
 | `ghkey roll <agent> [--apply] [--accept-loss]` | Move one agent. A dry run without `--apply`. |
-| `ghkey undo <agent>` | Put an agent's GitHub lines back and take it off the broker. Other changes to its `.env` since the move stay. |
+| `ghkey undo <agent>` | Put any GitHub lines back and take the agent off the broker. Other changes to its `.env` since the move stay. |
 | `ghkey check` | Show the health result: credentials found, agents left to move, key age. |
 | `ghkey purge` | Delete the `.env` backups. |
 
@@ -67,6 +67,23 @@ A PAT outside `.env` counts too: a `.git-credentials` line or a gh `hosts.yml` l
 in the agent's tool HOME or gateway HOME. The dry run names them, `roll` removes them,
 undo brings them back, and the check flags them if they return. Logins for other hosts
 and the broker's own short-lived tokens stay.
+
+A credential in a compose file counts as well, because a compose `environment:` entry
+outranks `.env`. `roll` can't remove it, so it blocks and says to take it out of the
+agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on the broker.
+
+## What the dry run looks for
+
+- Scripts, skills and cron jobs on that agent using `GITHUB_TOKEN`,
+  `GITHUB_PERSONAL_ACCESS_TOKEN` or `GH_TOKEN`, skipping `skills/.archive` and
+  `cron/output`. Hermes already hides `GITHUB_TOKEN` and `GH_TOKEN` from tool and cron
+  subprocesses and gives `GH_TOKEN` back from the broker, so reading those from the
+  environment is `No new loss`. Reading `.env` itself, or the PAT variable Hermes does
+  pass on, is `WILL BREAK`. Notes that only mention it with `.env` get `Check`.
+- A root or profile `config.yaml` using those variables, or mentioning copilot. This
+  blocks unless you pass `--accept-loss`.
+- A PAT in a `.netrc` or a repo's `.git/config` URL anywhere under the agent's home. The
+  roll leaves it, and whatever uses it stops once that PAT is revoked.
 
 ## Rules worth knowing
 
