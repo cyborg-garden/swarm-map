@@ -77,8 +77,9 @@ function envFiles(home) {
   return [home, ...profileDirs(home)].map((d) => path.join(d, '.env')).filter((f) => fs.existsSync(f))
 }
 
-// Copies like .env.bak or .env-old hold the same secrets. They are moved rather than
-// stripped, since their only use is as a record. Same names as the health check.
+// Copies like .env.bak or .env-old hold the same secrets, along with lines that may
+// exist nowhere else. So they get the same strip as .env and are never deleted. Same
+// names as the health check.
 function strayEnvCopies(home) {
   return [home, ...profileDirs(home)]
     .flatMap((d) => fs.readdirSync(d).filter((n) => n.startsWith('.env') && n !== '.env' && n !== '.env.example').map((n) => path.join(d, n)))
@@ -260,12 +261,11 @@ export async function rollout({
 
   fs.writeFileSync(path.join(home, MARKER), '')
   if (!wasEnrolled) enrollAgent({ dir, agent, home, url: `http://host.docker.internal:${port}` })
-  for (const f of envFiles(home)) {
+  for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
     const text = fs.readFileSync(f, 'utf-8')
     const stripped = stripGithubCredentials(text)
     if (stripped !== text) writeLikeOriginal(f, stripped)
   }
-  for (const f of strayEnvCopies(home)) fs.rmSync(f)
 
   const started = recreate(run, c)
   const result = started ? await verify(run, c, { verifyDeadlineMs, pollMs }) : { ok: false, reason: 'recreate-failed' }

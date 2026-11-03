@@ -230,12 +230,30 @@ describe('rollout', () => {
     for (const v of [FAKE_PAT, FAKE_KEY]) expect(text).not.toContain(v)
   })
 
-  it('moves other .env copies holding credentials out of the agent mount', async () => {
+  it('strips other .env copies in place, keeping their other lines', async () => {
     fs.writeFileSync(path.join(home, '.env.bak'), ENV)
     fs.writeFileSync(path.join(home, '.env.example'), 'NOTHING=here\n')
     await rollout(opts({ apply: true }))
-    expect(fs.existsSync(path.join(home, '.env.bak'))).toBe(false)
+    expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=mare\n')
     expect(fs.existsSync(path.join(home, '.env.example'))).toBe(true)
+  })
+
+  it('leaves a copy holding only non-GitHub data alone, with no backup needed', async () => {
+    const body = 'GOOGLE_PEM=-----BEGIN PRIVATE KEY-----\nOTHER=important\n'
+    fs.writeFileSync(path.join(home, '.env'), 'X=1\n')
+    fs.writeFileSync(path.join(home, '.env.old'), body)
+    await rollout(opts({ apply: true }))
+    expect(fs.readFileSync(path.join(home, '.env.old'), 'utf-8')).toBe(body)
+    expect(fs.existsSync(path.join(dir, 'env-backups'))).toBe(false)
+  })
+
+  it('a failed roll puts a stripped copy back byte for byte', async () => {
+    fs.writeFileSync(path.join(home, '.env.bak'), ENV)
+    writeFd('verify.out', 'gh-failed\n')
+    writeFd('verify.rc', '13')
+    const r = await rollout(opts({ apply: true }))
+    expect(r.ok).toBe(false)
+    expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe(ENV)
   })
 
   it('strips profile .env files too and restores them on failure', async () => {
