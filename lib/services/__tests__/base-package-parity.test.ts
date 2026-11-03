@@ -112,6 +112,17 @@ describe('base package parity across creation paths', () => {
     })
   }
 
+  it('a duplicate does not inherit the source agent\'s broker secret or marker', async () => {
+    const src = path.join(tmpDir, '.hermes-source')
+    fs.mkdirSync(src, { recursive: true })
+    fs.writeFileSync(path.join(src, 'github-broker.json'), '{}')
+    fs.writeFileSync(path.join(src, '.hsm-github-broker'), '')
+    const copy = await viaDuplicate({ surface: 'private', packs: [] })
+    expect(fs.existsSync(path.join(copy, 'github-broker.json'))).toBe(false)
+    expect(fs.existsSync(path.join(copy, '.hsm-github-broker'))).toBe(false)
+    expect(fs.existsSync(path.join(src, 'github-broker.json'))).toBe(true)
+  })
+
   it('import refuses a public agent with the browser-ops pack before copying anything', async () => {
     fs.writeFileSync(path.join(srcDir, '.env'), 'X=1\n')
     await expect(service.importFromDir(srcDir, 'nope', { surface: 'public', packs: ['browser-ops'] })).rejects.toThrow(/public/)

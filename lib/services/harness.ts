@@ -25,6 +25,7 @@ import {
   type Selection,
 } from './base-package'
 import { checkBasePackageDrift, type DriftReport } from './base-package-drift'
+import { GITHUB_BROKER_CONFIG, GITHUB_BROKER_MARKER } from './keys'
 import { getUseCaseTemplate, reapplyUseCaseTemplate as reapplyTemplateToDataDir } from './usecase-templates'
 import type { ToolsService } from './tools'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
@@ -1721,6 +1722,9 @@ export class HarnessService {
     if (fs.existsSync(sourceDataDir) && !fs.existsSync(newDataDir)) {
       // Deep copy using recursive dir copy
       copyDirRecursive(sourceDataDir, newDataDir)
+      // The broker secret is the source agent's identity. A clone must not ask for
+      // tokens as its source, and it starts unenrolled.
+      for (const f of [GITHUB_BROKER_CONFIG, GITHUB_BROKER_MARKER]) fs.rmSync(path.join(newDataDir, f), { force: true })
       // Update port and strip surface credentials from the new .env
       const newEnvPath = path.join(newDataDir, '.env')
       if (fs.existsSync(newEnvPath)) {

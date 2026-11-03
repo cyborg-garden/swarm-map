@@ -49,6 +49,18 @@ export function anthropicBlocked(dataDir: string): boolean {
   return fs.existsSync(path.join(dataDir, NO_ANTHROPIC_MARKER))
 }
 
+// An empty file with this name in an agent's data dir means the agent gets GitHub
+// tokens from the host broker (scripts/token-broker) and holds no credential of its
+// own. No write below may put one back, whatever triggers it.
+export const GITHUB_BROKER_MARKER = '.hsm-github-broker'
+export const GITHUB_BROKER_CONFIG = 'github-broker.json'
+const GITHUB_CREDENTIAL_VAR = /^(GITHUB_TOKEN|GITHUB_PAT|GH_TOKEN|GITHUB_PERSONAL_ACCESS_TOKEN|GITHUB_APP_[A-Z0-9_]+)$/i
+const GITHUB_CREDENTIAL_VALUE = /^(gh[pousr]_|github_pat_)/
+
+export function githubBrokered(dataDir: string): boolean {
+  return fs.existsSync(path.join(dataDir, GITHUB_BROKER_MARKER))
+}
+
 export function anthropicEnvVarForValue(value: string): 'ANTHROPIC_API_KEY' | 'ANTHROPIC_TOKEN' {
   const v = (value ?? '').trim()
   if (v.startsWith('sk-ant-api')) return 'ANTHROPIC_API_KEY'
@@ -197,8 +209,10 @@ function idToName(id: string): string {
 // Agent data directory mapping
 // A refused agent must not show as assigned on paper either.
 function withoutBlockedAgents(provider: string, assignedTo: string[]): string[] {
-  if (provider.trim().toLowerCase() !== 'anthropic') return assignedTo
-  return assignedTo.filter((h) => !anthropicBlocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)))
+  const p = provider.trim().toLowerCase()
+  if (p !== 'anthropic' && p !== 'github') return assignedTo
+  const blocked = p === 'anthropic' ? anthropicBlocked : githubBrokered
+  return assignedTo.filter((h) => !blocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)))
 }
 
 function agentDataDir(harnessName: string): string {
@@ -486,6 +500,13 @@ export class KeysService {
       anthropicBlocked(dataDir)
     ) {
       this.audit.append({ who: 'admin', what: 'key:refused-no-anthropic', target: name })
+      return false
+    }
+    if (
+      (provider.trim().toLowerCase() === 'github' || GITHUB_CREDENTIAL_VAR.test(varName) || GITHUB_CREDENTIAL_VALUE.test(value)) &&
+      githubBrokered(dataDir)
+    ) {
+      this.audit.append({ who: 'admin', what: 'key:refused-github-broker', target: name })
       return false
     }
     content = upsertEnvVar(content, varName, value)
