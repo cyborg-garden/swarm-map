@@ -101,11 +101,17 @@ function makeBackup({ dir, agent, home }) {
   const where = path.join(backupRoot(dir), `${agent}--${new Date().toISOString().replace(/[:.]/g, '-')}`)
   fs.mkdirSync(where, { recursive: true, mode: 0o700 })
   fs.chmodSync(backupRoot(dir), 0o700)
-  for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
-    const to = path.join(where, path.relative(home, f))
-    fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 })
-    fs.copyFileSync(f, to)
-    fs.chmodSync(to, 0o600)
+  try {
+    for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
+      const to = path.join(where, path.relative(home, f))
+      fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 })
+      fs.copyFileSync(f, to)
+      fs.chmodSync(to, 0o600)
+    }
+  } catch (err) {
+    // A partial copy must not become the newest backup that undo trusts.
+    fs.rmSync(where, { recursive: true, force: true })
+    throw err
   }
   return where
 }
@@ -224,6 +230,9 @@ async function verify(run, c, { verifyDeadlineMs, pollMs }) {
   }
 }
 
+// The code only: a message can quote the file it failed on.
+const errorName = (err) => err.code ?? err.name
+
 const AGENT_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const REBUILD_HINT = 'its image lacks the broker code. Rebuild through HSM first (mode "rebuild"), not by hand, so the drift check keeps working'
 
@@ -263,9 +272,13 @@ export async function rollout({
   if (!fs.existsSync(home)) return { ok: false, applied: false, lines: [`no home at ${home}`] }
 
   const { problems, warnings, port, c } = await preflight({ dir, root: homeRoot, agent, home, run, acceptLoss })
-  for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
-    const names = scanEnvText(fs.readFileSync(f, 'utf-8'))
-    lines.push(`${path.relative(home, f)}: ${names.length ? names.join(', ') : 'clean'}`)
+  try {
+    for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
+      const names = scanEnvText(fs.readFileSync(f, 'utf-8'))
+      lines.push(`${path.relative(home, f)}: ${names.length ? names.join(', ') : 'clean'}`)
+    }
+  } catch (err) {
+    problems.push(`could not read its .env files (${errorName(err)})`)
   }
   if (c.running) {
     const owners = checkoutOwners(run, c)
@@ -279,43 +292,68 @@ export async function rollout({
     return { ok: true, applied: false, lines }
   }
 
-  const hasCreds = [...envFiles(home), ...strayEnvCopies(home)]
-    .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
   const wasEnrolled = fs.existsSync(path.join(home, AGENT_CONFIG_FILE))
-  // A re-run on a clean agent has nothing to save, and a clean copy would become
-  // the newest backup and take undo away from the real original.
-  const backup = hasCreds ? makeBackup({ dir, agent, home }) : null
+  const note = (event, fields) => {
+    try { audit(dir, event, fields) } catch { /* the log must not undo the work */ }
+  }
+  let backup = null
+  let result = null
+  try {
+    const hasCreds = [...envFiles(home), ...strayEnvCopies(home)]
+      .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
+    // A re-run on a clean agent has nothing to save, and a clean copy would become
+    // the newest backup and take undo away from the real original.
+    if (hasCreds) backup = makeBackup({ dir, agent, home })
 
-  fs.writeFileSync(path.join(home, MARKER), '')
-  if (!wasEnrolled) enrollAgent({ dir, agent, home, url: `http://host.docker.internal:${port}` })
-  for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
-    const text = fs.readFileSync(f, 'utf-8')
-    const stripped = stripGithubCredentials(text)
-    if (stripped !== text) writeLikeOriginal(f, stripped)
+    fs.writeFileSync(path.join(home, MARKER), '')
+    if (!wasEnrolled) enrollAgent({ dir, agent, home, url: `http://host.docker.internal:${port}` })
+    for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
+      const text = fs.readFileSync(f, 'utf-8')
+      const stripped = stripGithubCredentials(text)
+      if (stripped !== text) writeLikeOriginal(f, stripped)
+    }
+  } catch (err) {
+    result = { ok: false, reason: `could not change its files (${errorName(err)})`, untouched: true }
   }
 
-  const started = recreate(run, c)
-  const result = started ? await verify(run, c, { verifyDeadlineMs, pollMs }) : { ok: false, reason: 'recreate-failed' }
+  if (!result) {
+    const started = recreate(run, c)
+    result = started ? await verify(run, c, { verifyDeadlineMs, pollMs }) : { ok: false, reason: 'recreate-failed' }
+  }
   if (result.ok) {
-    audit(dir, 'rolled-out', { agent })
+    note('rolled-out', { agent })
     lines.push(`OK: ${agent} now gets git and gh from the broker.`)
     return { ok: true, applied: true, lines }
   }
 
   lines.push(`FAILED: ${result.reason}`)
-  if (backup) {
-    restoreBackup(backup, home)
-    fs.rmSync(backup, { recursive: true, force: true })
+  note('rollout-failed', { agent, reason: result.reason })
+  try {
+    if (backup) restoreBackup(backup, home)
+    // An agent already on the broker before this run stays enrolled and marked.
+    if (!wasEnrolled) {
+      try {
+        unenrollAgent({ dir, agent, home })
+      } catch {
+        // A registry it can't update: deleting the secret is what ends this identity.
+        fs.rmSync(path.join(home, AGENT_CONFIG_FILE), { force: true })
+      }
+      fs.rmSync(path.join(home, MARKER), { force: true })
+    }
+  } catch (err) {
+    lines.push(backup
+      ? `Could not put ${agent} back (${errorName(err)}). Its old lines are safe in the backup. Fix that, then run: ghkey undo ${agent}`
+      : `Could not put ${agent} back (${errorName(err)}). Fix that, then delete ${MARKER} and ${AGENT_CONFIG_FILE} from its home.`)
+    return { ok: false, applied: false, lines }
   }
-  // An agent already on the broker before this run stays enrolled and marked.
-  if (!wasEnrolled) {
-    unenrollAgent({ dir, agent, home })
-    fs.rmSync(path.join(home, MARKER), { force: true })
+  if (backup) fs.rmSync(backup, { recursive: true, force: true })
+  // The container was never recreated, so it is still running as it was.
+  if (result.untouched) lines.push(`Restored ${agent} to how it was.`)
+  else {
+    lines.push(recreate(run, c)
+      ? `Restored ${agent} to how it was.`
+      : `Restored ${agent}'s files, but ${c.container} would not start and may be down.`)
   }
-  audit(dir, 'rollout-failed', { agent, reason: result.reason })
-  lines.push(recreate(run, c)
-    ? `Restored ${agent} to how it was.`
-    : `Restored ${agent}'s files, but ${c.container} would not start and may be down.`)
   return { ok: false, applied: false, lines }
 }
 
@@ -325,11 +363,15 @@ export async function undo({ agent, homeRoot, dir, docker, dockerEnv }) {
   const backup = newestBackup(dir, agent)
   if (!backup) return { ok: false, lines: [`no backup for ${agent}`] }
   const run = dockerClient({ docker, dockerEnv })
-  // Marker last: HSM must not write keys into a half-restored .env.
-  restoreBackup(backup, home)
-  unenrollAgent({ dir, agent, home })
-  fs.rmSync(path.join(home, MARKER), { force: true })
-  audit(dir, 'rollout-undone', { agent })
+  try {
+    // Marker last: HSM must not write keys into a half-restored .env.
+    restoreBackup(backup, home)
+    unenrollAgent({ dir, agent, home })
+    fs.rmSync(path.join(home, MARKER), { force: true })
+    audit(dir, 'rollout-undone', { agent })
+  } catch (err) {
+    return { ok: false, lines: [`Could not finish undoing ${agent} (${errorName(err)}). Its backup is safe. Fix that, then run: ghkey undo ${agent}`] }
+  }
   const started = recreate(run, locate(run, homeRoot, agent))
   return {
     ok: started,

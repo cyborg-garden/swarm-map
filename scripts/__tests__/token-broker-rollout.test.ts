@@ -35,6 +35,7 @@ case "$1" in
   compose)
     n=$(ls "$FD" | grep -c '^recreate-')
     cp "$AGENT_HOME/.env" "$FD/recreate-$n.env"
+    if [ -f "$FD/lock-home-during-recreate" ]; then chmod 500 "$AGENT_HOME"; fi
     if [ -f "$FD/write-during-recreate" ]; then cat "$FD/write-during-recreate" >> "$AGENT_HOME/.env"; rm "$FD/write-during-recreate"; fi
     exit $(cat "$FD/compose.rc" 2>/dev/null || echo 0) ;;
   exec)
@@ -372,6 +373,87 @@ describe('rollout', () => {
     await undo(opts())
     expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe(ENV)
     expect(fs.readFileSync(path.join(home, '.env.old'), 'utf-8')).toContain('MINE=1\n')
+  })
+
+  describe('when editing files throws partway', () => {
+    const backups = () => (fs.existsSync(path.join(dir, 'env-backups')) ? fs.readdirSync(path.join(dir, 'env-backups')) : [])
+    const expectPutBack = () => {
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+      expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
+      expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
+      expect(calls()).not.toMatch(/^compose/m)
+      expect(backups()).toEqual([])
+    }
+    let locked: string | null = null
+    afterEach(() => {
+      if (locked) fs.chmodSync(locked, 0o700)
+      locked = null
+    })
+
+    it('puts the agent back on a read-only profile, with no stack trace and no half move', async () => {
+      const prof = path.join(home, 'profiles', 'p1')
+      fs.mkdirSync(prof, { recursive: true })
+      fs.writeFileSync(path.join(prof, '.env'), ENV)
+      fs.chmodSync(prof, 0o500)
+      locked = prof
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).toMatch(/FAILED: .*EACCES/)
+      expect(r.lines.join('\n')).toMatch(/restored/i)
+      expectPutBack()
+      expect(fs.readFileSync(path.join(prof, '.env'), 'utf-8')).toBe(ENV)
+      expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+    })
+
+    it('puts the agent back when the registry has a typo, and does not overwrite the file', async () => {
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {},}')
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expectPutBack()
+      expect(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).toBe('{"agents": {},}')
+    })
+
+    it('puts the agent back when the audit log cannot be written', async () => {
+      fs.mkdirSync(path.join(dir, 'audit.jsonl'))
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expectPutBack()
+    })
+
+    it('blocks rather than throws on an .env it cannot read', async () => {
+      fs.chmodSync(path.join(home, '.env'), 0)
+      locked = path.join(home, '.env')
+      const r = await rollout(opts({ apply: true }))
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).toMatch(/BLOCKED: .*EACCES/)
+      expect(calls()).not.toMatch(/^compose/m)
+    })
+
+    it('keeps the backup and says to run undo when the restore itself fails', async () => {
+      writeFd('lock-home-during-recreate', '')
+      writeFd('verify.rc', '13')
+      writeFd('verify.out', 'gh-failed\n')
+      locked = home
+      const r = await rollout(opts({ apply: true }))
+      fs.chmodSync(home, 0o700)
+      fs.rmSync(path.join(fd, 'lock-home-during-recreate'))
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).toMatch(/ghkey undo mare/)
+      expect(backups()).toHaveLength(1)
+      expect((await undo(opts())).ok).toBe(true)
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+    })
+
+    it('undo reports a failure and can be run again', async () => {
+      await rollout(opts({ apply: true }))
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {},}')
+      const r = await undo(opts())
+      expect(r.ok).toBe(false)
+      expect(r.lines.join('\n')).toMatch(/ghkey undo mare/)
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {}}')
+      expect((await undo(opts())).ok).toBe(true)
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
+    })
   })
 
   it('undo with no backup says so and changes nothing', async () => {
