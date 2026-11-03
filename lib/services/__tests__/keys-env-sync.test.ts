@@ -38,6 +38,40 @@ describe('keys .env sync (assign / unassign / remove)', () => {
 
   const GH = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
+  describe('an agent marked no-anthropic', () => {
+    const ANT = 'sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    beforeEach(() => {
+      fs.mkdirSync(path.join(tmpHome, '.hermes-zdr'), { recursive: true })
+      fs.writeFileSync(path.join(tmpHome, '.hermes-zdr', '.hsm-no-anthropic'), '')
+    })
+
+    it('never has an Anthropic key written, by any route', () => {
+      const key = keys.add({ provider: 'anthropic', value: ANT, assignedTo: [] })
+      expect(keys.writeKeyToEnv('h_zdr', 'anthropic', ANT)).toBe(false)
+      keys.setAssignment(key.id, ['h_zdr', 'h_other'])
+      keys.resync(key.id)
+      keys.rotateValue(key.id, ANT + 'X')
+      expect(readEnv('zdr')).toBe('')
+      expect(readEnv('other')).toMatch(/^ANTHROPIC_API_KEY=/m)
+    })
+
+    it('does not show as assigned on paper', () => {
+      const key = keys.add({ provider: 'anthropic', value: ANT, assignedTo: [] })
+      keys.setAssignment(key.id, ['h_zdr', 'h_other'])
+      expect(keys.list().find((k) => k.id === key.id)?.assignedTo).toEqual(['h_other'])
+    })
+
+    it('refuses an Anthropic value filed under another provider', () => {
+      expect(keys.writeKeyToEnv('h_zdr', 'custom', ANT, { envVar: 'SOME_KEY' })).toBe(false)
+      expect(readEnv('zdr')).toBe('')
+    })
+
+    it('still takes other keys', () => {
+      expect(keys.writeKeyToEnv('h_zdr', 'github', GH)).toBe(true)
+      expect(readEnv('zdr')).toMatch(/^GITHUB_TOKEN=/m)
+    })
+  })
+
   // ASSUMPTION (bug): deleting a key leaves its var in each assigned agent's
   // .env — the agent keeps running with a credential the operator thinks is gone.
   it('remove() strips the key var from every assigned harness .env', () => {

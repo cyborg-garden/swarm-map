@@ -40,6 +40,15 @@ function fingerprintId(value: string): string {
 // is written to exactly one of these vars and the other is cleared.
 export const ANTHROPIC_ENV_VARS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_TOKEN'] as const
 
+// An empty file with this name in an agent's data dir keeps Anthropic out of that
+// agent for good: no key written to its .env, however the write is triggered, and
+// no Claude router from the base package. For agents promised zero data retention.
+export const NO_ANTHROPIC_MARKER = '.hsm-no-anthropic'
+
+export function anthropicBlocked(dataDir: string): boolean {
+  return fs.existsSync(path.join(dataDir, NO_ANTHROPIC_MARKER))
+}
+
 export function anthropicEnvVarForValue(value: string): 'ANTHROPIC_API_KEY' | 'ANTHROPIC_TOKEN' {
   const v = (value ?? '').trim()
   if (v.startsWith('sk-ant-api')) return 'ANTHROPIC_API_KEY'
@@ -455,6 +464,11 @@ export class KeysService {
     const dataDir = agentDataDir(name)
     const envPath = path.join(dataDir, '.env')
 
+    if ((provider === 'anthropic' || value.startsWith('sk-ant-')) && anthropicBlocked(dataDir)) {
+      this.audit.append({ who: 'admin', what: 'key:refused-no-anthropic', target: name })
+      return false
+    }
+
     let content = ''
     let exists = true
     try {
@@ -592,7 +606,10 @@ export class KeysService {
     const before = this.list().find((k) => k.id === id)
     if (!before) return []
     const prev = before.assignedTo ?? []
-    const next = assignedTo ?? []
+    // A refused agent must not show as assigned on paper either.
+    const next = (assignedTo ?? []).filter(
+      (h) => before.provider !== 'anthropic' || !anthropicBlocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)),
+    )
     const added = next.filter((h) => !prev.includes(h))
     const removed = prev.filter((h) => !next.includes(h))
 
