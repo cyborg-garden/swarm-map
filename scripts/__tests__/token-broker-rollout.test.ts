@@ -389,6 +389,89 @@ describe('rollout', () => {
     })
   })
 
+  describe('a .env that is not one simple line per value', () => {
+    const body = 'QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo='
+    const pem = (open: string, close: string) => [
+      `GITHUB_APP_PRIVATE_KEY=${open}${PEM_HEADER('RSA PRIVATE KEY')}`, body, `-----END RSA PRIVATE KEY-----${close}`,
+    ].join('\n')
+
+    it.each([['double quotes', '"', '"'], ['single quotes', "'", "'"], ['no quotes', '', '']])('strips a multi-line key in %s, body and all', (_n, a, b) => {
+      const left = stripGithubCredentials(`A=1\n${pem(a, b)}\nB=2\n`)
+      expect(left).toBe('A=1\nB=2\n')
+      expect(left).not.toContain(body)
+    })
+
+    it('strips a key whose first line is only the opening quote', () => {
+      const text = `A=1\nGITHUB_APP_PRIVATE_KEY="\n${PEM_HEADER('RSA PRIVATE KEY')}\n${body}\n-----END RSA PRIVATE KEY-----\n"\nB=2\n`
+      expect(scanEnvText(text)).toEqual(['GITHUB_APP_PRIVATE_KEY'])
+      expect(stripGithubCredentials(text)).toBe('A=1\nB=2\n')
+    })
+
+    it('leaves a multi-line value that is not GitHub, and what follows it', () => {
+      const text = `GOOGLE_PRIVATE_KEY="${PEM_HEADER('PRIVATE KEY')}\n${body}\n-----END PRIVATE KEY-----"\nB=2\n`
+      expect(stripGithubCredentials(text)).toBe(text)
+    })
+
+    it('does not treat a commented-out quote as opening a value', () => {
+      const text = `# GITHUB_ORG_NOTE="oops\nGITHUB_TOKEN=${FAKE_PAT}\nB="closed"\n`
+      expect(stripGithubCredentials(text)).toBe(`# GITHUB_ORG_NOTE="oops\nB="closed"\n`)
+    })
+
+    it('still finds a token inside a value it would not otherwise touch', () => {
+      expect(scanEnvText(`A="open\nGH_TOKEN=${FAKE_PAT}\nclose"\n`)).toEqual(['GH_TOKEN'])
+    })
+
+    it('rolls and undoes a multi-line key, back to the same bytes', async () => {
+      const text = `A=1\n${pem('"', '"')}\nB=2\n`
+      fs.writeFileSync(path.join(home, '.env'), text)
+      expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe('A=1\nB=2\n')
+      await undo(opts())
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(text)
+    })
+
+    it('undo merges a multi-line key whole into a file that moved on', async () => {
+      const text = `A=1\n${pem('"', '"')}\nB=2\n`
+      fs.writeFileSync(path.join(home, '.env'), text)
+      await rollout(opts({ apply: true }))
+      fs.appendFileSync(path.join(home, '.env'), 'C=3\n')
+      await undo(opts())
+      expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(`A=1\nB=2\nC=3\n${pem('"', '"')}\n`)
+    })
+
+    it('keeps a non-UTF-8 byte on another line through a roll and an undo', async () => {
+      const bytes = Buffer.concat([Buffer.from(`GITHUB_TOKEN=${FAKE_PAT}\nNAME=caf`), Buffer.from([0xe9]), Buffer.from('\n')])
+      fs.writeFileSync(path.join(home, '.env'), bytes)
+      expect((await rollout(opts({ apply: true }))).ok).toBe(true)
+      expect(fs.readFileSync(path.join(home, '.env')).equals(Buffer.concat([Buffer.from('NAME=caf'), Buffer.from([0xe9]), Buffer.from('\n')]))).toBe(true)
+      await undo(opts())
+      expect(fs.readFileSync(path.join(home, '.env')).equals(bytes)).toBe(true)
+    })
+
+    it('keeps real UTF-8 and a moved-on non-UTF-8 byte through a merging undo', async () => {
+      const bytes = Buffer.concat([Buffer.from(`GITHUB_TOKEN=${FAKE_PAT}\nNAME=Māori\nOLD=caf`), Buffer.from([0xe9]), Buffer.from('\n')])
+      fs.writeFileSync(path.join(home, '.env'), bytes)
+      await rollout(opts({ apply: true }))
+      fs.appendFileSync(path.join(home, '.env'), 'NEW=1\n')
+      await undo(opts())
+      const after = fs.readFileSync(path.join(home, '.env'))
+      expect(after.includes(Buffer.from('NAME=Māori'))).toBe(true)
+      expect(after.includes(Buffer.from([0x63, 0x61, 0x66, 0xe9]))).toBe(true)
+      expect(after.includes(Buffer.from(`GITHUB_TOKEN=${FAKE_PAT}`))).toBe(true)
+    })
+
+    it('keeps a non-UTF-8 byte in a login file', async () => {
+      const file = path.join(home, 'home/.git-credentials')
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      const bytes = Buffer.concat([Buffer.from(`https://x:${FAKE_PAT}@github.com\nhttps://caf`), Buffer.from([0xe9]), Buffer.from(':pw@gitlab.example.com\n')])
+      fs.writeFileSync(file, bytes)
+      await rollout(opts({ apply: true }))
+      expect(fs.readFileSync(file).includes(Buffer.from([0xe9]))).toBe(true)
+      await undo(opts())
+      expect(fs.readFileSync(file).equals(bytes)).toBe(true)
+    })
+  })
+
   it('rejects an agent name that could escape the home root', async () => {
     const r = await rollout(opts({ agent: '../evil', apply: true }))
     expect(r.ok).toBe(false)

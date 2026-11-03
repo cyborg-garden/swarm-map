@@ -79,10 +79,12 @@ export function defaultKeyPath(): string {
 
 function credentialNames(text: string): string[] {
   const names = new Set<string>()
-  for (const line of text.split('\n')) {
+  const lines = text.split('\n')
+  for (const [i, line] of lines.entries()) {
     const m = LINE_RE.exec(line.replace(/\r$/, ''))
     if (!m || !m[2].trim()) continue
-    const value = m[2].trim()
+    // Only the opening quote on this line: a pasted key starts on the next one.
+    const value = /^["']$/.test(m[2].trim()) ? `${m[2].trim()}${lines[i + 1] ?? ''}` : m[2].trim()
     if ((GITHUB_CREDENTIAL_VARS as readonly string[]).includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))) names.add(m[1])
   }
   return [...names]

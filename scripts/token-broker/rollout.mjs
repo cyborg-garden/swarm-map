@@ -30,22 +30,68 @@ const TOKEN_RE = /^["']?(?:gh[pousr]_|github_pat_)/
 const PEM_RE = /^["']?(?:-----BEGIN|LS0tLS1CRUdJTi)/
 const GITHUB_NAME_RE = /GITHUB|(?:^|_)GH(?:_|$)/i
 
-function credentialName(line) {
-  const m = LINE_RE.exec(line.replace(/\r$/, ''))
-  if (!m) return null
-  const value = m[2].trim()
-  const hit = CREDENTIAL_VARS.includes(m[1]) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(m[1]))
-  return hit ? m[1] : null
+function isCredential(name, value) {
+  return CREDENTIAL_VARS.includes(name) || TOKEN_RE.test(value) || (PEM_RE.test(value) && GITHUB_NAME_RE.test(name))
+}
+
+function closesQuote(text, quote) {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\') i++
+    else if (text[i] === quote) return true
+  }
+  return false
+}
+
+// A key pasted with its line breaks spreads over several lines, and leaving the body
+// behind would leave the secret with nothing to flag it. It ends at the closing quote,
+// or at the PEM footer if it has no quotes. Another NAME=value line means the quote was
+// never closed, so that line is someone else's and the value is just its first line.
+function lastLineOfValue(lines, start, value) {
+  const quote = /^["']/.test(value) ? value[0] : null
+  if (quote && closesQuote(value.slice(1), quote)) return start
+  const unquotedPem = !quote && value.startsWith('-----BEGIN') && !value.includes('-----END')
+  if (!quote && !unquotedPem) return start
+  for (let i = start + 1; i < lines.length; i++) {
+    const m = LINE_RE.exec(lines[i].replace(/\r$/, ''))
+    if (m && !/^=*$/.test(m[2].trim())) return start
+    if (quote ? closesQuote(lines[i], quote) : lines[i].includes('-----END')) return i
+  }
+  return start
+}
+
+/** A .env body as entries: each credential whole, every other line on its own. */
+function envEntries(text) {
+  const lines = text.split('\n')
+  const entries = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = LINE_RE.exec(lines[i].replace(/\r$/, ''))
+    const value = m ? m[2].trim() : ''
+    // Only the opening quote on this line: the value starts on the next one.
+    const seen = /^["']$/.test(value) ? `${value}${lines[i + 1] ?? ''}` : value
+    if (!m || !isCredential(m[1], seen)) {
+      entries.push({ name: null, comment: false, lines: [lines[i]] })
+      continue
+    }
+    const comment = /^[ \t]*#/.test(lines[i])
+    const last = comment ? i : lastLineOfValue(lines, i, value)
+    entries.push({ name: m[1], comment, lines: lines.slice(i, last + 1) })
+    i = last
+  }
+  return entries
 }
 
 /** Names of credential variables in a .env body. Names only, by construction. */
 export function scanEnvText(text) {
-  return [...new Set(text.split('\n').map(credentialName).filter(Boolean))]
+  return [...new Set(envEntries(text).map((e) => e.name).filter(Boolean))]
 }
 
 export function stripGithubCredentials(text) {
-  return text.split('\n').filter((line) => !credentialName(line)).join('\n')
+  return envEntries(text).filter((e) => !e.name).flatMap((e) => e.lines).join('\n')
 }
+
+// Every byte of a file maps to one character and back, so a byte that isn't valid UTF-8
+// survives an edit and undo stays exact. All the patterns here only look at ASCII.
+const readBytes = (file) => fs.readFileSync(file, 'latin1')
 
 // Git and gh keep their logins outside .env. A short-lived ghs_ token is what the broker
 // itself hands out, so only anything else counts. Keep these in step with
@@ -129,7 +175,7 @@ function agentHomes(root) {
 /** Agents whose .env still has the App key, so the old key can't be deleted yet. */
 export function agentsHoldingAppKey(root) {
   return agentHomes(root)
-    .filter((a) => envFiles(a.home).some((f) => /^GITHUB_APP_PRIVATE_KEY_B64=/m.test(fs.readFileSync(f, 'utf-8'))))
+    .filter((a) => envFiles(a.home).some((f) => /^GITHUB_APP_PRIVATE_KEY_B64=/m.test(readBytes(f))))
     .map((a) => a.agent)
 }
 
@@ -151,7 +197,7 @@ function envFiles(home) {
 function strayEnvCopies(home) {
   return [home, ...profileDirs(home)]
     .flatMap((d) => fs.readdirSync(d).filter((n) => n.startsWith('.env') && n !== '.env' && n !== '.env.example').map((n) => path.join(d, n)))
-    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
+    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && scanEnvText(readBytes(f)).length > 0)
 }
 
 // Both the tool HOME (home/) and the gateway HOME (the agent home itself).
@@ -159,18 +205,18 @@ function loginFilesWithToken(home) {
   return [home, ...profileDirs(home)]
     .flatMap((d) => [d, path.join(d, 'home')])
     .flatMap((base) => [path.join(base, '.git-credentials'), path.join(base, '.config', 'gh', 'hosts.yml')])
-    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && LOGIN_FILES[path.basename(f)].holds(fs.readFileSync(f, 'utf-8')))
+    .filter((f) => fs.statSync(f, { throwIfNoEntry: false })?.isFile() && LOGIN_FILES[path.basename(f)].holds(readBytes(f)))
 }
 
 function stripLoginFile(file) {
-  const left = LOGIN_FILES[path.basename(file)].strip(fs.readFileSync(file, 'utf-8'))
+  const left = LOGIN_FILES[path.basename(file)].strip(readBytes(file))
   if (left.split('\n').some((line) => line.trim() && !line.startsWith('#'))) writeLikeOriginal(file, left)
   else fs.rmSync(file)
 }
 
 function writeLikeOriginal(file, content) {
   const tmp = `${file}.broker.tmp`
-  fs.writeFileSync(tmp, content, { mode: 0o600 })
+  fs.writeFileSync(tmp, content, { mode: 0o600, encoding: 'latin1' })
   fs.chmodSync(tmp, 0o600)
   fs.renameSync(tmp, file)
 }
@@ -206,9 +252,8 @@ function makeBackup({ dir, agent, home }) {
  */
 export function restoreCredentialLines(current, backup) {
   if (stripGithubCredentials(backup) === current) return backup
-  const live = (line) => (/^[ \t]*#/.test(line) ? null : credentialName(line))
-  const held = new Set(current.split('\n').map(live).filter(Boolean))
-  const missing = backup.split('\n').filter((line) => credentialName(line) && !held.has(credentialName(line)))
+  const held = new Set(envEntries(current).filter((e) => e.name && !e.comment).map((e) => e.name))
+  const missing = envEntries(backup).filter((e) => e.name && !held.has(e.name)).flatMap((e) => e.lines)
   if (!missing.length) return current
   const gap = current === '' || current.endsWith('\n') ? '' : '\n'
   return `${current}${gap}${missing.join('\n')}\n`
@@ -219,13 +264,13 @@ function restoreBackup(where, home) {
     .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]))
   for (const f of walk(where)) {
     const target = path.join(home, path.relative(where, f))
-    const saved = fs.readFileSync(f, 'utf-8')
+    const saved = readBytes(f)
     if (!fs.existsSync(target)) {
       fs.mkdirSync(path.dirname(target), { recursive: true })
       writeLikeOriginal(target, saved)
       continue
     }
-    const current = fs.readFileSync(target, 'utf-8')
+    const current = readBytes(target)
     const login = LOGIN_FILES[path.basename(f)]
     const merged = login ? login.restore(current, saved) : restoreCredentialLines(current, saved)
     if (merged !== current) writeLikeOriginal(target, merged)
@@ -380,7 +425,7 @@ export async function rollout({
   const { problems, warnings, port, c } = await preflight({ dir, root: homeRoot, agent, home, run, acceptLoss })
   try {
     for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
-      const names = scanEnvText(fs.readFileSync(f, 'utf-8'))
+      const names = scanEnvText(readBytes(f))
       lines.push(`${path.relative(home, f)}: ${names.length ? names.join(', ') : 'clean'}`)
     }
     for (const f of loginFilesWithToken(home)) lines.push(`${path.relative(home, f)}: a GitHub token`)
@@ -413,7 +458,7 @@ export async function rollout({
   try {
     const logins = loginFilesWithToken(home)
     const hasCreds = logins.length > 0 || [...envFiles(home), ...strayEnvCopies(home)]
-      .some((f) => scanEnvText(fs.readFileSync(f, 'utf-8')).length > 0)
+      .some((f) => scanEnvText(readBytes(f)).length > 0)
     // A re-run on a clean agent has nothing to save.
     if (hasCreds) backup = makeBackup({ dir, agent, home })
 
@@ -423,7 +468,7 @@ export async function rollout({
       enrolledNow = true
     }
     for (const f of [...envFiles(home), ...strayEnvCopies(home)]) {
-      const text = fs.readFileSync(f, 'utf-8')
+      const text = readBytes(f)
       const stripped = stripGithubCredentials(text)
       if (stripped !== text) writeLikeOriginal(f, stripped)
     }

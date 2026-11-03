@@ -10,6 +10,17 @@ import { CREDENTIAL_VARS, scanEnvText, stripGithubCredentials, gitCredentialsHol
 // Built at runtime: the sanitization gate reads a literal header as a real key.
 const PEM_HEADER = (kind: string) => ['-----BEGIN', kind].join(' ') + '-----'
 
+describe('a key pasted with its line breaks', () => {
+  it('is flagged when its first line is only the opening quote, as the strip sees it', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-multiline-'))
+    const body = `GITHUB_APP_PRIVATE_KEY="\n${PEM_HEADER('RSA PRIVATE KEY')}\nQUJD\n"\n`
+    fs.writeFileSync(path.join(root, '.env'), body)
+    const r = checkGithubCredentials({ agents: [{ name: 'mare', dataDir: root }], keyPath: path.join(root, 'private-key.pem') })
+    expect(r.pending.flatMap((f) => f.vars)).toEqual(scanEnvText(body))
+    fs.rmSync(root, { recursive: true, force: true })
+  })
+})
+
 describe('checkGithubCredentials', () => {
   let root: string
   let keyPath: string
