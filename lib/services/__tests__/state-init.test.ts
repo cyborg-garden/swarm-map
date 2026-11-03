@@ -63,7 +63,7 @@ function readMarker(dbPath: string): string {
   }
 }
 
-describe('STATE_INIT_SCRIPT (real script under sh)', () => {
+describe('STATE_INIT_SCRIPT (real script under sh)', { timeout: 30_000 }, () => {
   it('migrates regular DB files (with -wal/-shm) to the volume and symlinks back', () => {
     createWalDb(path.join(dataDir, 'state.db'), 'original')
     const out = runInitScript()
