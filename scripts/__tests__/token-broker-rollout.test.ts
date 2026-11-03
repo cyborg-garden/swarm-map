@@ -505,6 +505,57 @@ describe('rollout', () => {
       expect(await out()).toContain('WILL BREAK: scripts/mcp.sh (GITHUB_PERSONAL_ACCESS_TOKEN)')
     })
 
+    describe('a script that tries gh before .env', () => {
+      // The shape of the bundled skills/github/github-auth/scripts/gh-env.sh.
+      const GH_ENV = [
+        '#!/usr/bin/env bash',
+        'GITHUB_TOKEN="${GITHUB_TOKEN:-}"',
+        'if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then',
+        '    GH_AUTH_METHOD="gh"',
+        'elif [ -n "$GITHUB_TOKEN" ]; then',
+        '    GH_AUTH_METHOD="curl"',
+        'elif _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ]; then',
+        '    GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1)',
+        '    if [ -n "$GITHUB_TOKEN" ]; then',
+        '        GH_AUTH_METHOD="curl"',
+        '    fi',
+        'fi',
+        '',
+      ].join('\n')
+
+      it('says no new loss, and --apply does not count it as needing a fix', async () => {
+        put('skills/github/github-auth/scripts/gh-env.sh', GH_ENV)
+        const dry = await out()
+        expect(dry).not.toContain('WILL BREAK')
+        expect(dry).toMatch(/No new loss: skills\/github\/github-auth\/scripts\/gh-env\.sh \(GITHUB_TOKEN\)\. These try gh first/)
+        const applied = (await rollout(opts({ apply: true }))).lines.join('\n')
+        expect(applied).not.toContain('still need fixing')
+      })
+
+      it.each([
+        ['reads .env anyway after the gh check', `${GH_ENV}TOKEN=$(grep ^GITHUB_TOKEN= ~/.hermes/.env)\n`],
+        ['reads .env before the gh check', `TOKEN=$(grep ^GITHUB_TOKEN= ~/.hermes/.env)\n${GH_ENV}`],
+        ['reads .env when gh works', 'if gh auth status; then\n  T=$(grep ^GITHUB_TOKEN= .env)\nelse\n  exit 1\nfi\n'],
+        ['takes the .env branch first when gh fails', 'if ! gh auth status; then\n  echo no\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\nfi\n'],
+        ['only checks gh, with no fallback branch', 'gh auth status || exit 1\nT=$(grep ^GITHUB_TOKEN= .env)\n'],
+        ['has gh as one option of an or', 'if [ -z "$X" ] || gh auth status; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\nfi\n'],
+        ['never closes its if', 'if gh auth status; then\n  echo a\nelse\n  T=$(grep ^GITHUB_TOKEN= .env)\n'],
+      ])('still says WILL BREAK for a script that %s', async (_name, script) => {
+        put('scripts/s.sh', script)
+        expect(await out()).toContain('WILL BREAK: scripts/s.sh (GITHUB_TOKEN)')
+      })
+
+      it('still says WILL BREAK for the same shape using the token Hermes passes through', async () => {
+        put('scripts/s.sh', GH_ENV.replaceAll('GITHUB_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN'))
+        expect(await out()).toContain('WILL BREAK: scripts/s.sh (GITHUB_PERSONAL_ACCESS_TOKEN)')
+      })
+
+      it('only reads shell this way, so a Python comment about gh changes nothing', async () => {
+        put('scripts/s.py', '# if gh auth status; then\nload(".env")\nos.environ["GITHUB_TOKEN"]\n')
+        expect(await out()).toContain('WILL BREAK: scripts/s.py (GITHUB_TOKEN)')
+      })
+    })
+
     it('says no new loss for the variables Hermes already hides from tools and cron', async () => {
       put('scripts/env-only.py', 'os.environ["GITHUB_TOKEN"]\n')
       put('cron/jobs.json', '{"prompt":"use $GH_TOKEN"}')

@@ -79,7 +79,10 @@ agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on th
   `cron/output`. Hermes already hides `GITHUB_TOKEN` and `GH_TOKEN` from tool and cron
   subprocesses and gives `GH_TOKEN` back from the broker, so reading those from the
   environment is `No new loss`. Reading `.env` itself, or the PAT variable Hermes does
-  pass on, is `WILL BREAK`. Notes that only mention it with `.env` get `Check`.
+  pass on, is `WILL BREAK`. So is a script that reads `.env` unless it's a shell `if` on
+  `gh auth status` or `gh auth token` with the `.env` read only in a later branch, like the
+  bundled `gh-env.sh`: a roll needs `gh` to work, so that's `No new loss`. Notes that only
+  mention it with `.env` get `Check`.
 - A root or profile `config.yaml` using those variables, or mentioning copilot. This
   blocks unless you pass `--accept-loss`.
 - A PAT in a `.netrc` or a repo's `.git/config` URL anywhere under the agent's home. The

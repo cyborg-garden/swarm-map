@@ -485,6 +485,33 @@ function readTextIfSmall(file) {
 }
 
 /**
+ * A shell script whose first choice is gh and that only reads .env when gh fails, like the
+ * bundled gh-env.sh. A roll only succeeds if gh works, so the .env branch never runs. Anything
+ * looser stays WILL BREAK: gh checked and .env read anyway is a real loss.
+ */
+function triesGhFirst(file, text) {
+  if (!/\.(?:sh|bash)$/i.test(file) && !/^#!.*\b(?:ba|z|k|da)?sh\b/.test(text)) return false
+  // Whole-line comments only: a # inside a line may be part of a string.
+  const lines = text.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l))
+  const start = lines.findIndex((l) => /^\s*if\s+(?!!)(?:(?!\|\|).)*\bgh\s+auth\s+(?:status|token)\b(?:(?!\|\|).)*$/.test(l))
+  if (start < 0) return false
+  let depth = 0
+  let inFallback = false
+  let end = -1
+  for (let i = start; i < lines.length; i++) {
+    const l = lines[i]
+    if (/^\s*if\b/.test(l)) depth++
+    if (depth === 1 && i > start && /^\s*(?:elif|else)\b/.test(l)) inFallback = true
+    if (!inFallback && READS_ENV_FILE.test(l)) return false
+    if (/(?:^|;)\s*fi\b/.test(l) && --depth === 0) {
+      end = i
+      break
+    }
+  }
+  return end >= 0 && lines.every((l, i) => (i >= start && i <= end) || !READS_ENV_FILE.test(l))
+}
+
+/**
  * Hermes already strips GITHUB_TOKEN and GH_TOKEN from tool and cron subprocesses, and
  * gives GH_TOKEN back from the broker, so a script reading those from its environment
  * loses nothing new. It passes GITHUB_PERSONAL_ACCESS_TOKEN through, and a script reading
@@ -492,7 +519,7 @@ function readTextIfSmall(file) {
  * Names only: the contents decide a label and go no further.
  */
 function githubUsers(home) {
-  const found = { willBreak: [], check: [], noLoss: [] }
+  const found = { willBreak: [], check: [], noLoss: [], ghFirst: [] }
   for (const root of homeAndProfiles(home)) {
     const skip = (full, name) => IGNORED_DIRS.has(name) || full === path.join(root, 'skills', '.archive') || full === path.join(root, 'cron', 'output')
     for (const sub of ['scripts', 'skills', 'cron']) {
@@ -505,6 +532,7 @@ function githubUsers(home) {
         const entry = `${path.relative(home, file)} (${vars.join(', ')})`
         if (!READS_ENV_FILE.test(text) && !vars.includes('GITHUB_PERSONAL_ACCESS_TOKEN')) found.noLoss.push(entry)
         else if (/\.(?:md|txt)$/i.test(file)) found.check.push(entry)
+        else if (!vars.includes('GITHUB_PERSONAL_ACCESS_TOKEN') && triesGhFirst(file, text)) found.ghFirst.push(entry)
         else found.willBreak.push(entry)
       }
     }
@@ -584,6 +612,7 @@ export async function rollout({
   for (const u of users.willBreak) lines.push(`WILL BREAK: ${u}. It reads a GitHub line that this move removes from .env.`)
   for (const u of users.check) lines.push(`Check: ${u}. These notes mention it with .env, so they may tell the agent to read a line this move removes.`)
   if (users.noLoss.length) lines.push(`No new loss: ${users.noLoss.join(', ')}. Hermes already hides these from tools and cron.`)
+  if (users.ghFirst.length) lines.push(`No new loss: ${users.ghFirst.join(', ')}. These try gh first and only read .env if it fails, and the move only succeeds if gh works.`)
   for (const w of warnings) lines.push(`warning: ${w}`)
   for (const p of problems) lines.push(`BLOCKED: ${p}`)
   if (problems.length) return { ok: false, applied: false, lines }
