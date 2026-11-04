@@ -73,6 +73,6 @@ export async function PUT(
     success: true,
     admins: result.admins,
     ...(restarted === undefined ? {} : { restarted }),
-    ...(result.dmEnvError ? { warning: result.dmEnvError } : {}),
+    ...(result.dmEnvWarning ? { warning: result.dmEnvWarning } : {}),
   })
 }

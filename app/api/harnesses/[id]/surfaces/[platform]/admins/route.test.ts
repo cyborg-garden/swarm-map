@@ -88,8 +88,8 @@ describe('PUT admins', () => {
     expect(await res.json()).toMatchObject({ restarted: false })
   })
 
-  it('surfaces a failed .env write instead of reporting a clean save', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvError: 'DM list not updated' })
+  it('passes a DM list warning on to the caller instead of reporting a clean save', async () => {
+    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvWarning: 'DM list not updated' })
     const res = await putDiscord()
     expect(await res.json()).toMatchObject({ success: true, warning: 'DM list not updated' })
     expect(services.harness.restart).not.toHaveBeenCalled()

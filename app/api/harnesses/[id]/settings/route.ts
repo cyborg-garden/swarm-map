@@ -3,12 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { buildSettingsEnvValue } from '@/lib/env-helpers'
-import {
-  DISCORD_DM_USERS_VAR,
-  SIGNAL_DENY_ALL_USERS,
-  discordDmAfterAllowlistEdit,
-  setEnvLine,
-} from '@/lib/surfaces/dm-allowlist'
+import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { resolveIdentifier, expandSignalAllowlist, expandTelegramAllowlist, expandDiscordAllowlist } from '@/lib/resolvers'
 import {
   PLATFORM_VARS as DERIVED_PLATFORM_VARS,
@@ -22,7 +17,6 @@ import {
   DISCORD_THREAD_GATE_VAR,
   effectiveDiscordThreadGate,
   hasDiscordSurface,
-  readEnvValue,
   type ThreadGateSource,
 } from '@/lib/services/discord-thread-gate'
 import { adapterForRuntime } from '@/lib/services/harness'
@@ -62,16 +56,6 @@ function agentDataDir(harnessId: string): string {
 // never be "0", so this matches nothing and fails closed. Mapped back to an
 // empty list on read so the console still shows "no channels approved".
 const DISCORD_DENY_ALL_CHANNELS_SENTINEL = '0'
-
-// True when this surface's allowlist also stands in as its admin list. Anything
-// else, including a store that cannot be read, leaves the DM list alone.
-function allowlistDoublesAsAdmins(id: string, platform: string): boolean {
-  try {
-    return services.surfaceAdmins.listAdmins(id, platform).source === 'allowlist'
-  } catch {
-    return false
-  }
-}
 
 // Env var names that map to permission settings, per platform.
 //
@@ -664,15 +648,6 @@ export async function PUT(
       content = content.replace(usersRegex, () => `${vars.users}=${usersValue}`)
     } else {
       content = content.trimEnd() + `\n${vars.users}=${usersValue}\n`
-    }
-
-    // Discord's DM list follows a real admin change only: see
-    // discordDmAfterAllowlistEdit for why a whole-document save cannot move it.
-    if (platform === 'discord' && hasDiscordSurface(content) && allowlistDoublesAsAdmins(id, platform)) {
-      const nextDm = discordDmAfterAllowlistEdit(
-        readEnvValue(content, DISCORD_DM_USERS_VAR), existingEnv[vars.users], usersValue,
-      )
-      if (nextDm !== null) content = setEnvLine(content, DISCORD_DM_USERS_VAR, nextDm)
     }
 
     // Groups — explicit list takes priority, then allowAllGroups → *, else empty.

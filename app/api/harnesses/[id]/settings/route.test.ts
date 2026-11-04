@@ -1364,13 +1364,13 @@ describe('Settings API: DM lists survive saves', () => {
   const B = '100000000000000002'
   let env = ''
   let written: string | undefined
-  const listAdmins = vi.fn()
+  // No explicit admins: the allowlist doubles as the admin list, the case where
+  // an allowlist edit could be mistaken for an admin change.
+  const listAdmins = vi.fn(() => ({ source: 'allowlist', admins: [], allowAllDm: false }))
 
   beforeEach(() => {
     vi.clearAllMocks()
     written = undefined
-    listAdmins.mockReset()
-    listAdmins.mockReturnValue({ source: 'allowlist', admins: [], allowAllDm: false })
     ;(services.surfaceAdmins as unknown as { listAdmins: unknown }).listAdmins = listAdmins
     vi.mocked(buildSettingsEnvValue).mockImplementation((_p, all, users) =>
       users.length ? users.join(',') : all ? '*' : '')
@@ -1419,48 +1419,28 @@ describe('Settings API: DM lists survive saves', () => {
     expect(dm()).toBeNull()
   })
 
-  it('adding to the allowlist of a new closed agent opens DMs for that user', async () => {
+  it('adding a channel user never adds them to DMs, even when the DM list matched the allowlist', async () => {
+    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
+    await put('discord', [A, B])
+    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('adding to the allowlist of a closed agent keeps DMs closed', async () => {
     env = 'DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=\nDISCORD_DM_ALLOWED_USERS=\n'
     await put('discord', [A])
-    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+    expect(dm()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
-  it('removing a user removes them from a DM list that matched', async () => {
+  it('removing a user from the allowlist leaves the DM list as it is', async () => {
     env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A},${B}\nDISCORD_DM_ALLOWED_USERS=${A},${B}\n`
     await put('discord', [A])
-    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
-  })
-
-  it('does not widen a hand-set DM list when someone joins the allowlist', async () => {
-    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A},${B}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
-    await put('discord', [A, B, '100000000000000003'])
-    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A},${B}`])
   })
 
   it('an allow-all allowlist never turns the DM gate off', async () => {
     env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
     await put('discord', [], true)
     expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
-  })
-
-  it('with an explicit admin list, allowlist edits leave the DM list to the admins', async () => {
-    listAdmins.mockReturnValue({ source: 'explicit', admins: [A], allowAllDm: false })
-    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
-    await put('discord', [A, B])
-    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
-  })
-
-  it('leaves the DM list alone if the admin source cannot be read', async () => {
-    listAdmins.mockImplementation(() => { throw new Error('store unreadable') })
-    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
-    await put('discord', [A, B])
-    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
-  })
-
-  it('writes no DM line on an agent with no Discord token', async () => {
-    env = 'DISCORD_ALLOWED_USERS=\n'
-    await put('discord', [A])
-    expect(dm()).toBeNull()
   })
 
   it('Signal GET shows the deny value as an empty list, not a phantom user', async () => {

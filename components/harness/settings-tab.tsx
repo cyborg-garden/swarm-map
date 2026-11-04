@@ -244,8 +244,9 @@ if (loading) {
           </label>
         </div>
         <p className="text-xs text-muted-foreground">
-          This choice is saved but does not change who can DM the agent. On Discord only the
-          agent&apos;s admins can DM it. On other surfaces, users on the allowlist can.
+          This choice is saved but does not change who can DM the agent. On Discord, DMs are
+          limited to the DM list (DISCORD_DM_ALLOWED_USERS), and those users must also pass the
+          allowlist. On other surfaces, users on the allowlist can DM it.
         </p>
       </div>
 

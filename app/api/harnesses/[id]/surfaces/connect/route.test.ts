@@ -324,6 +324,28 @@ describe('POST connect: admins-only DMs', () => {
     expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
+  it('Discord: a missing DM list is not seeded from the whole allowlist', async () => {
+    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A},${B}\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+  })
+
+  it('Discord: a closed list is not filled from an explicit list just because admins were named', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: [B] })
+    readSpy.mockReturnValue('DISCORD_DM_ALLOWED_USERS=\n')
+    await connect('discord', { token: 't', adminUser: A })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+  })
+
+  it('Discord: warns when a seeded explicit admin is not on the allowlist', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: [B] })
+    readSpy.mockReturnValue('X=1\n')
+    const res = await connect('discord', { token: 't' })
+    const body = await res.json() as { warning?: string }
+    expect(body.warning).toContain('DISCORD_ALLOWED_USERS')
+    expect(body.warning).toContain(B)
+  })
+
   it('Discord seeds the admins named at connect', async () => {
     readSpy.mockReturnValue('X=1\n')
     await connect('discord', { token: 't', adminUser: A })

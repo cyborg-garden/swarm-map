@@ -9,7 +9,7 @@ import { expandSignalAllowlist, resolveTelegramAdmins, type ResolvedIdentity } f
 import { USERS_VARS } from '@/lib/surfaces/derive'
 import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-roles'
 import { readEnvValue } from '@/lib/services/discord-thread-gate'
-import { DISCORD_DM_USERS_VAR, setEnvLine, validIdentities } from '@/lib/surfaces/dm-allowlist'
+import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, setEnvLine, validIdentities } from '@/lib/surfaces/dm-allowlist'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -115,27 +115,32 @@ export async function POST(
   content = mergeEnvVars(content, envVars)
 
   // Ensure policy defaults exist for new connections (empty = approved-only).
-  // Discord's DM list and Signal's user list start as this agent's admins.
+  // Discord's DM list and Signal's user list start as this agent's admins: its
+  // explicit list, or on Discord the admins named here. Never the whole allowlist,
+  // which also holds channel users.
+  let explicitAdmins: string[] | undefined
   let dmAdmins: string[] = []
   if (platform === 'discord' || platform === 'signal') {
-    let explicit: string[] | undefined
     try {
       const list = services.surfaceAdmins.listAdmins(id, platform)
-      if (list.source === 'explicit') explicit = list.admins
-    } catch {} // unreadable store: stay on the allowlist, which fails closed
-    const usersRaw = readEnvValue(content, USERS_VARS[platform])
-    dmAdmins = explicit ?? (usersRaw ?? '').split(',')
+      if (list.source === 'explicit') explicitAdmins = list.admins
+    } catch {} // unreadable store: no explicit admins, which fails closed
+    dmAdmins = explicitAdmins ?? (platform === 'discord' ? (config.adminUser ?? '').split(',') : [])
     // Sealed-sender DMs carry only a UUID, so a phone-only list would not match.
-    if (platform === 'signal' && explicit?.length && usersRaw === undefined) {
-      dmAdmins = await expandSignalAllowlist(id, explicit)
+    if (platform === 'signal' && dmAdmins.length > 0 && readEnvValue(content, USERS_VARS.signal) === undefined) {
+      dmAdmins = await expandSignalAllowlist(id, dmAdmins)
     }
   }
   content = ensurePolicyDefaults(content, platform, dmAdmins)
   // An agent deployed with a Discord token already has a closed list, so naming
-  // admins here has to open it. A list with anything in it is left alone.
-  if (platform === 'discord' && config.adminUser && !readEnvValue(content, DISCORD_DM_USERS_VAR)) {
+  // admins here has to open it. A list with anything in it is left alone, and an
+  // explicit admin list is changed through the admins route, not here.
+  if (platform === 'discord' && config.adminUser && !explicitAdmins && !readEnvValue(content, DISCORD_DM_USERS_VAR)) {
     content = setEnvLine(content, DISCORD_DM_USERS_VAR, validIdentities('discord', dmAdmins).join(','))
   }
+  const dmWarning = platform === 'discord'
+    ? discordDmRefusedWarning(content, validIdentities('discord', dmAdmins))
+    : undefined
 
   // A newly connected Discord agent joins the fleet bot-sender role gate now,
   // not at the next server start.
@@ -202,5 +207,12 @@ export async function POST(
     // written, so a later start/restart will pick it up. Don't fail the connect.
   }
 
-  return NextResponse.json({ success: true, envVars: Object.keys(envVars), restarted, configUpdated, ...(configError ? { configError } : {}) })
+  return NextResponse.json({
+    success: true,
+    envVars: Object.keys(envVars),
+    restarted,
+    configUpdated,
+    ...(configError ? { configError } : {}),
+    ...(dmWarning ? { warning: dmWarning } : {}),
+  })
 }

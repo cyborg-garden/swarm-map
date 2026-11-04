@@ -4,7 +4,7 @@ import {
   DISCORD_DM_USERS_VAR,
   SIGNAL_DENY_ALL_USERS,
   discordDmAfterAdminSet,
-  discordDmAfterAllowlistEdit,
+  discordDmRefusedAdmins,
   setEnvLine,
   validIdentities,
 } from './dm-allowlist'
@@ -45,51 +45,54 @@ describe('setEnvLine', () => {
   })
 })
 
-describe('discordDmAfterAdminSet (an explicit admin change)', () => {
-  it('sets the list to the admins', () => {
-    expect(discordDmAfterAdminSet(A, [A, B])).toBe(`${A},${B}`)
+describe('discordDmAfterAdminSet', () => {
+  it('follows an admin change when the DM list equalled the previous admins', () => {
+    expect(discordDmAfterAdminSet(A, [A], [A, B])).toEqual({ action: 'write', value: `${A},${B}` })
+    expect(discordDmAfterAdminSet(`${B},${A}`, [A, B], [C])).toEqual({ action: 'write', value: C })
+    expect(discordDmAfterAdminSet(A, [A], [])).toEqual({ action: 'write', value: '' })
   })
-  it('closes DMs when the admins are cleared', () => {
-    expect(discordDmAfterAdminSet(A, [])).toBe('')
+  it('a closed list opens for a first admin list (nothing was set by hand)', () => {
+    expect(discordDmAfterAdminSet(undefined, [], [A])).toEqual({ action: 'write', value: A })
+    expect(discordDmAfterAdminSet('', [], [A])).toEqual({ action: 'write', value: A })
   })
-  it('opens a closed list for a named admin', () => {
-    expect(discordDmAfterAdminSet(undefined, [A])).toBe(A)
-    expect(discordDmAfterAdminSet('', [A])).toBe(A)
+  it('does nothing when the list already matches, in any order', () => {
+    expect(discordDmAfterAdminSet(`${B},${A}`, [C], [A, B])).toEqual({ action: 'none' })
   })
-  it('asks for no write when the set already matches, in any order', () => {
-    expect(discordDmAfterAdminSet(`${B},${A}`, [A, B])).toBeNull()
+  it('saving the same admins does not widen a list that differs', () => {
+    expect(discordDmAfterAdminSet(A, [A, B], [A, B])).toEqual({ action: 'left' })
+  })
+  it('a first admin list does not drop or add to a hand-set list', () => {
+    expect(discordDmAfterAdminSet(A, [], [B])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet(A, [], [A, B])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet(A, [], [])).toEqual({ action: 'left' })
+  })
+  it('a closed list stays closed once an admin list already exists', () => {
+    expect(discordDmAfterAdminSet('', [A], [A, B])).toEqual({ action: 'left' })
   })
   it('leaves a deliberate * alone', () => {
-    expect(discordDmAfterAdminSet('*', [A])).toBeNull()
-    expect(discordDmAfterAdminSet(`${A},*`, [])).toBeNull()
+    expect(discordDmAfterAdminSet('*', [], [A])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet(`${A},*`, [A], [])).toEqual({ action: 'left' })
   })
 })
 
-describe('discordDmAfterAllowlistEdit (allowlist edit while it doubles as the admin set)', () => {
-  it('never writes on a save that did not change the allowlist', () => {
-    expect(discordDmAfterAllowlistEdit('', A, A)).toBeNull()
-    expect(discordDmAfterAllowlistEdit(A, `${A},${B}`, `${B},${A}`)).toBeNull()
-    expect(discordDmAfterAllowlistEdit(undefined, '', '')).toBeNull()
+describe('discordDmRefusedAdmins', () => {
+  const env = (users: string, dm: string, extra = '') =>
+    `DISCORD_ALLOWED_USERS=${users}\nDISCORD_DM_ALLOWED_USERS=${dm}\n${extra}`
+
+  it('names a listed admin who is not on the allowlist', () => {
+    expect(discordDmRefusedAdmins(env(A, `${A},${B}`), [A, B])).toEqual([B])
   })
-  it('follows the allowlist when the DM list matched it', () => {
-    expect(discordDmAfterAllowlistEdit('', '', A)).toBe(A)
-    expect(discordDmAfterAllowlistEdit(undefined, undefined, A)).toBe(A)
-    expect(discordDmAfterAllowlistEdit(A, A, `${A},${B}`)).toBe(`${A},${B}`)
-    expect(discordDmAfterAllowlistEdit(`${A},${B}`, `${B},${A}`, A)).toBe(A)
-    expect(discordDmAfterAllowlistEdit(A, A, '')).toBe('')
+  it('is empty when every listed admin passes', () => {
+    expect(discordDmRefusedAdmins(env(`${A},${B}`, `${A},${B}`), [A, B])).toEqual([])
   })
-  it('does not widen a DM list hand-set narrower than the allowlist', () => {
-    expect(discordDmAfterAllowlistEdit(A, `${A},${B}`, `${A},${B},${C}`)).toBeNull()
+  it('ignores an admin the DM list leaves out: they are not being refused by the allowlist', () => {
+    expect(discordDmRefusedAdmins(env(A, A), [A, B])).toEqual([])
   })
-  it('does not open an agent whose DMs are closed while it already has users', () => {
-    expect(discordDmAfterAllowlistEdit('', A, `${A},${B}`)).toBeNull()
-    expect(discordDmAfterAllowlistEdit(undefined, A, `${A},${B}`)).toBeNull()
+  it('counts a * DM list as listing them', () => {
+    expect(discordDmRefusedAdmins(env(A, '*'), [A, B])).toEqual([B])
   })
-  it('never derives * and never touches an existing *', () => {
-    expect(discordDmAfterAllowlistEdit(A, A, '*')).toBeNull()
-    expect(discordDmAfterAllowlistEdit('*', A, B)).toBeNull()
-  })
-  it('never lists a username, which the DM gate could not match', () => {
-    expect(discordDmAfterAllowlistEdit('', '', `somebody,${A}`)).toBe(A)
+  it('is empty when everyone passes the allowlist', () => {
+    expect(discordDmRefusedAdmins(env('*', A), [A])).toEqual([])
+    expect(discordDmRefusedAdmins(env('', A, 'DISCORD_ALLOW_ALL_USERS=true\n'), [A])).toEqual([])
   })
 })

@@ -4,8 +4,9 @@
 //
 // Discord: DISCORD_DM_ALLOWED_USERS (hermes-agent-mt#200). Unset or empty means
 // nobody; '*' turns the gate off. A listed user must still pass the normal
-// allowlist. Swarm Map keeps it equal to the agent's Discord surface admins, and
-// never derives '*'.
+// allowlist. It starts as the agent's explicit admins or the admins named at
+// connect, and follows admin changes while it still matches them. Allowlist edits
+// never move it: the allowlist also holds channel users. Swarm Map never derives '*'.
 //
 // Signal: SIGNAL_ALLOWED_USERS gates DMs and SIGNAL_GROUP_ALLOWED_USERS gates
 // groups, so there is no extra var. This list is NOT kept in step with the
@@ -65,35 +66,48 @@ export function setEnvLine(env: string, key: string, value: string): string {
   return out.join('\n')
 }
 
+export type DmListChange = { action: 'write'; value: string } | { action: 'none' } | { action: 'left' }
+
 /**
- * New DISCORD_DM_ALLOWED_USERS after an explicit admin change, or null for no
- * write. A '*' is an operator's deliberate choice, so it stays.
+ * What an explicit admin change does to DISCORD_DM_ALLOWED_USERS. `previousAdmins`
+ * is the explicit list before this change, empty if there was none. The list
+ * follows only if it equalled that. A list that differs, or a '*', was set
+ * deliberately, so it is 'left' and the caller tells the operator.
+ *
+ * Empty with no earlier explicit list counts as matching, so a first admin list
+ * opens an agent that started closed: nothing else in Swarm Map can.
  */
-export function discordDmAfterAdminSet(current: string | undefined, admins: readonly string[]): string | null {
+export function discordDmAfterAdminSet(
+  current: string | undefined,
+  previousAdmins: readonly string[],
+  admins: readonly string[],
+): DmListChange {
   const now = parseList(current)
-  if (now.includes('*')) return null
+  if (now.includes('*')) return { action: 'left' }
   const next = validIdentities('discord', admins)
-  return sameSet(now, next) ? null : next.join(',')
+  if (sameSet(now, next)) return { action: 'none' }
+  if (!sameSet(now, validIdentities('discord', previousAdmins))) return { action: 'left' }
+  return { action: 'write', value: next.join(',') }
 }
 
 /**
- * New DISCORD_DM_ALLOWED_USERS after a settings save, for an agent with no
- * explicit admin list (its allowlist doubles as its admins), or null for no write.
- *
- * Both clients PUT the whole document back, so only a real allowlist change
- * counts. Even then the DM list follows only if it matched the allowlist before:
- * a list that differs was set by hand, and an allowlist edit must not widen it,
- * and must not open an agent whose DMs are closed while it already has users.
+ * Admins the DM list lets through who still cannot DM, because they are not on
+ * DISCORD_ALLOWED_USERS. They only pass if they hold an allowed role.
  */
-export function discordDmAfterAllowlistEdit(
-  current: string | undefined,
-  allowlistBefore: string | undefined,
-  allowlistAfter: string,
-): string | null {
-  if (parseList(allowlistAfter).includes('*')) return null
-  const before = validIdentities('discord', parseList(allowlistBefore))
-  const after = validIdentities('discord', parseList(allowlistAfter))
-  if (sameSet(before, after)) return null
-  if (!sameSet(parseList(current), before)) return null
-  return after.join(',')
+export function discordDmRefusedAdmins(env: string, admins: readonly string[]): string[] {
+  const value = (key: string): string | undefined => {
+    const line = env.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.startsWith(`${key}=`)).pop()
+    return line?.slice(key.length + 1).trim()
+  }
+  const allowed = parseList(value(SURFACES.discord.admission.users))
+  if (allowed.includes('*') || ['true', '1', 'yes'].includes((value('DISCORD_ALLOW_ALL_USERS') ?? '').toLowerCase())) return []
+  const dm = parseList(value(DISCORD_DM_USERS_VAR))
+  return admins.filter((a) => (dm.includes('*') || dm.includes(a)) && !allowed.includes(a))
+}
+
+/** Operator-facing warning for discordDmRefusedAdmins, or undefined if nobody is refused. */
+export function discordDmRefusedWarning(env: string, admins: readonly string[]): string | undefined {
+  const refused = discordDmRefusedAdmins(env, admins)
+  if (refused.length === 0) return undefined
+  return `Not on ${SURFACES.discord.admission.users}, so their DMs are refused unless they hold an allowed role: ${refused.join(', ')}.`
 }

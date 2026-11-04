@@ -1128,14 +1128,15 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                             <p className="text-xs text-muted-foreground">
                               The user allowlist: who the bot answers. Until an explicit
                               per-surface admin list is set, these users also act as the
-                              surface&apos;s admins (DM, add to groups, approve commands, global
-                              memory).
+                              surface&apos;s admins ({platform !== 'discord' && 'DM, '}add to groups,
+                              approve commands, global memory).
                               {platform === 'discord' && (
                                 <> Everyone else is only answered in Approved Channels, and only
                                 when channel-scoped access (DISCORD_CHANNEL_SCOPED_ACCESS) is
                                 enabled on the agent. Usernames are resolved to IDs
-                                automatically. Only admins can DM the bot
-                                (DISCORD_DM_ALLOWED_USERS).</>
+                                automatically. Adding someone here does not let them DM: DMs are limited
+                                to the agent&apos;s DM list (DISCORD_DM_ALLOWED_USERS), and those
+                                users must also be allowed here or hold an allowed role.</>
                               )}
                               {platform === 'telegram' && (
                                 <> Entries may be numeric Telegram user IDs or @usernames — @usernames are resolved to IDs automatically.</>
