@@ -8,6 +8,8 @@ import { services } from '@/lib/services'
 import { expandSignalAllowlist, resolveTelegramAdmins, type ResolvedIdentity } from '@/lib/resolvers'
 import { USERS_VARS } from '@/lib/surfaces/derive'
 import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-roles'
+import { readEnvValue } from '@/lib/services/discord-thread-gate'
+import { DISCORD_DM_USERS_VAR, setEnvLine, validIdentities } from '@/lib/surfaces/dm-allowlist'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -113,7 +115,27 @@ export async function POST(
   content = mergeEnvVars(content, envVars)
 
   // Ensure policy defaults exist for new connections (empty = approved-only).
-  content = ensurePolicyDefaults(content, platform)
+  // Discord's DM list and Signal's user list start as this agent's admins.
+  let dmAdmins: string[] = []
+  if (platform === 'discord' || platform === 'signal') {
+    let explicit: string[] | undefined
+    try {
+      const list = services.surfaceAdmins.listAdmins(id, platform)
+      if (list.source === 'explicit') explicit = list.admins
+    } catch {} // unreadable store: stay on the allowlist, which fails closed
+    const usersRaw = readEnvValue(content, USERS_VARS[platform])
+    dmAdmins = explicit ?? (usersRaw ?? '').split(',')
+    // Sealed-sender DMs carry only a UUID, so a phone-only list would not match.
+    if (platform === 'signal' && explicit?.length && usersRaw === undefined) {
+      dmAdmins = await expandSignalAllowlist(id, explicit)
+    }
+  }
+  content = ensurePolicyDefaults(content, platform, dmAdmins)
+  // An agent deployed with a Discord token already has a closed list, so naming
+  // admins here has to open it. A list with anything in it is left alone.
+  if (platform === 'discord' && config.adminUser && !readEnvValue(content, DISCORD_DM_USERS_VAR)) {
+    content = setEnvLine(content, DISCORD_DM_USERS_VAR, validIdentities('discord', dmAdmins).join(','))
+  }
 
   // A newly connected Discord agent joins the fleet bot-sender role gate now,
   // not at the next server start.

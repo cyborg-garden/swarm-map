@@ -1134,7 +1134,8 @@ function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
                                 <> Everyone else is only answered in Approved Channels, and only
                                 when channel-scoped access (DISCORD_CHANNEL_SCOPED_ACCESS) is
                                 enabled on the agent. Usernames are resolved to IDs
-                                automatically.</>
+                                automatically. Only admins can DM the bot
+                                (DISCORD_DM_ALLOWED_USERS).</>
                               )}
                               {platform === 'telegram' && (
                                 <> Entries may be numeric Telegram user IDs or @usernames — @usernames are resolved to IDs automatically.</>

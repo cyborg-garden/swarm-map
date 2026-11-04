@@ -4,7 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { checkBasePackageDrift } from '../base-package-drift'
-import { loadBasePackage, applyBasePackageToDir } from '../base-package'
+import { loadBasePackage, applyBasePackageToDir, publicReachabilityWarnings } from '../base-package'
 import { generateDefaultConfig } from '../../templates/config-yaml'
 import type { Key } from '@/lib/types'
 
@@ -165,5 +165,13 @@ describe('public reachability + dead top-level toolsets (review fixes)', () => {
     const w = rep.warnings.join('\n')
     expect(w).toMatch(/DISCORD_ALLOWED_CHANNELS has no real channel ids/)
     expect(w).toMatch(/re-opens DMs/)
+  })
+
+  it('warns when the Discord DM gate is turned off on a public surface', () => {
+    const on = publicReachabilityWarnings('DISCORD_DM_ALLOWED_USERS=*\n').join('\n')
+    expect(on).toMatch(/DISCORD_DM_ALLOWED_USERS contains "\*"/)
+    for (const env of ['DISCORD_DM_ALLOWED_USERS=\n', 'DISCORD_DM_ALLOWED_USERS=100000000000000001\n', '']) {
+      expect(publicReachabilityWarnings(env).join('\n')).not.toMatch(/DISCORD_DM_ALLOWED_USERS/)
+    }
   })
 })

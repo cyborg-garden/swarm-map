@@ -13,6 +13,7 @@ vi.mock('@/lib/services', () => ({
       listAdmins: vi.fn(),
       setAdmins: vi.fn(),
     },
+    harness: { restart: vi.fn() },
   },
 }))
 
@@ -57,6 +58,41 @@ describe('PUT admins', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, admins: ['+64222'] })
     expect(setAdmins).toHaveBeenCalledWith('h_seraph', 'signal', ['+64222'], '+64111')
+  })
+
+  const putDiscord = () => PUT(new Request('http://x', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ admins: ['100000000000000001'], actor: '100000000000000001' }),
+  }), makeParams('h_seraph', 'discord'))
+
+  it('recreates the container when the .env changed, so the running bot gets the new DM list', async () => {
+    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvUpdated: true })
+    const res = await putDiscord()
+    expect(res.status).toBe(200)
+    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(await res.json()).toMatchObject({ success: true, restarted: true })
+  })
+
+  it('does not recreate when only the overlay changed', async () => {
+    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'] })
+    await putDiscord()
+    expect(services.harness.restart).not.toHaveBeenCalled()
+  })
+
+  it('still answers 200 when no container exists to recreate', async () => {
+    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvUpdated: true })
+    vi.mocked(services.harness.restart).mockImplementationOnce(() => { throw new Error('no compose') })
+    const res = await putDiscord()
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ restarted: false })
+  })
+
+  it('surfaces a failed .env write instead of reporting a clean save', async () => {
+    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvError: 'DM list not updated' })
+    const res = await putDiscord()
+    expect(await res.json()).toMatchObject({ success: true, warning: 'DM list not updated' })
+    expect(services.harness.restart).not.toHaveBeenCalled()
   })
 
   it('403 when the service rejects a non-admin actor (self-escalation guard)', async () => {

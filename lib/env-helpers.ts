@@ -7,6 +7,7 @@
 
 import { POLICY_VARS as DERIVED_POLICY_VARS, CONNECT_ENV_MAP } from '@/lib/surfaces/derive'
 import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
+import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, validIdentities } from '@/lib/surfaces/dm-allowlist'
 
 /**
  * Build env vars for a surface connect operation.
@@ -77,10 +78,14 @@ export function mergeEnvVars(
  * Ensure policy defaults exist in .env content for a given platform.
  * Only writes if the key doesn't already exist (preserves user settings).
  * Admission lists default to empty = "no one allowed"; mention gates to 'true'.
+ *
+ * `admins` is the agent's admins on this surface. Discord's DM list and Signal's
+ * user list start as those admins, or closed when there are none (no '*', ever).
  */
 export function ensurePolicyDefaults(
   content: string,
-  platform: string
+  platform: string,
+  admins: readonly string[] = [],
 ): string {
   const basePolicyKeys = POLICY_VARS[platform]
   if (!basePolicyKeys) return content
@@ -94,7 +99,7 @@ export function ensurePolicyDefaults(
   // drift into opposite postures (the D1 lesson below).
   const discord = SURFACES.discord.behavior
   const policyKeys = platform === 'discord'
-    ? [...basePolicyKeys, discord.botsRequireInlineMention!, discord.threadRequireMention!]
+    ? [...basePolicyKeys, discord.botsRequireInlineMention!, discord.threadRequireMention!, DISCORD_DM_USERS_VAR]
     : basePolicyKeys
 
   // Non-empty seed values. Admission lists default to the secure empty string
@@ -113,6 +118,13 @@ export function ensurePolicyDefaults(
     DISCORD_BOTS_REQUIRE_INLINE_MENTION: 'true',
     [discord.threadRequireMention!]: 'true',
     ...Object.fromEntries(Object.values(SURFACES).map((s) => [s.behavior.requireMention, 'true'])),
+  }
+  if (platform === 'discord') {
+    SEED_VALUES[DISCORD_DM_USERS_VAR] = validIdentities('discord', admins).join(',')
+  }
+  if (platform === 'signal') {
+    SEED_VALUES[SURFACES.signal.admission.users] =
+      validIdentities('signal', admins).join(',') || SIGNAL_DENY_ALL_USERS
   }
 
   let result = content

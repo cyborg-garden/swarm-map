@@ -13,11 +13,12 @@ import os from 'os'
 // Mock the services module — we assert harness.restart is invoked.
 const restartMock = vi.hoisted(() => vi.fn())
 const syncFromAllowlistMock = vi.hoisted(() => vi.fn())
+const listAdminsMock = vi.hoisted(() => vi.fn((): { source: string; admins: string[] } => ({ source: 'allowlist', admins: [] })))
 const getSettingsMock = vi.hoisted(() => vi.fn(() => ({})))
 vi.mock('@/lib/services', () => ({
   services: {
     harness: { restart: restartMock },
-    surfaceAdmins: { syncFromAllowlist: syncFromAllowlistMock },
+    surfaceAdmins: { syncFromAllowlist: syncFromAllowlistMock, listAdmins: listAdminsMock },
     config: { getSettings: getSettingsMock },
   },
 }))
@@ -50,6 +51,8 @@ beforeEach(() => {
   // call history across tests unless cleared here.
   restartMock.mockClear()
   syncFromAllowlistMock.mockClear()
+  listAdminsMock.mockReset()
+  listAdminsMock.mockReturnValue({ source: 'allowlist', admins: [] })
   resolveTelegramUsernameMock.mockClear()
   vi.spyOn(os, 'homedir').mockReturnValue('/home/test')
   vi.spyOn(fs, 'existsSync').mockReturnValue(true)
@@ -293,5 +296,103 @@ describe('surface connect — enables the platform in config.yaml', () => {
     const res = await connectDiscord()
     expect(res.status).toBe(200)
     expect(configWrite()).toBeUndefined()
+  })
+})
+
+describe('POST connect: admins-only DMs', () => {
+  const A = '100000000000000001'
+  const B = '100000000000000002'
+  // Signal connect runs a pre-flight daemon health check via fetch.
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ result: [] }) })))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+  const connect = (platform: string, config: Record<string, string>) => POST(new Request('http://x', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ platform, config }),
+  }), makeParams('h_test'))
+  const envWritten = () => {
+    const call = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
+    return (call?.[1] as string) ?? ''
+  }
+  const line = (key: string) => envWritten().match(new RegExp(`^${key}=.*$`, 'gm'))
+
+  it('Discord with no admins starts closed', async () => {
+    readSpy.mockReturnValue('X=1\n')
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+  })
+
+  it('Discord seeds the admins named at connect', async () => {
+    readSpy.mockReturnValue('X=1\n')
+    await connect('discord', { token: 't', adminUser: A })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('Discord: an explicit admin list wins over the allowlist', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: [B] })
+    readSpy.mockReturnValue(`DISCORD_ALLOWED_USERS=${A}\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${B}`])
+  })
+
+  it('Discord: fills a closed list when admins are named, on an agent born closed at deploy', async () => {
+    readSpy.mockReturnValue('DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=\nDISCORD_DM_ALLOWED_USERS=\n')
+    await connect('discord', { token: 't', adminUser: A })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('Discord: a token change keeps a hand-set or closed list, and a * stays', async () => {
+    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A},${B}\nDISCORD_DM_ALLOWED_USERS=${A}\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+    writeSpy.mockClear()
+    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+    writeSpy.mockClear()
+    readSpy.mockReturnValue('DISCORD_BOT_TOKEN=old\nDISCORD_DM_ALLOWED_USERS=*\n')
+    await connect('discord', { token: 't', adminUser: A })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS=*'])
+  })
+
+  it('Discord: a username or * named at connect never reaches the DM list', async () => {
+    readSpy.mockReturnValue('X=1\n')
+    await connect('discord', { token: 't', adminUser: `somebody,*,${A}` })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('other platforms never get a Discord DM line', async () => {
+    readSpy.mockReturnValue('X=1\n')
+    await connect('slack', { botToken: 'b', appToken: 'a' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toBeNull()
+  })
+
+  it('Signal with no admins starts on the deny value', async () => {
+    readSpy.mockReturnValue('X=1\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS=0'])
+  })
+
+  it('Signal: an explicit admin list seeds the list, expanded so sealed-sender DMs match', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: ['+15550001234'] })
+    readSpy.mockReturnValue('X=1\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS=+15550001234,aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'])
+  })
+
+  it('Signal: an existing list is left alone', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: ['+15550001234'] })
+    readSpy.mockReturnValue('SIGNAL_ALLOWED_USERS=+15550009999,+15550008888\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS=+15550009999,+15550008888'])
+  })
+
+  it('stays closed when the admin store cannot be read', async () => {
+    listAdminsMock.mockImplementation(() => { throw new Error('store unreadable') })
+    readSpy.mockReturnValue('X=1\n')
+    expect((await connect('discord', { token: 't' })).status).toBe(200)
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 })

@@ -327,11 +327,53 @@ describe('Discord seed parity — deploy template vs connect (the D1 lesson)', (
       'DISCORD_REQUIRE_MENTION',
       'DISCORD_THREAD_REQUIRE_MENTION',
       'DISCORD_BOTS_REQUIRE_INLINE_MENTION',
+      'DISCORD_DM_ALLOWED_USERS',
     ]) {
       expect(val(deploy, k), `deploy ${k}`).toBeDefined()
       expect(val(connect, k), `connect ${k}`).toBe(val(deploy, k))
     }
     expect(val(connect, 'DISCORD_THREAD_REQUIRE_MENTION')).toBe('true')
+  })
+})
+
+describe('ensurePolicyDefaults: admins-only DMs', () => {
+  const ID = '100000000000000001'
+
+  it('Discord: seeds closed with no admins, and the admins when there are some', () => {
+    expect(ensurePolicyDefaults('', 'discord')).toMatch(/^DISCORD_DM_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'discord', [ID])).toMatch(new RegExp(`^DISCORD_DM_ALLOWED_USERS=${ID}$`, 'm'))
+  })
+
+  it('Discord: never overwrites an existing value, including an empty one', () => {
+    for (const v of ['999999999999999999', '', '*']) {
+      const out = ensurePolicyDefaults(`DISCORD_DM_ALLOWED_USERS=${v}\n`, 'discord', [ID])
+      expect(out.match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm)).toEqual([`DISCORD_DM_ALLOWED_USERS=${v}`])
+    }
+  })
+
+  it('Discord: a * or username among the admins never reaches the seed', () => {
+    const out = ensurePolicyDefaults('', 'discord', ['*', 'somebody', ID])
+    expect(out).toMatch(new RegExp(`^DISCORD_DM_ALLOWED_USERS=${ID}$`, 'm'))
+    expect(ensurePolicyDefaults('', 'discord', ['*'])).toMatch(/^DISCORD_DM_ALLOWED_USERS=$/m)
+  })
+
+  it('Signal: seeds the deny value with no admins, and the admins when there are some', () => {
+    expect(ensurePolicyDefaults('', 'signal')).toMatch(/^SIGNAL_ALLOWED_USERS=0$/m)
+    expect(ensurePolicyDefaults('', 'signal', ['+15550001111'])).toMatch(/^SIGNAL_ALLOWED_USERS=\+15550001111$/m)
+  })
+
+  it('Signal: leaves any existing value alone, including an existing empty list', () => {
+    for (const v of ['+15550001111', '', '*']) {
+      const out = ensurePolicyDefaults(`SIGNAL_ALLOWED_USERS=${v}\n`, 'signal', ['+15550002222'])
+      expect(out.match(/^SIGNAL_ALLOWED_USERS=.*$/gm)).toEqual([`SIGNAL_ALLOWED_USERS=${v}`])
+    }
+  })
+
+  it('leaves the other surfaces on their plain empty seed', () => {
+    expect(ensurePolicyDefaults('', 'slack')).toMatch(/^SLACK_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'telegram')).toMatch(/^TELEGRAM_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'mattermost')).toMatch(/^MATTERMOST_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'telegram')).not.toContain('DM_ALLOWED')
   })
 })
 

@@ -3,6 +3,7 @@
  * standalone docker-compose. Extracted from app/api/setup/deploy/route.ts so the
  * templating is unit-testable and the route stays orchestration-only.
  */
+import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
 import { assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
@@ -142,6 +143,9 @@ export function generateEnvContent(params: {
     // has joined — the #bounties-work incident. Seeded on BOTH creation paths
     // (ensurePolicyDefaults mirrors it) so they cannot drift.
     lines.push(`DISCORD_THREAD_REQUIRE_MENTION=true`)
+    // Org policy: no DMs except the agent's admins. A new agent has none yet, so
+    // this starts closed. Seeded on both creation paths; see lib/surfaces/dm-allowlist.
+    lines.push(`${DISCORD_DM_USERS_VAR}=`)
   } else {
     lines.push(`# DISCORD_BOT_TOKEN=`)
     lines.push(`# DISCORD_ALLOWED_USERS=`)
@@ -162,7 +166,10 @@ export function generateEnvContent(params: {
   if (signalPhone) {
     lines.push(`SIGNAL_HTTP_URL=http://host.docker.internal:8080`)
     lines.push(`SIGNAL_ACCOUNT=${signalPhone}`)
-    lines.push(`# SIGNAL_ALLOWED_USERS= (empty = no DMs; add phone numbers to allow, or * for all)`)
+    // Org policy: no DMs except the agent's admins. A new agent has none yet, so
+    // this starts closed, with a real deny value: the adapter reads unset as '*'
+    // and empty as open mode. Seeded on both creation paths; see lib/surfaces/dm-allowlist.
+    lines.push(`SIGNAL_ALLOWED_USERS=${SIGNAL_DENY_ALL_USERS}`)
     lines.push(`# SIGNAL_GROUP_ALLOWED_USERS= (empty = no groups; add group IDs to allow, or * for all)`)
   } else {
     lines.push(`# SIGNAL_HTTP_URL=http://host.docker.internal:8080`)

@@ -3,6 +3,12 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { buildSettingsEnvValue } from '@/lib/env-helpers'
+import {
+  DISCORD_DM_USERS_VAR,
+  SIGNAL_DENY_ALL_USERS,
+  discordDmAfterAllowlistEdit,
+  setEnvLine,
+} from '@/lib/surfaces/dm-allowlist'
 import { resolveIdentifier, expandSignalAllowlist, expandTelegramAllowlist, expandDiscordAllowlist } from '@/lib/resolvers'
 import {
   PLATFORM_VARS as DERIVED_PLATFORM_VARS,
@@ -16,6 +22,7 @@ import {
   DISCORD_THREAD_GATE_VAR,
   effectiveDiscordThreadGate,
   hasDiscordSurface,
+  readEnvValue,
   type ThreadGateSource,
 } from '@/lib/services/discord-thread-gate'
 import { adapterForRuntime } from '@/lib/services/harness'
@@ -55,6 +62,16 @@ function agentDataDir(harnessId: string): string {
 // never be "0", so this matches nothing and fails closed. Mapped back to an
 // empty list on read so the console still shows "no channels approved".
 const DISCORD_DENY_ALL_CHANNELS_SENTINEL = '0'
+
+// True when this surface's allowlist also stands in as its admin list. Anything
+// else, including a store that cannot be read, leaves the DM list alone.
+function allowlistDoublesAsAdmins(id: string, platform: string): boolean {
+  try {
+    return services.surfaceAdmins.listAdmins(id, platform).source === 'allowlist'
+  } catch {
+    return false
+  }
+}
 
 // Env var names that map to permission settings, per platform.
 //
@@ -271,7 +288,9 @@ export async function GET(
       ? []
       : parseCommaList(groupsRaw)
 
+    // Signal's "nobody" value is shown as an empty list, not as a user.
     const users = parseCommaList(usersRaw)
+      .filter(u => !(platform === 'signal' && u === SIGNAL_DENY_ALL_USERS))
     surfaces[platform] = {
       allowedUsers: users,
       adminUsers: users,  // backward compat — old plugins read this field
@@ -633,12 +652,27 @@ export async function PUT(
         telegramAllowlist = allowedUsers
       }
     }
-    const usersValue = buildSettingsEnvValue(body.dmPolicy, settings.allowAll, allowedUsers)
+    let usersValue = buildSettingsEnvValue(body.dmPolicy, settings.allowAll, allowedUsers)
+    // Signal's adapter reads an empty list as open mode, so a cleared list (or an
+    // echoed deny value, which GET shows as empty) must stay a real deny. Decided
+    // from disk: an existing agent already on empty keeps what it has.
+    if (platform === 'signal' && usersValue === '' && !!existingEnv[vars.users]) {
+      usersValue = SIGNAL_DENY_ALL_USERS
+    }
     const usersRegex = new RegExp(`^${vars.users}=.*$`, 'm')
     if (usersRegex.test(content)) {
       content = content.replace(usersRegex, () => `${vars.users}=${usersValue}`)
     } else {
       content = content.trimEnd() + `\n${vars.users}=${usersValue}\n`
+    }
+
+    // Discord's DM list follows a real admin change only: see
+    // discordDmAfterAllowlistEdit for why a whole-document save cannot move it.
+    if (platform === 'discord' && hasDiscordSurface(content) && allowlistDoublesAsAdmins(id, platform)) {
+      const nextDm = discordDmAfterAllowlistEdit(
+        readEnvValue(content, DISCORD_DM_USERS_VAR), existingEnv[vars.users], usersValue,
+      )
+      if (nextDm !== null) content = setEnvLine(content, DISCORD_DM_USERS_VAR, nextDm)
     }
 
     // Groups — explicit list takes priority, then allowAllGroups → *, else empty.

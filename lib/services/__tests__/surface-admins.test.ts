@@ -462,3 +462,70 @@ describe('traversal ids on the agent-callable paths', () => {
     expect(svc.isAdmin(evil, 'telegram', '111')).toBe(false)
   })
 })
+
+describe('Discord DM list follows the admins', () => {
+  const A = '100000000000000001'
+  const B = '100000000000000002'
+  const envPath = () => path.join(home, '.hermes-seraph', '.env')
+  const dmLines = () => fs.readFileSync(envPath(), 'utf-8').match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm)
+
+  it('writes the new admins into .env and flags it for a recreate', () => {
+    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\nOTHER=keep\n`)
+    const r = svc.setAdmins('h_seraph', 'discord', [A, B], A)
+    expect(r).toEqual({ ok: true, admins: [A, B], dmEnvUpdated: true })
+    expect(dmLines()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A},${B}`])
+    expect(fs.readFileSync(envPath(), 'utf-8')).toContain('OTHER=keep')
+  })
+
+  it('closes DMs when the admins are cleared', () => {
+    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`)
+    svc.setAdmins('h_seraph', 'discord', [], A)
+    expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+  })
+
+  it('does not rewrite the file or ask for a recreate when nothing changes', () => {
+    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`)
+    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, admins: [A] })
+  })
+
+  it('leaves a deliberate * alone', () => {
+    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=*\n`)
+    expect(svc.setAdmins('h_seraph', 'discord', [A, B], A)).toEqual({ ok: true, admins: [A, B] })
+    expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS=*'])
+  })
+
+  it('writes nothing for an agent with no Discord token', () => {
+    writeAgentEnv('seraph', `DISCORD_ALLOWED_USERS=${A}\n`)
+    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, admins: [A] })
+    expect(dmLines()).toBeNull()
+  })
+
+  it('reports a failed .env write rather than hiding it, and keeps the admin change', () => {
+    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`)
+    const realWrite = fs.writeFileSync
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (String(p) === envPath()) throw new Error('read-only')
+      return (realWrite as (...a: unknown[]) => void)(p, ...rest)
+    }) as never)
+    const r = svc.setAdmins('h_seraph', 'discord', [A, B], A)
+    expect(r).toMatchObject({ ok: true, admins: [A, B] })
+    expect((r as { dmEnvError?: string }).dmEnvError).toMatch(/not updated/)
+    expect(svc.listAdmins('h_seraph', 'discord').admins).toEqual([A, B])
+  })
+
+  it('other surfaces never touch the .env on an admin change, so Signal users are not evicted', () => {
+    const before = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=+15550001111,+15550002222\n'
+    writeAgentEnv('seraph', before)
+    expect(svc.setAdmins('h_seraph', 'signal', ['+15550001111'], '+15550001111'))
+      .toEqual({ ok: true, admins: ['+15550001111'] })
+    expect(fs.readFileSync(envPath(), 'utf-8')).toBe(before)
+  })
+})
+
+describe('Signal deny value', () => {
+  it('is not an admin: the bootstrap set is empty and fails closed', () => {
+    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=0\n')
+    expect(svc.listAdmins('h_seraph', 'signal')).toMatchObject({ admins: [], source: 'allowlist', allowAllDm: false })
+    expect(svc.isAdmin('h_seraph', 'signal', '0')).toBe(false)
+  })
+})

@@ -57,5 +57,22 @@ export async function PUT(
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status })
   }
-  return NextResponse.json({ success: true, admins: result.admins })
+
+  // Admins are served live, but a Discord change also rewrites the DM list in
+  // .env, which the running bot reads only when its container is recreated.
+  let restarted: boolean | undefined
+  if (result.dmEnvUpdated) {
+    try {
+      services.harness.restart(id, 'recreate')
+      restarted = true
+    } catch {
+      restarted = false // no compose file yet; a later start picks up the .env
+    }
+  }
+  return NextResponse.json({
+    success: true,
+    admins: result.admins,
+    ...(restarted === undefined ? {} : { restarted }),
+    ...(result.dmEnvError ? { warning: result.dmEnvError } : {}),
+  })
 }

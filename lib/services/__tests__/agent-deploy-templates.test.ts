@@ -87,6 +87,18 @@ describe('generateEnvContent', () => {
     expect(env).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
   })
 
+  it('starts a new Discord agent with DMs closed, never open', () => {
+    const env = generateEnvContent({ ...base, discordToken: 'discord.bot.token' })
+    expect(env).toMatch(/^DISCORD_DM_ALLOWED_USERS=$/m)
+    expect(generateEnvContent({ ...base })).not.toMatch(/^DISCORD_DM_ALLOWED_USERS=/m)
+  })
+
+  it('starts a new Signal agent with a real deny value: the adapter reads unset as * and empty as open', () => {
+    const env = generateEnvContent({ ...base, signalPhone: '+15550001111' })
+    expect(env).toMatch(/^SIGNAL_ALLOWED_USERS=0$/m)
+    expect(generateEnvContent({ ...base })).not.toMatch(/^SIGNAL_ALLOWED_USERS=/m)
+  })
+
   it('does not emit the thread gate for a non-discord agent', () => {
     expect(generateEnvContent({ ...base })).not.toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=/m)
   })

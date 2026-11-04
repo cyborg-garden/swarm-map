@@ -27,12 +27,23 @@ allowlist "Admins") caused a real silent-bot incident:
   rule:** until an explicit admin list is set, the overlay answers from the
   admission allowlist.
 
+- **DMs** — Discord: `DISCORD_DM_ALLOWED_USERS` (hermes-agent-mt#200) narrows
+  DMs on top of admission; unset or empty means nobody, `*` turns the gate off.
+  New agents start with it set to their admins, or empty. Changing the admin
+  list updates it and recreates the container. While the allowlist doubles as
+  the admin list, an allowlist edit moves it only if it matched the allowlist
+  before, so a hand-set list is never widened. A save that changes nothing never
+  touches it, and Swarm Map never writes `*`. Signal: `SIGNAL_ALLOWED_USERS` is
+  the DM list. New agents start with it set to their admins, or `0` (nobody): the
+  adapter reads unset as `*` and empty as open mode. Admin changes do not rewrite
+  it, because it can hold DM users who are not admins.
+
 ## The three var classes (lifecycle is decided by class, not per var)
 
 | Class | Examples | On disconnect | On duplicate |
 |---|---|---|---|
 | `credentials` | bot tokens, `SIGNAL_ACCOUNT` | stripped | stripped |
-| `admission` | allowlists, roles, ignored channels, `MATTERMOST_ADMIN_USERS` | stripped (identity-bound to the account/guild) | stripped |
+| `admission` | allowlists, roles, ignored channels, `MATTERMOST_ADMIN_USERS`, `DISCORD_DM_ALLOWED_USERS` | stripped (identity-bound to the account/guild) | stripped |
 | `behavior` | `*_REQUIRE_MENTION`, `DISCORD_ALLOW_BOTS`, invite policy, `DISCORD_CHANNEL_SCOPED_ACCESS`, `SIGNAL_PROFILE_NAME` | **kept** | **kept** |
 
 Behavior vars are kept because nothing reseeds their *values* on reconnect —

@@ -56,6 +56,7 @@ export type SurfaceSpec = {
     roles?: string // Discord only — OR'd with the user allowlist
     ignoredGroups?: string // Discord only — deny beats allow
     adminUsers?: string // Mattermost only — surface-native admin list
+    dmUsers?: string // Discord only — who may DM, on top of the allowlist (lib/surfaces/dm-allowlist)
   }
 
   // How the bot responds + presentation preferences. KEPT on disconnect
@@ -166,6 +167,8 @@ export const SURFACES: Record<SurfaceSlug, SurfaceSpec> = {
       groups: 'DISCORD_ALLOWED_CHANNELS',
       roles: 'DISCORD_ALLOWED_ROLES',
       ignoredGroups: 'DISCORD_IGNORED_CHANNELS',
+      // hermes-agent-mt#200. Unset or empty = nobody; '*' turns the gate off.
+      dmUsers: 'DISCORD_DM_ALLOWED_USERS',
     },
     behavior: {
       requireMention: 'DISCORD_REQUIRE_MENTION',
