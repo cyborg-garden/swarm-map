@@ -68,7 +68,7 @@ the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
   what an agent is missing or violating. It fixes nothing; run sync to adopt.
 - **Public surface:** DMs off (`DISCORD_ALLOW_ALL_USERS=false`), terminal,
   code execution, file and Discord-history toolsets off, a pruned skill list,
-  and no browser-ops / GitHub / Google.
+  and no browser-ops / engineering / GitHub / Google.
 - **Browser (v1.1):** plain browsing is base research for every agent, public
   included: create and sync add `CAMOFOX_URL` when an agent has none (an
   existing URL is kept; no `CAMOFOX_USER_ID`, so sessions use ephemeral
@@ -77,6 +77,9 @@ the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
   browser guard: navigation only to public http(s) hosts, no page JavaScript,
   no CDP. Hermes skips its own SSRF check for camofox, so this guard is the
   barrier; it does not cover redirects or a page's own requests.
+- **Engineering pack:** opt-in `engineering` adds two skills (`engineering-process`,
+  `engineering-multiplayer`). Process only: no plugin, tool, key or access. Refused
+  on a public surface.
 
 ## Choosing
 

@@ -49,6 +49,18 @@
       "tier": "core"
     },
     {
+      "name": "engineering-process",
+      "source": "local",
+      "tier": "pack",
+      "pack": "engineering"
+    },
+    {
+      "name": "engineering-multiplayer",
+      "source": "local",
+      "tier": "pack",
+      "pack": "engineering"
+    },
+    {
       "name": "captcha-escalation",
       "source": "local",
       "tier": "pack",
@@ -65,6 +77,10 @@
   "packs": {
     "browser-ops": {
       "description": "Captcha solving and browser login on top of the base browser. Never on a public surface.",
+      "public": false
+    },
+    "engineering": {
+      "description": "Two short skills: how code reaches a repo here, and working around other people and sessions. Process only: grants no access, adds no tools. Never on a public surface.",
       "public": false
     },
     "community-member": {
@@ -155,7 +171,8 @@
         "github-repo-management"
       ],
       "forbiddenPacks": [
-        "browser-ops"
+        "browser-ops",
+        "engineering"
       ],
       "forbiddenEnv": [
         "CAPSOLVER_API_KEY",
