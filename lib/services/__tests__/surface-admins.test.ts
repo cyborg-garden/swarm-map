@@ -488,10 +488,19 @@ describe('Discord DM list follows the admins', () => {
     expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
-  it('a first admin list opens a closed agent for the named admins', () => {
-    withEnv(A, '')
+  it('a chosen first admin list opens a closed agent for those admins', () => {
+    withEnv(`${A},${B}`, '')
     expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, admins: [A], dmEnvUpdated: true })
     expect(dmLines()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('sending GET admins back on a closed agent does not open DMs to the allowlist or recreate', () => {
+    withEnv(`${A},${B}`, '')
+    const { admins } = svc.listAdmins('h_seraph', 'discord')
+    const r = svc.setAdmins('h_seraph', 'discord', admins, A)
+    expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
+    expect(warningOf(r)).toMatch(/matches the allowlist/)
+    expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
   it('saving the same admins does not widen a hand-set list or recreate: it says so', () => {
@@ -534,7 +543,7 @@ describe('Discord DM list follows the admins', () => {
 
   it('gives no such warning when every listed admin is on the allowlist', () => {
     withEnv(`${A},${B}`, '')
-    expect(warningOf(svc.setAdmins('h_seraph', 'discord', [A, B], A))).toBeUndefined()
+    expect(warningOf(svc.setAdmins('h_seraph', 'discord', [A], A))).toBeUndefined()
   })
 
   it('writes nothing for an agent with no Discord token', () => {
@@ -550,11 +559,11 @@ describe('Discord DM list follows the admins', () => {
       if (String(p) === envPath()) throw new Error('read-only')
       return (realWrite as (...a: unknown[]) => void)(p, ...rest)
     }) as never)
-    const r = svc.setAdmins('h_seraph', 'discord', [A, B], A)
-    expect(r).toMatchObject({ ok: true, admins: [A, B] })
+    const r = svc.setAdmins('h_seraph', 'discord', [A], A)
+    expect(r).toMatchObject({ ok: true, admins: [A] })
     expect(warningOf(r)).toMatch(/not updated/)
     expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
-    expect(svc.listAdmins('h_seraph', 'discord').admins).toEqual([A, B])
+    expect(svc.listAdmins('h_seraph', 'discord').admins).toEqual([A])
   })
 
   it('other surfaces never touch the .env on an admin change, so Signal users are not evicted', () => {

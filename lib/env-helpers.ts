@@ -7,7 +7,7 @@
 
 import { POLICY_VARS as DERIVED_POLICY_VARS, CONNECT_ENV_MAP } from '@/lib/surfaces/derive'
 import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
-import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, validIdentities } from '@/lib/surfaces/dm-allowlist'
+import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, setEnvLine, validIdentities } from '@/lib/surfaces/dm-allowlist'
 
 /**
  * Build env vars for a surface connect operation.
@@ -81,11 +81,19 @@ export function mergeEnvVars(
  *
  * `admins` is the agent's admins on this surface. Discord's DM list and Signal's
  * user list start as those admins, or closed when there are none (no '*', ever).
+ *
+ * `firstConnect` is false when the agent already has this surface's credential.
+ * Discord and Signal lists are then left exactly as they are, set or unset: unset
+ * is a working state on a connected agent, and writing one would change who gets
+ * answered on a token rotation. On a first connect, lines that read as open when
+ * empty are replaced too, because page saves write empty lines on agents that do
+ * not have the surface yet.
  */
 export function ensurePolicyDefaults(
   content: string,
   platform: string,
   admins: readonly string[] = [],
+  firstConnect = true,
 ): string {
   const basePolicyKeys = POLICY_VARS[platform]
   if (!basePolicyKeys) return content
@@ -127,11 +135,21 @@ export function ensurePolicyDefaults(
       validIdentities('signal', admins).join(',') || SIGNAL_DENY_ALL_USERS
   }
 
+  const lists = platform === 'discord'
+    ? [SURFACES.discord.admission.users, SURFACES.discord.admission.groups, DISCORD_DM_USERS_VAR]
+    : platform === 'signal'
+      ? [SURFACES.signal.admission.users, SURFACES.signal.admission.groups]
+      : []
+  const replaceWhenEmpty = [SURFACES.signal.admission.users, SURFACES.discord.admission.groups, DISCORD_DM_USERS_VAR]
+
   let result = content
   for (const key of policyKeys) {
+    if (!firstConnect && lists.includes(key)) continue
     const regex = new RegExp(`^${key}=`, 'm')
     if (!regex.test(result)) {
       result = result.trimEnd() + `\n${key}=${SEED_VALUES[key] ?? ''}\n`
+    } else if (firstConnect && replaceWhenEmpty.includes(key) && new RegExp(`^${key}=[ \\t]*\\r?$`, 'm').test(result)) {
+      result = setEnvLine(result, key, SEED_VALUES[key] ?? '')
     }
   }
 

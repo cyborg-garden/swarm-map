@@ -324,15 +324,34 @@ describe('POST connect: admins-only DMs', () => {
     expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
-  it('Discord: a missing DM list is not seeded from the whole allowlist', async () => {
-    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A},${B}\n`)
+  it('Discord: a first connect does not seed the DM list from the whole allowlist', async () => {
+    readSpy.mockReturnValue(`DISCORD_ALLOWED_USERS=${A},${B}\n`)
     await connect('discord', { token: 't' })
     expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
+  it('Discord: rotating a token on an unset list adds no line, even with explicit admins', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: [A] })
+    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A}\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toBeNull()
+  })
+
+  it('Discord: rotating a token does not close an unscoped agent by adding a channel deny', async () => {
+    readSpy.mockReturnValue(`DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=${A}\n`)
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_ALLOWED_CHANNELS')).toBeNull()
+  })
+
+  it('Discord: a first connect after a page save closes the empty channel list', async () => {
+    readSpy.mockReturnValue('DISCORD_ALLOWED_USERS=\nDISCORD_ALLOWED_CHANNELS=\n')
+    await connect('discord', { token: 't' })
+    expect(line('DISCORD_ALLOWED_CHANNELS')).toEqual(['DISCORD_ALLOWED_CHANNELS=0'])
+  })
+
   it('Discord: a closed list is not filled from an explicit list just because admins were named', async () => {
     listAdminsMock.mockReturnValue({ source: 'explicit', admins: [B] })
-    readSpy.mockReturnValue('DISCORD_DM_ALLOWED_USERS=\n')
+    readSpy.mockReturnValue('DISCORD_BOT_TOKEN=old\nDISCORD_DM_ALLOWED_USERS=\n')
     await connect('discord', { token: 't', adminUser: A })
     expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
@@ -359,10 +378,11 @@ describe('POST connect: admins-only DMs', () => {
     expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${B}`])
   })
 
-  it('Discord: fills a closed list when admins are named, on an agent born closed at deploy', async () => {
+  it('Discord: naming admins on an already connected agent leaves a closed list closed, and says so', async () => {
     readSpy.mockReturnValue('DISCORD_BOT_TOKEN=old\nDISCORD_ALLOWED_USERS=\nDISCORD_DM_ALLOWED_USERS=\n')
-    await connect('discord', { token: 't', adminUser: A })
-    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+    const res = await connect('discord', { token: 't', adminUser: A })
+    expect(line('DISCORD_DM_ALLOWED_USERS')).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+    expect((await res.json() as { warning?: string }).warning).toMatch(/left unchanged/)
   })
 
   it('Discord: a token change keeps a hand-set or closed list, and a * stays', async () => {
@@ -402,6 +422,25 @@ describe('POST connect: admins-only DMs', () => {
     readSpy.mockReturnValue('X=1\n')
     await connect('signal', { phone: '+15550000000' })
     expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS=+15550001234,aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'])
+  })
+
+  it('Signal: a first connect after a page save seeds the deny value over the empty line', async () => {
+    readSpy.mockReturnValue('SIGNAL_ALLOWED_USERS=\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS=0'])
+  })
+
+  it('Signal: reconnecting an agent already on Signal leaves an empty list alone', async () => {
+    readSpy.mockReturnValue('SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toEqual(['SIGNAL_ALLOWED_USERS='])
+  })
+
+  it('Signal: reconnecting an agent already on Signal leaves an unset list unset, even with explicit admins', async () => {
+    listAdminsMock.mockReturnValue({ source: 'explicit', admins: ['+15550001234'] })
+    readSpy.mockReturnValue('SIGNAL_ACCOUNT=+15550000000\n')
+    await connect('signal', { phone: '+15550000000' })
+    expect(line('SIGNAL_ALLOWED_USERS')).toBeNull()
   })
 
   it('Signal: an existing list is left alone', async () => {

@@ -277,7 +277,7 @@ export class SurfaceAdminService {
       }
     }
 
-    const previousExplicit = this.explicitAdmins(harnessId, platform) ?? []
+    const previousExplicit = this.explicitAdmins(harnessId, platform)
 
     // Persist onto the harness overlay (read-modify-write the raw array — the
     // single persisted shape; HarnessService tolerates partial overlays).
@@ -305,7 +305,7 @@ export class SurfaceAdminService {
   // is reported to the caller rather than undoing it or passing unnoticed.
   private syncDiscordDmEnv(
     harnessId: string,
-    previousAdmins: string[],
+    previousAdmins: string[] | undefined,
     admins: string[],
   ): { dmEnvUpdated?: true; dmEnvWarning?: string } {
     let envPath: string
@@ -317,9 +317,13 @@ export class SurfaceAdminService {
       return {} // no .env means no surface to update
     }
     if (!hasDiscordSurface(env)) return {}
-    const change = discordDmAfterAdminSet(readEnvValue(env, DISCORD_DM_USERS_VAR), previousAdmins, admins)
+    const change = discordDmAfterAdminSet(
+      readEnvValue(env, DISCORD_DM_USERS_VAR), previousAdmins, admins, readEnvValue(env, ALLOWED_USERS_VARS.discord),
+    )
     if (change.action === 'left') {
-      const left = `Admins saved. ${DISCORD_DM_USERS_VAR} did not match the previous admins, so it was left unchanged.`
+      const left = change.reason === 'matches-allowlist'
+        ? `Admins saved. This first list matches the allowlist, which also holds channel users, so ${DISCORD_DM_USERS_VAR} was left unchanged.`
+        : `Admins saved. ${DISCORD_DM_USERS_VAR} did not match the previous admins, so it was left unchanged.`
       return { dmEnvWarning: [left, discordDmRefusedWarning(env, admins)].filter(Boolean).join(' ') }
     }
     if (change.action === 'none') {

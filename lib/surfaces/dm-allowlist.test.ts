@@ -46,32 +46,43 @@ describe('setEnvLine', () => {
 })
 
 describe('discordDmAfterAdminSet', () => {
+  const NO_EXPLICIT = undefined
+
   it('follows an admin change when the DM list equalled the previous admins', () => {
-    expect(discordDmAfterAdminSet(A, [A], [A, B])).toEqual({ action: 'write', value: `${A},${B}` })
-    expect(discordDmAfterAdminSet(`${B},${A}`, [A, B], [C])).toEqual({ action: 'write', value: C })
-    expect(discordDmAfterAdminSet(A, [A], [])).toEqual({ action: 'write', value: '' })
+    expect(discordDmAfterAdminSet(A, [A], [A, B], A)).toEqual({ action: 'write', value: `${A},${B}` })
+    expect(discordDmAfterAdminSet(`${B},${A}`, [A, B], [C], A)).toEqual({ action: 'write', value: C })
+    expect(discordDmAfterAdminSet(A, [A], [], A)).toEqual({ action: 'write', value: '' })
   })
-  it('a closed list opens for a first admin list (nothing was set by hand)', () => {
-    expect(discordDmAfterAdminSet(undefined, [], [A])).toEqual({ action: 'write', value: A })
-    expect(discordDmAfterAdminSet('', [], [A])).toEqual({ action: 'write', value: A })
+  it('a chosen first list that differs from the allowlist opens a closed agent', () => {
+    expect(discordDmAfterAdminSet(undefined, NO_EXPLICIT, [A], `${A},${B}`)).toEqual({ action: 'write', value: A })
+    expect(discordDmAfterAdminSet('', NO_EXPLICIT, [A], `${A},${B}`)).toEqual({ action: 'write', value: A })
+  })
+  it('a first list that matches the allowlist (GET sent back) does not open it, in any order', () => {
+    expect(discordDmAfterAdminSet('', NO_EXPLICIT, [B, A], `${A},${B}`)).toEqual({ action: 'left', reason: 'matches-allowlist' })
+    expect(discordDmAfterAdminSet(undefined, NO_EXPLICIT, [A], A)).toEqual({ action: 'left', reason: 'matches-allowlist' })
+  })
+  it('a usernames entry on the allowlist does not hide the match', () => {
+    expect(discordDmAfterAdminSet('', NO_EXPLICIT, [A], `somebody,${A}`)).toEqual({ action: 'left', reason: 'matches-allowlist' })
   })
   it('does nothing when the list already matches, in any order', () => {
-    expect(discordDmAfterAdminSet(`${B},${A}`, [C], [A, B])).toEqual({ action: 'none' })
+    expect(discordDmAfterAdminSet(`${B},${A}`, [C], [A, B], A)).toEqual({ action: 'none' })
+    expect(discordDmAfterAdminSet(A, NO_EXPLICIT, [A], A)).toEqual({ action: 'none' })
+    expect(discordDmAfterAdminSet('', NO_EXPLICIT, [], '')).toEqual({ action: 'none' })
   })
   it('saving the same admins does not widen a list that differs', () => {
-    expect(discordDmAfterAdminSet(A, [A, B], [A, B])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet(A, [A, B], [A, B], `${A},${B}`)).toEqual({ action: 'left', reason: 'differs' })
   })
   it('a first admin list does not drop or add to a hand-set list', () => {
-    expect(discordDmAfterAdminSet(A, [], [B])).toEqual({ action: 'left' })
-    expect(discordDmAfterAdminSet(A, [], [A, B])).toEqual({ action: 'left' })
-    expect(discordDmAfterAdminSet(A, [], [])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet(A, NO_EXPLICIT, [B], C)).toEqual({ action: 'left', reason: 'differs' })
+    expect(discordDmAfterAdminSet(A, NO_EXPLICIT, [A, B], C)).toEqual({ action: 'left', reason: 'differs' })
+    expect(discordDmAfterAdminSet(A, NO_EXPLICIT, [], C)).toEqual({ action: 'left', reason: 'differs' })
   })
   it('a closed list stays closed once an admin list already exists', () => {
-    expect(discordDmAfterAdminSet('', [A], [A, B])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet('', [A], [A, B], A)).toEqual({ action: 'left', reason: 'differs' })
   })
   it('leaves a deliberate * alone', () => {
-    expect(discordDmAfterAdminSet('*', [], [A])).toEqual({ action: 'left' })
-    expect(discordDmAfterAdminSet(`${A},*`, [A], [])).toEqual({ action: 'left' })
+    expect(discordDmAfterAdminSet('*', NO_EXPLICIT, [A], C)).toEqual({ action: 'left', reason: 'differs' })
+    expect(discordDmAfterAdminSet(`${A},*`, [A], [], A)).toEqual({ action: 'left', reason: 'differs' })
   })
 })
 

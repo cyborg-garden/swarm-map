@@ -207,7 +207,9 @@ export async function POST(
   if (action === 'group-deregister') {
     // Remove chatId from list
     const newGroups = currentGroups.filter(g => g !== chatId)
-    const newValue = newGroups.join(',')
+    // Discord reads an empty channel list as "no gate": every channel. Removing
+    // the last approved channel has to deny, the same '0' the settings route uses.
+    const newValue = newGroups.join(',') || (platform === 'discord' && currentGroups.length > 0 ? '0' : '')
     const regex = new RegExp(`^${groupVar}=.*$`, 'm')
     if (regex.test(content)) {
       content = content.replace(regex, () => `${groupVar}=${newValue}`)

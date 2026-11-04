@@ -290,6 +290,19 @@ describe('Policy API — group-register (POST)', () => {
 })
 
 describe('Policy API — group-deregister (POST)', () => {
+  it('Discord: removing the last channel denies rather than opening every channel', async () => {
+    vi.spyOn(fs, 'existsSync').mockReturnValue(true)
+    vi.spyOn(fs, 'readFileSync').mockReturnValue('DISCORD_ALLOWED_CHANNELS=100000000000000001\n' as never)
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {})
+    const req = new Request('http://localhost/api/harnesses/h_test/policy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'group-deregister', platform: 'discord', chatId: '100000000000000001' }),
+    })
+    await POST(req, makeParams('h_test'))
+    expect(write.mock.calls[0][1]).toMatch(/^DISCORD_ALLOWED_CHANNELS=0$/m)
+  })
+
   it('removes chatId from GROUP_ALLOWED var', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2,group3\n')
 

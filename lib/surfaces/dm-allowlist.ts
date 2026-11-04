@@ -66,27 +66,36 @@ export function setEnvLine(env: string, key: string, value: string): string {
   return out.join('\n')
 }
 
-export type DmListChange = { action: 'write'; value: string } | { action: 'none' } | { action: 'left' }
+export type DmListChange =
+  | { action: 'write'; value: string }
+  | { action: 'none' }
+  | { action: 'left'; reason: 'differs' | 'matches-allowlist' }
 
 /**
  * What an explicit admin change does to DISCORD_DM_ALLOWED_USERS. `previousAdmins`
- * is the explicit list before this change, empty if there was none. The list
+ * is the explicit list before this change, undefined if there was none. The list
  * follows only if it equalled that. A list that differs, or a '*', was set
  * deliberately, so it is 'left' and the caller tells the operator.
  *
  * Empty with no earlier explicit list counts as matching, so a first admin list
- * opens an agent that started closed: nothing else in Swarm Map can.
+ * can open an agent that started closed. Unless that list is just the allowlist:
+ * GET returns the allowlist when there is no explicit list, so sending it back
+ * would open DMs to the channel users on it without anyone choosing them.
  */
 export function discordDmAfterAdminSet(
   current: string | undefined,
-  previousAdmins: readonly string[],
+  previousAdmins: readonly string[] | undefined,
   admins: readonly string[],
+  allowlist: string | undefined,
 ): DmListChange {
   const now = parseList(current)
-  if (now.includes('*')) return { action: 'left' }
+  if (now.includes('*')) return { action: 'left', reason: 'differs' }
   const next = validIdentities('discord', admins)
   if (sameSet(now, next)) return { action: 'none' }
-  if (!sameSet(now, validIdentities('discord', previousAdmins))) return { action: 'left' }
+  if (!sameSet(now, validIdentities('discord', previousAdmins ?? []))) return { action: 'left', reason: 'differs' }
+  if (previousAdmins === undefined && sameSet(next, validIdentities('discord', parseList(allowlist)))) {
+    return { action: 'left', reason: 'matches-allowlist' }
+  }
   return { action: 'write', value: next.join(',') }
 }
 

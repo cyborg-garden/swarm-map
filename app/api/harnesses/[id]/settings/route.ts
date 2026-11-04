@@ -646,7 +646,9 @@ export async function PUT(
     const usersRegex = new RegExp(`^${vars.users}=.*$`, 'm')
     if (usersRegex.test(content)) {
       content = content.replace(usersRegex, () => `${vars.users}=${usersValue}`)
-    } else {
+    } else if (platform !== 'signal' || usersValue !== '') {
+      // Signal skips this when empty: the save would otherwise add an empty list,
+      // which is open mode, to an agent that does not have one.
       content = content.trimEnd() + `\n${vars.users}=${usersValue}\n`
     }
 

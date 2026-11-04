@@ -1477,6 +1477,16 @@ describe('Settings API: DM lists survive saves', () => {
     expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS='])
   })
 
+  it('Signal: a page save adds no empty list to an agent that has none', async () => {
+    env = 'GITHUB_TOKEN=x\n'
+    await put('signal', [])
+    expect(signal()).toBeNull()
+    written = undefined
+    env = 'SIGNAL_ACCOUNT=+15550000000\n'
+    await put('signal', [])
+    expect(signal()).toBeNull()
+  })
+
   it('Signal: adding a user replaces the deny value rather than sitting beside it', async () => {
     env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=0\n'
     await put('signal', ['+15550001111'])

@@ -9,7 +9,8 @@ import { expandSignalAllowlist, resolveTelegramAdmins, type ResolvedIdentity } f
 import { USERS_VARS } from '@/lib/surfaces/derive'
 import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-roles'
 import { readEnvValue } from '@/lib/services/discord-thread-gate'
-import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, setEnvLine, validIdentities } from '@/lib/surfaces/dm-allowlist'
+import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
+import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, validIdentities } from '@/lib/surfaces/dm-allowlist'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -110,6 +111,9 @@ export async function POST(
 
   let content = fs.readFileSync(envPath, 'utf-8')
 
+  // Read before the merge below writes the credential.
+  const firstConnect = !isSurfaceSlug(platform) || !readEnvValue(content, SURFACES[platform].credentials[0])
+
   // Only write connection-specific vars (URL, token, account).
   // Never touch policy vars (ALLOWED_USERS, GROUP_ALLOWED_USERS) — unless adminUser was explicitly provided.
   content = mergeEnvVars(content, envVars)
@@ -117,30 +121,30 @@ export async function POST(
   // Ensure policy defaults exist for new connections (empty = approved-only).
   // Discord's DM list and Signal's user list start as this agent's admins: its
   // explicit list, or on Discord the admins named here. Never the whole allowlist,
-  // which also holds channel users.
-  let explicitAdmins: string[] | undefined
+  // which also holds channel users. Only on a first connect: rotating a credential
+  // changes no list.
   let dmAdmins: string[] = []
-  if (platform === 'discord' || platform === 'signal') {
+  if (firstConnect && (platform === 'discord' || platform === 'signal')) {
+    let explicitAdmins: string[] | undefined
     try {
       const list = services.surfaceAdmins.listAdmins(id, platform)
       if (list.source === 'explicit') explicitAdmins = list.admins
     } catch {} // unreadable store: no explicit admins, which fails closed
     dmAdmins = explicitAdmins ?? (platform === 'discord' ? (config.adminUser ?? '').split(',') : [])
     // Sealed-sender DMs carry only a UUID, so a phone-only list would not match.
-    if (platform === 'signal' && dmAdmins.length > 0 && readEnvValue(content, USERS_VARS.signal) === undefined) {
+    if (platform === 'signal' && dmAdmins.length > 0 && !readEnvValue(content, USERS_VARS.signal)) {
       dmAdmins = await expandSignalAllowlist(id, dmAdmins)
     }
   }
-  content = ensurePolicyDefaults(content, platform, dmAdmins)
-  // An agent deployed with a Discord token already has a closed list, so naming
-  // admins here has to open it. A list with anything in it is left alone, and an
-  // explicit admin list is changed through the admins route, not here.
-  if (platform === 'discord' && config.adminUser && !explicitAdmins && !readEnvValue(content, DISCORD_DM_USERS_VAR)) {
-    content = setEnvLine(content, DISCORD_DM_USERS_VAR, validIdentities('discord', dmAdmins).join(','))
+  content = ensurePolicyDefaults(content, platform, dmAdmins, firstConnect)
+  let dmWarning: string | undefined
+  if (platform === 'discord') {
+    const dmList = (readEnvValue(content, DISCORD_DM_USERS_VAR) ?? '').split(',').map((s) => s.trim())
+    const named = validIdentities('discord', (config.adminUser ?? '').split(','))
+    dmWarning = !firstConnect && !dmList.includes('*') && named.some((n) => !dmList.includes(n))
+      ? `Admins saved. This agent is already connected, so ${DISCORD_DM_USERS_VAR} was left unchanged.`
+      : discordDmRefusedWarning(content, validIdentities('discord', dmAdmins))
   }
-  const dmWarning = platform === 'discord'
-    ? discordDmRefusedWarning(content, validIdentities('discord', dmAdmins))
-    : undefined
 
   // A newly connected Discord agent joins the fleet bot-sender role gate now,
   // not at the next server start.

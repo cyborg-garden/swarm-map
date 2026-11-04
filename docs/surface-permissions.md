@@ -29,13 +29,15 @@ allowlist "Admins") caused a real silent-bot incident:
 
 - **DMs** — Discord: `DISCORD_DM_ALLOWED_USERS` (hermes-agent-mt#200) narrows
   DMs on top of admission; unset or empty means nobody, `*` turns the gate off.
-  New agents start closed. Connect seeds it from explicit admins or the admins
-  named at connect, never from the whole allowlist. An explicit admin change
-  moves it, and recreates the container, only if it equalled the previous
-  explicit admins (empty counts when there were none, so a first admin list
-  opens a closed agent); otherwise it stays and the response says so. The
-  response also warns about a listed admin the allowlist would refuse. Allowlist
-  edits and settings saves never touch it, and Swarm Map never writes `*`.
+  New agents start closed. A first connect seeds it from explicit admins or the
+  admins named at connect, never from the whole allowlist; later connects leave
+  it, and every other Discord or Signal list, exactly as they are. An explicit
+  admin change moves it, and recreates the container, only if it equalled the
+  previous explicit admins. Empty counts when there were none, so a chosen first
+  list opens a closed agent, unless that list is just the allowlist, which also
+  holds channel users. Otherwise it stays and the response says so. The response
+  also warns about a listed admin the allowlist would refuse. Allowlist edits and
+  settings saves never touch it, and Swarm Map never writes `*`.
   Signal: `SIGNAL_ALLOWED_USERS` is
   the DM list. New agents start with it set to their admins, or `0` (nobody): the
   adapter reads unset as `*` and empty as open mode. Admin changes do not rewrite
