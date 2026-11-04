@@ -155,7 +155,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "  SIGNAL_HTTP_URL=http://signal-cli-daemon:8080"
 echo "  SIGNAL_ACCOUNT=$PHONE"
-echo "  SIGNAL_ALLOWED_USERS=        # empty = no DMs allowed (add phone numbers to allow, or * for all)"
+echo "  SIGNAL_ALLOWED_USERS=0       # 0 = nobody can DM. Replace with phone numbers to allow them. Empty is NOT closed"
 echo "  SIGNAL_GROUP_ALLOWED_USERS=  # empty = no groups allowed (add group IDs to allow, or * for all)"
 echo ""
 echo "Then restart the agent. It will connect to the daemon automatically."

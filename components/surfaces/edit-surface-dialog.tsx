@@ -59,6 +59,7 @@ export function EditSurfaceDialog({ platform, harnessId, currentConfig, open, on
       if (data.success) {
         setDone(true)
         toast.success(`${platform} config updated`)
+        if (data.warning) toast.warning(data.warning)
         onSaved()
       } else {
         setError(data.error || 'Failed to update')

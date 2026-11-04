@@ -216,6 +216,7 @@ export function useSurfaceRegister(opts: UseSurfaceRegisterOptions) {
     if (data.success) {
       setStep('done')
       toast.success(`${SURFACES[platform].label} connected`)
+      if (data.warning) toast.warning(data.warning)
       onConnected?.()
       return true
     } else {
