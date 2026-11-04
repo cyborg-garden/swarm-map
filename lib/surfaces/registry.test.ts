@@ -109,7 +109,7 @@ describe('derived maps match the pre-registry literals (byte-for-byte)', () => {
       signal: ['SIGNAL_ACCOUNT', 'SIGNAL_HTTP_URL', 'SIGNAL_ALLOWED_USERS', 'SIGNAL_GROUP_ALLOWED_USERS'],
       telegram: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_ALLOWED_USERS', 'TELEGRAM_GROUP_ALLOWED_CHATS'],
       mattermost: ['MATTERMOST_URL', 'MATTERMOST_TOKEN', 'MATTERMOST_ALLOWED_USERS', 'MATTERMOST_ALLOWED_CHANNELS', 'MATTERMOST_ADMIN_USERS'],
-      discord: ['DISCORD_BOT_TOKEN', 'DISCORD_ALLOWED_USERS', 'DISCORD_ALLOWED_CHANNELS', 'DISCORD_ALLOWED_ROLES', 'DISCORD_IGNORED_CHANNELS'],
+      discord: ['DISCORD_BOT_TOKEN', 'DISCORD_ALLOWED_USERS', 'DISCORD_ALLOWED_CHANNELS', 'DISCORD_ALLOWED_ROLES', 'DISCORD_IGNORED_CHANNELS', 'DISCORD_DM_ALLOWED_USERS'],
       slack: ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_ALLOWED_USERS', 'SLACK_ALLOWED_CHANNELS'],
     })
   })
@@ -196,7 +196,11 @@ describe('registry structural invariants', () => {
     expect(SURFACES.discord.behavior.threadRequireMention).toBe('DISCORD_THREAD_REQUIRE_MENTION')
     // +1: DISCORD_ALLOWED_BOT_ROLES (bot-sender role gate, fleet setting)
     expect(ALL_SURFACE_VARS.has('DISCORD_ALLOWED_BOT_ROLES')).toBe(true)
-    expect(ALL_SURFACE_VARS.size).toBe(40)
+    // +1: DISCORD_DM_ALLOWED_USERS (DM gate, hermes-agent-mt#200). Admission, so
+    // it is stripped on disconnect and duplicate, and extraEnv cannot shadow it.
+    expect(ALL_SURFACE_VARS.has('DISCORD_DM_ALLOWED_USERS')).toBe(true)
+    expect(SURFACES.discord.admission.dmUsers).toBe('DISCORD_DM_ALLOWED_USERS')
+    expect(ALL_SURFACE_VARS.size).toBe(41)
   })
 
   it('isSurfaceSlug / surfaceSpec agree with the SURFACES keys', () => {

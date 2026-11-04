@@ -8,6 +8,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
+import { toast } from 'sonner'
 import { useSurfaceRegister } from './useSurfaceRegister'
 
 type FetchHandler = (url: string, init?: RequestInit) => unknown
@@ -182,6 +183,31 @@ describe('useSurfaceRegister — signal, pending (wizard) mode', () => {
         profileName: 'Wizard Bot',
       })
     )
+  })
+})
+
+describe('useSurfaceRegister — connect warnings', () => {
+  it('shows a warning the connect route returns', async () => {
+    const warning = vi.spyOn(toast, 'warning').mockImplementation(() => '')
+    mockFetch((url) => {
+      if (url.includes('api.telegram.org')) return { ok: true, result: { username: 'mybot' } }
+      if (url.includes('/surfaces/connect')) return { success: true, warning: 'Admin not on the allowlist' }
+      return {}
+    })
+    const { result } = renderHook(() =>
+      useSurfaceRegister({
+        platform: 'telegram',
+        target: { kind: 'harness', harnessId: 'h_tg' },
+      })
+    )
+    act(() => {
+      result.current.setToken('123456:ABCdef')
+      result.current.setAdminUser('123456789')
+    })
+    await act(async () => { await result.current.verify() })
+    await act(async () => { await result.current.connect() })
+    await waitFor(() => expect(result.current.step).toBe('done'))
+    expect(warning).toHaveBeenCalledWith('Admin not on the allowlist')
   })
 })
 

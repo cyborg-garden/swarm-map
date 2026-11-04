@@ -27,12 +27,28 @@ allowlist "Admins") caused a real silent-bot incident:
   rule:** until an explicit admin list is set, the overlay answers from the
   admission allowlist.
 
+- **DMs** — Discord: `DISCORD_DM_ALLOWED_USERS` (hermes-agent-mt#200) narrows
+  DMs on top of admission; unset or empty means nobody, `*` turns the gate off.
+  New agents start closed. A first connect seeds it from explicit admins or the
+  admins named at connect, never from the whole allowlist; later connects leave
+  it, and every other Discord or Signal list, exactly as they are. An explicit
+  admin change moves it, and recreates the container, only if it equalled the
+  previous explicit admins. Empty counts when there were none, so a chosen first
+  list opens a closed agent, unless that list is just the allowlist, which also
+  holds channel users. Otherwise it stays and the response says so. The response
+  also warns about a listed admin the allowlist would refuse. Allowlist edits and
+  settings saves never touch it, and Swarm Map never writes `*`.
+  Signal: `SIGNAL_ALLOWED_USERS` is
+  the DM list. New agents start with it set to their admins, or `0` (nobody): the
+  adapter reads unset as `*` and empty as open mode. Admin changes do not rewrite
+  it, because it can hold DM users who are not admins.
+
 ## The three var classes (lifecycle is decided by class, not per var)
 
 | Class | Examples | On disconnect | On duplicate |
 |---|---|---|---|
 | `credentials` | bot tokens, `SIGNAL_ACCOUNT` | stripped | stripped |
-| `admission` | allowlists, roles, ignored channels, `MATTERMOST_ADMIN_USERS` | stripped (identity-bound to the account/guild) | stripped |
+| `admission` | allowlists, roles, ignored channels, `MATTERMOST_ADMIN_USERS`, `DISCORD_DM_ALLOWED_USERS` | stripped (identity-bound to the account/guild) | stripped |
 | `behavior` | `*_REQUIRE_MENTION`, `DISCORD_ALLOW_BOTS`, invite policy, `DISCORD_CHANNEL_SCOPED_ACCESS`, `SIGNAL_PROFILE_NAME` | **kept** | **kept** |
 
 Behavior vars are kept because nothing reseeds their *values* on reconnect —

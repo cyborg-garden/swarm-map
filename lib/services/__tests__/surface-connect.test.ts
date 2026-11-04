@@ -327,11 +327,76 @@ describe('Discord seed parity — deploy template vs connect (the D1 lesson)', (
       'DISCORD_REQUIRE_MENTION',
       'DISCORD_THREAD_REQUIRE_MENTION',
       'DISCORD_BOTS_REQUIRE_INLINE_MENTION',
+      'DISCORD_DM_ALLOWED_USERS',
     ]) {
       expect(val(deploy, k), `deploy ${k}`).toBeDefined()
       expect(val(connect, k), `connect ${k}`).toBe(val(deploy, k))
     }
     expect(val(connect, 'DISCORD_THREAD_REQUIRE_MENTION')).toBe('true')
+  })
+})
+
+describe('ensurePolicyDefaults: admins-only DMs', () => {
+  const ID = '100000000000000001'
+
+  it('Discord: seeds closed with no admins, and the admins when there are some', () => {
+    expect(ensurePolicyDefaults('', 'discord')).toMatch(/^DISCORD_DM_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'discord', [ID])).toMatch(new RegExp(`^DISCORD_DM_ALLOWED_USERS=${ID}$`, 'm'))
+  })
+
+  it('Discord: never overwrites a list with anything in it', () => {
+    for (const v of ['999999999999999999', '*']) {
+      const out = ensurePolicyDefaults(`DISCORD_DM_ALLOWED_USERS=${v}\n`, 'discord', [ID])
+      expect(out.match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm)).toEqual([`DISCORD_DM_ALLOWED_USERS=${v}`])
+    }
+  })
+
+  it('Discord: a * or username among the admins never reaches the seed', () => {
+    const out = ensurePolicyDefaults('', 'discord', ['*', 'somebody', ID])
+    expect(out).toMatch(new RegExp(`^DISCORD_DM_ALLOWED_USERS=${ID}$`, 'm'))
+    expect(ensurePolicyDefaults('', 'discord', ['*'])).toMatch(/^DISCORD_DM_ALLOWED_USERS=$/m)
+  })
+
+  it('Signal: seeds the deny value with no admins, and the admins when there are some', () => {
+    expect(ensurePolicyDefaults('', 'signal')).toMatch(/^SIGNAL_ALLOWED_USERS=0$/m)
+    expect(ensurePolicyDefaults('', 'signal', ['+15550001111'])).toMatch(/^SIGNAL_ALLOWED_USERS=\+15550001111$/m)
+  })
+
+  it('first connect replaces an empty line a page save left behind, since empty is open', () => {
+    expect(ensurePolicyDefaults('SIGNAL_ALLOWED_USERS=\n', 'signal').match(/^SIGNAL_ALLOWED_USERS=.*$/gm))
+      .toEqual(['SIGNAL_ALLOWED_USERS=0'])
+    expect(ensurePolicyDefaults('SIGNAL_ALLOWED_USERS=\n', 'signal', ['+15550002222']).match(/^SIGNAL_ALLOWED_USERS=.*$/gm))
+      .toEqual(['SIGNAL_ALLOWED_USERS=+15550002222'])
+    expect(ensurePolicyDefaults('DISCORD_ALLOWED_CHANNELS=\n', 'discord').match(/^DISCORD_ALLOWED_CHANNELS=.*$/gm))
+      .toEqual(['DISCORD_ALLOWED_CHANNELS=0'])
+    expect(ensurePolicyDefaults('DISCORD_DM_ALLOWED_USERS=\n', 'discord', [ID]).match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm))
+      .toEqual([`DISCORD_DM_ALLOWED_USERS=${ID}`])
+  })
+
+  it('a later connect adds or changes no Discord or Signal list, set or unset', () => {
+    const later = (env: string, platform: string) => ensurePolicyDefaults(env, platform, [ID], false)
+    for (const env of ['', 'SIGNAL_ALLOWED_USERS=\nSIGNAL_GROUP_ALLOWED_USERS=\n']) {
+      expect(later(env, 'signal').match(/^SIGNAL_(GROUP_)?ALLOWED_USERS=.*$/gm)).toEqual(env ? ['SIGNAL_ALLOWED_USERS=', 'SIGNAL_GROUP_ALLOWED_USERS='] : null)
+    }
+    for (const env of ['', 'DISCORD_ALLOWED_USERS=\nDISCORD_ALLOWED_CHANNELS=\nDISCORD_DM_ALLOWED_USERS=\n']) {
+      expect(later(env, 'discord').match(/^DISCORD_(ALLOWED_USERS|ALLOWED_CHANNELS|DM_ALLOWED_USERS)=.*$/gm))
+        .toEqual(env ? ['DISCORD_ALLOWED_USERS=', 'DISCORD_ALLOWED_CHANNELS=', 'DISCORD_DM_ALLOWED_USERS='] : null)
+    }
+    expect(later('', 'discord')).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
+  })
+
+  it('Signal: leaves a list with anything in it alone', () => {
+    for (const v of ['+15550001111', '*']) {
+      const out = ensurePolicyDefaults(`SIGNAL_ALLOWED_USERS=${v}\n`, 'signal', ['+15550002222'])
+      expect(out.match(/^SIGNAL_ALLOWED_USERS=.*$/gm)).toEqual([`SIGNAL_ALLOWED_USERS=${v}`])
+    }
+  })
+
+  it('leaves the other surfaces on their plain empty seed', () => {
+    expect(ensurePolicyDefaults('', 'slack')).toMatch(/^SLACK_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'telegram')).toMatch(/^TELEGRAM_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'mattermost')).toMatch(/^MATTERMOST_ALLOWED_USERS=$/m)
+    expect(ensurePolicyDefaults('', 'telegram')).not.toContain('DM_ALLOWED')
   })
 })
 

@@ -244,9 +244,9 @@ if (loading) {
           </label>
         </div>
         <p className="text-xs text-muted-foreground">
-          {settings.dmPolicy === 'approved-only'
-            ? 'Only users in the approved list below can DM this agent.'
-            : 'Anyone can DM this agent. Approved users list still controls who can add this agent to groups.'}
+          This choice is saved but does not change who can DM the agent. On Discord, DMs are
+          limited to the DM list (DISCORD_DM_ALLOWED_USERS), and those users must also pass the
+          allowlist. On other surfaces, users on the allowlist can DM it.
         </p>
       </div>
 

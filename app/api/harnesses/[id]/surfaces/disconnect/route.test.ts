@@ -59,6 +59,7 @@ describe('surface disconnect — applies removal by recreating the container', (
       'DISCORD_ALLOWED_CHANNELS=555',
       'DISCORD_ALLOWED_ROLES=777',
       'DISCORD_IGNORED_CHANNELS=888',
+      'DISCORD_DM_ALLOWED_USERS=111',
       'DISCORD_ALLOW_BOTS=none',
       'DISCORD_REQUIRE_MENTION=true',
       'DISCORD_CHANNEL_SCOPED_ACCESS=true',
@@ -82,7 +83,7 @@ describe('surface disconnect — applies removal by recreating the container', (
     const written = (envWrite?.[1] as string) ?? ''
     for (const key of [
       'DISCORD_BOT_TOKEN', 'DISCORD_ALLOWED_USERS', 'DISCORD_ALLOWED_CHANNELS',
-      'DISCORD_ALLOWED_ROLES', 'DISCORD_IGNORED_CHANNELS',
+      'DISCORD_ALLOWED_ROLES', 'DISCORD_IGNORED_CHANNELS', 'DISCORD_DM_ALLOWED_USERS',
     ]) {
       expect(written).not.toContain(`${key}=`)
     }

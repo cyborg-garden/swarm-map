@@ -104,7 +104,7 @@ describe('HarnessService.duplicate — identity reset', () => {
       path.join(srcDir, '.env'),
       'HERMES_AGENT_NAME=srcagent\nAPI_SERVER_PORT=8642\nSIGNAL_ACCOUNT=+15550001111\nDISCORD_BOT_TOKEN=src-bot-token\nSLACK_BOT_TOKEN=xoxb-src\nSLACK_APP_TOKEN=xapp-src\n' +
         // Identity-bound admission vars the old hand-list omitted (drift D4).
-        'MATTERMOST_ADMIN_USERS=srcadmin\nDISCORD_ALLOWED_ROLES=111\nDISCORD_IGNORED_CHANNELS=222\n' +
+        'MATTERMOST_ADMIN_USERS=srcadmin\nDISCORD_ALLOWED_ROLES=111\nDISCORD_IGNORED_CHANNELS=222\nDISCORD_DM_ALLOWED_USERS=333\n' +
         // Behavioral pref — MUST carry to the clone.
         'DISCORD_REQUIRE_MENTION=true\n',
       { mode: 0o600 },
@@ -150,6 +150,7 @@ describe('HarnessService.duplicate — identity reset', () => {
     expect(env).not.toMatch(/^MATTERMOST_ADMIN_USERS=/m)
     expect(env).not.toMatch(/^DISCORD_ALLOWED_ROLES=/m)
     expect(env).not.toMatch(/^DISCORD_IGNORED_CHANNELS=/m)
+    expect(env).not.toMatch(/^DISCORD_DM_ALLOWED_USERS=/m)
     // Behavioral prefs are NOT identity — they carry to the clone.
     expect(env).toMatch(/^DISCORD_REQUIRE_MENTION=true$/m)
   })

@@ -51,7 +51,7 @@ vi.mock('@/lib/env-helpers', async () => ({
 import { GET, PUT } from './route'
 import { generateStandaloneCompose, isDeployBornCompose } from '@/lib/services/harness-compose'
 import { services } from '@/lib/services'
-import { expandSignalAllowlist, expandTelegramAllowlist } from '@/lib/resolvers'
+import { expandDiscordAllowlist, expandSignalAllowlist, expandTelegramAllowlist } from '@/lib/resolvers'
 import { buildSettingsEnvValue } from '@/lib/env-helpers'
 
 function makeParams(id: string) {
@@ -1356,5 +1356,140 @@ describe('Settings API — Discord thread mention gate (2026-10-06)', () => {
     files['.env'] = 'SIGNAL_ACCOUNT=+1\n'
     await PUT(makeRequest(policyBody({ discordThreadMentionGating: false })), makeParams('h_test'))
     expect(written).not.toContain('DISCORD_THREAD_REQUIRE_MENTION')
+  })
+})
+
+describe('Settings API: DM lists survive saves', () => {
+  const A = '100000000000000001'
+  const B = '100000000000000002'
+  let env = ''
+  let written: string | undefined
+  // No explicit admins: the allowlist doubles as the admin list, the case where
+  // an allowlist edit could be mistaken for an admin change.
+  const listAdmins = vi.fn(() => ({ source: 'allowlist', admins: [], allowAllDm: false }))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    written = undefined
+    ;(services.surfaceAdmins as unknown as { listAdmins: unknown }).listAdmins = listAdmins
+    vi.mocked(buildSettingsEnvValue).mockImplementation((_p, all, users) =>
+      users.length ? users.join(',') : all ? '*' : '')
+    vi.mocked(expandDiscordAllowlist).mockImplementation(async (_id, users) => users)
+    vi.mocked(expandSignalAllowlist).mockImplementation(async (_id, users) => users)
+    vi.spyOn(os, 'homedir').mockReturnValue('/home/test')
+    vi.spyOn(fs, 'existsSync').mockImplementation(((p: fs.PathLike) => String(p).endsWith('.env')) as never)
+    vi.spyOn(fs, 'statSync').mockReturnValue({ mtimeMs: 1111.0 } as unknown as fs.Stats)
+    vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor) => {
+      if (String(p).endsWith('.env')) return env
+      throw new Error('ENOENT')
+    }) as never)
+    vi.spyOn(fs, 'writeFileSync').mockImplementation(((p: unknown, data: unknown) => {
+      if (typeof data === 'string' && String(p).endsWith('.env')) written = data
+    }) as never)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.mocked(buildSettingsEnvValue).mockReset()
+    vi.mocked(buildSettingsEnvValue).mockReturnValue('')
+    delete (services.surfaceAdmins as unknown as { listAdmins?: unknown }).listAdmins
+  })
+
+  const put = (platform: string, allowedUsers: string[], allowAll = false) => PUT(makeRequest({
+    dmPolicy: 'approved-only',
+    groupInvitePolicy: 'approved-only',
+    mentionGating: true,
+    commandApprovalAdminOnly: true,
+    memoryScope: 'channel',
+    surfaces: { [platform]: { allowedUsers, adminUsers: allowedUsers, allowedGroups: [], allowAll, allowAllGroups: false } },
+  }), makeParams('h_test'))
+  const dm = () => (written ?? env).match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm)
+  const signal = () => (written ?? env).match(/^SIGNAL_ALLOWED_USERS=.*$/gm)
+
+  it('a save that does not change the allowlist keeps a hand-set DM list, closed or narrower', async () => {
+    for (const dmValue of [A, '', '*']) {
+      env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A},${B}\nDISCORD_DM_ALLOWED_USERS=${dmValue}\n`
+      expect((await put('discord', [A, B])).status).toBe(200)
+      expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${dmValue}`])
+    }
+  })
+
+  it('never adds the line on a save of an agent that lacks it', async () => {
+    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\n`
+    await put('discord', [A])
+    expect(dm()).toBeNull()
+  })
+
+  it('adding a channel user never adds them to DMs, even when the DM list matched the allowlist', async () => {
+    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
+    await put('discord', [A, B])
+    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('adding to the allowlist of a closed agent keeps DMs closed', async () => {
+    env = 'DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=\nDISCORD_DM_ALLOWED_USERS=\n'
+    await put('discord', [A])
+    expect(dm()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
+  })
+
+  it('removing a user from the allowlist leaves the DM list as it is', async () => {
+    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A},${B}\nDISCORD_DM_ALLOWED_USERS=${A},${B}\n`
+    await put('discord', [A])
+    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A},${B}`])
+  })
+
+  it('an allow-all allowlist never turns the DM gate off', async () => {
+    env = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\n`
+    await put('discord', [], true)
+    expect(dm()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
+  })
+
+  it('Signal GET shows the deny value as an empty list, not a phantom user', async () => {
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=0\n'
+    const res = await GET(makeRequest({}) as Request, makeParams('h_test'))
+    const body = await res.json() as { surfaces: Record<string, { allowedUsers: string[]; allowAll: boolean }> }
+    expect(body.surfaces.signal.allowedUsers).toEqual([])
+    expect(body.surfaces.signal.allowAll).toBe(false)
+  })
+
+  it('Signal: a whole-document save keeps the deny value instead of blanking it open', async () => {
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=0\n'
+    await put('signal', [])
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS=0'])
+  })
+
+  it('Signal: clearing a real list closes it rather than opening it', async () => {
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=+15550001111\n'
+    await put('signal', [])
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS=0'])
+  })
+
+  it('Signal: an existing agent keeps what it has on a save (list, *, or empty)', async () => {
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=+15550001111\n'
+    await put('signal', ['+15550001111'])
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS=+15550001111'])
+    written = undefined
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=*\n'
+    await put('signal', [], true)
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS=*'])
+    written = undefined
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=\n'
+    await put('signal', [])
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS='])
+  })
+
+  it('Signal: a page save adds no empty list to an agent that has none', async () => {
+    env = 'GITHUB_TOKEN=x\n'
+    await put('signal', [])
+    expect(signal()).toBeNull()
+    written = undefined
+    env = 'SIGNAL_ACCOUNT=+15550000000\n'
+    await put('signal', [])
+    expect(signal()).toBeNull()
+  })
+
+  it('Signal: adding a user replaces the deny value rather than sitting beside it', async () => {
+    env = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=0\n'
+    await put('signal', ['+15550001111'])
+    expect(signal()).toEqual(['SIGNAL_ALLOWED_USERS=+15550001111'])
   })
 })

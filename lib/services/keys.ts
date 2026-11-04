@@ -7,6 +7,9 @@ import type { Storage } from './storage'
 import type { AuditService } from './audit'
 import { Encryption } from './encryption'
 import { assertNoNewline } from '@/lib/env-helpers'
+import { SURFACES } from '@/lib/surfaces/registry'
+import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
+import { readEnvValue } from './discord-thread-gate'
 
 const KEYS_FILE = 'keys.json'
 
@@ -509,7 +512,14 @@ export class KeysService {
       this.audit.append({ who: 'admin', what: 'key:refused-github-broker', target: name })
       return false
     }
+    // A Signal key connects the surface without going through the connect route,
+    // and the adapter reads an unset list as '*' and an empty one as open mode.
+    const signal = SURFACES.signal
+    const newToSignal = varName === signal.credentials[0] && !readEnvValue(content, varName)
     content = upsertEnvVar(content, varName, value)
+    if (newToSignal && !readEnvValue(content, signal.admission.users)) {
+      content = upsertEnvVar(content, signal.admission.users, SIGNAL_DENY_ALL_USERS)
+    }
 
     // Anthropic's credential belongs in exactly one var depending on its format;
     // clear the other so a stale value can't add a conflicting auth header.

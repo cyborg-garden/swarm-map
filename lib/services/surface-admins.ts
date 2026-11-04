@@ -5,6 +5,8 @@ import type { Harness } from '@/lib/types'
 import type { Storage } from './storage'
 import type { AuditService } from './audit'
 import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/lib/surfaces/registry'
+import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
+import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
   GROUPS_VARS as DERIVED_GROUPS_VARS,
@@ -178,7 +180,9 @@ export class SurfaceAdminService {
     const env = parseEnvFile(path.join(agentDataDir(harnessId), '.env'))
     const raw = env[varName]
     if (raw === '*') return { admins: [], allowAllDm: true }
-    return { admins: parseCommaList(raw), allowAllDm: false }
+    const admins = parseCommaList(raw)
+    // Signal's "nobody" value is not a person.
+    return { admins: platform === 'signal' ? admins.filter((a) => a !== SIGNAL_DENY_ALL_USERS) : admins, allowAllDm: false }
   }
 
   /**
@@ -228,6 +232,12 @@ export class SurfaceAdminService {
    * keeps self-escalation blocked even if the transport gate is disabled via
    * its kill-switch (HSM_OPERATOR_TOKEN unset).
    *
+   * On Discord this also updates DISCORD_DM_ALLOWED_USERS in the agent .env, if
+   * that list still matched the previous admins. The running bot only sees that
+   * after a recreate, which `dmEnvUpdated` asks the route to do; `dmEnvWarning`
+   * reports a list left alone or an admin the runtime will refuse. No other
+   * surface's .env is touched (see lib/surfaces/dm-allowlist).
+   *
    * Returns a discriminated result rather than throwing so the route can map it
    * to the right HTTP status.
    */
@@ -237,7 +247,7 @@ export class SurfaceAdminService {
     admins: unknown,
     actor: string,
   ):
-    | { ok: true; admins: string[] }
+    | { ok: true; admins: string[]; dmEnvUpdated?: true; dmEnvWarning?: string }
     | { ok: false; status: 400 | 403; error: string } {
     if (!isSupportedSurface(platform)) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
@@ -267,6 +277,8 @@ export class SurfaceAdminService {
       }
     }
 
+    const previousExplicit = this.explicitAdmins(harnessId, platform)
+
     // Persist onto the harness overlay (read-modify-write the raw array — the
     // single persisted shape; HarnessService tolerates partial overlays).
     const overlays = this.readOverlays()
@@ -286,7 +298,47 @@ export class SurfaceAdminService {
       meta: { count: cleaned.length },
     })
 
-    return { ok: true, admins: cleaned }
+    return { ok: true, admins: cleaned, ...(platform === 'discord' ? this.syncDiscordDmEnv(harnessId, previousExplicit, cleaned) : {}) }
+  }
+
+  // Never throws: the admin change has already been saved, so a failed .env write
+  // is reported to the caller rather than undoing it or passing unnoticed.
+  private syncDiscordDmEnv(
+    harnessId: string,
+    previousAdmins: string[] | undefined,
+    admins: string[],
+  ): { dmEnvUpdated?: true; dmEnvWarning?: string } {
+    let envPath: string
+    let env: string
+    try {
+      envPath = path.join(agentDataDir(harnessId), '.env')
+      env = fs.readFileSync(envPath, 'utf-8')
+    } catch {
+      return {} // no .env means no surface to update
+    }
+    if (!hasDiscordSurface(env)) return {}
+    const change = discordDmAfterAdminSet(
+      readEnvValue(env, DISCORD_DM_USERS_VAR), previousAdmins, admins, readEnvValue(env, ALLOWED_USERS_VARS.discord),
+    )
+    if (change.action === 'left') {
+      const left = change.reason === 'matches-allowlist'
+        ? `Admins saved. This first list matches the allowlist, which also holds channel users, so ${DISCORD_DM_USERS_VAR} was left unchanged.`
+        : `Admins saved. ${DISCORD_DM_USERS_VAR} did not match the previous admins, so it was left unchanged.`
+      return { dmEnvWarning: [left, discordDmRefusedWarning(env, admins)].filter(Boolean).join(' ') }
+    }
+    if (change.action === 'none') {
+      const refused = discordDmRefusedWarning(env, admins)
+      return refused ? { dmEnvWarning: refused } : {}
+    }
+    const nextEnv = setEnvLine(env, DISCORD_DM_USERS_VAR, change.value)
+    try {
+      fs.writeFileSync(envPath, nextEnv, { mode: 0o600 })
+    } catch (err) {
+      console.error(`[surface-admins] could not update ${DISCORD_DM_USERS_VAR} for ${harnessId}:`, err)
+      return { dmEnvWarning: `Admins saved, but ${DISCORD_DM_USERS_VAR} was not updated in the agent .env.` }
+    }
+    const refused = discordDmRefusedWarning(nextEnv, admins)
+    return { dmEnvUpdated: true, ...(refused ? { dmEnvWarning: refused } : {}) }
   }
 
   /**

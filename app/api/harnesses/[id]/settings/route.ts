@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { buildSettingsEnvValue } from '@/lib/env-helpers'
+import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { resolveIdentifier, expandSignalAllowlist, expandTelegramAllowlist, expandDiscordAllowlist } from '@/lib/resolvers'
 import {
   PLATFORM_VARS as DERIVED_PLATFORM_VARS,
@@ -271,7 +272,9 @@ export async function GET(
       ? []
       : parseCommaList(groupsRaw)
 
+    // Signal's "nobody" value is shown as an empty list, not as a user.
     const users = parseCommaList(usersRaw)
+      .filter(u => !(platform === 'signal' && u === SIGNAL_DENY_ALL_USERS))
     surfaces[platform] = {
       allowedUsers: users,
       adminUsers: users,  // backward compat — old plugins read this field
@@ -633,11 +636,19 @@ export async function PUT(
         telegramAllowlist = allowedUsers
       }
     }
-    const usersValue = buildSettingsEnvValue(body.dmPolicy, settings.allowAll, allowedUsers)
+    let usersValue = buildSettingsEnvValue(body.dmPolicy, settings.allowAll, allowedUsers)
+    // Signal's adapter reads an empty list as open mode, so a cleared list (or an
+    // echoed deny value, which GET shows as empty) must stay a real deny. Decided
+    // from disk: an existing agent already on empty keeps what it has.
+    if (platform === 'signal' && usersValue === '' && !!existingEnv[vars.users]) {
+      usersValue = SIGNAL_DENY_ALL_USERS
+    }
     const usersRegex = new RegExp(`^${vars.users}=.*$`, 'm')
     if (usersRegex.test(content)) {
       content = content.replace(usersRegex, () => `${vars.users}=${usersValue}`)
-    } else {
+    } else if (platform !== 'signal' || usersValue !== '') {
+      // Signal skips this when empty: the save would otherwise add an empty list,
+      // which is open mode, to an agent that does not have one.
       content = content.trimEnd() + `\n${vars.users}=${usersValue}\n`
     }
 

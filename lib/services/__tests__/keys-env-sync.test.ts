@@ -273,3 +273,43 @@ describe('agents on the GitHub token broker', () => {
     expect(fs.readFileSync(envFor('a'), 'utf-8')).toBe('OTHER=1\n')
   })
 })
+
+describe('writeKeyToEnv: a Signal key is a first connect too', () => {
+  let home: string
+  let store: string
+  let prevHome: string | undefined
+  const envPath = () => path.join(home, '.hermes-sig', '.env')
+  const svc = () => {
+    const storage = new Storage(store)
+    return new KeysService(storage, new AuditService(storage))
+  }
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'keys-signal-'))
+    store = fs.mkdtempSync(path.join(os.tmpdir(), 'keys-signal-store-'))
+    prevHome = process.env.HOME
+    process.env.HOME = home
+    fs.mkdirSync(path.dirname(envPath()), { recursive: true })
+  })
+  afterEach(() => {
+    process.env.HOME = prevHome
+    fs.rmSync(home, { recursive: true, force: true })
+    fs.rmSync(store, { recursive: true, force: true })
+  })
+
+  it.each(['', 'SIGNAL_ALLOWED_USERS=\n'])('closes the list on an agent new to Signal: %j', (start) => {
+    fs.writeFileSync(envPath(), start)
+    svc().writeKeyToEnv('h_sig', 'signal', '+15550000000')
+    expect(fs.readFileSync(envPath(), 'utf-8').match(/^SIGNAL_ALLOWED_USERS=.*$/gm)).toEqual(['SIGNAL_ALLOWED_USERS=0'])
+  })
+
+  it.each([
+    ['SIGNAL_ACCOUNT=+15550000000\n', null],
+    ['SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=\n', ['SIGNAL_ALLOWED_USERS=']],
+    ['SIGNAL_ALLOWED_USERS=+15550001111\n', ['SIGNAL_ALLOWED_USERS=+15550001111']],
+  ])('leaves %j as it is', (start, want) => {
+    fs.writeFileSync(envPath(), start)
+    svc().writeKeyToEnv('h_sig', 'signal', '+15550000009')
+    expect(fs.readFileSync(envPath(), 'utf-8').match(/^SIGNAL_ALLOWED_USERS=.*$/gm)).toEqual(want)
+  })
+})

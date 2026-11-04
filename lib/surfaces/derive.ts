@@ -135,6 +135,7 @@ export function surfaceStripVars(platform: SurfaceSlug): string[] {
       s.admission.roles,
       s.admission.ignoredGroups,
       s.admission.adminUsers,
+      s.admission.dmUsers,
     ].filter(Boolean) as string[]),
   ]
 }

@@ -242,6 +242,9 @@ export function publicReachabilityWarnings(env: string): string[] {
   if (val('DISCORD_ALLOWED_USERS').split(',').some((u) => u.trim() === '*')) {
     out.push('public surface: DISCORD_ALLOWED_USERS contains "*", which re-opens DMs to everyone')
   }
+  if (val('DISCORD_DM_ALLOWED_USERS').split(',').some((u) => u.trim() === '*')) {
+    out.push('public surface: DISCORD_DM_ALLOWED_USERS contains "*", which turns the DM gate off')
+  }
   return out
 }
 function envValue(env: string, key: string): string | undefined {
