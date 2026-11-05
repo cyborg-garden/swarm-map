@@ -499,9 +499,19 @@ def fence(content, filename):
 MAX_TOKENS = 16384
 RETRY_MAX_TOKENS = 65536
 
+# Seconds a single socket read may wait. The request is not streamed, so the
+# first byte arrives only after the model has finished reasoning: 180 s was too
+# short for a 16k-65k token reply. Still finite, so a dead provider cannot hang
+# the job; a timeout fails the layer closed as ModelTimeout naming the file.
+REQUEST_TIMEOUT = 600
+
 
 class ModelReplyError(RuntimeError):
     """The provider answered, but with an error instead of a completion."""
+
+
+class ModelTimeout(ModelReplyError):
+    """The provider did not answer within REQUEST_TIMEOUT."""
 
 
 class EmptyModelReply(ValueError):
@@ -543,7 +553,7 @@ def assess(content, client, filename, system_prompt, model):
                 messages=[{"role": "user", "content": fence(content, filename)}],
             )
         except ModelReplyError as exc:
-            raise ModelReplyError(f"{filename}: {exc}") from None
+            raise type(exc)(f"{filename}: {exc}") from None
         text = msg.content[0].text or ""
         if text.strip():
             break
@@ -557,11 +567,15 @@ def assess(content, client, filename, system_prompt, model):
     except ValueError as exc:
         raise ValueError(f"{filename}: {exc}") from None
     if "flagged" not in verdict:
-        raise ValueError(f"model response missing 'flagged' key: {verdict!r}")
+        raise ValueError(f"{filename}: model response missing 'flagged' key: {verdict!r}")
+    # Only a real JSON boolean is a verdict. bool(null), bool("false") and
+    # bool(0) would all read as clean, so anything else fails the layer closed.
+    if not isinstance(verdict["flagged"], bool):
+        raise ValueError(f"{filename}: 'flagged' is not a boolean: {verdict['flagged']!r}")
     reasons = verdict.get("reasons", [])
     if isinstance(reasons, str):
         reasons = [reasons]
-    result = {"flagged": bool(verdict["flagged"]), "reasons": list(reasons)}
+    result = {"flagged": verdict["flagged"], "reasons": list(reasons)}
     _ASSESS_CACHE[key] = result
     return result
 
@@ -605,8 +619,18 @@ class _OpenRouterClient:
             "Content-Type": "application/json",
             "User-Agent": "cyborg-garden-sanitization/1.0",
         })
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.load(resp)
+        import urllib.error
+        try:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                data = json.load(resp)
+        except TimeoutError as exc:  # socket.timeout is TimeoutError
+            raise ModelTimeout(f"{model} did not answer within {REQUEST_TIMEOUT}s "
+                               f"(max_tokens={max_tokens})") from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise ModelTimeout(f"{model} did not answer within {REQUEST_TIMEOUT}s "
+                                   f"(max_tokens={max_tokens})") from exc
+            raise
         choice = (data.get("choices") or [{}])[0] or {}
         # OpenRouter can answer HTTP 200 with an error body (provider failure,
         # data-policy refusal) at the top level or on the choice. Surface it as
@@ -619,8 +643,15 @@ class _OpenRouterClient:
                     f" (provider {prov})" if prov else "")
             raise ModelReplyError(f"OpenRouter returned an error for {model}: {err}")
         raw = (choice.get("message") or {}).get("content")
-        if isinstance(raw, list):  # content parts
-            raw = "".join(p.get("text", "") for p in raw if isinstance(p, dict))
+        if isinstance(raw, list):
+            # Content parts. Only "text" parts are the answer: a reasoning or
+            # thinking part is the model's draft, and a clean verdict in a draft
+            # must never stand in for (or outrank) the real one.
+            raw = "".join(
+                p if isinstance(p, str)
+                else (p.get("text") or "") if isinstance(p, dict) and p.get("type") == "text"
+                else ""
+                for p in raw)
         usage = data.get("usage") or {}
         meta = {
             "finish_reason": choice.get("finish_reason"),
@@ -701,6 +732,10 @@ def _describe_failure(exc):
             "repeats on the same file raise MAX_TOKENS / RETRY_MAX_TOKENS in the "
             "gate or pick a model that reasons less (semantic.model)."
         )
+    elif "ModelTimeout" in detail:
+        detail += ("\n  HINT: no answer before the request timeout. Not a leak: "
+                   "re-run; if the same file keeps timing out, the model is "
+                   "reasoning too long on it.")
     elif "ModelReplyError" in detail:
         detail += ("\n  HINT: the provider failed the request. On a ZDR-only "
                    "account this can mean no ZDR endpoint served the model; "

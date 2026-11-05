@@ -1526,3 +1526,92 @@ def test_fake_clients_without_metadata_still_work():
     with pytest.raises(cs.EmptyModelReply):
         cs.assess("x", client, "f.md", "sys", "m")
     assert len(client.calls) == 2
+
+
+# ---- audit of PR #286: reasoning parts, non-bool verdicts, timeouts ----------
+
+def test_reasoning_part_is_not_joined_into_the_answer(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    parts = [{"type": "reasoning", "text": '{"flagged": false, "reasons": []}'},
+             {"type": "text", "text": ""}]
+    _openrouter_replies(monkeypatch, [_reply(parts), _reply(parts)])
+    with pytest.raises(cs.EmptyModelReply):
+        cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+
+
+def test_reasoning_clean_draft_cannot_beat_a_flagged_answer(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    parts = [{"type": "thinking", "text": '{"flagged": false, "reasons": []}'},
+             {"type": "text", "text": '{"flagged": true, "reasons": ["codename"]}'}]
+    _openrouter_replies(monkeypatch, [_reply(parts)])
+    v = cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert v == {"flagged": True, "reasons": ["codename"]}
+
+
+def test_plain_string_parts_still_count_as_text(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    _openrouter_replies(monkeypatch, [_reply(['{"flagged": true, ', '"reasons": ["x"]}'])])
+    assert cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)["flagged"] is True
+
+
+@pytest.mark.parametrize("value", ["null", '"false"', "0", "1", '"no"', "[]"])
+def test_non_boolean_flagged_fails_closed(value):
+    cs._ASSESS_CACHE.clear()
+    client = _FakeClient('{"flagged": %s, "reasons": []}' % value)
+    with pytest.raises(ValueError) as ei:
+        cs.assess("x", client, "f.md", "sys", "m")
+    assert "f.md" in str(ei.value)
+
+
+def test_non_boolean_flagged_fails_closed_in_main(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["hermes-skill/"]}')
+    _write(root, "hermes-skill/SKILL.md", "Generic methodology.")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present")
+    cs._ASSESS_CACHE.clear()
+    rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
+                 client_factory=lambda: _FakeClient('{"flagged": null}'))
+    out = capsys.readouterr().out
+    assert rc == 2 and "clean" not in out
+
+
+def test_socket_timeout_is_long_enough_for_the_big_budget(monkeypatch):
+    import io
+    import json as _json
+    import urllib.request
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["timeout"] = timeout
+        return io.BytesIO(_json.dumps(_OK).encode())
+
+    cs._ASSESS_CACHE.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert 600 <= seen["timeout"] <= 900  # long enough, still bounded
+
+
+@pytest.mark.parametrize("exc_factory", [
+    lambda: TimeoutError("timed out"),
+    lambda: __import__("socket").timeout("timed out"),
+    lambda: __import__("urllib.error").error.URLError(TimeoutError("timed out")),
+])
+def test_timeout_fails_closed_naming_the_file(tmp_path, monkeypatch, capsys, exc_factory):
+    import urllib.request
+
+    def fake_urlopen(req, timeout):
+        raise exc_factory()
+
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["hermes-skill/"]}')
+    _write(root, "hermes-skill/SKILL.md", "Generic methodology.")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present")
+    cs._ASSESS_CACHE.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
+                 client_factory=lambda: cs._OpenRouterClient("k"))
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "failing closed" in out
+    assert "ModelTimeout" in out
+    assert "hermes-skill/SKILL.md" in out
