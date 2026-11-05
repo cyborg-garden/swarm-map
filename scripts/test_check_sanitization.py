@@ -1388,3 +1388,230 @@ def test_jwts_are_caught_inside_fixture_dirs(tmp_path):
     _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
     _write(root, "tests/f.py", "T = '" + _F("eyJ", "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ") + "'")
     assert cs.main(["--deterministic-only", "tests/f.py"], root=root) == 1
+
+
+# ---- empty replies from reasoning models (game-maker PR #3, 2026-11-05) -------
+#
+# kimi-k3 is a reasoning model. On a large file it spent the whole output
+# budget thinking, OpenRouter returned 200 with content "" and
+# finish_reason "length", and the client threw finish_reason, usage and the
+# provider away. The gate then failed with `no verdict object in model reply:
+# ''` and a hint to "fix the extractor" — naming neither the file nor the cause.
+
+def _openrouter_replies(monkeypatch, replies):
+    """Patch urlopen to serve `replies` in order; return the request bodies."""
+    import io
+    import json as _json
+    import urllib.request
+    bodies = []
+
+    def fake_urlopen(req, timeout):
+        bodies.append(_json.loads(req.data))
+        return io.BytesIO(_json.dumps(replies[len(bodies) - 1]).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    return bodies
+
+
+def _reply(content, finish="stop", reasoning_tokens=0, reasoning=None):
+    msg = {"role": "assistant", "content": content}
+    if reasoning is not None:
+        msg["reasoning"] = reasoning
+    return {"provider": "Wafer", "model": "moonshotai/kimi-k3",
+            "choices": [{"finish_reason": finish, "native_finish_reason": finish,
+                         "message": msg}],
+            "usage": {"completion_tokens": 4096,
+                      "completion_tokens_details": {"reasoning_tokens": reasoning_tokens}}}
+
+
+_TRUNCATED = _reply("", finish="length", reasoning_tokens=4096, reasoning="thinking " * 50)
+_OK = _reply('{"flagged": false, "reasons": []}')
+
+
+def test_first_request_budget_leaves_room_after_reasoning(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    bodies = _openrouter_replies(monkeypatch, [_OK])
+    cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert bodies[0]["max_tokens"] >= 16384
+
+
+def test_truncated_by_reasoning_retries_with_a_bigger_budget(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    bodies = _openrouter_replies(monkeypatch, [_TRUNCATED, _OK])
+    v = cs.assess("big file", cs._OpenRouterClient("k"), "tests/big.py", "sys", cs.DEFAULT_MODEL)
+    assert v == {"flagged": False, "reasons": []}
+    assert len(bodies) == 2
+    assert bodies[1]["max_tokens"] > bodies[0]["max_tokens"]
+
+
+def test_empty_after_retry_fails_closed_naming_file_and_cause(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    _openrouter_replies(monkeypatch, [_TRUNCATED, _TRUNCATED])
+    with pytest.raises(cs.EmptyModelReply) as ei:
+        cs.assess("big file", cs._OpenRouterClient("k"), "tests/big.py", "sys", cs.DEFAULT_MODEL)
+    msg = str(ei.value)
+    assert "tests/big.py" in msg
+    assert "finish_reason=length" in msg
+    assert "reasoning_tokens=4096" in msg
+    assert "Wafer" in msg
+
+
+def test_null_content_is_an_empty_reply_not_a_crash(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    _openrouter_replies(monkeypatch, [_reply(None), _reply(None)])
+    with pytest.raises(cs.EmptyModelReply):
+        cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+
+
+def test_empty_stop_reply_is_retried_once(monkeypatch):
+    """A provider hiccup (200, finish_reason stop, no content) gets one retry."""
+    cs._ASSESS_CACHE.clear()
+    bodies = _openrouter_replies(monkeypatch, [_reply(""), _OK])
+    assert cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)["flagged"] is False
+    assert len(bodies) == 2
+
+
+def test_verdict_hidden_in_reasoning_is_not_accepted(monkeypatch):
+    """Reasoning is not the answer. A verdict-shaped string in `reasoning` must
+    never stand in for the reply, or the gate passes on the model's draft."""
+    cs._ASSESS_CACHE.clear()
+    trunc = _reply("", finish="length", reasoning='{"flagged": false, "reasons": []}')
+    _openrouter_replies(monkeypatch, [trunc, trunc])
+    with pytest.raises(cs.EmptyModelReply):
+        cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+
+
+def test_content_parts_list_is_joined(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    parts = [{"type": "text", "text": '{"flagged": true, '}, {"type": "text", "text": '"reasons": ["x"]}'}]
+    _openrouter_replies(monkeypatch, [_reply(parts)])
+    v = cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert v == {"flagged": True, "reasons": ["x"]}
+
+
+def test_error_inside_a_200_reply_is_reported_as_the_provider_error(monkeypatch):
+    """OpenRouter can return HTTP 200 carrying an `error` (mid-stream provider
+    failure, data-policy refusal). That is a provider error, not a parse bug."""
+    cs._ASSESS_CACHE.clear()
+    err = {"error": {"code": 502, "message": "Provider returned error",
+                     "metadata": {"provider_name": "Wafer"}}}
+    _openrouter_replies(monkeypatch, [err])
+    with pytest.raises(cs.ModelReplyError) as ei:
+        cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert "Provider returned error" in str(ei.value)
+    assert "f.md" in str(ei.value)
+
+
+def test_empty_reply_fails_closed_in_main_with_a_budget_hint(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["hermes-skill/"]}')
+    _write(root, "hermes-skill/SKILL.md", "Generic methodology.")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present")
+    cs._ASSESS_CACHE.clear()
+    _openrouter_replies(monkeypatch, [_TRUNCATED, _TRUNCATED])
+    rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
+                 client_factory=lambda: cs._OpenRouterClient("k"))
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "failing closed" in out
+    assert "hermes-skill/SKILL.md" in out
+    assert "fix the extractor" not in out
+    assert "reasoning" in out.lower()
+
+
+def test_fake_clients_without_metadata_still_work():
+    """Test doubles that return only `.text` must keep working (no finish_reason)."""
+    cs._ASSESS_CACHE.clear()
+    client = _FakeClient("")
+    with pytest.raises(cs.EmptyModelReply):
+        cs.assess("x", client, "f.md", "sys", "m")
+    assert len(client.calls) == 2
+
+
+# ---- audit of PR #286: reasoning parts, non-bool verdicts, timeouts ----------
+
+def test_reasoning_part_is_not_joined_into_the_answer(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    parts = [{"type": "reasoning", "text": '{"flagged": false, "reasons": []}'},
+             {"type": "text", "text": ""}]
+    _openrouter_replies(monkeypatch, [_reply(parts), _reply(parts)])
+    with pytest.raises(cs.EmptyModelReply):
+        cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+
+
+def test_reasoning_clean_draft_cannot_beat_a_flagged_answer(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    parts = [{"type": "thinking", "text": '{"flagged": false, "reasons": []}'},
+             {"type": "text", "text": '{"flagged": true, "reasons": ["codename"]}'}]
+    _openrouter_replies(monkeypatch, [_reply(parts)])
+    v = cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert v == {"flagged": True, "reasons": ["codename"]}
+
+
+def test_plain_string_parts_still_count_as_text(monkeypatch):
+    cs._ASSESS_CACHE.clear()
+    _openrouter_replies(monkeypatch, [_reply(['{"flagged": true, ', '"reasons": ["x"]}'])])
+    assert cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)["flagged"] is True
+
+
+@pytest.mark.parametrize("value", ["null", '"false"', "0", "1", '"no"', "[]"])
+def test_non_boolean_flagged_fails_closed(value):
+    cs._ASSESS_CACHE.clear()
+    client = _FakeClient('{"flagged": %s, "reasons": []}' % value)
+    with pytest.raises(ValueError) as ei:
+        cs.assess("x", client, "f.md", "sys", "m")
+    assert "f.md" in str(ei.value)
+
+
+def test_non_boolean_flagged_fails_closed_in_main(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["hermes-skill/"]}')
+    _write(root, "hermes-skill/SKILL.md", "Generic methodology.")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present")
+    cs._ASSESS_CACHE.clear()
+    rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
+                 client_factory=lambda: _FakeClient('{"flagged": null}'))
+    out = capsys.readouterr().out
+    assert rc == 2 and "clean" not in out
+
+
+def test_socket_timeout_is_long_enough_for_the_big_budget(monkeypatch):
+    import io
+    import json as _json
+    import urllib.request
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["timeout"] = timeout
+        return io.BytesIO(_json.dumps(_OK).encode())
+
+    cs._ASSESS_CACHE.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    cs.assess("x", cs._OpenRouterClient("k"), "f.md", "sys", cs.DEFAULT_MODEL)
+    assert 600 <= seen["timeout"] <= 900  # long enough, still bounded
+
+
+@pytest.mark.parametrize("exc_factory", [
+    lambda: TimeoutError("timed out"),
+    lambda: __import__("socket").timeout("timed out"),
+    lambda: __import__("urllib.error").error.URLError(TimeoutError("timed out")),
+])
+def test_timeout_fails_closed_naming_the_file(tmp_path, monkeypatch, capsys, exc_factory):
+    import urllib.request
+
+    def fake_urlopen(req, timeout):
+        raise exc_factory()
+
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", '{"sensitive_prefixes":["hermes-skill/"]}')
+    _write(root, "hermes-skill/SKILL.md", "Generic methodology.")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "present")
+    cs._ASSESS_CACHE.clear()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    rc = cs.main(["--require-semantic", "hermes-skill/SKILL.md"], root=root,
+                 client_factory=lambda: cs._OpenRouterClient("k"))
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "failing closed" in out
+    assert "ModelTimeout" in out
+    assert "hermes-skill/SKILL.md" in out

@@ -59,7 +59,7 @@ import secrets as _secrets
 import subprocess
 import sys
 
-GATE_VERSION = "1.0.0"
+GATE_VERSION = "1.0.1"
 
 # ---------------------------------------------------------------- config
 
@@ -488,9 +488,42 @@ def fence(content, filename):
             f"BEGIN UNTRUSTED CONTENT [{nonce}]\n{content}\nEND UNTRUSTED CONTENT [{nonce}]")
 
 
-# Output budget. Reasoning models spend part of it before the verdict; 1024 left
-# some replies truncated to an empty string, which then fails the parse.
-MAX_TOKENS = 4096
+# Output budget. Reasoning models (kimi-k3) spend it thinking BEFORE they write
+# the verdict, and how much they think grows with the file. 1024 truncated small
+# files; 4096 truncated a 70 KB test file on game-maker PR #3 (2026-11-05):
+# OpenRouter answered 200 with content "" and finish_reason "length". A reply
+# cut off that way is retried once with the larger budget; a reply that is still
+# empty fails the layer (closed) with the file, finish_reason and token counts.
+# Reasoning text is never parsed for a verdict: it is the model's draft, not its
+# answer.
+MAX_TOKENS = 16384
+RETRY_MAX_TOKENS = 65536
+
+# Seconds a single socket read may wait. The request is not streamed, so the
+# first byte arrives only after the model has finished reasoning: 180 s was too
+# short for a 16k-65k token reply. Still finite, so a dead provider cannot hang
+# the job; a timeout fails the layer closed as ModelTimeout naming the file.
+REQUEST_TIMEOUT = 600
+
+
+class ModelReplyError(RuntimeError):
+    """The provider answered, but with an error instead of a completion."""
+
+
+class ModelTimeout(ModelReplyError):
+    """The provider did not answer within REQUEST_TIMEOUT."""
+
+
+class EmptyModelReply(ValueError):
+    """The model returned no content to judge (truncated or provider glitch)."""
+
+
+def _reply_facts(msg):
+    """finish_reason / usage / provider from a client reply, when it has them."""
+    meta = getattr(msg, "meta", None) or {}
+    keys = ("finish_reason", "native_finish_reason", "completion_tokens",
+            "reasoning_tokens", "provider")
+    return ", ".join(f"{k}={meta[k]}" for k in keys if meta.get(k) not in (None, ""))
 
 _ASSESS_CACHE = {}
 
@@ -508,17 +541,41 @@ def assess(content, client, filename, system_prompt, model):
         "utf-8", "replace")).hexdigest()
     if key in _ASSESS_CACHE:
         return _ASSESS_CACHE[key]
-    msg = client.messages.create(
-        model=model, max_tokens=MAX_TOKENS, system=system_prompt,
-        messages=[{"role": "user", "content": fence(content, filename)}],
-    )
-    verdict = _extract_json(msg.content[0].text)
+    # One retry, for an empty reply only: a truncated reply gets the larger
+    # budget, a provider glitch (stop, no content) just gets a second try. A
+    # reply WITH content is judged as-is; it is never re-rolled for a better one.
+    attempts = []
+    text = ""
+    for budget in (MAX_TOKENS, RETRY_MAX_TOKENS):
+        try:
+            msg = client.messages.create(
+                model=model, max_tokens=budget, system=system_prompt,
+                messages=[{"role": "user", "content": fence(content, filename)}],
+            )
+        except ModelReplyError as exc:
+            raise type(exc)(f"{filename}: {exc}") from None
+        text = msg.content[0].text or ""
+        if text.strip():
+            break
+        attempts.append(f"max_tokens={budget}" + (f", {_reply_facts(msg)}" if _reply_facts(msg) else ""))
+    else:
+        raise EmptyModelReply(
+            f"{filename}: model {model} returned no content in {len(attempts)} "
+            f"attempt(s) [" + "; ".join(attempts) + "]")
+    try:
+        verdict = _extract_json(text)
+    except ValueError as exc:
+        raise ValueError(f"{filename}: {exc}") from None
     if "flagged" not in verdict:
-        raise ValueError(f"model response missing 'flagged' key: {verdict!r}")
+        raise ValueError(f"{filename}: model response missing 'flagged' key: {verdict!r}")
+    # Only a real JSON boolean is a verdict. bool(null), bool("false") and
+    # bool(0) would all read as clean, so anything else fails the layer closed.
+    if not isinstance(verdict["flagged"], bool):
+        raise ValueError(f"{filename}: 'flagged' is not a boolean: {verdict['flagged']!r}")
     reasons = verdict.get("reasons", [])
     if isinstance(reasons, str):
         reasons = [reasons]
-    result = {"flagged": bool(verdict["flagged"]), "reasons": list(reasons)}
+    result = {"flagged": verdict["flagged"], "reasons": list(reasons)}
     _ASSESS_CACHE[key] = result
     return result
 
@@ -562,11 +619,49 @@ class _OpenRouterClient:
             "Content-Type": "application/json",
             "User-Agent": "cyborg-garden-sanitization/1.0",
         })
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.load(resp)
-        text = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-        block = type("B", (), {"text": text})()
-        return type("M", (), {"content": [block]})()
+        import urllib.error
+        try:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                data = json.load(resp)
+        except TimeoutError as exc:  # socket.timeout is TimeoutError
+            raise ModelTimeout(f"{model} did not answer within {REQUEST_TIMEOUT}s "
+                               f"(max_tokens={max_tokens})") from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise ModelTimeout(f"{model} did not answer within {REQUEST_TIMEOUT}s "
+                                   f"(max_tokens={max_tokens})") from exc
+            raise
+        choice = (data.get("choices") or [{}])[0] or {}
+        # OpenRouter can answer HTTP 200 with an error body (provider failure,
+        # data-policy refusal) at the top level or on the choice. Surface it as
+        # the provider error it is, not as an unparseable verdict.
+        err = data.get("error") or choice.get("error")
+        if err:
+            if isinstance(err, dict):
+                prov = (err.get("metadata") or {}).get("provider_name")
+                err = f"{err.get('code', '')} {err.get('message', '')}".strip() + (
+                    f" (provider {prov})" if prov else "")
+            raise ModelReplyError(f"OpenRouter returned an error for {model}: {err}")
+        raw = (choice.get("message") or {}).get("content")
+        if isinstance(raw, list):
+            # Content parts. Only "text" parts are the answer: a reasoning or
+            # thinking part is the model's draft, and a clean verdict in a draft
+            # must never stand in for (or outrank) the real one.
+            raw = "".join(
+                p if isinstance(p, str)
+                else (p.get("text") or "") if isinstance(p, dict) and p.get("type") == "text"
+                else ""
+                for p in raw)
+        usage = data.get("usage") or {}
+        meta = {
+            "finish_reason": choice.get("finish_reason"),
+            "native_finish_reason": choice.get("native_finish_reason"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "reasoning_tokens": (usage.get("completion_tokens_details") or {}).get("reasoning_tokens"),
+            "provider": data.get("provider"),
+        }
+        block = type("B", (), {"text": raw if isinstance(raw, str) else ""})()
+        return type("M", (), {"content": [block], "meta": meta})()
 
 
 def semantic_model(cfg):
@@ -628,6 +723,23 @@ def _describe_failure(exc):
             "stripped automatically, so an interior newline is the likely cause: "
             "re-enter the OPENROUTER_API_KEY secret as a single unbroken line."
         )
+    elif "EmptyModelReply" in detail:
+        detail += (
+            "\n  HINT: the model returned no text to judge. finish_reason=length "
+            "with reasoning_tokens near max_tokens means it spent the whole output "
+            "budget reasoning before writing a verdict; anything else is usually "
+            "a provider hiccup. Not a leak and not a parse bug: re-run, and if it "
+            "repeats on the same file raise MAX_TOKENS / RETRY_MAX_TOKENS in the "
+            "gate or pick a model that reasons less (semantic.model)."
+        )
+    elif "ModelTimeout" in detail:
+        detail += ("\n  HINT: no answer before the request timeout. Not a leak: "
+                   "re-run; if the same file keeps timing out, the model is "
+                   "reasoning too long on it.")
+    elif "ModelReplyError" in detail:
+        detail += ("\n  HINT: the provider failed the request. On a ZDR-only "
+                   "account this can mean no ZDR endpoint served the model; "
+                   "check the model's endpoints, then re-run.")
     elif "no verdict object in model reply" in detail:
         detail += (
             "\n  HINT: the model replied but the verdict object could not be found. "
