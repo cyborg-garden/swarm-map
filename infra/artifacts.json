@@ -31,6 +31,13 @@
       "enabled": true,
       "tier": "pack",
       "pack": "browser-ops"
+    },
+    {
+      "name": "papareo_transcribe",
+      "source": "git:cyborg-garden/papareo-transcribe#v0.5.0:hermes-plugin",
+      "enabled": true,
+      "tier": "pack",
+      "pack": "papareo-transcription"
     }
   ],
   "imagePlugins": [
@@ -65,6 +72,12 @@
       "source": "local",
       "tier": "pack",
       "pack": "browser-ops"
+    },
+    {
+      "name": "papareo-transcribe",
+      "source": "git:cyborg-garden/papareo-transcribe#v0.5.0:hermes-skill",
+      "tier": "pack",
+      "pack": "papareo-transcription"
     }
   ],
   "hooks": [
@@ -86,6 +99,10 @@
     "community-member": {
       "description": "Public-safe community seed (orientation + community MEMORY). Ships via the use-case template path.",
       "public": true
+    },
+    "papareo-transcription": {
+      "description": "transcribe_recording: local whisper or Papa Reo (te reo Maori), the person picks. Without ovenmitt, Papa Reo files go only to platforms in PAPAREO_DIRECT_PLATFORMS. Install via POST /api/harnesses/:id/artifacts/pack. Needs PAPAREO_API_KEY and stt.enabled: false.",
+      "public": false
     }
   },
   "research": {
