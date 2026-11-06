@@ -175,7 +175,7 @@ memory:
 session_reset:
   mode: both
   idle_minutes: 1440
-  at_hour: 15  # a UTC hour: Hermes containers run in UTC (15 = 4am NZDT)
+  at_hour: 4  # a UTC hour: Hermes containers run in UTC; use the UTC hour of your local 4am
 
 group_sessions_per_user: true
 

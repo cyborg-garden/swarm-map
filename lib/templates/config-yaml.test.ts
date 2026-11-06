@@ -52,13 +52,13 @@ describe('generateDefaultConfig', () => {
 
   it('writes at_hour as the UTC hour of 4am on the deploying host', () => {
     // Hermes containers run in UTC and read at_hour as a UTC hour, so a
-    // literal 4 resets at 5pm in New Zealand. Convert 4am local to UTC.
+    // literal 4 resets mid-afternoon on a UTC+12 host. Convert 4am local to UTC.
     const at = (offsetMinutes: number) => {
       const fakeNow = { getTimezoneOffset: () => offsetMinutes } as Date
       return generateDefaultConfig({ ...baseParams, now: fakeNow }).match(/at_hour: (\d+)/)?.[1]
     }
-    expect(at(-780)).toBe('15') // NZDT, UTC+13: 4am local = 15:00 UTC
-    expect(at(-720)).toBe('16') // NZST, UTC+12
+    expect(at(-780)).toBe('15') // UTC+13: 4am local = 15:00 UTC
+    expect(at(-720)).toBe('16') // UTC+12
     expect(at(0)).toBe('4')     // UTC host
     expect(at(300)).toBe('9')   // US Eastern, UTC-5
     expect(at(-330)).toBe('22') // India, UTC+5:30 rounds to the hour
