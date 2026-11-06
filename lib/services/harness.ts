@@ -327,7 +327,7 @@ SIGNAL_GROUP_INVITE_POLICY=approved-only
   // config.yaml with opinionated defaults
   const configContent = generateDefaultConfig({
     provider: 'anthropic',
-    primaryModel: 'claude-sonnet-4-5',
+    primaryModel: 'claude-sonnet-4-6',
     enabledPlugins: defaultEnabledPlugins(),
     searchBackend: opts.searchBackend,
   })
@@ -2058,7 +2058,7 @@ export class HarnessService {
       platform: input.platform ?? 'hermes',
       channel: input.channel ?? `:${port}`,
       apiPort: port,
-      models: input.models ?? ['claude-sonnet-4-5'],
+      models: input.models ?? ['claude-sonnet-4-6'],
       tools: input.tools ?? [],
       composeFile: composePath,
       serviceName: adapter.serviceName(input.name),

@@ -132,8 +132,8 @@ const MODEL_SUGGESTIONS: Record<string, string[]> = {
 // Letta uses provider-independent model handles (provider/model). These map to
 // the SERVER-WIDE provider key the Letta compose expects (anthropic → OPENAI etc.).
 const LETTA_MODEL_SUGGESTIONS = [
-  'anthropic/claude-sonnet-4-5',
-  'anthropic/claude-3-5-sonnet',
+  'anthropic/claude-sonnet-4-6',
+  'anthropic/claude-sonnet-5-5',
   'openai/gpt-4o',
 ]
 
@@ -588,7 +588,7 @@ export default function WizardPage() {
               <Input
                 value={state.lettaModel}
                 onChange={(e) => update({ lettaModel: e.target.value })}
-                placeholder="anthropic/claude-sonnet-4-5"
+                placeholder="anthropic/claude-sonnet-4-6"
               />
               <p className="text-xs text-muted-foreground mt-1">
                 A Letta <span className="font-mono">provider/model</span> handle. The provider key is configured once on the Letta server (next step), not per agent.
