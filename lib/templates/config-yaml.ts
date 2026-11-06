@@ -26,7 +26,17 @@ export function generateDefaultConfig(params: {
   /** web.search_backend. Base package: 'brave-free' when a Brave key is
    *  assigned, the no-key fallback ('ddgs') otherwise. Defaults to brave-free. */
   searchBackend?: string
+  /** Clock used to read the deploying host's timezone. Tests inject one. */
+  now?: Date
 }): string {
+  // Hermes containers run in UTC and read session_reset.at_hour as a UTC hour,
+  // so a literal 4 resets agents mid-afternoon on a UTC+12 host. Write the UTC hour of
+  // 4am on the deploying host instead (offsets that are not whole hours round
+  // down, so the reset lands just before 4am rather than after). The offset is
+  // read once at deploy, so in daylight-saving zones the reset drifts by an
+  // hour for half the year (3am or 5am); that is acceptable for a nightly reset.
+  const offsetMinutes = (params.now ?? new Date()).getTimezoneOffset()
+  const resetHourUtc = (((Math.floor((4 * 60 + offsetMinutes) / 60)) % 24) + 24) % 24
   const { provider, primaryModel, fallbackModel, browserEnabled, mcpServers, enabledPlugins, enabledPlatforms } = params
   const searchBackend = params.searchBackend ?? 'brave-free'
   if (!/^[a-z][a-z0-9-]*$/.test(searchBackend)) {
@@ -128,7 +138,7 @@ memory:
 session_reset:
   mode: both
   idle_minutes: 1440
-  at_hour: 4
+  at_hour: ${resetHourUtc}  # UTC hour of 4am on the host that deployed this agent
 
 # Shared group session by default (one session per group, sender-name prefixed).
 # DMs stay isolated regardless. Set to true for per-person sessions inside a group.

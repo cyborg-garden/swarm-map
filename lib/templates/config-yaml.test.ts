@@ -47,7 +47,21 @@ describe('generateDefaultConfig', () => {
     expect(result).toContain('session_reset:')
     expect(result).toContain('mode: both')
     expect(result).toContain('idle_minutes: 1440')
-    expect(result).toContain('at_hour: 4')
+    expect(result).toMatch(/at_hour: \d+/)
+  })
+
+  it('writes at_hour as the UTC hour of 4am on the deploying host', () => {
+    // Hermes containers run in UTC and read at_hour as a UTC hour, so a
+    // literal 4 resets mid-afternoon on a UTC+12 host. Convert 4am local to UTC.
+    const at = (offsetMinutes: number) => {
+      const fakeNow = { getTimezoneOffset: () => offsetMinutes } as Date
+      return generateDefaultConfig({ ...baseParams, now: fakeNow }).match(/at_hour: (\d+)/)?.[1]
+    }
+    expect(at(-780)).toBe('15') // UTC+13: 4am local = 15:00 UTC
+    expect(at(-720)).toBe('16') // UTC+12
+    expect(at(0)).toBe('4')     // UTC host
+    expect(at(300)).toBe('9')   // US Eastern, UTC-5
+    expect(at(-330)).toBe('22') // India, UTC+5:30 rounds to the hour
   })
 
   it('defaults group_sessions_per_user to false (shared group session)', () => {
