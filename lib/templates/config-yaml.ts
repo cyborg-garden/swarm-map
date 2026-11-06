@@ -32,7 +32,9 @@ export function generateDefaultConfig(params: {
   // Hermes containers run in UTC and read session_reset.at_hour as a UTC hour,
   // so a literal 4 resets agents at 5pm in New Zealand. Write the UTC hour of
   // 4am on the deploying host instead (offsets that are not whole hours round
-  // down, so the reset lands just before 4am rather than after).
+  // down, so the reset lands just before 4am rather than after). The offset is
+  // read once at deploy, so in daylight-saving zones the reset drifts by an
+  // hour for half the year (3am or 5am); that is acceptable for a nightly reset.
   const offsetMinutes = (params.now ?? new Date()).getTimezoneOffset()
   const resetHourUtc = (((Math.floor((4 * 60 + offsetMinutes) / 60)) % 24) + 24) % 24
   const { provider, primaryModel, fallbackModel, browserEnabled, mcpServers, enabledPlugins, enabledPlatforms } = params
