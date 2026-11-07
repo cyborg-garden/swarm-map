@@ -142,8 +142,9 @@ _DETERMINISTIC_PATTERNS = [
     ("bearer-token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}"), None),
     ("basic-auth", re.compile(r"(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/=]{16,}"), None),
     # <scheme>://<user>:<secret>@<host> — credentials in a connection string.
+    # The user may be empty: redis://:<secret>@<host> carries only a password.
     ("connection-string-credentials",
-     re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]+:[^\s@/]{3,}@[^\s/\"'<>,;)]+"), None),
+     re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]*:[^\s@/]{3,}@[^\s/\"'<>,;)]+"), None),
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
         r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
