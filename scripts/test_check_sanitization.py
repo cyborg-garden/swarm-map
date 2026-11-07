@@ -97,6 +97,43 @@ def test_detects_quoted_hardcoded_credential():
     assert any(l == "hardcoded-credential" for l, _ in hits)
 
 
+@pytest.mark.parametrize("line", [
+    'SECRET_KEY = "aB3dEf6hIj9lMn2pQr5t"',
+    "secret_key: 'aB3dEf6hIj9lMn2pQr5t'",
+    "aws_secret_access_key = aB3dEf6hIj9lMn2pQr5tUv8wXy1z0AbCdEfGhIj",
+    'PRIVATE_KEY="0x4c0883a69102937d6231471b5dbb6204fe512961708279f3c"',
+    'API_KEY_PROD="aB3dEf6hIj9lMn2pQr5t"',
+    'DB_PASSWORD_PRIMARY: "aB3dEf6hIj9lMn2pQr5t"',
+    'AUTH_TOKEN_V2 = "aB3dEf6hIj9lMn2pQr5t"',
+    "STRIPE_SECRET_LIVE: aB3dEf6hIj9lMn2pQr5t",
+])
+def test_common_credential_variable_names_are_caught(line):
+    """Framework and cloud names (SECRET_KEY, *_secret_access_key, PRIVATE_KEY)
+    and env-style suffixes (API_KEY_PROD) were not credential names to the
+    assignment rule, so their values went through unreported."""
+    assert any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
+@pytest.mark.parametrize("line", [
+    'tokenizer = "bert-base-uncased-v2-x"',
+    'secret_name = "database-credentials"',
+    'primary_key = "aB3dEf6hIj9lMn2pQr5t"',
+    "TOKEN_DIR: '/run/agent/tokens/x'",
+    'API_KEY_URL = "api/v2/keys/rotate/now1"',
+    "TOKEN_CHANGED = 'resumeTokenChanged'",
+    'SECRET_ARN = "aB3dEf6hIj9lMn2pQr5t"',
+    'SECRET_ID: "aB3dEf6hIj9lMn2pQr5t"',
+    'TOKEN_SCOPE = "aB3dEf6hIj9lMn2pQr5t"',
+    'TOKEN_EXPIRY = "aB3dEf6hIj9lMn2pQr5t"',
+    'TOKEN_AUDIENCE = "aB3dEf6hIj9lMn2pQr5t"',
+    'PASSWORD_POLICY = "aB3dEf6hIj9lMn2pQr5t"',
+    "TOKEN_DIRECTORY: '/run/agent/tokens/x'",
+    "GOOGLE_PRIVATE_KEY_B64=aB3dEf6hIj9lMn2pQr5t",
+])
+def test_credential_name_widening_stays_narrow(line):
+    assert not any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
 def test_unquoted_credential_is_entropy_gated():
     """An unquoted assignment is only a finding when it looks like a literal
     value. Reporting every `token: someIdentifier` would train maintainers to
@@ -105,6 +142,35 @@ def test_unquoted_credential_is_entropy_gated():
                for l, _ in cs.scan_deterministic("password: hunter2Correct9Horse", []))
     assert not any(l == "hardcoded-credential-unquoted"
                    for l, _ in cs.scan_deterministic("token: resolveFromEnvironment", []))
+
+
+@pytest.mark.parametrize("line", [
+    'password = "Tr0ub4dor&3!xQ#9zLp"',
+    "DB_PASSWORD: 'kP9#vL2!mQ8@wR4$zT'",
+    '{"password": "n7^Hq*2Lw~Xp!9Zk"}',
+])
+def test_quoted_passwords_with_symbols_are_caught(line):
+    """People put symbols in passwords. The quoted-value class allowed only
+    base64-ish characters, so a symbol-bearing password was not a value."""
+    assert "hardcoded-credential" in _labels(line), line
+
+
+@pytest.mark.parametrize("line", [
+    'password: "{{vault_db_password_v2}}"',
+    'password = "${DB_PASSWORD_PRIMARY}"',
+    "token: 'https://auth.internal/oauth2/v1/token'",
+    'password = "%(db_password_v2)s"',
+    'secret: "$(cat /run/secrets/db1)"',
+    'Token = "?NoLineTerminatorHere"',
+    'Token = "?InterpolationInTemplate"',
+    'token: "[a-zA-Z0-9_]{16,}"',
+    'token: "^[A-Za-z0-9_-]{16,}$"',
+    'SECRET_HASH="something-with-a-#-hash"',
+    "Token': 'urn:uuid:a515cfa4-5da4-22e1-f5b5'",
+    'password = "$DB_PASSWORD_PRIMARY"',
+])
+def test_template_references_and_urls_are_not_passwords(line):
+    assert "hardcoded-credential" not in _labels(line), line
 
 
 def test_credit_card_requires_luhn():
