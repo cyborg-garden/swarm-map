@@ -144,6 +144,35 @@ def test_unquoted_credential_is_entropy_gated():
                    for l, _ in cs.scan_deterministic("token: resolveFromEnvironment", []))
 
 
+@pytest.mark.parametrize("line", [
+    'password = "Tr0ub4dor&3!xQ#9zLp"',
+    "DB_PASSWORD: 'kP9#vL2!mQ8@wR4$zT'",
+    '{"password": "n7^Hq*2Lw~Xp!9Zk"}',
+])
+def test_quoted_passwords_with_symbols_are_caught(line):
+    """People put symbols in passwords. The quoted-value class allowed only
+    base64-ish characters, so a symbol-bearing password was not a value."""
+    assert "hardcoded-credential" in _labels(line), line
+
+
+@pytest.mark.parametrize("line", [
+    'password: "{{vault_db_password_v2}}"',
+    'password = "${DB_PASSWORD_PRIMARY}"',
+    "token: 'https://auth.internal/oauth2/v1/token'",
+    'password = "%(db_password_v2)s"',
+    'secret: "$(cat /run/secrets/db1)"',
+    'Token = "?NoLineTerminatorHere"',
+    'Token = "?InterpolationInTemplate"',
+    'token: "[a-zA-Z0-9_]{16,}"',
+    'token: "^[A-Za-z0-9_-]{16,}$"',
+    'SECRET_HASH="something-with-a-#-hash"',
+    "Token': 'urn:uuid:a515cfa4-5da4-22e1-f5b5'",
+    'password = "$DB_PASSWORD_PRIMARY"',
+])
+def test_template_references_and_urls_are_not_passwords(line):
+    assert "hardcoded-credential" not in _labels(line), line
+
+
 def test_credit_card_requires_luhn():
     assert any(l == "credit-card" for l, _ in cs.scan_deterministic("card 4111111111111111", []))
     # Same shape, fails the checksum — an order number or an ID, not a card.

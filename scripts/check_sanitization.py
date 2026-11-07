@@ -157,7 +157,7 @@ _DETERMINISTIC_PATTERNS = [
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
         r"(?i)" + _CRED_NAME +
-        r"[\"']?\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-.]{16,})[\"']"), "group1"),
+        r"[\"']?\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-.!#$%&*@^~;,]{16,})[\"']"), "group1"),
     # Unquoted hardcoded credential (YAML / .env): entropy-gated so a bare
     # identifier or function call is not reported as a literal secret.
     ("hardcoded-credential-unquoted", re.compile(
@@ -221,6 +221,12 @@ _PLACEHOLDER_WORDS = re.compile(
 # ("discord.bot.token", "turnstile-token-xyz"), not a generated secret.
 _LOWER_SLUG = re.compile(r"^[a-z]+(?:[._\-][a-z]+)*$")
 _ENV_REFERENCE = re.compile(r"^(?:[A-Z][A-Z0-9_]*|process\.env\.\w+|os\.environ\S*|env\.\w+)$")
+# The quoted class admits the symbols people put in passwords (! # $ % & * @ ^ ~ ; ,)
+# but not ? : [ ] { } ( ) < > |, which mark parser constants, regex sources,
+# templates and URLs. A value carrying a symbol must also mix letters and digits,
+# and a bare $NAME is a shell variable reference, not its value.
+_PASSWORD_SYMBOL = re.compile(r"[!#$%&*@^~;,]")
+_SHELL_VAR = re.compile(r"^\$[A-Za-z_]\w*$")
 
 
 def _is_credential_placeholder(body):
@@ -228,7 +234,9 @@ def _is_credential_placeholder(body):
     ("your_api_key_here", "changeme"), or the NAME of an env var rather than
     its value ("OPENROUTER_API_KEY", "process.env.X")."""
     b = str(body).strip("\"'")
-    return bool(_PLACEHOLDER_WORDS.search(b) or _ENV_REFERENCE.match(b) or _LOWER_SLUG.match(b))
+    return bool(_PLACEHOLDER_WORDS.search(b) or _ENV_REFERENCE.match(b) or _LOWER_SLUG.match(b)
+                or _SHELL_VAR.match(b)
+                or bool(_PASSWORD_SYMBOL.search(b)) and not _has_entropy(b))
 
 
 def _luhn_ok(digits):
