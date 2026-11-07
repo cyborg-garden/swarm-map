@@ -15,7 +15,7 @@ import { generateDefaultConfig } from '../../templates/config-yaml'
 
 const repoRoot = process.cwd()
 const pkg = loadBasePackage(repoRoot)
-const SKILLS = ['engineering-multiplayer', 'engineering-process']
+const SKILLS = ['engineering-multiplayer', 'engineering-process', 'property-testing']
 const skillText = (name: string) =>
   fs.readFileSync(path.join(repoRoot, 'infra', 'templates', 'skills', name, 'SKILL.md'), 'utf-8')
 
@@ -38,7 +38,7 @@ describe('engineering pack', () => {
     for (const s of SKILLS) expect(fs.existsSync(path.join(dataDir, 'skills', s))).toBe(false)
   })
 
-  it('is two local skills and nothing else: no plugin, no hook', () => {
+  it('is three local skills and nothing else: no plugin, no hook', () => {
     const owned = <T extends { pack?: string }>(list: T[]) => list.filter((e) => e.pack === 'engineering')
     expect(owned(pkg.manifest.plugins)).toEqual([])
     expect(owned(pkg.manifest.hooks)).toEqual([])
@@ -84,6 +84,7 @@ describe('engineering skills text', () => {
   it.each([
     ['engineering-process', 'Read before changing code, opening a PR, or saying done.'],
     ['engineering-multiplayer', 'Read before coding in a thread or shared checkout.'],
+    ['property-testing', 'Read before testing tricky stateful code or a validator.'],
   ])('%s puts its whole trigger inside what the skills index shows', (name, trigger) => {
     const description = skillText(name).match(/^description: (.*)$/m)?.[1] ?? ''
     expect(description.slice(0, 57)).toContain(trigger)

@@ -61,6 +61,12 @@
       "pack": "engineering"
     },
     {
+      "name": "property-testing",
+      "source": "local",
+      "tier": "pack",
+      "pack": "engineering"
+    },
+    {
       "name": "captcha-escalation",
       "source": "local",
       "tier": "pack",
@@ -80,7 +86,7 @@
       "public": false
     },
     "engineering": {
-      "description": "Two short skills: how code reaches a repo here, and working around other people and sessions. Process only: grants no access, adds no tools. Never on a public surface.",
+      "description": "Three short skills: how code reaches a repo here, working around other people and sessions, and property testing. Process only: grants no access, adds no tools. Never on a public surface.",
       "public": false
     },
     "community-member": {
