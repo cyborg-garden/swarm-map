@@ -1281,6 +1281,28 @@ def test_a_stray_bom_cannot_hide_an_ascii_secret(tmp_path, data):
     assert cs.main(["--deterministic-only", "config/.env"], root=root) == 1
 
 
+@pytest.mark.parametrize("body", [
+    # A multi-line env blob serialised into one JSON string: the token follows "\\n".
+    lambda: json.dumps({"env": _F("A=1\n", "AK", "IA", "QZ7XK2LM9PW4RT6Y", "\nB=2")}),
+    lambda: json.dumps({"env": _F("A=1\n", "hf_", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdE")}),
+    # JSON written with escaped slashes (PHP, some Java serialisers).
+    lambda: json.dumps({"hook": _F("https://hooks.slack.com/", "services/T0AB12CD3/B0EF45GH6/",
+                                   "aB3dEf7hJk9mNp2qRs5tUv8w")}).replace("/", "\\/"),
+    # A notebook cell: code stored as a JSON string, so its quotes are escaped.
+    lambda: json.dumps({"source": ['password = "aB3dEf6hIj9lMn2pQr5t"\n']}),
+])
+def test_secrets_inside_escaped_json_strings_are_caught(tmp_path, body):
+    root = str(tmp_path)
+    _write(root, "notebook.ipynb", body())
+    assert cs.main(["--deterministic-only", "notebook.ipynb"], root=root) == 1
+
+
+def test_unescaping_alone_does_not_invent_findings(tmp_path):
+    root = str(tmp_path)
+    _write(root, "a.json", json.dumps({"p": "C:\\new\\tmp", "s": "line1\nline2\t\"q\" \u00e9"}))
+    assert cs.main(["--deterministic-only", "a.json"], root=root) == 0
+
+
 @pytest.mark.parametrize("rel", ["proxy.test.tsx", "proxy.test.ts.env", "proxy.test.ts.bak"])
 def test_skip_paths_match_whole_files_not_string_prefixes(tmp_path, rel):
     root = str(tmp_path)

@@ -840,20 +840,42 @@ def _sniff_wide(head):
     return None
 
 
+_BACKSLASH_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|([nrt\"'/\\]))")
+_ESCAPED_CHARS = {"n": "\n", "r": "\r", "t": "\t"}
+
+
+def _unescape(text):
+    """JSON / YAML / shell string escapes decoded. A JSON-serialised env blob
+    puts a token straight after a literal backslash-n (word boundaries see the
+    "n"), some serialisers escape every "/" in a URL, and a notebook stores code
+    as JSON strings so a quoted assignment's quotes are escaped. Each hid the
+    secret from the patterns."""
+    return _BACKSLASH_ESCAPE.sub(
+        lambda m: chr(int(m.group(1), 16)) if m.group(1)
+        else _ESCAPED_CHARS.get(m.group(2), m.group(2)), text)
+
+
 def layer1_texts(path):
     """Every reading of a file that layer 1 must scan.
 
     The decoding chosen from a BOM or NUL pattern, PLUS the raw bytes read as
     latin-1. A stray FF FE in front of an ASCII token used to make the file
     decode as UTF-16 garbage and the token vanished; with the union, a secret
-    visible in either reading counts.
+    visible in either reading counts. Each reading that carries backslash
+    escapes is also scanned with them decoded (see ``_unescape``).
     """
     primary = read_for_layer1(path)
     if os.path.islink(path):
         return [primary]
     with open(path, "rb") as fh:
         raw = fh.read().decode("latin-1")
-    return [primary] if raw == primary else [primary, raw]
+    texts = [primary] if raw == primary else [primary, raw]
+    for t in list(texts):
+        if "\\" in t:
+            u = _unescape(t)
+            if u not in texts:
+                texts.append(u)
+    return texts
 
 
 def read_for_layer1(path):
