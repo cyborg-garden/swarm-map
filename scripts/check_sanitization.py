@@ -137,7 +137,8 @@ _DETERMINISTIC_PATTERNS = [
     ("twilio-sid-or-key", re.compile(r"\bA[CK][0-9a-fA-F]{32}\b"), None),
     ("sendgrid-key", re.compile(r"\bSG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}\b"), None),
     ("notion-token", re.compile(r"\bntn_[A-Za-z0-9]{20,}"), "strip:ntn_"),
-    ("private-key-block", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"), None),
+    # PEM / OpenSSH armour, and an exported PGP secret key (" BLOCK" suffix).
+    ("private-key-block", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"), None),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{6,}"), None),
     ("bearer-token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{20,}"), None),
     ("basic-auth", re.compile(r"(?i)\bauthorization\s*:\s*basic\s+[A-Za-z0-9+/=]{16,}"), None),

@@ -30,6 +30,13 @@ def test_detects_private_key_block():
     assert any(label == "private-key-block" for label, _ in hits)
 
 
+def test_detects_pgp_private_key_block():
+    """An exported GPG secret key ends its armour header with " BLOCK"."""
+    hits = cs.scan_deterministic("-----BEGIN PGP PRIVATE" " KEY BLOCK-----", [])
+    assert any(label == "private-key-block" for label, _ in hits)
+    assert not cs.scan_deterministic("-----BEGIN PGP PUBLIC" " KEY BLOCK-----", [])
+
+
 def test_detects_real_email_but_allows_allowlisted():
     hits = cs.scan_deterministic("contact jane.doe@realcorp.io now", [])
     assert any(label == "email" for label, _ in hits)
