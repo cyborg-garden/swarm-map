@@ -37,7 +37,7 @@ each quietly missing a protection another still had.
 ```yaml
 jobs:
   sanitization:
-    uses: cyborg-garden/swarm-map/.github/workflows/sanitization-gate.yml@sanitization-gate-v1.0.1
+    uses: cyborg-garden/swarm-map/.github/workflows/sanitization-gate.yml@sanitization-gate-v1.1.0
     with:
       mode: pr          # pull_request runs; full-tree for schedule / dispatch / release audits
     secrets:
