@@ -59,7 +59,7 @@ import secrets as _secrets
 import subprocess
 import sys
 
-GATE_VERSION = "1.0.1"
+GATE_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------- config
 
