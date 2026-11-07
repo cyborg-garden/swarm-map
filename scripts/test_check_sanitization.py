@@ -42,6 +42,13 @@ def test_detects_ipv4_but_allows_loopback():
     assert not any(l == "ipv4" for l, _ in cs.scan_deterministic("bind 127.0.0.1", ["127.0.0.1"]))
 
 
+def test_connection_string_with_empty_username_is_caught():
+    """Redis and some AMQP URLs carry only a password: scheme://:secret@host."""
+    url = _F("redis:", "//:", "s3cretPw9xQ", "@cache.internal:6379/0")
+    assert "connection-string-credentials" in _labels(f"REDIS_URL={url}")
+    assert "connection-string-credentials" not in _labels("see https://cache.internal:6379/0")
+
+
 def test_detects_international_phone():
     # E.164 form with no separators — the us-phone pattern misses these entirely.
     assert any(l == "intl-phone" for l, _ in cs.scan_deterministic("contact +442079460958 anytime", []))
