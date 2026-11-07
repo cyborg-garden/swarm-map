@@ -1032,6 +1032,24 @@ def test_a_listed_path_missing_from_disk_is_a_hard_failure(tmp_path, capsys):
     assert "docs/nowhere.md" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("sample,label", [
+    (lambda: _F("AK", "IA", "QZ7XK2LM9PW4RT6Y"), "aws-access-key"),
+    (lambda: _F("npm_", "aB3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdEfG"), "npm-token"),
+    (lambda: _F("jane.doe", "@", "realcorp.io"), "email"),
+    (lambda: _F("123456789", ":", "AAH3dEf7hJk9mNp2qRs5tUv8wXy1z0AbCdE"), "telegram-bot-token"),
+])
+@pytest.mark.parametrize("before,after", [("鍵は", "です"), ("连接", "。"), ("ключ", "тут")])
+def test_non_english_text_touching_a_secret_does_not_hide_it(sample, label, before, after):
+    """Chinese and Japanese prose has no spaces, and Unicode \\b treats every
+    CJK or Cyrillic letter as a word character, so a token written flush
+    against such text failed the word boundary."""
+    assert label in _labels(before + sample() + after)
+
+
+def test_phone_grouped_with_no_break_spaces_still_matches():
+    assert "intl-phone" in _labels("call +33\u00a06\u00a012\u00a034\u00a056\u00a078")
+
+
 def test_one_non_utf8_byte_does_not_hide_a_token(tmp_path, monkeypatch):
     """A latin-1 byte made the UTF-8 decode fail and layer 1 skipped the file."""
     root = str(tmp_path)

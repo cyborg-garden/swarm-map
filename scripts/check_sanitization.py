@@ -398,6 +398,9 @@ def _is_skipped(rel, skip_paths):
     return any(rel.startswith(sp) if sp.endswith("/") else rel == sp for sp in skip_paths)
 
 
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+
+
 def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
     """Return a list of (label, matched_text) for credential/PII hits, minus any
     match that is itself allowlisted.
@@ -411,10 +414,19 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
     changes.
     """
     hits = []
+    # Every shape here is ASCII, but Unicode \b and \w treat a CJK or Cyrillic
+    # letter as part of the word, so a token written flush against Chinese or
+    # Japanese prose (no spaces) failed its boundary. Scan a copy with non-ASCII
+    # characters blanked as well; the original keeps Unicode \s (a phone number
+    # grouped with no-break spaces still matches there).
+    texts = [content]
+    folded = _NON_ASCII.sub(" ", content)
+    if folded != content:
+        texts.append(folded)
     for label, pat, gate in _DETERMINISTIC_PATTERNS:
         if only is not None and label not in only:
             continue
-        for m in pat.finditer(content):
+        for m in (m for text in texts for m in pat.finditer(text)):
             if not _is_finding(m, gate, det_cfg):
                 continue
             if _is_allowed(label, m.group(0), allow_substrings):
