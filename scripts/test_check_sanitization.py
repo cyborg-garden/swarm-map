@@ -1442,6 +1442,28 @@ def test_json_style_placeholders_stay_quiet(line):
     assert not any(l.startswith("hardcoded-credential") for l in _labels(line)), line
 
 
+@pytest.mark.parametrize("line", [
+    'password := "aB3dEf7hJk9mNp2qRs5tUv8wXy1z"',
+    "'api_key' => 'aB3dEf7hJk9mNp2qRs5tUv8wXy1z'",
+    ':token => "aB3dEf7hJk9mNp2qRs5tUv8wXy1z"',
+    "password := aB3dEf7hJk9mNp2qRs5tUv8wXy1z",
+])
+def test_go_and_php_assignment_operators_are_caught(line):
+    """Go declares with := and PHP/Ruby hashes map with =>; the assignment
+    rule only knew = and :."""
+    assert any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
+@pytest.mark.parametrize("line", [
+    "tokens.map(token => tokenToIdentifier2(token))",
+    "arr.map(password => hashPasswordWithSalt256(password))",
+    "const f = (secret) => secretManagerClient2(secret)",
+])
+def test_arrow_functions_are_not_assignments(line):
+    """=> counts only before a quoted value: unquoted, it is a JS/TS arrow."""
+    assert not any(l.startswith("hardcoded-credential") for l in _labels(line)), line
+
+
 @pytest.mark.parametrize("label,sample", [
     ("openrouter-key", OR_KEY),
     ("discord-bot-token", DISCORD_BOT),

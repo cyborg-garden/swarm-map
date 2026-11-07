@@ -161,12 +161,12 @@ _DETERMINISTIC_PATTERNS = [
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
         r"(?i)" + _CRED_NAME +
-        r"[\"']?\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-.!#$%&*@^~;,]{16,})[\"']"), "group1"),
+        r"[\"']?\s*(?::=|=>|[=:])\s*[\"']([A-Za-z0-9/+=_\-.!#$%&*@^~;,]{16,})[\"']"), "group1"),
     # Unquoted hardcoded credential (YAML / .env): entropy-gated so a bare
     # identifier or function call is not reported as a literal secret.
     ("hardcoded-credential-unquoted", re.compile(
         r"(?i)" + _CRED_NAME +
-        r"[\"']?\s*[=:]\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
+        r"[\"']?\s*(?::=|[=:])\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
     ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "pii"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),
     # E.164 international (e.g. a contact wired into config/SOUL): "+" + 7–15 digits,
