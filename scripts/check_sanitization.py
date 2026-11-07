@@ -132,7 +132,9 @@ _DETERMINISTIC_PATTERNS = [
     ("discord-bot-token", re.compile(
         r"\b[MN][A-Za-z\d_\-]{23,25}\.[A-Za-z\d_\-]{6}\.[A-Za-z\d_\-]{27,38}\b"), "last-segment"),
     ("discord-webhook", re.compile(r"discord(?:app)?\.com/api/webhooks/\d+/[\w\-]+"), None),
-    ("telegram-bot-token", re.compile(r"(?<![\w:])\d{8,10}:[A-Za-z0-9_\-]{35}(?![\w\-])"), None),
+    # The Bot API carries the token in the URL path right after "/bot".
+    ("telegram-bot-token", re.compile(
+        r"(?:(?<=/bot)|(?<![\w:]))\d{8,10}:[A-Za-z0-9_\-]{35}(?![\w\-])"), None),
     ("huggingface-token", re.compile(r"\bhf_[A-Za-z0-9]{30,}"), "strip:hf_"),
     ("npm-token", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"), "strip:npm_"),
     ("gitlab-token", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}"), "strip:glpat-"),
