@@ -93,13 +93,13 @@ def load_config(root="."):
 
 # Variable names whose value is a credential. Besides the bare words: the
 # framework and cloud names (SECRET_KEY, *_secret_access_key, PRIVATE_KEY, ...)
-# and an UPPER_CASE env suffix (API_KEY_PROD, DB_PASSWORD_PRIMARY). The suffix is
-# case-sensitive so ordinary snake_case names (secret_name) stay quiet, and a
-# suffix naming where or what the secret is (TOKEN_DIR, API_KEY_URL) ends it.
+# and an UPPER_CASE environment or role suffix (API_KEY_PROD, DB_PASSWORD_PRIMARY,
+# TOKEN_V2). Only those suffixes extend a name: TOKEN_CHANGED, SECRET_ARN or
+# PASSWORD_POLICY name something else, and an open-ended suffix flagged them.
 _CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|signing"
               r"|encryption)[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
-              r"(?-i:(?:_(?!(?:DIR|PATH|FILE|URL|URI|ENDPOINT|HOST|NAME|TYPE|HEADER|FIELD"
-              r"|VAR|ENV|LENGTH|COUNT|TTL)(?![A-Z0-9]))[A-Z0-9]+)*)")
+              r"(?-i:(?:_(?:PROD|PRODUCTION|DEV|STAGING|STAGE|TEST|LIVE|PRIMARY|SECONDARY"
+              r"|BASE|V\d+|\d+))*)")
 
 # (label, regex, gate). The gate says how to derive the "body" that placeholder /
 # entropy checks look at, so a documentation stub (sk-ant-xxxxxxxx) does not read
