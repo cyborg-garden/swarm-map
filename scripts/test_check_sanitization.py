@@ -1339,6 +1339,14 @@ def test_fleet_provider_tokens_fire(label, sample):
     assert label in cs.HIGH_CONFIDENCE_LABELS
 
 
+def test_telegram_token_inside_a_bot_api_url_is_caught():
+    """The Bot API puts the token straight after "bot" in the URL path, so the
+    usual way to call it carried the token where the lookbehind refused it."""
+    url = _F("https://api.telegram.org/", "bot", TELEGRAM, "/sendMessage?chat_id=1")
+    assert "telegram-bot-token" in _labels(url)
+    assert "telegram-bot-token" not in _labels(_F("robot", TELEGRAM))
+
+
 def test_fleet_provider_tokens_are_caught_inside_fixture_dirs(tmp_path):
     root = str(tmp_path)
     _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
