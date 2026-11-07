@@ -77,8 +77,8 @@ the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
   browser guard: navigation only to public http(s) hosts, no page JavaScript,
   no CDP. Hermes skips its own SSRF check for camofox, so this guard is the
   barrier; it does not cover redirects or a page's own requests.
-- **Engineering pack:** opt-in `engineering` adds two skills (`engineering-process`,
-  `engineering-multiplayer`). Process only: no plugin, tool, key or access. Refused
+- **Engineering pack:** opt-in `engineering` adds three skills (`engineering-process`,
+  `engineering-multiplayer`, `property-testing`). Process only: no plugin, tool, key or access. Refused
   on a public surface.
 
 ## Choosing
