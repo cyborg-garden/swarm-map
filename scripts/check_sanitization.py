@@ -91,6 +91,16 @@ def load_config(root="."):
 
 # ---------------------------------------------------------------- layer 1: deterministic
 
+# Variable names whose value is a credential. Besides the bare words: the
+# framework and cloud names (SECRET_KEY, *_secret_access_key, PRIVATE_KEY, ...)
+# and an UPPER_CASE env suffix (API_KEY_PROD, DB_PASSWORD_PRIMARY). The suffix is
+# case-sensitive so ordinary snake_case names (secret_name) stay quiet, and a
+# suffix naming where or what the secret is (TOKEN_DIR, API_KEY_URL) ends it.
+_CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|signing"
+              r"|encryption)[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
+              r"(?-i:(?:_(?!(?:DIR|PATH|FILE|URL|URI|ENDPOINT|HOST|NAME|TYPE|HEADER|FIELD"
+              r"|VAR|ENV|LENGTH|COUNT|TTL)(?![A-Z0-9]))[A-Z0-9]+)*)")
+
 # (label, regex, gate). The gate says how to derive the "body" that placeholder /
 # entropy checks look at, so a documentation stub (sk-ant-xxxxxxxx) does not read
 # as a live credential while a real key still does:
@@ -146,12 +156,12 @@ _DETERMINISTIC_PATTERNS = [
      re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s:@/]+:[^\s@/]{3,}@[^\s/\"'<>,;)]+"), None),
     # Quoted hardcoded credential — once quoted, any value is suspect.
     ("hardcoded-credential", re.compile(
-        r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
+        r"(?i)" + _CRED_NAME +
         r"[\"']?\s*[=:]\s*[\"']([A-Za-z0-9/+=_\-.]{16,})[\"']"), "group1"),
     # Unquoted hardcoded credential (YAML / .env): entropy-gated so a bare
     # identifier or function call is not reported as a literal secret.
     ("hardcoded-credential-unquoted", re.compile(
-        r"(?i)(?:api[_-]?key|secret|token|password|passwd|pwd|client[_-]?secret)"
+        r"(?i)" + _CRED_NAME +
         r"[\"']?\s*[=:]\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
     ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "pii"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),

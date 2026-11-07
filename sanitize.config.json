@@ -59,6 +59,7 @@
     "skip_paths": [
       "scripts/test_check_sanitization.py",
       "lib/services/__tests__/",
+      "scripts/__tests__/",
       "app/api/auth/login/route.test.ts",
       "app/api/harnesses/[id]/surfaces/connect/route.test.ts",
       "components/surfaces/platform-ui.test.ts",
