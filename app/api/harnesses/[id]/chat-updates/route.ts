@@ -5,8 +5,8 @@ import { applyChatUpdatesToHarness, readHarnessChatUpdates } from '@/lib/service
  * GET /api/harnesses/:id/chat-updates
  *
  * How much of this agent's working shows in chat: `level` is quiet, some or
- * all ('custom' when config.yaml holds a mix no level writes; an absent key
- * counts as hermes's Discord default). `overridden` is true when a
+ * all; 'custom' when config.yaml holds a mix no level writes; 'unset' when a
+ * key is absent, so hermes's per-surface defaults apply. `overridden` is true when a
  * per-platform value in config.yaml wins over the level on some surface.
  */
 export async function GET(

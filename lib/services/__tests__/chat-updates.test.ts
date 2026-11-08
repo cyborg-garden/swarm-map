@@ -55,6 +55,9 @@ const OLD_TEMPLATE = [
   '',
 ].join('\n')
 
+// The same file once all three keys are written.
+const FULL = OLD_TEMPLATE.replace('  streaming: true', '  streaming: true\n  long_running_notifications: true')
+
 function splice(text: string, level: 'quiet' | 'some' | 'all'): string {
   const r = spliceChatUpdateLevel(text, level)
   if (!r.ok) throw new Error(r.error)
@@ -62,8 +65,9 @@ function splice(text: string, level: 'quiet' | 'some' | 'all'): string {
 }
 
 describe('readChatUpdateLevel', () => {
-  it('reads the old template as all', () => {
-    expect(readChatUpdateLevel(OLD_TEMPLATE)).toBe('all')
+  it('reads the old template as unset (no long_running_notifications key) and the full one as all', () => {
+    expect(readChatUpdateLevel(OLD_TEMPLATE)).toBe('unset')
+    expect(readChatUpdateLevel(FULL)).toBe('all')
   })
 
   it('treats bare off and quoted "off" alike, as hermes does', () => {
@@ -74,23 +78,29 @@ describe('readChatUpdateLevel', () => {
   })
 
   it('reports custom for a mix no level writes', () => {
-    expect(readChatUpdateLevel(OLD_TEMPLATE.replace('tool_progress: all', 'tool_progress: verbose'))).toBe('custom')
-    expect(readChatUpdateLevel(OLD_TEMPLATE.replace('interim_assistant_messages: true', 'interim_assistant_messages: false'))).toBe('custom')
+    expect(readChatUpdateLevel(FULL.replace('tool_progress: all', 'tool_progress: verbose'))).toBe('custom')
+    expect(readChatUpdateLevel(FULL.replace('interim_assistant_messages: true', 'interim_assistant_messages: false'))).toBe('custom')
   })
 
-  it('reads absent keys as hermes\'s Discord defaults (every step)', () => {
-    expect(readChatUpdateLevel('model:\n  provider: x\n')).toBe('all')
+  it('reads any absent key as unset: hermes defaults differ per surface', () => {
+    expect(readChatUpdateLevel('model:\n  provider: x\n')).toBe('unset')
     // Live shapes: only one of the keys set.
-    expect(readChatUpdateLevel('display:\n  interim_assistant_messages: true\n')).toBe('all')
-    expect(readChatUpdateLevel('display:\n  tool_progress: all\n')).toBe('all')
+    expect(readChatUpdateLevel('display:\n  interim_assistant_messages: true\n')).toBe('unset')
+    expect(readChatUpdateLevel('display:\n  tool_progress: all\n')).toBe('unset')
+  })
+
+  it('reads null and ~ as unset, not false', () => {
+    const quiet = splice(FULL, 'quiet')
+    expect(readChatUpdateLevel(quiet.replace('interim_assistant_messages: false', 'interim_assistant_messages: null'))).toBe('unset')
+    expect(readChatUpdateLevel(quiet.replace('long_running_notifications: false', 'long_running_notifications: ~'))).toBe('unset')
   })
 
   it('counts long_running_notifications: generic as on, as hermes does', () => {
-    expect(readChatUpdateLevel(OLD_TEMPLATE.replace('  streaming: true', '  streaming: true\n  long_running_notifications: generic'))).toBe('all')
+    expect(readChatUpdateLevel(FULL.replace('long_running_notifications: true', 'long_running_notifications: generic'))).toBe('all')
   })
 
   it('ignores a nested display.platforms override when reading the global level', () => {
-    const nested = OLD_TEMPLATE.replace(
+    const nested = FULL.replace(
       '  streaming: true',
       '  streaming: true\n  platforms:\n    discord:\n      tool_progress: new',
     )
@@ -110,7 +120,7 @@ describe('spliceChatUpdateLevel', () => {
   })
 
   it('is byte-identical on a no-op save', () => {
-    const full = OLD_TEMPLATE.replace('  streaming: true', '  streaming: true\n  long_running_notifications: true')
+    const full = FULL
     expect(splice(full, 'all')).toBe(full)
     // An absent key is written out, even when it matches hermes's default:
     // the defaults differ per surface, and the level must hold on all of them.
@@ -197,6 +207,15 @@ describe('per-platform overrides', () => {
     }
   })
 
+  it('flags an inline per-platform value', () => {
+    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {tool_progress: all}'))).toBe(true)
+    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false, long_running_notifications: true}'))).toBe(true)
+    expect(hasPlatformOverride('display:\n  platforms: {discord: {interim_assistant_messages: true}}\n')).toBe(true)
+    // Inline values that do not touch the three keys are not overrides.
+    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false}'))).toBe(false)
+    expect(hasPlatformOverride('display:\n  platforms: {}\n  tool_progress_overrides: null\n')).toBe(false)
+  })
+
   it('flags a non-empty tool_progress_overrides, inline or block', () => {
     expect(hasPlatformOverride(MARE_DISPLAY.replace('  platforms:', '  tool_progress_overrides: {discord: all}\n  platforms:'))).toBe(true)
     expect(hasPlatformOverride(MARE_DISPLAY.replace('  platforms:', '  tool_progress_overrides:\n    discord: all\n  platforms:'))).toBe(true)
@@ -232,7 +251,7 @@ describe('applyChatUpdatesToHarness', () => {
   afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }))
 
   it('writes the level and audits it', () => {
-    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), OLD_TEMPLATE)
+    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), FULL)
     const r = applyChatUpdatesToHarness('h_test', 'quiet', { who: 'test' })
     expect(r).toEqual({ ok: true, unchanged: false, level: 'quiet', overridden: false })
     expect(readHarnessChatUpdates('h_test')).toEqual({ ok: true, level: 'quiet', overridden: false })
@@ -240,7 +259,7 @@ describe('applyChatUpdatesToHarness', () => {
   })
 
   it('does not touch the file or audit when nothing changes', () => {
-    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), OLD_TEMPLATE.replace('  streaming: true', '  streaming: true\n  long_running_notifications: true'))
+    fs.writeFileSync(path.join(tmpDir, 'config.yaml'), FULL)
     const r = applyChatUpdatesToHarness('h_test', 'all', { who: 'test' })
     expect(r).toEqual({ ok: true, unchanged: true, level: 'all', overridden: false })
     expect(auditAppend).not.toHaveBeenCalled()

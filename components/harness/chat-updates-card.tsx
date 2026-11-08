@@ -5,9 +5,10 @@ import { useState, useEffect } from 'react'
 import { MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
 import { CHAT_UPDATE_LEVELS, type ChatUpdateLevel } from '@/lib/chat-update-levels'
+import type { ChatUpdateReading } from '@/lib/services/chat-updates'
 
 const LABELS: Record<ChatUpdateLevel, { label: string; hint: string }> = {
-  quiet: { label: 'Quiet', hint: 'Only questions, approval prompts and final answers. No progress or "still working" messages.' },
+  quiet: { label: 'Quiet', hint: 'Questions, approval prompts and final answers, plus rare notices such as a switch to a backup model or an error.' },
   some: { label: 'Some', hint: 'Also shows each new kind of step and short progress notes.' },
   all: { label: 'Everything', hint: 'Shows every step the agent takes.' },
 }
@@ -15,7 +16,7 @@ const LABELS: Record<ChatUpdateLevel, { label: string; hint: string }> = {
 type Props = { harnessId: string }
 
 export function ChatUpdatesCard({ harnessId }: Props) {
-  const [level, setLevel] = useState<ChatUpdateLevel | 'custom' | undefined>(undefined)
+  const [level, setLevel] = useState<ChatUpdateReading | undefined>(undefined)
   const [overridden, setOverridden] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -58,9 +59,11 @@ export function ChatUpdatesCard({ harnessId }: Props) {
   }
 
   const note =
-    level === 'custom'
-      ? 'Set by hand in config.yaml to a mix none of these match.'
-      : LABELS[level].hint
+    level === 'unset'
+      ? 'Not set, so Hermes uses its own defaults for each surface (every step on Discord). Pick one to set it.'
+      : level === 'custom'
+        ? 'Set by hand in config.yaml to a mix none of these match.'
+        : LABELS[level].hint
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
@@ -86,7 +89,7 @@ export function ChatUpdatesCard({ harnessId }: Props) {
       <p className="text-xs text-muted-foreground">{note}</p>
       {overridden && (
         <p className="text-xs text-[var(--warning)]">
-          This agent&apos;s config.yaml also has a per-surface setting under display.platforms, which wins on that surface. Remove it there for this choice to apply everywhere.
+          This agent&apos;s config.yaml also has a per-surface setting (display.platforms or display.tool_progress_overrides), which wins on that surface. Remove it for this choice to apply everywhere.
         </p>
       )}
     </div>

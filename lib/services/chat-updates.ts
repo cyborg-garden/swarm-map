@@ -32,13 +32,13 @@ export { CHAT_UPDATE_LEVELS, DEFAULT_CHAT_UPDATE_LEVEL, isChatUpdateLevel, type 
 
 const KEY = { toolProgress: 'tool_progress', interim: 'interim_assistant_messages', heartbeat: 'long_running_notifications' } as const
 
-// What hermes uses on Discord when a key is absent
-// (gateway/display_config.py _PLATFORM_DEFAULTS discord = tier high).
-const MISSING_KEY_DEFAULTS = LEVEL_KEYS.all
-
 // Same normalisation hermes applies (gateway/display_config.py _normalise).
+// An empty, `null` or `~` value is "not set" to hermes (it falls back to the
+// surface default), not false.
+const isUnset = (raw: string | null): raw is null => raw === null || ['', 'null', '~'].includes(raw.trim().toLowerCase())
+
 function normToolProgress(raw: string | null): string | null {
-  if (raw === null || raw === '') return null
+  if (isUnset(raw)) return null
   const v = raw.trim().toLowerCase()
   if (['false', '0', 'no', 'off'].includes(v)) return 'off'
   if (['true', '1', 'yes', 'on'].includes(v)) return 'all'
@@ -46,7 +46,7 @@ function normToolProgress(raw: string | null): string | null {
 }
 
 function normBool(raw: string | null, alsoTrue: string[] = []): boolean | null {
-  if (raw === null || raw === '') return null
+  if (isUnset(raw)) return null
   return ['true', '1', 'yes', 'on', 'raw', 'verbose', ...alsoTrue].includes(raw.trim().toLowerCase())
 }
 
@@ -62,34 +62,40 @@ export function hasPlatformOverride(text: string): boolean {
   if (content.length === 0) return false
   const top = content[0].length - content[0].trimStart().length
   const keys = new Set<string>(Object.values(KEY))
+  // A key written inline, e.g. `discord: {tool_progress: all}` or
+  // `platforms: {discord: {tool_progress: all}}`.
+  const inlineKey = new RegExp(`[{,]\\s*(${Object.values(KEY).join('|')})\\s*:`)
   let parent = ''
   for (const l of content) {
     const indent = l.length - l.trimStart().length
     const m = l.trimStart().match(/^([\w-]+)\s*:\s*(.*)$/)
     if (indent <= top) {
       parent = m?.[1] ?? ''
-      if (parent === 'tool_progress_overrides') {
-        const v = (m?.[2] ?? '').replace(/\s+#.*$/, '').trim()
-        if (v !== '' && v !== '{}') return true
-      }
+      const v = (m?.[2] ?? '').replace(/\s+#.*$/, '').trim()
+      if (parent === 'tool_progress_overrides' && !['', '{}', 'null', '~'].includes(v)) return true
+      if (parent === 'platforms' && inlineKey.test(v)) return true
       continue
     }
     if (parent === 'tool_progress_overrides') return true
-    if (parent === 'platforms' && m && keys.has(m[1])) return true
+    if (parent === 'platforms' && m && (keys.has(m[1]) || inlineKey.test(m[2]))) return true
   }
   return false
 }
 
-export type ChatUpdateState = { level: ChatUpdateLevel | 'custom'; overridden: boolean }
+export type ChatUpdateReading = ChatUpdateLevel | 'custom' | 'unset'
+export type ChatUpdateState = { level: ChatUpdateReading; overridden: boolean }
 
 /**
- * The level config.yaml expresses, with an absent key read as hermes's
- * Discord default. 'custom' = a mix no level writes.
+ * The level config.yaml expresses. 'custom' = a mix no level writes.
+ * 'unset' = at least one of the three keys is absent: hermes then uses its
+ * per-surface defaults (every step on Discord, almost nothing on Signal), so
+ * the file alone does not say what the agent does.
  */
-export function readChatUpdateLevel(text: string): ChatUpdateLevel | 'custom' {
-  const tp = normToolProgress(readScalar(text, 'display', KEY.toolProgress)) ?? MISSING_KEY_DEFAULTS.toolProgress
-  const interim = normBool(readScalar(text, 'display', KEY.interim)) ?? MISSING_KEY_DEFAULTS.interim
-  const heartbeat = normBool(readScalar(text, 'display', KEY.heartbeat), ['generic']) ?? MISSING_KEY_DEFAULTS.heartbeat
+export function readChatUpdateLevel(text: string): ChatUpdateReading {
+  const tp = normToolProgress(readScalar(text, 'display', KEY.toolProgress))
+  const interim = normBool(readScalar(text, 'display', KEY.interim))
+  const heartbeat = normBool(readScalar(text, 'display', KEY.heartbeat), ['generic'])
+  if (tp === null || interim === null || heartbeat === null) return 'unset'
   for (const level of CHAT_UPDATE_LEVELS) {
     const k = LEVEL_KEYS[level]
     if (tp === k.toolProgress && interim === k.interim && heartbeat === k.heartbeat) return level
