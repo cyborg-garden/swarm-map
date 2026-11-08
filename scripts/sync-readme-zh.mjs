@@ -175,6 +175,24 @@ export function urlKeys(md) {
   return keys
 }
 
+/**
+ * Backstop that does not depend on link syntax at all: every domain-like token
+ * anywhere in the text (prose, code spans, code blocks), lowercased, with
+ * leading/trailing "_" and "-" trimmed so _evil.com_ emphasis cannot hide one.
+ * A token counts when its last label is letters (2+) or punycode (xn--).
+ * Filenames like README.md or state.db match too; they are allowed because the
+ * check is token-set membership against the source texts, not a TLD list.
+ */
+export function domainTokens(text) {
+  const out = new Set()
+  for (const m of text.matchAll(/[a-z0-9_-]+(?:\.[a-z0-9_-]+)+/gi)) {
+    const t = m[0].toLowerCase().replace(/^[_-]+|[_-]+$/g, '')
+    const last = t.split('.').pop()
+    if (t.includes('.') && (/^[a-z]{2,}$/.test(last) || last.startsWith('xn--'))) out.add(t)
+  }
+  return out
+}
+
 function urlKey(u) {
   let s = u.trim().replace(/[.,;:!?'"]+$/, '')
   if (!s || s.startsWith('#')) return null
@@ -225,6 +243,11 @@ export function validate({ newEn, zhBody, prevZhBody = null, diff = null }) {
   const known = new Set([...urlKeys(newEn), ...urlKeys(prevZhBody || '')])
   for (const k of urlKeys(zhBody)) {
     if (!known.has(k)) problems.push(`link or image not in the English or current translation: ${k}`)
+  }
+  // Superset backstop: any host or file-like token the sources never contained.
+  const knownTokens = new Set([...domainTokens(newEn), ...domainTokens(prevZhBody || '')])
+  for (const t of domainTokens(zhBody)) {
+    if (!knownTokens.has(t)) problems.push(`domain-like token not in the English or current translation: ${t}`)
   }
 
   const enCode = fencedBlocks(newEn).map(codeSkeleton)

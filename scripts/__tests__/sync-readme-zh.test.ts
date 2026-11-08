@@ -98,8 +98,30 @@ describe('validate', () => {
     const problems = check(BODY.replace('## 许可证', `## 许可证\n\n${snippet}\n`)).join('\n')
     expect(problems).toContain(`not in the English or current translation: ${key}`)
   })
+  // Forms the link-syntax extractor cannot see; only the token backstop catches these.
+  it.each([
+    ['underscore-wrapped URL', '详见 _https://evil.com_。', 'evil.com'],
+    ['underscore-wrapped www', '详见 _www.evil.com_。', 'www.evil.com'],
+    ['underscore in a host label', '访问 www.a_b.evil.com 即可。', 'www.a_b.evil.com'],
+    ['bare mailto', '联系 mailto:a@evil.com。', 'evil.com'],
+    ['bare email', '联系 a@evil.com。', 'evil.com'],
+    ['host inside a code span', '运行 `curl evil.example.org/x`。', 'evil.example.org'],
+    ['punycode host', '访问 xn--80ak6aa92e.xn--p1ai 即可。', 'xn--80ak6aa92e.xn--p1ai'],
+    ['subdomain of a known host', '访问 evil.github.com 即可。', 'evil.github.com'],
+  ])('backstop rejects a new host written as %s', (_form, snippet, token) => {
+    const problems = check(BODY.replace('## 许可证', `## 许可证\n\n${snippet}\n`)).join('\n')
+    expect(problems).toContain(`domain-like token not in the English or current translation: ${token}`)
+  })
+  it('backstop allows filenames and hosts the sources already carry', () => {
+    const known = '见 `README.md`、`state.db`、Next.js 和 github.com。'
+    expect(check(BODY.replace('## 许可证', `## 许可证\n\n${known}\n`))).toEqual([])
+  })
+  it("main's real README pair passes the whole validation, backstop included", () => {
+    expect(check(BODY)).toEqual([])
+    expect(check(BODY, { diff: '--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-a\n+b\n' })).toEqual([])
+  })
   it('treats the same target written another way as known', () => {
-    const same = '<a href="https://nimbleco.ai">NimbleCo</a> //github.com/letta-ai/letta/ www.nimbleco.ai'
+    const same = '<a href="https://www.nimbleco.ai">NimbleCo</a> //github.com/letta-ai/letta/ www.nimbleco.ai'
     expect(check(BODY.replace('## 许可证', `## 许可证\n\n${same}\n`))).toEqual([])
   })
   it('rejects a truncated reply', () => {
