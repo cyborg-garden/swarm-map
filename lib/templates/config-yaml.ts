@@ -5,6 +5,7 @@
 
 import { MODEL_CATALOG } from '../model-catalog'
 import { isSurfacePlatform } from '../config-yaml-helpers'
+import { chatUpdateYamlLines, DEFAULT_CHAT_UPDATE_LEVEL } from '../chat-update-levels'
 
 export interface McpServerConfig {
   command?: string
@@ -192,10 +193,11 @@ skills:
   creation_nudge_interval: 15
 
 # --- Display ---
+# Chat updates: quiet = only questions, approvals and final answers in chat.
+# Change per agent in Swarm Map (Settings → Chat updates).
 display:
   compact: false
-  tool_progress: all
-  interim_assistant_messages: true
+${chatUpdateYamlLines(DEFAULT_CHAT_UPDATE_LEVEL).join('\n')}
   streaming: true
 
 # --- Platform toolsets (explicit defaults) ---

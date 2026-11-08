@@ -306,8 +306,8 @@ skills:
 # --- Display ---
 display:
   compact: false
-  tool_progress: all
-  interim_assistant_messages: true
+  tool_progress: "off"
+  interim_assistant_messages: false
   streaming: true
 
 # --- Platform toolsets (explicit defaults) ---

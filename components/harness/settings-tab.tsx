@@ -6,6 +6,7 @@ import { Shield, Loader2, Save, RotateCw } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Surface } from '@/lib/types'
 import { TuningCard } from './tuning-card'
+import { ChatUpdatesCard } from './chat-updates-card'
 
 type SurfaceSettings = {
   allowedUsers: string[]
@@ -466,6 +467,9 @@ if (loading) {
             : 'All memory is shared globally across channels. Any user in any group can read/write the same memory pool.'}
         </p>
       </div>
+
+      {/* How much of the agent's working shows in chat (config.yaml display:) */}
+      <ChatUpdatesCard harnessId={harnessId} />
 
       {/* Memory length, turn budget, compression (config.yaml) */}
       <TuningCard harnessId={harnessId} />

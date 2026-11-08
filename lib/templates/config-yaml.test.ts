@@ -110,7 +110,8 @@ describe('generateDefaultConfig', () => {
     const result = generateDefaultConfig(baseParams)
     expect(result).toContain('display:')
     expect(result).toContain('compact: false')
-    expect(result).toContain('tool_progress: all')
+    expect(result).toContain('tool_progress: "off"')
+    expect(result).toContain('interim_assistant_messages: false')
     expect(result).toContain('streaming: true')
   })
 

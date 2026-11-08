@@ -192,26 +192,40 @@ export function validateTuning(edits: TuningEdits): Fail | null {
   return null
 }
 
-export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text: string } | Fail {
-  const bad = validateTuning(edits)
-  if (bad) return bad
+/**
+ * One scalar edit: `value` is the literal YAML text to write (already
+ * formatted and quoted as needed), or null to remove the key. `same` says
+ * whether the scalar currently in the file already means `value`, so an
+ * unchanged value leaves its line byte-identical.
+ */
+export type ScalarEdit = {
+  section: string
+  key: string
+  value: string | null
+  same: (currentScalar: string) => boolean
+}
+
+/**
+ * Apply scalar edits to config.yaml text by line, with every guard described
+ * at the top of this file. Shared by the tuning knobs and the chat-updates
+ * level (lib/services/chat-updates.ts).
+ */
+export function spliceScalars(text: string, edits: ScalarEdit[]): { ok: true; text: string } | Fail {
   if (text.startsWith('\uFEFF')) {
     return { ok: false, status: 409, error: 'unsupported-shape: config.yaml starts with a byte-order mark; edit it by hand' }
   }
   const { lines, eol } = splitLines(text)
   const hadTrailingNewline = text.endsWith('\n')
 
-  for (const s of TUNING_SPEC) {
-    const v = edits[s.id]
-    if (v === undefined) continue
-    const sec = findSection(lines, s.section)
+  for (const e of edits) {
+    const sec = findSection(lines, e.section)
     if (sec && 'ok' in sec) return sec
     if (sec) {
-      const shape = checkSection(lines, sec, s.section, s.key)
+      const shape = checkSection(lines, sec, e.section, e.key)
       if (shape) return shape
     }
-    const at = sec ? findKeys(lines, sec, s.key)[0] ?? -1 : -1
-    if (v === null) {
+    const at = sec ? findKeys(lines, sec, e.key)[0] ?? -1 : -1
+    if (e.value === null) {
       if (at < 0 || !sec) continue
       lines.splice(at, 1)
       // An empty `memory:` loads as memory: None, which replaces hermes's
@@ -225,21 +239,20 @@ export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text
       }
       continue
     }
-    const value = formatValue(s, v)
     if (!sec) {
       while (lines.length && isBlank(lines[lines.length - 1])) lines.pop()
       if (lines.length) lines.push('')
-      lines.push(`${s.section}:`, `  ${s.key}: ${value}`, '')
+      lines.push(`${e.section}:`, `  ${e.key}: ${e.value}`, '')
       continue
     }
     if (at >= 0) {
-      if (parseNumber(lines[at], s.key) === Number(value)) continue
+      if (e.same(scalarOf(lines[at], e.key))) continue
       const indent = indentOf(lines[at])
-      const rest = lines[at].slice(indent.length + s.key.length + 1)
+      const rest = lines[at].slice(indent.length + e.key.length + 1)
       const comment = rest.match(/(\s+#.*)$/)?.[1] ?? ''
-      lines[at] = `${indent}${s.key}: ${value}${comment}`
+      lines[at] = `${indent}${e.key}: ${e.value}${comment}`
     } else {
-      lines.splice(sec.end, 0, `${sec.indent || '  '}${s.key}: ${value}`)
+      lines.splice(sec.end, 0, `${sec.indent || '  '}${e.key}: ${e.value}`)
     }
   }
 
@@ -248,6 +261,41 @@ export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text
   let out = lines.join(eol)
   if (!hadTrailingNewline && out.endsWith(eol) && text !== '') out = out.slice(0, -eol.length)
   return { ok: true, text: out }
+}
+
+/** The scalar text of a `key: value` line, quotes and trailing comment removed. */
+function scalarOf(line: string, key: string): string {
+  const t = line.trimStart()
+  return yamlScalar(t.slice(t.indexOf(':', key.length) + 1))
+}
+
+/**
+ * Read the scalar of `section.key` (the LAST copy, which is the one a YAML
+ * parser keeps). null when the section or key is absent.
+ */
+export function readScalar(text: string, section: string, key: string): string | null {
+  const { lines } = splitLines(text)
+  const sec = findSection(lines, section)
+  const at = sec && !('ok' in sec) ? findKeys(lines, sec, key).at(-1) ?? -1 : -1
+  return at >= 0 ? scalarOf(lines[at], key) : null
+}
+
+export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text: string } | Fail {
+  const bad = validateTuning(edits)
+  if (bad) return bad
+  const scalarEdits: ScalarEdit[] = []
+  for (const s of TUNING_SPEC) {
+    const v = edits[s.id]
+    if (v === undefined) continue
+    const value = v === null ? null : formatValue(s, v)
+    scalarEdits.push({
+      section: s.section,
+      key: s.key,
+      value,
+      same: (cur) => cur !== '' && value !== null && Number(cur) === Number(value),
+    })
+  }
+  return spliceScalars(text, scalarEdits)
 }
 
 export type TuningWriteResult = ({ ok: true; unchanged: boolean; values: TuningValues }) | Fail
