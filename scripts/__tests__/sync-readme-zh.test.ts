@@ -328,6 +328,15 @@ describe('rendered link check (GitHub render fixtures)', () => {
     expect(normalizeUrl('HTTPS://EVIL.Example.NET/a#frag')).toBe('https://evil.example.net/a')
     expect(normalizeUrl('//evil%2Eexample%2Enet/p')).toBe(normalizeUrl('https://evil.example.net/p'))
     expect(normalizeUrl('http://[bad')).toMatch(/^unparseable:/)
+    // The query of a mailto: or tel: link is part of what it does.
+    expect(normalizeUrl('mailto:a@example.org?bcc=b@example.com')).toBe('mailto:a@example.org?bcc=b@example.com')
+    expect(normalizeUrl('tel:+1234567890?x=1')).toBe('tel:+1234567890?x=1')
+    const known = '<a href="mailto:a@example.org">a</a>'
+    const bcc = '<a href="mailto:a@example.org?bcc=b%40example.com">a</a>'
+    expect(renderedLinkProblems({ enHtml: known, prevZhHtml: '', candidateHtml: known })).toEqual([])
+    expect(renderedLinkProblems({ enHtml: known, prevZhHtml: '', candidateHtml: bcc })).toEqual([
+      'rendered link not in the English or current translation: mailto:a@example.org?bcc=b@example.com',
+    ])
   })
 })
 

@@ -357,7 +357,11 @@ export function normalizeUrl(raw, base = REPO_BASE) {
   if (u.hostname === 'private-user-images.githubusercontent.com') u.searchParams.delete('jwt')
   let path = u.pathname
   try { path = decodeURIComponent(path) } catch { /* keep the encoded form */ }
-  if (!u.host) return `${u.protocol}${path.toLowerCase()}`   // mailto:, tel:, data:, javascript:
+  // mailto:, tel:, data:, javascript:. The query stays: mailto:known@x?bcc=other
+  // is a different message from mailto:known@x.
+  let search = u.search
+  try { search = decodeURIComponent(search) } catch { /* keep the encoded form */ }
+  if (!u.host) return `${u.protocol}${path.toLowerCase()}${search}`
   return `${u.protocol}//${u.host}${path}${u.search}`
 }
 
