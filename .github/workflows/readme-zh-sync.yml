@@ -6,7 +6,8 @@ name: readme-zh-sync
 # English at the translation's marker commit, the new English, the diff and the
 # current Chinese, and takes back the Chinese with only the changed parts
 # updated. The reply is validated mechanically (images, links, code blocks,
-# sections, length, unchanged text kept, no invented URLs) before it is written.
+# sections, length, unchanged text kept, no invented URLs or hosts) and its
+# links are checked against GitHub's own render of it before it is written.
 #
 # HOW IT LANDS. main has a ruleset requiring the `sanitize / sanitize` check
 # (from GitHub Actions) on the exact commit. A PR opened with GITHUB_TOKEN runs
@@ -81,6 +82,8 @@ jobs:
         if: steps.drift.outputs.drift == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Only for POST /markdown (GitHub's renderer, the link check's ground truth).
+          GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/sync-readme-zh.mjs --write
 
       - name: Only the translation may change

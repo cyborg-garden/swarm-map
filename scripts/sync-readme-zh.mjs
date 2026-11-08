@@ -18,7 +18,8 @@
  *   node scripts/sync-readme-zh.mjs --dry-run   print the prompt, call nothing
  *   node scripts/sync-readme-zh.mjs --write     translate, validate, write
  *
- * --write needs OPENROUTER_API_KEY. README_SYNC_MODEL overrides the model.
+ * --write needs OPENROUTER_API_KEY and GITHUB_TOKEN (for GitHub's markdown
+ * renderer, the ground truth for the link check; no token means no write). README_SYNC_MODEL overrides the model.
  * Run from the repo root (CI does). The pure functions are exported for tests.
  */
 import { execFileSync } from 'node:child_process'
@@ -305,6 +306,101 @@ export function readState() {
   return { zh, newEn, sha, oldEn, diff, headSha, inSync: oldEn != null && oldEn === newEn }
 }
 
+// --------------------------------------------------- rendered link check ----
+//
+// Ground truth for links: what GitHub actually renders. Regex extraction keeps
+// losing to Markdown edge cases (reference definitions inside blockquotes, an
+// escaped label, a URL on the next line, a host spelt evil%2Ecom or evil。com).
+// So the candidate, the current translation and the English all go through
+// GitHub's own renderer (POST /markdown, gfm, this repo as context), every URL
+// attribute is read from the HTML, and each URL is normalised the way a
+// browser would resolve it. The regex checks above stay as an offline first pass.
+
+export const REPO_BASE = 'https://github.com/cyborg-garden/swarm-map/blob/main/'
+const URL_ATTRS = new Set(['href', 'src', 'srcset', 'action', 'formaction', 'poster', 'data', 'cite', 'background', 'xlink:href'])
+
+function decodeEntities(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|#39);/gi, (_, e) => {
+    const l = e.toLowerCase()
+    if (l[0] === '#') return String.fromCodePoint(l[1] === 'x' ? parseInt(l.slice(2), 16) : parseInt(l.slice(1), 10))
+    return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[l]
+  })
+}
+
+/** Raw URL attribute values from rendered HTML (srcset split into its URLs). */
+export function htmlUrls(html) {
+  const out = []
+  for (const tag of html.matchAll(/<[a-z][^\s/>]*(\s[^>]*)?>/gi)) {
+    for (const a of (tag[1] || '').matchAll(/([a-z][a-z0-9:_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/gi)) {
+      const name = a[1].toLowerCase()
+      if (!URL_ATTRS.has(name)) continue
+      const v = decodeEntities(a[2] ?? a[3] ?? a[4] ?? '').trim()
+      if (name === 'srcset') out.push(...v.split(',').map((c) => c.trim().split(/\s+/)[0]).filter(Boolean))
+      else out.push(v)
+    }
+  }
+  return out
+}
+
+/**
+ * A URL as a browser resolves it: relative against the repo, host through the
+ * WHATWG parser (percent-decoded, IDNA/punycode, 。 mapped to ., lowercased),
+ * path percent-decoded, fragment dropped. Pure in-page anchors return null.
+ * GitHub signs uploaded images with a per-render jwt; that is dropped so the
+ * same image compares equal across renders.
+ */
+export function normalizeUrl(raw, base = REPO_BASE) {
+  const v = raw.trim()
+  if (!v || v.startsWith('#')) return null
+  let u
+  try { u = new URL(v, base) } catch { return `unparseable:${v}` }
+  if (u.hostname === 'private-user-images.githubusercontent.com') u.searchParams.delete('jwt')
+  let path = u.pathname
+  try { path = decodeURIComponent(path) } catch { /* keep the encoded form */ }
+  if (!u.host) return `${u.protocol}${path.toLowerCase()}`   // mailto:, tel:, data:, javascript:
+  return `${u.protocol}//${u.host}${path}${u.search}`
+}
+
+export function renderedUrlKeys(html) {
+  const keys = new Set()
+  for (const raw of htmlUrls(html)) {
+    const k = normalizeUrl(raw)
+    if (k) keys.add(k)
+  }
+  return keys
+}
+
+/** GitHub's renderer. Throws on any failure: no render, no write. */
+export function githubRenderer({ token, fetchImpl = fetch, repo = 'cyborg-garden/swarm-map' }) {
+  if (!token) throw new Error('GITHUB_TOKEN is not set; the rendered link check cannot run')
+  return async (text) => {
+    const res = await fetchImpl('https://api.github.com/markdown', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'cyborg-garden-readme-sync/1.0',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      body: JSON.stringify({ text, mode: 'gfm', context: repo }),
+      signal: AbortSignal.timeout(60_000),
+    })
+    const html = await res.text()
+    if (!res.ok) throw new Error(`GitHub markdown render failed: HTTP ${res.status} ${html.slice(0, 200)}`)
+    if (!html.trim()) throw new Error('GitHub markdown render returned an empty body')
+    return html
+  }
+}
+
+/** Problems for URLs the rendered candidate links to that neither source does. */
+export function renderedLinkProblems({ enHtml, prevZhHtml, candidateHtml }) {
+  const known = new Set([...renderedUrlKeys(enHtml), ...renderedUrlKeys(prevZhHtml)])
+  return [...renderedUrlKeys(candidateHtml)]
+    .filter((k) => !known.has(k))
+    .map((k) => `rendered link not in the English or current translation: ${k}`)
+}
+
 // ----------------------------------------------------------------- model ----
 
 async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
@@ -333,8 +429,11 @@ async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
 }
 
 /** Ask, validate, and on failure ask once more with the problems listed. */
-export async function translate(state, { model, key, fetchImpl, attempts = 2, log = console.error }) {
+export async function translate(state, { model, key, fetchImpl, render = null, attempts = 2, log = console.error }) {
+  // Fail closed: without GitHub's renderer there is no ground-truth link check.
+  if (typeof render !== 'function') throw new Error('no markdown renderer; refusing to translate without the rendered link check')
   const zhBody = stripMarker(state.zh)
+  let sourceHtml = null
   const prompt = buildPrompt({ oldEn: state.oldEn, newEn: state.newEn, diff: state.diff, zhBody })
   let user = prompt.user
   let problems = []
@@ -342,6 +441,10 @@ export async function translate(state, { model, key, fetchImpl, attempts = 2, lo
     const { text, finish } = await callModel({ system: prompt.system, user }, { model, key, fetchImpl })
     const body = extractReadme(text)
     problems = body == null ? [`no <readme> block in the reply (finish_reason ${finish})`] : validate({ newEn: state.newEn, zhBody: body, prevZhBody: zhBody, diff: state.diff })
+    if (!problems.length) {
+      sourceHtml ??= { en: await render(state.newEn), zh: await render(zhBody) }
+      problems = renderedLinkProblems({ enHtml: sourceHtml.en, prevZhHtml: sourceHtml.zh, candidateHtml: await render(body) })
+    }
     if (!problems.length) return withMarker(body, state.headSha)
     log(`attempt ${i}: rejected:\n  - ${problems.join('\n  - ')}`)
     user = `${prompt.user}\n\nYour previous answer was rejected for these reasons. Fix them:\n- ${problems.join('\n- ')}`
@@ -384,7 +487,8 @@ async function main(argv) {
     return 2
   }
   const model = (process.env.README_SYNC_MODEL || '').trim() || DEFAULT_MODEL
-  const out = await translate(state, { model, key })
+  const render = githubRenderer({ token: (process.env.GITHUB_TOKEN || '').trim() })
+  const out = await translate(state, { model, key, render })
   fs.writeFileSync(ZH, out)
   console.log(`wrote ${ZH} (source ${state.headSha}, model ${model})`)
   return 0

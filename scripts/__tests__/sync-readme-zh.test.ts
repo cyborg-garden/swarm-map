@@ -16,7 +16,11 @@ import path from 'node:path'
 import {
   parseMarker, stripMarker, withMarker, markerLines, buildPrompt, extractReadme,
   validate, readState, translate,
+  htmlUrls, normalizeUrl, renderedUrlKeys, renderedLinkProblems, githubRenderer,
 } from '../sync-readme-zh.mjs'
+// Real POST /markdown responses (gfm, context cyborg-garden/swarm-map), captured
+// 2026-11-09. The per-render image jwt is redacted; normalizeUrl drops it anyway.
+import RENDERS from './fixtures/readme-zh-render.json'
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const SCRIPT = path.join(ROOT, 'scripts', 'sync-readme-zh.mjs')
@@ -246,12 +250,16 @@ describe('drift detection (real git)', () => {
   })
 })
 
+// Stand-in renderer: link-free HTML, so the rendered check passes and the
+// model-loop behaviour is what these tests see.
+const fakeRender = async () => '<p dir="auto">x</p>'
+
 describe('translate (fake model)', () => {
   const state = { zh: ZH, newEn: EN, oldEn: EN, diff: '', headSha: 'abc1234', sha: parseMarker(ZH), inSync: false }
   const reply = (text: string) => async () => new Response(JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] }), { status: 200 })
 
   it('writes the validated reply with a bumped marker', async () => {
-    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl: reply(`<readme>\n${BODY}</readme>`), log: () => {} })
+    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl: reply(`<readme>\n${BODY}</readme>`), render: fakeRender, log: () => {} })
     expect(parseMarker(out)).toBe('abc1234')
     expect(stripMarker(out)).toBe(BODY)
   })
@@ -263,14 +271,109 @@ describe('translate (fake model)', () => {
       seen.push(JSON.parse(init.body).messages[1].content)
       return reply(n++ === 0 ? '<readme>\nno</readme>' : `<readme>\n${BODY}</readme>`)()
     }
-    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl, log: () => {} })
+    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl, render: fakeRender, log: () => {} })
     expect(parseMarker(out)).toBe('abc1234')
     expect(seen[1]).toMatch(/previous answer was rejected/)
   })
 
   it('throws, writing nothing, when every attempt fails validation or the API errors', async () => {
-    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl: reply('no tags'), log: () => {} })).rejects.toThrow(/rejected after 2 attempts/)
+    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl: reply('no tags'), render: fakeRender, log: () => {} })).rejects.toThrow(/rejected after 2 attempts/)
     const apiErr = async () => new Response(JSON.stringify({ error: { message: 'no credit' } }), { status: 402 })
-    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl: apiErr, log: () => {} })).rejects.toThrow(/OpenRouter 402/)
+    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl: apiErr, render: fakeRender, log: () => {} })).rejects.toThrow(/OpenRouter 402/)
   })
+})
+
+type Render = { markdown: string; html: string }
+const R = RENDERS as Record<string, Render>
+
+describe('rendered link check (GitHub render fixtures)', () => {
+  // Each audit bypass, as GitHub really renders it, and the URL a browser follows.
+  it.each([
+    ['blockquote_ref', 'https://evil.example.net/bq'],
+    ['ref_next_line', 'https://evil.example.net/nl'],
+    ['escaped_label', 'https://evil.example.net/esc'],
+    ['pct_dot', 'https://evil.example.net/p'],
+    ['ideographic_dot', 'https://evil.example.net/i'],
+    ['idn_www', 'http://www.xn--e1afmkfd.xn--p1ai/'],
+    ['underscore_url', 'https://evil.example.net/u_。'],
+    ['underscore_label', 'http://www.a_b.evil.example.net/'],
+    ['bare_mailto', 'mailto:a@example.org'],
+    ['bare_email', 'mailto:a@example.org'],
+  ])('%s resolves to %s and is rejected', (name, key) => {
+    expect([...renderedUrlKeys(R[name].html)]).toContain(key)
+    const problems = renderedLinkProblems({ enHtml: R.known_links.html, prevZhHtml: R.known_links.html, candidateHtml: R[name].html })
+    expect(problems).toContain(`rendered link not in the English or current translation: ${key}`)
+  })
+  it('emphasised www. text renders as no link (the domain backstop covers it)', () => {
+    expect(renderedUrlKeys(R.underscore_www.html).size).toBe(0)
+    expect(check(BODY.replace('## 许可证', `## 许可证\n\n${R.underscore_www.markdown}\n`)).join()).toMatch(/domain-like token/)
+  })
+  it('known links pass, relative links resolve against the repo, image jwt is ignored', () => {
+    expect(renderedLinkProblems({ enHtml: R.known_links.html, prevZhHtml: '', candidateHtml: R.known_links.html })).toEqual([])
+    const keys = [...renderedUrlKeys(R.known_links.html)]
+    expect(keys).toContain('https://github.com/cyborg-garden/swarm-map/blob/main/README.md')
+    expect(keys).toContain('https://github.com/cyborg-garden/swarm-map/blob/main/docs/runtimes.md')
+    const img = R.known_links.html.replace(/jwt=REDACTED/g, 'jwt=another-render')
+    expect(renderedLinkProblems({ enHtml: R.known_links.html, prevZhHtml: '', candidateHtml: img })).toEqual([])
+  })
+  it('reads every URL attribute, decodes entities, splits srcset', () => {
+    const html = '<form action="/a"><button formaction="//b.example.net/x"></button></form><video poster="https://c.example.net/p"></video>'
+      + '<object data="https://d.example.net/o"></object><img srcset="https://e.example.net/1x.png 1x, https://f.example.net/2x.png 2x">'
+      + '<a href="https://g.example.net/?a=1&amp;b=2">x</a><a href=\'https://h.example.net/&#x2e;\'>y</a>'
+    expect(htmlUrls(html)).toEqual(['/a', '//b.example.net/x', 'https://c.example.net/p', 'https://d.example.net/o',
+      'https://e.example.net/1x.png', 'https://f.example.net/2x.png', 'https://g.example.net/?a=1&b=2', 'https://h.example.net/.'])
+  })
+  it('normalises the way a browser resolves', () => {
+    expect(normalizeUrl('#section')).toBeNull()
+    expect(normalizeUrl('HTTPS://EVIL.Example.NET/a#frag')).toBe('https://evil.example.net/a')
+    expect(normalizeUrl('//evil%2Eexample%2Enet/p')).toBe(normalizeUrl('https://evil.example.net/p'))
+    expect(normalizeUrl('http://[bad')).toMatch(/^unparseable:/)
+  })
+})
+
+describe('githubRenderer (fails closed)', () => {
+  it('refuses without a token', () => {
+    expect(() => githubRenderer({ token: '' })).toThrow(/GITHUB_TOKEN/)
+  })
+  it('sends gfm with the repo as context and throws on an API error or empty body', async () => {
+    let sent: { text: string; mode: string; context: string } | null = null
+    const ok = githubRenderer({ token: 't', fetchImpl: (async (_u: string, init: { body: string }) => { sent = JSON.parse(init.body); return new Response('<p>x</p>', { status: 200 }) }) as unknown as typeof fetch })
+    expect(await ok('hi')).toBe('<p>x</p>')
+    expect(sent).toEqual({ text: 'hi', mode: 'gfm', context: 'cyborg-garden/swarm-map' })
+    const bad = githubRenderer({ token: 't', fetchImpl: (async () => new Response('nope', { status: 502 })) as unknown as typeof fetch })
+    await expect(bad('hi')).rejects.toThrow(/HTTP 502/)
+    const empty = githubRenderer({ token: 't', fetchImpl: (async () => new Response('', { status: 200 })) as unknown as typeof fetch })
+    await expect(empty('hi')).rejects.toThrow(/empty/)
+  })
+  it('translate refuses to run without a renderer, and a render error writes nothing', async () => {
+    const state = { zh: ZH, newEn: EN, oldEn: EN, diff: '', headSha: 'abc1234', sha: parseMarker(ZH), inSync: false }
+    const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content: `<readme>\n${BODY}</readme>` } }] }), { status: 200 })
+    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl, log: () => {} })).rejects.toThrow(/no markdown renderer/)
+    const boom = async () => { throw new Error('GitHub markdown render failed: HTTP 500') }
+    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl, render: boom, log: () => {} })).rejects.toThrow(/HTTP 500/)
+  })
+  it('rejects a reply whose rendered links add a URL, then accepts a clean retry', async () => {
+    const state = { zh: ZH, newEn: EN, oldEn: EN, diff: '', headSha: 'abc1234', sha: parseMarker(ZH), inSync: false }
+    let n = 0
+    const fetchImpl = async () => new Response(JSON.stringify({ choices: [{ message: { content: `<readme>\n${BODY}</readme>` } }] }), { status: 200 })
+    // Sources render to the known links; the first candidate render adds a bypass link.
+    let renders = 0
+    const render = async () => (++renders === 3 && n++ === 0 ? R.pct_dot.html : R.known_links.html)
+    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl, render, log: () => {} })
+    expect(parseMarker(out)).toBe('abc1234')
+    expect(renders).toBe(4)
+  })
+})
+
+// Optional: the real API against the real README pair. Skipped without a token.
+describe.skipIf(!process.env.README_SYNC_LIVE_TOKEN)('live GitHub render', () => {
+  it("main's README pair has no rendered link outside English ∪ current zh", async () => {
+    const render = githubRenderer({ token: process.env.README_SYNC_LIVE_TOKEN as string })
+    const [en, zh] = await Promise.all([render(EN), render(BODY)])
+    expect(renderedLinkProblems({ enHtml: en, prevZhHtml: zh, candidateHtml: await render(BODY) })).toEqual([])
+    // Against the English alone, the only extra is the switcher's link back to README.md.
+    expect(renderedLinkProblems({ enHtml: en, prevZhHtml: '', candidateHtml: zh })).toEqual([
+      'rendered link not in the English or current translation: https://github.com/cyborg-garden/swarm-map/blob/main/README.md',
+    ])
+  }, 60_000)
 })

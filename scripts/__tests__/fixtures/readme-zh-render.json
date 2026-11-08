@@ -1,0 +1,50 @@
+{
+  "blockquote_ref": {
+    "markdown": "> [x]: //evil.example.net/bq\n\n[链接][x]",
+    "html": "<blockquote>\n</blockquote>\n<p dir=\"auto\"><a href=\"//evil.example.net/bq\" rel=\"nofollow\">链接</a></p>"
+  },
+  "ref_next_line": {
+    "markdown": "[x]:\n  //evil.example.net/nl\n\n[链接][x]",
+    "html": "<p dir=\"auto\"><a href=\"//evil.example.net/nl\" rel=\"nofollow\">链接</a></p>"
+  },
+  "escaped_label": {
+    "markdown": "[a\\]b]: //evil.example.net/esc\n\n[链接][a\\]b]",
+    "html": "<p dir=\"auto\"><a href=\"//evil.example.net/esc\" rel=\"nofollow\">链接</a></p>"
+  },
+  "pct_dot": {
+    "markdown": "[链接](//evil%2Eexample%2Enet/p)",
+    "html": "<p dir=\"auto\"><a href=\"//evil%2Eexample%2Enet/p\" rel=\"nofollow\">链接</a></p>"
+  },
+  "ideographic_dot": {
+    "markdown": "[链接](//evil。example。net/i)",
+    "html": "<p dir=\"auto\"><a href=\"//evil%E3%80%82example%E3%80%82net/i\" rel=\"nofollow\">链接</a></p>"
+  },
+  "idn_www": {
+    "markdown": "访问 www.пример.рф 即可。",
+    "html": "<p dir=\"auto\">访问 <a href=\"http://www.%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80.%D1%80%D1%84\" rel=\"nofollow\">www.пример.рф</a> 即可。</p>"
+  },
+  "underscore_url": {
+    "markdown": "详见 _https://evil.example.net/u_。",
+    "html": "<p dir=\"auto\">详见 _<a href=\"https://evil.example.net/u_%E3%80%82\" rel=\"nofollow\">https://evil.example.net/u_。</a></p>"
+  },
+  "underscore_www": {
+    "markdown": "详见 _www.evil.example.net_。",
+    "html": "<p dir=\"auto\">详见 <em>www.evil.example.net</em>。</p>"
+  },
+  "underscore_label": {
+    "markdown": "访问 www.a_b.evil.example.net 即可。",
+    "html": "<p dir=\"auto\">访问 <a href=\"http://www.a_b.evil.example.net\" rel=\"nofollow\">www.a_b.evil.example.net</a> 即可。</p>"
+  },
+  "bare_mailto": {
+    "markdown": "联系 mailto:a@example.org。",
+    "html": "<p dir=\"auto\">联系 <a href=\"mailto:a@example.org\">mailto:a@example.org</a>。</p>"
+  },
+  "bare_email": {
+    "markdown": "联系 a@example.org。",
+    "html": "<p dir=\"auto\">联系 <a href=\"mailto:a@example.org\">a@example.org</a>。</p>"
+  },
+  "known_links": {
+    "markdown": "[English](README.md) | [文档](docs/runtimes.md#x) [NimbleCo](https://www.nimbleco.ai/)\n\n<img width=\"10\" alt=\"x\" src=\"https://github.com/user-attachments/assets/4b94f0d1-d9b8-4a81-8b47-b2dae1940741\" />\n\n## 标题",
+    "html": "<p dir=\"auto\"><a href=\"README.md\">English</a> | <a href=\"docs/runtimes.md#x\">文档</a> <a href=\"https://www.nimbleco.ai/\" rel=\"nofollow\">NimbleCo</a></p>\n<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"https://private-user-images.githubusercontent.com/275381629/597958848-4b94f0d1-d9b8-4a81-8b47-b2dae1940741.png?jwt=REDACTED\"><img width=\"10\" alt=\"x\" src=\"https://private-user-images.githubusercontent.com/275381629/597958848-4b94f0d1-d9b8-4a81-8b47-b2dae1940741.png?jwt=REDACTED\" style=\"max-width: 100%;\"></a>\n<h2 dir=\"auto\">标题</h2>"
+  }
+}
