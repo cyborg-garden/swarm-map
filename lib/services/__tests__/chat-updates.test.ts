@@ -129,6 +129,11 @@ describe('spliceChatUpdateLevel', () => {
     expect(splice(quiet, 'quiet')).toBe(quiet)
   })
 
+  it('keeps long_running_notifications: generic when setting all', () => {
+    const generic = FULL.replace('long_running_notifications: true', 'long_running_notifications: generic')
+    expect(splice(generic, 'all')).toBe(generic)
+  })
+
   it('round-trips every level', () => {
     for (const level of ['quiet', 'some', 'all'] as const) {
       expect(readChatUpdateLevel(splice(OLD_TEMPLATE, level))).toBe(level)
@@ -211,7 +216,10 @@ describe('per-platform overrides', () => {
     expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {tool_progress: all}'))).toBe(true)
     expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false, long_running_notifications: true}'))).toBe(true)
     expect(hasPlatformOverride('display:\n  platforms: {discord: {interim_assistant_messages: true}}\n')).toBe(true)
-    // Inline values that do not touch the three keys are not overrides.
+    expect(hasPlatformOverride('display:\n  platforms: {discord: {"tool_progress": all}}\n')).toBe(true)
+    // Inline values that do not touch the three keys are not overrides,
+    // including a key named only in a comment.
+    expect(hasPlatformOverride(MARE_DISPLAY.replace('      streaming: false', '      streaming: false  # was {tool_progress: all}'))).toBe(false)
     expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false}'))).toBe(false)
     expect(hasPlatformOverride('display:\n  platforms: {}\n  tool_progress_overrides: null\n')).toBe(false)
   })

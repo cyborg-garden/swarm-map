@@ -26,6 +26,11 @@ export { CHAT_UPDATE_LEVELS, DEFAULT_CHAT_UPDATE_LEVEL, isChatUpdateLevel, type 
  * so the reader reports `overridden` when any are present; the level shown
  * is then not what that surface does. The writer leaves them alone.
  *
+ * Known edge cases, left as they are because no generated config has them:
+ * a quoted empty or "null" value reads as unset (hermes reads it as a
+ * string), and a per-platform `null` is flagged as an override (hermes
+ * skips it). Both only affect what the card says, never what is written.
+ *
  * Hermes re-reads config.yaml when it changes, so a new level applies from
  * the agent's next message with no restart.
  */
@@ -64,7 +69,7 @@ export function hasPlatformOverride(text: string): boolean {
   const keys = new Set<string>(Object.values(KEY))
   // A key written inline, e.g. `discord: {tool_progress: all}` or
   // `platforms: {discord: {tool_progress: all}}`.
-  const inlineKey = new RegExp(`[{,]\\s*(${Object.values(KEY).join('|')})\\s*:`)
+  const inlineKey = new RegExp(`[{,]\\s*["']?(${Object.values(KEY).join('|')})["']?\\s*:`)
   let parent = ''
   for (const l of content) {
     const indent = l.length - l.trimStart().length
@@ -77,7 +82,7 @@ export function hasPlatformOverride(text: string): boolean {
       continue
     }
     if (parent === 'tool_progress_overrides') return true
-    if (parent === 'platforms' && m && (keys.has(m[1]) || inlineKey.test(m[2]))) return true
+    if (parent === 'platforms' && m && (keys.has(m[1]) || inlineKey.test(m[2].replace(/\s+#.*$/, '')))) return true
   }
   return false
 }
@@ -112,7 +117,8 @@ export function spliceChatUpdateLevel(text: string, level: ChatUpdateLevel) {
   return spliceScalars(text, [
     { section: 'display', key: KEY.toolProgress, value: `"${k.toolProgress}"`, same: (cur) => cur === k.toolProgress },
     { section: 'display', key: KEY.interim, value: String(k.interim), same: (cur) => cur === String(k.interim) },
-    { section: 'display', key: KEY.heartbeat, value: String(k.heartbeat), same: (cur) => cur === String(k.heartbeat) },
+    // `generic` is on too (hermes words the message generically); keep it.
+    { section: 'display', key: KEY.heartbeat, value: String(k.heartbeat), same: (cur) => cur === String(k.heartbeat) || (k.heartbeat && cur.trim().toLowerCase() === 'generic') },
   ])
 }
 
