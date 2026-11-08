@@ -70,13 +70,37 @@ describe('validate', () => {
   })
   it('rejects a link or image URL that is in neither the English nor the current translation', () => {
     const link = check(BODY.replace('## 许可证', '## 许可证\n\n详见 [这里](https://evil.example.net/x)。'))
-    expect(link.join()).toMatch(/not in the English or current translation: https:\/\/evil\.example\.net\/x/)
+    expect(link.join()).toMatch(/not in the English or current translation: evil\.example\.net\/x/)
     const img = check(BODY.replace('## 许可证', '## 许可证\n\n<img alt="x" src="https://evil.example.net/p.png" />'))
-    expect(img.join()).toMatch(/not in the English or current translation: https:\/\/evil\.example\.net\/p\.png/)
+    expect(img.join()).toMatch(/not in the English or current translation: evil\.example\.net\/p\.png/)
     const rel = check(BODY.replace('## 许可证', '## 许可证\n\n[文档](docs/invented.md)'))
     expect(rel.join()).toMatch(/not in the English or current translation: docs\/invented\.md/)
     // A URL the current translation already carries (README.md#api-reference) stays allowed.
     expect(check(BODY)).toEqual([])
+  })
+  // One case per URL form a model could slip a new target through.
+  it.each([
+    ['HTML <a href>', '<a href="https://evil.example.net/a">这里</a>', 'evil.example.net/a'],
+    ['relative HTML href', '<a href="docs/invented.md">这里</a>', 'docs/invented.md'],
+    ['protocol-relative HTML src', '<img alt="x" src="//evil.example.net/s.png" />', 'evil.example.net/s.png'],
+    ['single-quoted href', "<a href='https://evil.example.net/q'>这里</a>", 'evil.example.net/q'],
+    ['reference definition', '详见 [这里][r]。\n\n[r]: https://evil.example.net/ref', 'evil.example.net/ref'],
+    ['protocol-relative reference', '[r]: //evil.example.net/pr', 'evil.example.net/pr'],
+    ['protocol-relative inline', '详见 [这里](//evil.example.net/pi)。', 'evil.example.net/pi'],
+    ['bare protocol-relative', '访问 //evil.example.net/bp 即可。', 'evil.example.net/bp'],
+    ['bare www.', '访问 www.evil-example.net/w。', 'evil-example.net/w'],
+    ['autolink', '<https://evil.example.net/auto>', 'evil.example.net/auto'],
+    ['www autolink', '<www.evil-example.net/wa>', 'evil-example.net/wa'],
+    ['inline link with title', '[这里](https://evil.example.net/t "标题")', 'evil.example.net/t'],
+    ['new path on a known host', '[这里](https://github.com/cyborg-garden/not-a-repo)', 'github.com/cyborg-garden/not-a-repo'],
+    ['image in markdown form', '![x](https://evil.example.net/i.png)', 'evil.example.net/i.png'],
+  ])('rejects an added URL written as %s', (_form, snippet, key) => {
+    const problems = check(BODY.replace('## 许可证', `## 许可证\n\n${snippet}\n`)).join('\n')
+    expect(problems).toContain(`not in the English or current translation: ${key}`)
+  })
+  it('treats the same target written another way as known', () => {
+    const same = '<a href="https://nimbleco.ai">NimbleCo</a> //github.com/letta-ai/letta/ www.nimbleco.ai'
+    expect(check(BODY.replace('## 许可证', `## 许可证\n\n${same}\n`))).toEqual([])
   })
   it('rejects a truncated reply', () => {
     expect(check(BODY.slice(0, Math.floor(BODY.length / 2))).join()).toMatch(/shrank/)

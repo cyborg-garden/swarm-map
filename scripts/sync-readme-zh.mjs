@@ -146,6 +146,48 @@ function linkTargets(md) {
   return [...out].filter((t) => !t.startsWith('#') && t !== ZH)
 }
 
+// Characters that end a bare URL: whitespace, markup delimiters, and the
+// full-width punctuation Chinese prose puts straight after a link.
+const URL_CHARS = '[^\\s)\\]"\'<>`，。；：！？、（）“”]+'
+
+/**
+ * Every URL a reader could follow, in every form Markdown and HTML allow:
+ * inline links and images, reference definitions, href/src attributes,
+ * autolinks, bare http(s)://, protocol-relative //host and bare www.
+ * Normalised to host+path(+query), fragment dropped, so the same target
+ * written two ways compares equal and a new target in any form is caught.
+ */
+export function urlKeys(md) {
+  const raw = []
+  const add = (re, g = 1) => { for (const m of md.matchAll(re)) raw.push(m[g]) }
+  add(/!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+["'(][^)]*)?\)/g)          // [t](url "title"), ![a](src)
+  add(/^[ \t]{0,3}\[[^\]]+\]:[ \t]*<?([^\s>]+)>?/gm)                   // [ref]: url
+  add(/\b(?:href|src|srcset|action|poster|data)\s*=\s*["']?([^"'\s>]+)/gi) // <a href>, <img src>, ...
+  add(/<((?:[a-z][a-z0-9+.-]*:|www\.)[^\s>]+)>/gi)                    // <https://x>, <www.x>
+  add(new RegExp(`\\b[a-z][a-z0-9+.-]*://${URL_CHARS}`, 'gi'), 0)      // bare scheme://
+  add(new RegExp(`(?<![\\w:/.-])//[a-z0-9-]+(?:\\.[a-z0-9-]+)+${URL_CHARS.slice(0, -1)}*`, 'gi'), 0) // //host
+  add(new RegExp(`(?<![\\w./:-])www\\.[a-z0-9-]+(?:\\.[a-z0-9-]+)+${URL_CHARS.slice(0, -1)}*`, 'gi'), 0) // www.host
+  const keys = new Set()
+  for (const u of raw) {
+    const k = urlKey(u)
+    if (k) keys.add(k)
+  }
+  return keys
+}
+
+function urlKey(u) {
+  let s = u.trim().replace(/[.,;:!?'"]+$/, '')
+  if (!s || s.startsWith('#')) return null
+  s = s.replace(/#.*$/, '')
+  const abs = s.match(/^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#]+)(.*)$/i) || (/^www\./i.test(s) ? [null, s.split(/[/?]/)[0], s.slice(s.split(/[/?]/)[0].length)] : null)
+  if (abs) {
+    const host = abs[1].toLowerCase().replace(/^www\./, '').replace(/:(80|443)$/, '')
+    return `${host}${abs[2].replace(/\/$/, '') || ''}`
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s.toLowerCase()               // mailto:, data:, javascript:
+  return s.replace(/^\.\//, '') || null
+}
+
 const h2 = (md) => md.split('\n').filter((l) => /^## /.test(l)).length
 const cjk = (s) => (s.match(/[一-鿿]/g) || []).length
 
@@ -180,9 +222,9 @@ export function validate({ newEn, zhBody, prevZhBody = null, diff = null }) {
   // The other direction: the model must not invent a link or image. Every URL
   // in the output has to come from the English or the current translation, so
   // a hallucinated or injected URL never reaches the published README.
-  const known = new Set([...imageSrcs(newEn), ...linkTargets(newEn), ...imageSrcs(prevZhBody || ''), ...linkTargets(prevZhBody || '')])
-  for (const t of new Set([...imageSrcs(zhBody), ...linkTargets(zhBody)])) {
-    if (!known.has(t)) problems.push(`link or image not in the English or current translation: ${t}`)
+  const known = new Set([...urlKeys(newEn), ...urlKeys(prevZhBody || '')])
+  for (const k of urlKeys(zhBody)) {
+    if (!known.has(k)) problems.push(`link or image not in the English or current translation: ${k}`)
   }
 
   const enCode = fencedBlocks(newEn).map(codeSkeleton)
