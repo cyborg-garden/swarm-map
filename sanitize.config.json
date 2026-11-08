@@ -25,8 +25,8 @@
       "generic tool / API / platform / model / provider names and public reference material",
       "clearly fictional placeholders (Subject A, <case>, example.com, <host>)",
       "the project's copyright holder, Juniper Bevensee, ONLY inside a copyright, license, or NOTICE attribution line (e.g. \"Copyright (C) 2025-2026 Juniper Bevensee and contributors\" or the same line in a translated README). Anywhere else, her name, full or first name alone (e.g. 'Juniper's server'), is still a particular and must be flagged",
-      "the author and repository of open-source work this package adapts or vendors, ONLY inside its credit or licence-attribution line (e.g. \"Adapted from proptest-praxis by Inanna Malick (github.com/inanna-malick/agent-skills). Copyright (c) 2026 Inanna Malick, MIT licence\"). Licences such as MIT require that credit. The same name or repo anywhere else is still a particular and must be flagged",
-      "Alembic / the Alembic gate: the name of this repo's own sanitization gate (scripts/check_sanitization.py)"
+      "the author and repository of open-source work this package adapts or vendors, ONLY inside its credit or licence-attribution line (e.g. \"Adapted from proptest-praxis by Inanna Malick (github.com/inanna-malick/agent-skills). Copyright (c) 2026 Inanna Malick, MIT licence\"). Licences such as MIT require that credit. Exempt only when the line names a licence AND a public repo URL whose owner matches the credited author; a credit line lacking either, or crediting someone unrelated to the linked repo, must still be flagged. The same name or repo anywhere else is still a particular and must be flagged",
+      "'Alembic' only when it refers to this repo's own sanitization gate (scripts/check_sanitization.py)"
     ],
     "extra_instructions": [
       "This package MAY, and naturally does, describe the platform itself. Prefer NOT flagging the platform's own project identity, but DO flag anything that looks like it came from a specific investigation, customer, or operator instance."
