@@ -1,0 +1,126 @@
+name: readme-zh-sync
+
+# Keeps README.zh-CN.md in step with README.md, with no human step.
+#
+# When README.md changes on main, scripts/sync-readme-zh.mjs feeds the model the
+# English at the translation's marker commit, the new English, the diff and the
+# current Chinese, and takes back the Chinese with only the changed parts
+# updated. The reply is validated mechanically (images, links, code blocks,
+# sections, length, unchanged text kept) before it is written.
+#
+# WHY A DIRECT COMMIT TO MAIN, NOT A PR. A PR opened with GITHUB_TOKEN triggers
+# no pull_request workflows, so the sanitization and test checks would never run
+# on it, and this repo does not allow Actions to open PRs anyway. Instead the
+# job runs the same sanitization gate itself, both layers, fail-closed, on the
+# translated file, using the gate script and config already on main, and pushes
+# only if it passes. The commit touches README.zh-CN.md and nothing else (the job
+# checks). A GITHUB_TOKEN push triggers no workflows, so this cannot loop, and
+# the daily full-tree audit (sanitization-scheduled.yml) re-scans it anyway.
+#
+# A failed run (API outage, a reply that fails validation) writes nothing. The
+# weekly schedule retries, so drift heals without anyone re-running it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - scripts/sync-readme-zh.mjs
+      - .github/workflows/readme-zh-sync.yml
+  schedule:
+    - cron: '41 7 * * 1'   # Mondays 07:41 UTC: retry anything a failed run left
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: readme-zh-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'cyborg-garden/swarm-map'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          # Full history: the marker names an older commit to diff against.
+          fetch-depth: 0
+
+      - name: Check for drift
+        id: drift
+        run: |
+          set -uo pipefail
+          rc=0
+          node scripts/sync-readme-zh.mjs --check || rc=$?
+          case "$rc" in
+            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "drift=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::drift check failed (exit $rc)"; exit "$rc" ;;
+          esac
+
+      - name: Translate the changed parts
+        if: steps.drift.outputs.drift == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: node scripts/sync-readme-zh.mjs --write
+
+      - name: Only the translation may change
+        if: steps.drift.outputs.drift == 'true'
+        id: changed
+        run: |
+          set -euo pipefail
+          changed="$(git status --porcelain)"
+          echo "$changed"
+          if [ -z "$changed" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$changed" != " M README.zh-CN.md" ]; then
+            echo "::error::the sync changed files other than README.zh-CN.md; refusing to commit"
+            exit 1
+          fi
+          echo "any=true" >> "$GITHUB_OUTPUT"
+
+      # The gate script and config come from this checkout, which is main: code
+      # that has already passed review, so nothing the translation contains can
+      # weaken the gate that judges it.
+      - name: "Sanitization: config check"
+        if: steps.changed.outputs.any == 'true'
+        run: python3 scripts/check_sanitization.py --check-config
+
+      - name: "Sanitization: secrets & PII (deterministic)"
+        if: steps.changed.outputs.any == 'true'
+        env:
+          OPENROUTER_API_KEY: ""
+        run: python3 scripts/check_sanitization.py README.zh-CN.md --deterministic-only --require-config
+
+      - name: "Sanitization: particulars (semantic, fails closed)"
+        if: steps.changed.outputs.any == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python3 scripts/check_sanitization.py README.zh-CN.md --require-semantic --require-config
+
+      - name: Commit and push
+        if: steps.changed.outputs.any == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          src="$(sed -n '1s/.*@ \([0-9a-f]*\)；.*/\1/p' README.zh-CN.md)"
+          git add README.zh-CN.md
+          git commit -q -m "docs(readme): sync zh-CN translation to ${src}" \
+            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated. Validated by scripts/sync-readme-zh.mjs and passed both sanitization layers before push."
+          # main may have moved while the model ran. Rebase this one commit and
+          # retry; if README.md moved too, that push queues another run.
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            git pull --rebase -q origin main
+          done
+          echo "::error::could not push after 3 attempts"
+          exit 1
