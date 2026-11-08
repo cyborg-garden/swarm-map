@@ -5,8 +5,9 @@ import { applyChatUpdatesToHarness, readHarnessChatUpdates } from '@/lib/service
  * GET /api/harnesses/:id/chat-updates
  *
  * How much of this agent's working shows in chat: `level` is quiet, some or
- * all; 'custom' when config.yaml holds a mix no level writes; null when
- * neither key is set (hermes's defaults apply — every step on Discord).
+ * all ('custom' when config.yaml holds a mix no level writes; an absent key
+ * counts as hermes's Discord default). `overridden` is true when a
+ * per-platform value in config.yaml wins over the level on some surface.
  */
 export async function GET(
   _request: Request,
@@ -15,7 +16,7 @@ export async function GET(
   const { id } = await params
   const r = readHarnessChatUpdates(id)
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status })
-  return NextResponse.json({ level: r.level })
+  return NextResponse.json({ level: r.level, overridden: r.overridden })
 }
 
 /**
@@ -37,5 +38,5 @@ export async function PUT(
   }
   const r = applyChatUpdatesToHarness(id, body?.level, { who: 'api' })
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status })
-  return NextResponse.json({ success: true, unchanged: r.unchanged, level: r.level })
+  return NextResponse.json({ success: true, unchanged: r.unchanged, level: r.level, overridden: r.overridden })
 }

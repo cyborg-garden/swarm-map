@@ -280,6 +280,17 @@ export function readScalar(text: string, section: string, key: string): string |
   return at >= 0 ? scalarOf(lines[at], key) : null
 }
 
+/**
+ * The body lines of a top-level section, or null when it is absent or not
+ * safely readable (duplicated, quoted, inline).
+ */
+export function sectionBody(text: string, section: string): string[] | null {
+  const { lines } = splitLines(text)
+  const sec = findSection(lines, section)
+  if (!sec || 'ok' in sec) return null
+  return lines.slice(sec.header + 1, sec.end)
+}
+
 export function spliceTuning(text: string, edits: TuningEdits): { ok: true; text: string } | Fail {
   const bad = validateTuning(edits)
   if (bad) return bad

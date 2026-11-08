@@ -19,7 +19,7 @@ function hermesHarnessIds(): string[] {
 export async function GET() {
   const agents = hermesHarnessIds().map((id) => {
     const r = readHarnessChatUpdates(id)
-    return r.ok ? { id, level: r.level } : { id, error: r.error }
+    return r.ok ? { id, level: r.level, overridden: r.overridden } : { id, error: r.error }
   })
   return NextResponse.json({ agents })
 }
@@ -37,10 +37,19 @@ export async function POST(request: Request) {
   const updated: string[] = []
   const unchanged: string[] = []
   const failed: Array<{ id: string; error: string }> = []
+  const overridden: string[] = []
+  // One agent failing never stops the rest; every agent lands in exactly one list.
   for (const id of hermesHarnessIds()) {
-    const r = applyChatUpdatesToHarness(id, body.level, { who: 'api:fleet' })
-    if (!r.ok) failed.push({ id, error: r.error })
-    else (r.unchanged ? unchanged : updated).push(id)
+    try {
+      const r = applyChatUpdatesToHarness(id, body.level, { who: 'api:fleet' })
+      if (!r.ok) failed.push({ id, error: r.error })
+      else {
+        ;(r.unchanged ? unchanged : updated).push(id)
+        if (r.overridden) overridden.push(id)
+      }
+    } catch (err) {
+      failed.push({ id, error: err instanceof Error ? err.message : String(err) })
+    }
   }
-  return NextResponse.json({ level: body.level, updated, unchanged, failed })
+  return NextResponse.json({ level: body.level, updated, unchanged, failed, overridden })
 }
