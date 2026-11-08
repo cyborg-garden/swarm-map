@@ -23,7 +23,8 @@
       "Hermes, Swarm Map / SM / swarm-map, the former names Hermes Swarm Map / HSM / hermes-swarm-map, hermes-agent and its published multi-tenant fork hermes-agent-mt, this repo's own name and its GitHub URLs",
       "the platform's own architecture, design, roadmap, plans, and contributor docs",
       "generic tool / API / platform / model / provider names and public reference material",
-      "clearly fictional placeholders (Subject A, <case>, example.com, <host>)"
+      "clearly fictional placeholders (Subject A, <case>, example.com, <host>)",
+      "the project's copyright holder, Juniper Bevensee, ONLY inside a copyright, license, or NOTICE attribution line (e.g. \"Copyright (C) 2025-2026 Juniper Bevensee and contributors\" or its translation). Anywhere else, her name is still a particular and must be flagged"
     ],
     "extra_instructions": [
       "This package MAY, and naturally does, describe the platform itself. Prefer NOT flagging the platform's own project identity, but DO flag anything that looks like it came from a specific investigation, customer, or operator instance."
