@@ -177,6 +177,13 @@ export function validate({ newEn, zhBody, prevZhBody = null, diff = null }) {
   for (const t of linkTargets(outsideApiSection(newEn))) {
     if (!zhBody.includes(t)) problems.push(`link target dropped: ${t}`)
   }
+  // The other direction: the model must not invent a link or image. Every URL
+  // in the output has to come from the English or the current translation, so
+  // a hallucinated or injected URL never reaches the published README.
+  const known = new Set([...imageSrcs(newEn), ...linkTargets(newEn), ...imageSrcs(prevZhBody || ''), ...linkTargets(prevZhBody || '')])
+  for (const t of new Set([...imageSrcs(zhBody), ...linkTargets(zhBody)])) {
+    if (!known.has(t)) problems.push(`link or image not in the English or current translation: ${t}`)
+  }
 
   const enCode = fencedBlocks(newEn).map(codeSkeleton)
   const zhCode = fencedBlocks(zhBody).map(codeSkeleton)

@@ -68,6 +68,16 @@ describe('validate', () => {
   it('rejects a dropped link target', () => {
     expect(check(BODY.replaceAll('docs/runtimes.md', 'docs/runtime.md')).join()).toMatch(/link target dropped: docs\/runtimes\.md/)
   })
+  it('rejects a link or image URL that is in neither the English nor the current translation', () => {
+    const link = check(BODY.replace('## 许可证', '## 许可证\n\n详见 [这里](https://evil.example.net/x)。'))
+    expect(link.join()).toMatch(/not in the English or current translation: https:\/\/evil\.example\.net\/x/)
+    const img = check(BODY.replace('## 许可证', '## 许可证\n\n<img alt="x" src="https://evil.example.net/p.png" />'))
+    expect(img.join()).toMatch(/not in the English or current translation: https:\/\/evil\.example\.net\/p\.png/)
+    const rel = check(BODY.replace('## 许可证', '## 许可证\n\n[文档](docs/invented.md)'))
+    expect(rel.join()).toMatch(/not in the English or current translation: docs\/invented\.md/)
+    // A URL the current translation already carries (README.md#api-reference) stays allowed.
+    expect(check(BODY)).toEqual([])
+  })
   it('rejects a truncated reply', () => {
     expect(check(BODY.slice(0, Math.floor(BODY.length / 2))).join()).toMatch(/shrank/)
   })

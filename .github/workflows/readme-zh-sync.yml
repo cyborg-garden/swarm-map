@@ -6,19 +6,26 @@ name: readme-zh-sync
 # English at the translation's marker commit, the new English, the diff and the
 # current Chinese, and takes back the Chinese with only the changed parts
 # updated. The reply is validated mechanically (images, links, code blocks,
-# sections, length, unchanged text kept) before it is written.
+# sections, length, unchanged text kept, no invented URLs) before it is written.
 #
-# WHY A DIRECT COMMIT TO MAIN, NOT A PR. A PR opened with GITHUB_TOKEN triggers
-# no pull_request workflows, so the sanitization and test checks would never run
-# on it, and this repo does not allow Actions to open PRs anyway. Instead the
-# job runs the same sanitization gate itself, both layers, fail-closed, on the
-# translated file, using the gate script and config already on main, and pushes
-# only if it passes. The commit touches README.zh-CN.md and nothing else (the job
-# checks). A GITHUB_TOKEN push triggers no workflows, so this cannot loop, and
-# the daily full-tree audit (sanitization-scheduled.yml) re-scans it anyway.
+# HOW IT LANDS. main has a ruleset requiring the `sanitize / sanitize` check
+# (from GitHub Actions) on the exact commit. A PR opened with GITHUB_TOKEN runs
+# no workflows, and a GITHUB_TOKEN push to main runs none either, so neither can
+# satisfy it. Instead:
+#   1. sync: translate, validate, and run both sanitization layers on the file
+#      in-job (so nothing unvetted reaches a public branch), then commit on top
+#      of the main it started from and force-push that commit to
+#      bot/readme-zh-sync. Touches README.zh-CN.md only (the job checks).
+#   2. land: dispatch sanitization.yml on bot/readme-zh-sync (a GITHUB_TOKEN
+#      dispatch does start a run). That is the real gate, full-tree, and its
+#      check is named `sanitize / sanitize` on that SHA. When it succeeds,
+#      fast-forward main to the SHA. If main moved meanwhile, stop without
+#      rebasing: the gate passed on a tree main no longer matches, and the
+#      next README.md push or the weekly run redoes the sync from fresh main.
+# No check run is ever created by hand: only the gate's own run can pass it.
 #
-# A failed run (API outage, a reply that fails validation) writes nothing. The
-# weekly schedule retries, so drift heals without anyone re-running it.
+# A failed run writes nothing to main. The weekly schedule retries, so drift
+# heals without anyone re-running it.
 on:
   push:
     branches: [main]
@@ -37,13 +44,19 @@ concurrency:
   group: readme-zh-sync
   cancel-in-progress: false
 
+env:
+  SYNC_BRANCH: bot/readme-zh-sync
+
 jobs:
   sync:
     if: github.repository == 'cyborg-garden/swarm-map'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: write   # push the side branch; nothing else
+    outputs:
+      sha: ${{ steps.push.outputs.sha }}
+      base: ${{ steps.push.outputs.base }}
     steps:
       - name: Checkout main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -87,9 +100,10 @@ jobs:
           fi
           echo "any=true" >> "$GITHUB_OUTPUT"
 
-      # The gate script and config come from this checkout, which is main: code
-      # that has already passed review, so nothing the translation contains can
-      # weaken the gate that judges it.
+      # Pre-publication check: the side branch is public, so the file is gated
+      # before it is pushed anywhere. Gate script and config come from this
+      # checkout, which is main, so the translation cannot weaken its judge.
+      # The authoritative gate for main is the dispatched run in `land`.
       - name: "Sanitization: config check"
         if: steps.changed.outputs.any == 'true'
         run: python3 scripts/check_sanitization.py --check-config
@@ -106,21 +120,81 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python3 scripts/check_sanitization.py README.zh-CN.md --require-semantic --require-config
 
-      - name: Commit and push
+      - name: Commit and push the side branch
+        id: push
         if: steps.changed.outputs.any == 'true'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base="$(git rev-parse HEAD)"
           src="$(sed -n '1s/.*@ \([0-9a-f]*\)；.*/\1/p' README.zh-CN.md)"
           git add README.zh-CN.md
           git commit -q -m "docs(readme): sync zh-CN translation to ${src}" \
-            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated. Validated by scripts/sync-readme-zh.mjs and passed both sanitization layers before push."
-          # main may have moved while the model ran. Rebase this one commit and
-          # retry; if README.md moved too, that push queues another run.
-          for i in 1 2 3; do
-            if git push origin HEAD:main; then exit 0; fi
-            git pull --rebase -q origin main
+            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
+          git push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  land:
+    needs: sync
+    if: needs.sync.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: write    # dispatch sanitization.yml and read its run
+      checks: read      # confirm the check the ruleset will look for
+      contents: write   # fast-forward main
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ needs.sync.outputs.sha }}
+      BASE: ${{ needs.sync.outputs.base }}
+    steps:
+      - name: Run the sanitization gate on the exact commit
+        run: |
+          set -euo pipefail
+          main_now="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
+          if [ "$main_now" != "$BASE" ]; then
+            echo "::notice::main moved ($BASE -> $main_now) before the gate ran; not landing. The next trigger redoes the sync from fresh main."
+            exit 0
+          fi
+          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run sanitization.yml --repo "$REPO" --ref "$SYNC_BRANCH"
+          id=""
+          for _ in $(seq 1 30); do
+            id="$(gh run list --repo "$REPO" --workflow sanitization.yml --branch "$SYNC_BRANCH" \
+                    --event workflow_dispatch --commit "$SHA" --limit 20 --json databaseId,createdAt \
+                    --jq "[.[] | select(.createdAt >= \"$started\")] | sort_by(.createdAt) | last | .databaseId // empty")"
+            [ -n "$id" ] && break
+            sleep 10
           done
-          echo "::error::could not push after 3 attempts"
+          [ -n "$id" ] || { echo "::error::the dispatched sanitization run for $SHA never appeared"; exit 1; }
+          echo "sanitization run: https://github.com/$REPO/actions/runs/$id"
+          gh run watch "$id" --repo "$REPO" --exit-status --interval 30 > /dev/null \
+            || { echo "::error::sanitization failed on $SHA; not landing. See https://github.com/$REPO/actions/runs/$id"; exit 1; }
+
+          # The ruleset wants `sanitize / sanitize` from GitHub Actions (app 15368)
+          # on this SHA. Confirm that is what the run produced before pushing.
+          ok="$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=sanitize%20%2F%20sanitize&filter=latest" \
+                  --jq '[.check_runs[] | select(.app.id == 15368 and .conclusion == "success")] | length')"
+          [ "$ok" -gt 0 ] || { echo "::error::no successful 'sanitize / sanitize' check on $SHA"; exit 1; }
+          echo "gate=passed" >> "$GITHUB_ENV"
+
+      - name: Fast-forward main
+        if: env.gate == 'passed'
+        run: |
+          set -uo pipefail
+          # force=false: GitHub only accepts a fast-forward. No rebase, ever:
+          # a rebased commit would be a different SHA the gate never saw.
+          if out="$(gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$SHA" -F force=false 2>&1)"; then
+            echo "main -> $SHA"
+            exit 0
+          fi
+          echo "$out"
+          if printf '%s' "$out" | grep -qi 'fast.forward'; then
+            echo "::notice::main moved while the gate ran; not landing. The next trigger redoes the sync from fresh main."
+            exit 0
+          fi
+          echo "::error::could not update main"
           exit 1
