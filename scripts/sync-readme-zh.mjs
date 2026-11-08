@@ -429,6 +429,10 @@ async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
 }
 
 /** Ask, validate, and on failure ask once more with the problems listed. */
+/**
+ * @param {any} state
+ * @param {{ model: string, key: string, fetchImpl?: any, render?: ((text: string) => Promise<string>) | null, attempts?: number, log?: (msg: string) => void }} opts
+ */
 export async function translate(state, { model, key, fetchImpl, render = null, attempts = 2, log = console.error }) {
   // Fail closed: without GitHub's renderer there is no ground-truth link check.
   if (typeof render !== 'function') throw new Error('no markdown renderer; refusing to translate without the rendered link check')
