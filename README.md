@@ -1,5 +1,7 @@
 # Swarm Map
 
+**English** | [简体中文](README.zh-CN.md)
+
 > **Swarm Map (SM)** — formerly Hermes Swarm Map / HSM.
 
 A commons, public goods project of [NimbleCo](https://www.nimbleco.ai/). 
