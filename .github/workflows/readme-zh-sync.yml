@@ -154,8 +154,11 @@ jobs:
           git commit -q -m "docs(readme): sync zh-CN translation to ${src}" \
             -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
           # Push as the App (not GITHUB_TOKEN) so the PR's gate actually runs.
-          git push --force \
-            "https://x-access-token:${APP_TOKEN}@github.com/${REPO}.git" "HEAD:refs/heads/$SYNC_BRANCH"
+          # Basic auth in a one-off header: no credential in the URL or git config.
+          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
           sha="$(git rev-parse HEAD)"
           pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
