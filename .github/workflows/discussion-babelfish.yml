@@ -9,7 +9,7 @@ name: discussion-babelfish
 #   - anything else, and anything by a bot, gets nothing.
 # It only translates. The post is untrusted input to a model whose output is
 # posted publicly, so the reply is validated mechanically first (no new URLs,
-# links or images, code unchanged, right language, sane length). One retry,
+# links, images or #references, code unchanged, right language, sane length). One retry,
 # then nothing is posted and the run fails. Mentions are defused.
 #
 # Replies are posted with GITHUB_TOKEN, and GITHUB_TOKEN-authored comments start
@@ -25,8 +25,11 @@ permissions:
   discussions: write
   contents: read
 
+# One group per post (comment, else the discussion opener), so a burst of
+# posts in one thread never drops a pending run; only a re-run of the same
+# post waits for the first.
 concurrency:
-  group: discussion-babelfish-${{ github.event.discussion.number }}
+  group: discussion-babelfish-${{ github.event.comment.node_id || github.event.discussion.node_id }}
   cancel-in-progress: false
 
 jobs:

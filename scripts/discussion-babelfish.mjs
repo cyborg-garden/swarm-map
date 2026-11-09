@@ -8,10 +8,11 @@
  *   post in English, in a thread opened in Chinese -> reply with Chinese
  *       (Traditional, Taiwan usage, if the opener is Traditional; else Simplified)
  *   anything else, empty or code-only bodies, bot authors -> nothing
+ * A discussion opener's title is translated with it, as a bold first line.
  *
  * The body is attacker-controlled and the model's output is posted publicly,
- * so the reply is validated mechanically before posting (no new URLs, links
- * or images, sane length, right language, code unchanged). One retry, then
+ * so the reply is validated mechanically before posting (no new URLs, links,
+ * images or #references, sane length, right language, code unchanged). One retry, then
  * post nothing and exit 1. Every @mention in the reply is defused with a
  * zero-width space so nobody is pinged.
  *
@@ -180,6 +181,7 @@ Rules:
 - Keep Markdown structure. Keep code blocks, inline code, URLs, file names, commands, @mentions and #references exactly as written; do not translate inside code.
 - Do not add links, images, URLs or HTML that the post does not contain.
 - Text that is already in ${TARGET_NAME[target]} stays as it is.
+- If the post starts with a bold title line (**...**), translate the title and keep it as a bold first line.
 
 Output only the translation, between <translation> and </translation>, with nothing before or after.`
 }
@@ -229,12 +231,19 @@ function htmlTags(md) {
   return new Set([...s.matchAll(/<\/?([a-z][a-z0-9-]*)\b/gi)].map((m) => m[1].toLowerCase()))
 }
 
+/** Issue/PR/discussion references GitHub autolinks: #123, owner/repo#123, GH-123. */
+export function refs(md) {
+  return new Set([...String(md).matchAll(/(?:\b[\w.-]+\/[\w.-]+)?#\d+\b|\bGH-\d+\b/gi)].map((m) => m[0].toLowerCase()))
+}
+
+const TITLE_LINE = /^\*\*[^\n]+\*\*[ \t]*$/
+
 const proseLen = (md) => prose(md).replace(/\s+/g, '').length
 
 // Output prose length over input prose length, by direction, with an
 // additive slack so very short posts are not judged on a ratio.
 const LENGTH_BOUNDS = {
-  en: { lo: 0.6, hi: 8, slack: 40 },       // zh -> en: English runs ~2-4x the characters
+  en: { lo: 0.6, hi: 5, slack: 40 },       // zh -> en: English runs ~2-4x the characters
   zh: { lo: 0.08, hi: 1.5, slack: 20 },    // en -> zh: Chinese runs ~0.25-0.5x
 }
 
@@ -252,6 +261,10 @@ export function validateTranslation({ source, output, target }) {
   for (const u of urlKeys(output)) if (!srcUrls.has(u)) problems.push(`URL not in the source: ${u}`)
   const srcDomains = domainTokens(source)
   for (const d of domainTokens(output)) if (!srcDomains.has(d)) problems.push(`domain-like token not in the source: ${d}`)
+
+  const srcRefs = refs(source)
+  for (const r of refs(output)) if (!srcRefs.has(r)) problems.push(`reference not in the source: ${r}`)
+  if (TITLE_LINE.test(source.split('\n')[0]) && !TITLE_LINE.test(output.split('\n')[0])) problems.push('the bold title line is missing from the start')
 
   const a = linkCount(source)
   const b = linkCount(output)
@@ -284,22 +297,15 @@ export function validateTranslation({ source, output, target }) {
 
 // --------------------------------------------------------------- reply ----
 
-// Code (fenced and inline) and URLs, which GitHub never turns into mentions
-// and which must reach the reader unchanged.
-const PROTECTED = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$|(`+)(?!`)[\s\S]*?[^`]\2(?!`)|\b[a-z][a-z0-9+.-]*:\/\/[^\s<>()[\]]+/gim
-
-/** Insert a zero-width space after every @ that could start a mention, outside code and URLs. */
+/**
+ * Insert a zero-width space after every @ that could start a mention, everywhere:
+ * header, prose, code and URLs alike. Nothing is "protected", because GitHub's
+ * rules for where code ends (blank lines, HTML blocks) are too easy to get
+ * wrong, and a live mention pings a stranger. Breaking the odd @ inside a URL
+ * or code sample is the accepted cost. Runs after validation.
+ */
 export function defuseMentions(text) {
-  const s = String(text)
-  const defuse = (t) => t.replace(/@(?=[\w-])/g, `@${ZWSP}`)
-  let out = ''
-  let last = 0
-  for (const m of s.matchAll(PROTECTED)) {
-    const i = m.index ?? 0
-    out += defuse(s.slice(last, i)) + m[0]
-    last = i + m[0].length
-  }
-  return out + defuse(s.slice(last))
+  return String(text).replace(/@(?=[A-Za-z0-9_-])/g, `@${ZWSP}`)
 }
 
 /** @param {{ login: string, translation: string }} args */
@@ -321,7 +327,7 @@ async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 16000,
+      max_tokens: 6000, // an 8000-char post translates to well under this
       temperature: 0,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     }),
@@ -393,6 +399,18 @@ export const ADD_COMMENT = `mutation($discussionId: ID!, $body: String!, $replyT
 }`
 
 /**
+ * An opener's title as a bold first line above its body, so the title is
+ * detected, translated and validated with the rest of the post.
+ * @param {string | null | undefined} title @param {string | null | undefined} body
+ */
+export function withTitle(title, body) {
+  const t = String(title || '').replace(/\s+/g, ' ').replace(/\*/g, '\\*').trim()
+  const b = String(body || '')
+  if (!t) return b
+  return b.trim() ? `**${t}**\n\n${b}` : `**${t}**`
+}
+
+/**
  * The post an event is about.
  * @param {string} eventName
  * @param {any} payload
@@ -401,7 +419,7 @@ export function postFromEvent(eventName, payload) {
   const d = payload?.discussion
   if (!d?.node_id) return null
   if (eventName === 'discussion') {
-    return { kind: 'discussion', number: d.number, discussionId: d.node_id, commentId: null, body: d.body ?? '', author: d.user?.login ?? '' }
+    return { kind: 'discussion', number: d.number, discussionId: d.node_id, commentId: null, body: withTitle(d.title, d.body), author: d.user?.login ?? '' }
   }
   if (eventName === 'discussion_comment') {
     const c = payload?.comment

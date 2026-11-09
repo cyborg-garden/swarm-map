@@ -10,7 +10,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   detectLang, detectScript, cjkRatio, decide, isBot, extractTranslation,
   validateTranslation, defuseMentions, formatReply, buildPrompt, postFromEvent,
-  translate, run, MAX_INPUT, fences, inlineCode,
+  translate, run, MAX_INPUT, fences, inlineCode, refs, withTitle,
 } from '../discussion-babelfish.mjs'
 
 const ZWSP = '​'
@@ -139,6 +139,23 @@ describe('validateTranslation', () => {
     const long = EN.repeat(6)
     expect(ok(long, '好的。', 'zh-CN').join()).toMatch(/too short/)
   })
+  it('regression: rejects issue references the source did not have', () => {
+    expect(refs('see #12, other/repo#3 and GH-5')).toEqual(new Set(['#12', 'other/repo#3', 'gh-5']))
+    expect(ok(ZH_CN, `${EN} See #123.`, 'en').join()).toMatch(/reference not in the source: #123/)
+    expect(ok(ZH_CN, `${EN} See evil/repo#9.`, 'en').join()).toMatch(/reference not in the source/)
+    expect(ok(ZH_CN, `${EN} See GH-5.`, 'en').join()).toMatch(/reference not in the source: gh-5/)
+    expect(ok(`${ZH_CN} 见 #12`, `${EN} See #12.`, 'en')).toEqual([])
+  })
+  it('regression: the zh->en length bound is tighter but still fits real translations', () => {
+    // Real ratio here is ~2x; ~6.7x (between the new 5x and the old 8x bound) is an added essay.
+    expect(ok(ZH_CN, EN, 'en')).toEqual([])
+    const pad = ' And here is some extra text the model added.'.repeat(6)
+    expect(ok(ZH_CN, EN + pad, 'en').join()).toMatch(/too long/)
+  })
+  it('requires a bold title line when the source has one', () => {
+    expect(ok(`**部署失败**\n\n${ZH_CN}`, `**Deploy failed**\n\n${EN}`, 'en')).toEqual([])
+    expect(ok(`**部署失败**\n\n${ZH_CN}`, `Deploy failed\n\n${EN}`, 'en').join()).toMatch(/bold title/)
+  })
   it('rejects leaked prompt markers', () => {
     expect(ok(ZH_CN, `<post>${EN}</post>`, 'en').join()).toMatch(/prompt markers/)
   })
@@ -149,13 +166,27 @@ describe('validateTranslation', () => {
 })
 
 describe('mentions', () => {
-  it('defuses every mention outside code and URLs', () => {
+  const live = /@(?!\u200B)[A-Za-z0-9_-]/
+  it('defuses every mention, inside code and URLs too', () => {
     const out = defuseMentions('hi @alice and @org/team\n\n```\n@decorator\n```\n`@x` https://medium.example/@writer')
     expect(out).toContain(`@${ZWSP}alice`)
     expect(out).toContain(`@${ZWSP}org/team`)
-    expect(out).toContain('```\n@decorator\n```')
-    expect(out).toContain('`@x`')
-    expect(out).toContain('https://medium.example/@writer')
+    expect(out).toContain(`\`\`\`\n@${ZWSP}decorator\n\`\`\``)
+    expect(out).toContain(`\`@${ZWSP}x\``)
+    expect(out).toContain(`https://medium.example/@${ZWSP}writer`)
+    expect(out).not.toMatch(live)
+  })
+  it('regression: an inline-code span across a blank line cannot hide a mention', () => {
+    // GitHub ends inline code at a blank line, so @octocat here is live prose.
+    const out = defuseMentions('请帮我 `开始\n\n@octocat 你好\n\n结束` 谢谢')
+    expect(out).toContain(`@${ZWSP}octocat`)
+    expect(out).not.toMatch(live)
+  })
+  it('regression: emphasis inside a URL cannot hide a mention', () => {
+    expect(defuseMentions('https://x.com/*@octocat*')).not.toMatch(live)
+  })
+  it('regression: a fence line inside an HTML block cannot hide a mention', () => {
+    expect(defuseMentions('<div>\n```\n</div>\n@octocat\n```')).not.toMatch(live)
   })
   it('formats the bilingual header with a defused author', () => {
     const r = formatReply({ login: 'alice', translation: 'Hello @bob' })
@@ -228,6 +259,24 @@ describe('run', () => {
     const { fn, calls } = mockFetch({ models: [`<translation>${EN}</translation>`], replyTo: 'DC_top' })
     await run({ eventName: 'discussion_comment', payload: commentEvent(ZH_CN), env: ENV, fetchImpl: fn, log: silent })
     expect(posts(calls)[0].body.variables.replyToId).toBe('DC_top')
+  })
+
+  it('regression: translates an opener\'s title as a bold first line, and detects language from it', async () => {
+    expect(withTitle('部署 *失败*', 'body')).toBe('**部署 \\*失败\\***\n\nbody')
+    expect(withTitle('', 'body')).toBe('body')
+    expect(withTitle('部署失败', '')).toBe('**部署失败**')
+    // Chinese title, code-only body: translated because of the title.
+    const { fn, calls } = mockFetch({ models: ['<translation>**Deploy failed**\n\n```\nnpm ci\n```</translation>'] })
+    const payload = { discussion: { number: 7, node_id: 'D_1', title: '部署失败了，怎么办', body: '```\nnpm ci\n```', user: { login: 'alice' } } }
+    expect(await run({ eventName: 'discussion', payload, env: ENV, fetchImpl: fn, log: silent })).toBe(0)
+    expect(calls.find((c) => c.url.includes('openrouter.ai'))!.body.messages[1].content).toContain('**部署失败了，怎么办**')
+    expect(posts(calls)[0].body.variables.body).toContain('**Deploy failed**')
+  })
+
+  it('regression: asks for at most 6000 output tokens', async () => {
+    const { fn, calls } = mockFetch({ models: [`<translation>${EN}</translation>`] })
+    await run({ eventName: 'discussion', payload: discussionEvent(ZH_CN), env: ENV, fetchImpl: fn, log: silent })
+    expect(calls.find((c) => c.url.includes('openrouter.ai'))!.body.max_tokens).toBeLessThanOrEqual(6000)
   })
 
   it('honours BABELFISH_MODEL', async () => {
