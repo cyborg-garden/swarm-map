@@ -22,8 +22,8 @@ name: readme-zh-sync
 #   2. land: the App-authored push runs sanitization.yml on the PR, the real
 #      gate. When `sanitize / sanitize` succeeds on that exact SHA, merge the
 #      PR with --match-head-commit, so a commit the gate never saw cannot land.
-#      If main moved meanwhile, stop: the next README.md push or the weekly
-#      run redoes the sync from fresh main.
+#      If either README changed on main meanwhile, stop: that push re-runs
+#      the sync from fresh main. Unrelated commits on main do not block it.
 # No check run is ever created by hand: only the gate's own run can pass it.
 #
 # A failed run writes nothing to main. The weekly schedule retries, so drift
@@ -110,7 +110,7 @@ jobs:
       # Pre-publication check: the side branch is public, so the file is gated
       # before it is pushed anywhere. Gate script and config come from this
       # checkout, which is main, so the translation cannot weaken its judge.
-      # The authoritative gate for main is the dispatched run in `land`.
+      # The authoritative gate for main is the PR's own `sanitize / sanitize` run.
       - name: "Sanitization: config check"
         if: steps.changed.outputs.any == 'true'
         run: python3 scripts/check_sanitization.py --check-config
@@ -159,10 +159,10 @@ jobs:
           sha="$(git rev-parse HEAD)"
           pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
-            gh pr create --repo "$REPO" --head "$SYNC_BRANCH" --base main \
+            url="$(gh pr create --repo "$REPO" --head "$SYNC_BRANCH" --base main \
               --title "docs(readme): sync zh-CN translation to ${src}" \
-              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only \`README.zh-CN.md\` changes. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit."
-            pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number')"
+              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only \`README.zh-CN.md\` changes. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit.")"
+            pr="${url##*/}"
           fi
           { echo "base=$base"; echo "sha=$sha"; echo "pr=$pr"; } >> "$GITHUB_OUTPUT"
 
@@ -214,10 +214,18 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -uo pipefail
-          main_now="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
-          if [ "$main_now" != "$BASE" ]; then
-            echo "::notice::main moved ($BASE -> $main_now) while the gate ran; not landing. The next trigger redoes the sync from fresh main."
-            exit 0
-          fi
+          [ -n "$PR" ] || { echo "::error::no PR number from the sync job"; exit 1; }
+          # Other commits on main are fine (the PR touches README.zh-CN.md only).
+          # Refuse only if either README changed since the translation started:
+          # then the gated text is stale, and that push re-runs the sync anyway.
+          for f in README.md README.zh-CN.md; do
+            old="$(gh api "repos/$REPO/contents/$f?ref=$BASE" --jq .sha)" || exit 1
+            new="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)" || exit 1
+            if [ -z "$old" ] || [ -z "$new" ]; then echo "::error::could not read $f"; exit 1; fi
+            if [ "$old" != "$new" ]; then
+              echo "::notice::$f changed on main while the gate ran; not landing. The next trigger redoes the sync from fresh main."
+              exit 0
+            fi
+          done
           # --match-head-commit: refuse if the branch moved off the gated SHA.
           gh pr merge "$PR" --repo "$REPO" --squash --delete-branch --match-head-commit "$SHA"
