@@ -273,10 +273,10 @@ describe('run', () => {
     expect(posts(calls)[0].body.variables.body).toContain('**Deploy failed**')
   })
 
-  it('regression: asks for at most 6000 output tokens', async () => {
+  it('regression: asks for a bounded output-token budget (16000)', async () => {
     const { fn, calls } = mockFetch({ models: [`<translation>${EN}</translation>`] })
     await run({ eventName: 'discussion', payload: discussionEvent(ZH_CN), env: ENV, fetchImpl: fn, log: silent })
-    expect(calls.find((c) => c.url.includes('openrouter.ai'))!.body.max_tokens).toBeLessThanOrEqual(6000)
+    expect(calls.find((c) => c.url.includes('openrouter.ai'))!.body.max_tokens).toBeLessThanOrEqual(16000)
   })
 
   it('honours BABELFISH_MODEL', async () => {
@@ -353,5 +353,24 @@ describe('run', () => {
   it('translate throws after the attempts are used up', async () => {
     const { fn } = mockFetch({ models: ['no tags', 'still no tags'] })
     await expect(translate(ZH_CN, 'en', { model: 'm', key: 'k', fetchImpl: fn, log: silent })).rejects.toThrow(/rejected after 2 attempts/)
+  })
+})
+
+describe('audit round 3 regressions', () => {
+  it('escapes HTML character references so encoded @ and # cannot ping or link', async () => {
+    const { defuseMentions: d } = await import('../discussion-babelfish.mjs')
+    for (const x of ['&#64;octocat', '&#x40;octocat', '&commat;octocat', '@&#x6f;ctocat', '&num;5', '#&#x35;']) {
+      expect(d(x)).not.toMatch(/&(?!amp;)#?[A-Za-z0-9]+;/)
+    }
+    expect(d('a & b')).toBe('a & b')
+  })
+  it('includes the opener title when judging thread language', async () => {
+    const { withTitle: w, decide: dec } = await import('../discussion-babelfish.mjs')
+    const opener = w('请问如何部署多个智能体', '')
+    expect(dec({ body: 'You can use the setup wizard for that.', author: 'someone', openerBody: opener }).action).toBe('translate')
+  })
+  it('drops trailing backslashes from titles so the bold line survives', async () => {
+    const { withTitle: w } = await import('../discussion-babelfish.mjs')
+    expect(w('标题\\', 'x')).toBe('**标题**\n\nx')
   })
 })

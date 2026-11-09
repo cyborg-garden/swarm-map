@@ -303,9 +303,15 @@ export function validateTranslation({ source, output, target }) {
  * rules for where code ends (blank lines, HTML blocks) are too easy to get
  * wrong, and a live mention pings a stranger. Breaking the odd @ inside a URL
  * or code sample is the accepted cost. Runs after validation.
+ *
+ * HTML character references (&#64;, &#x40;, &commat;, &num;...) are escaped
+ * first: GitHub decodes them before it looks for mentions and refs, so an
+ * encoded @ or # would otherwise survive both this and the ref check.
  */
 export function defuseMentions(text) {
-  return String(text).replace(/@(?=[A-Za-z0-9_-])/g, `@${ZWSP}`)
+  return String(text)
+    .replace(/&(?=#?[A-Za-z0-9]+;)/g, '&amp;')
+    .replace(/@(?=[A-Za-z0-9_-])/g, `@${ZWSP}`)
 }
 
 /** @param {{ login: string, translation: string }} args */
@@ -327,7 +333,7 @@ async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
     },
     body: JSON.stringify({
       model,
-      max_tokens: 6000, // an 8000-char post translates to well under this
+      max_tokens: 16000, // 8000 Chinese chars can be ~24k English chars (~6k tokens) plus any reasoning
       temperature: 0,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
     }),
@@ -388,7 +394,7 @@ export function githubGraphql({ token, fetchImpl = fetch }) {
 }
 
 export const THREAD_QUERY = `query($discussion: ID!, $comment: ID!) {
-  discussion: node(id: $discussion) { ... on Discussion { body } }
+  discussion: node(id: $discussion) { ... on Discussion { title body } }
   comment: node(id: $comment) { ... on DiscussionComment { replyTo { id } } }
 }`
 
@@ -404,7 +410,7 @@ export const ADD_COMMENT = `mutation($discussionId: ID!, $body: String!, $replyT
  * @param {string | null | undefined} title @param {string | null | undefined} body
  */
 export function withTitle(title, body) {
-  const t = String(title || '').replace(/\s+/g, ' ').replace(/\*/g, '\\*').trim()
+  const t = String(title || '').replace(/\s+/g, ' ').replace(/\*/g, '\\*').trim().replace(/\\+$/, '')
   const b = String(body || '')
   if (!t) return b
   return b.trim() ? `**${t}**\n\n${b}` : `**${t}**`
@@ -458,7 +464,7 @@ export async function run({ eventName, payload, env, fetchImpl = fetch, log = co
   let replyToId = null
   if (post.kind === 'comment') {
     const data = await gql(THREAD_QUERY, { discussion: post.discussionId, comment: post.commentId })
-    openerBody = data?.discussion?.body ?? ''
+    openerBody = withTitle(data?.discussion?.title, data?.discussion?.body ?? '')
     // GitHub nests one level: a reply to a reply goes under the top-level comment.
     replyToId = data?.comment?.replyTo?.id || post.commentId
   }
