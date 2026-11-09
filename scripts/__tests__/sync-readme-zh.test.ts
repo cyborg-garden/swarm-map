@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseMarker, stripMarker, withMarker, markerLines, buildPrompt, extractReadme,
-  validate, readState, translate,
+  validate, readState, translate, parseArgs, LOCALES,
   htmlUrls, normalizeUrl, renderedUrlKeys, renderedLinkProblems, githubRenderer,
 } from '../sync-readme-zh.mjs'
 // Real POST /markdown responses (gfm, context cyborg-garden/swarm-map), captured
@@ -182,6 +182,71 @@ describe('buildPrompt', () => {
   })
 })
 
+// Traditional Chinese (Taiwan). README.zh-TW.md is new, so the synthetic body
+// (the zh-CN body with the zh-TW switcher) keeps these tests independent of it;
+// the shipped file is checked too when present.
+const TW_PATH = path.join(ROOT, 'README.zh-TW.md')
+const TW = fs.existsSync(TW_PATH) ? fs.readFileSync(TW_PATH, 'utf8') : null
+const TW_SYNTH = BODY.replace(/^\[English\]\(README\.md\).*$/m, LOCALES['zh-TW'].switcher)
+
+describe('zh-TW', () => {
+  it('builds, parses and strips its own marker, and not the zh-CN one', () => {
+    const [l1] = markerLines('abc1234', 'zh-TW')
+    expect(l1).toBe('<!-- 譯自 README.md @ abc1234；如有出入，以英文版為準。 -->')
+    const out = withMarker(TW_SYNTH, 'abc1234', 'zh-TW')
+    expect(parseMarker(out, 'zh-TW')).toBe('abc1234')
+    expect(parseMarker(out)).toBeNull()
+    expect(parseMarker(withMarker(BODY, 'abc1234'), 'zh-TW')).toBeNull()
+    expect(stripMarker(out, 'zh-TW')).toBe(TW_SYNTH)
+    expect(withMarker(stripMarker(out, 'zh-TW'), 'abc1234', 'zh-TW')).toBe(out)
+  })
+  it.skipIf(!TW)('strip + re-add is the identity on the shipped README.zh-TW.md', () => {
+    const sha = parseMarker(TW as string, 'zh-TW')
+    expect(sha).toMatch(/^[0-9a-f]{7,40}$/)
+    expect(withMarker(stripMarker(TW as string, 'zh-TW'), sha as string, 'zh-TW')).toBe(TW)
+  })
+  it('prompt asks for Taiwan usage and terminology, zh-CN prompt unchanged', () => {
+    const p = buildPrompt({ oldEn: 'O', newEn: 'N', diff: 'D', zhBody: 'Z' }, 'zh-TW')
+    expect(p.system).toMatch(/Traditional Chinese/)
+    expect(p.system).toMatch(/Taiwan/)
+    for (const w of ['軟體', '程式碼', '預設', '伺服器', '儲存庫', '連接埠', '快取', '代理', '執行環境', '模型級聯', '多租戶', 'API 參考', '「」', '（英文）', LOCALES['zh-TW'].switcher]) {
+      expect(p.system).toContain(w)
+    }
+    expect(p.system).not.toMatch(/智能体/)
+    const cn = buildPrompt({ oldEn: 'O', newEn: 'N', diff: 'D', zhBody: 'Z' })
+    expect(cn.system).toMatch(/Simplified Chinese/)
+    expect(cn.system).toContain(LOCALES['zh-CN'].switcher)
+  })
+  it('validate accepts a valid zh-TW body', () => {
+    expect(validate({ newEn: EN, zhBody: TW_SYNTH, prevZhBody: TW_SYNTH })).toEqual([])
+  })
+  it.skipIf(!TW)('validate accepts the shipped README.zh-TW.md', () => {
+    const body = stripMarker(TW as string, 'zh-TW')
+    expect(validate({ newEn: EN, zhBody: body, prevZhBody: body })).toEqual([])
+  })
+  it('validate rejects a 譯自 marker leaking into the body', () => {
+    const leaked = TW_SYNTH.replace('## 许可证', `${markerLines('abc1234', 'zh-TW')[0]}\n\n## 许可证`)
+    expect(validate({ newEn: EN, zhBody: leaked, prevZhBody: TW_SYNTH }).join()).toMatch(/marker comment/)
+  })
+  it('extractReadme strips a zh-TW marker the model echoed', () => {
+    expect(extractReadme(`<readme>\n${withMarker(TW_SYNTH, 'abc1234', 'zh-TW')}</readme>`, 'zh-TW')!.trim()).toBe(TW_SYNTH.trim())
+  })
+})
+
+describe('parseArgs', () => {
+  it('defaults to --check zh-CN and accepts --locale in either position', () => {
+    expect(parseArgs([])).toEqual({ mode: '--check', locale: 'zh-CN' })
+    expect(parseArgs(['--write', '--locale', 'zh-TW'])).toEqual({ mode: '--write', locale: 'zh-TW' })
+    expect(parseArgs(['--locale=zh-TW', '--dry-run'])).toEqual({ mode: '--dry-run', locale: 'zh-TW' })
+    expect(parseArgs(['--check', '--locale', 'all'])).toEqual({ mode: '--check', locale: 'all' })
+  })
+  it('rejects an unknown locale, a missing value and all outside --check', () => {
+    expect(parseArgs(['--locale', 'zh-HK']).error).toMatch(/unknown locale/)
+    expect(parseArgs(['--check', '--locale']).error).toMatch(/needs a value/)
+    expect(parseArgs(['--write', '--locale', 'all']).error).toMatch(/--check only/)
+  })
+})
+
 // A throwaway repo with a real history, so drift detection is tested against git.
 describe('drift detection (real git)', () => {
   let dir = ''
@@ -201,9 +266,9 @@ describe('drift detection (real git)', () => {
     g('add', '.'); g('commit', '-qm', 'zh')
     return sha
   }
-  const run = (mode: string) => {
+  const run = (mode: string, ...extra: string[]) => {
     try {
-      return { code: 0, out: execFileSync('node', [SCRIPT, mode], { cwd: dir, encoding: 'utf8', env: { ...process.env, OPENROUTER_API_KEY: '' } }) }
+      return { code: 0, out: execFileSync('node', [SCRIPT, mode, ...extra], { cwd: dir, encoding: 'utf8', env: { ...process.env, OPENROUTER_API_KEY: '' } }) }
     } catch (e) {
       const err = e as { status: number; stdout: string; stderr: string }
       return { code: err.status, out: err.stdout + err.stderr }
@@ -237,6 +302,29 @@ describe('drift detection (real git)', () => {
     expect(dry).not.toContain('<!-- 译自')
     // --write refuses without a key rather than calling out.
     expect(run('--write').code).toBe(2)
+  })
+
+  it('tracks each locale on its own marker, and --locale all reports any drift', () => {
+    const base = repo()
+    // No README.zh-TW.md yet: a clear error, not a silent pass.
+    const missing = run('--check', '--locale', 'zh-TW')
+    expect(missing.code).toBe(1)
+    expect(missing.out).toMatch(/README\.zh-TW\.md not found/)
+    fs.writeFileSync(path.join(dir, 'README.zh-TW.md'), withMarker(TW_SYNTH, base, 'zh-TW'))
+    g('add', '.'); g('commit', '-qm', 'zh-TW')
+    expect(run('--check', '--locale', 'zh-TW').code).toBe(0)
+    expect(run('--check', '--locale', 'all').code).toBe(0)
+    // A zh-CN marker in the zh-TW file is malformed for zh-TW.
+    fs.writeFileSync(path.join(dir, 'README.zh-TW.md'), withMarker(TW_SYNTH, base))
+    g('commit', '-qam', 'wrong marker')
+    expect(run('--check', '--locale', 'zh-TW').code).toBe(3)
+    expect(run('--check').code).toBe(0)
+    expect(run('--check', '--locale', 'all').code).toBe(3)
+    const st = inDir(() => readState('zh-TW'))
+    expect(st.sha).toBeNull()
+    expect(st.file).toBe('README.zh-TW.md')
+    expect(run('--dry-run', '--locale', 'zh-TW').out).toMatch(/Taiwan/)
+    expect(run('--check', '--locale', 'xx').code).toBe(2)
   })
 
   it('treats an unknown marker commit as drift with no old English', () => {
@@ -385,4 +473,18 @@ describe.skipIf(!process.env.README_SYNC_LIVE_TOKEN)('live GitHub render', () =>
       'rendered link not in the English or current translation: https://github.com/cyborg-garden/swarm-map/blob/main/README.md',
     ])
   }, 60_000)
+})
+
+describe('exact switcher per locale', () => {
+  it('accepts the real files and rejects a wrong switcher', async () => {
+    const fs = await import('node:fs')
+    const { validate: v, stripMarker: sm } = await import('../sync-readme-zh.mjs')
+    const en = fs.readFileSync('README.md', 'utf8')
+    for (const [loc, file] of [['zh-CN', 'README.zh-CN.md'], ['zh-TW', 'README.zh-TW.md']] as const) {
+      const body = sm(fs.readFileSync(file, 'utf8'), loc)
+      expect(v({ newEn: en, zhBody: body, prevZhBody: body, locale: loc })).toEqual([])
+      const bad = body.replace(/^\[English\]\(README\.md\).*$/m, '[English](README.md) | **简体中文**')
+      expect(v({ newEn: en, zhBody: bad, prevZhBody: body, locale: loc }).join()).toMatch(/switcher line is not exactly/)
+    }
+  })
 })
