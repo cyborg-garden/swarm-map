@@ -274,6 +274,9 @@ const cjk = (s) => (s.match(/[一-鿿]/g) || []).length
  * of problems; empty means it may be written. These catch the failures a model
  * actually produces: truncation, dropped images or code, rewritten commands,
  * English left untranslated, or the API tables re-added.
+ *
+ * @param {{ newEn: string, zhBody: string, prevZhBody?: string | null, diff?: string | null, locale?: 'zh-CN' | 'zh-TW' | null }} args
+ *   With `locale`, the switcher line must match that locale's exactly.
  */
 export function validate({ newEn, zhBody, prevZhBody = null, diff = null, locale = null }) {
   const problems = []
