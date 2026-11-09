@@ -1,5 +1,5 @@
-<!-- 譯自 README.md @ 088694d；如有出入，以英文版為準。 -->
-<!-- Translated from README.md @ 088694d. The English README is authoritative. -->
+<!-- 譯自 README.md @ 4313403；如有出入，以英文版為準。 -->
+<!-- Translated from README.md @ 4313403. The English README is authoritative. -->
 
 # Swarm Map
 
