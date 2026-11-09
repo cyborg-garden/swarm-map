@@ -8,10 +8,6 @@ name: sanitization
 #   * pull_request → DIFF-ONLY (git diff origin/main...HEAD, the full PR range).
 #     Never flaky-blocks contributors on pre-existing, untouched content.
 #   * push: main   → FULL-TREE. Publish-time backstop.
-#   * workflow_dispatch → FULL-TREE on the dispatched ref. readme-zh-sync.yml
-#     uses this to gate its bot commit on bot/readme-zh-sync, because the check
-#     this job reports (`sanitize / sanitize`) is the one main's ruleset requires
-#     and a GITHUB_TOKEN push triggers no other run.
 # The daily full-tree audit lives in sanitization-scheduled.yml.
 #
 # What swarm-map counts as a particular, and which paths carry content, lives in
@@ -22,7 +18,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read

@@ -10,19 +10,20 @@ name: readme-zh-sync
 # links are checked against GitHub's own render of it before it is written.
 #
 # HOW IT LANDS. main has a ruleset requiring the `sanitize / sanitize` check
-# (from GitHub Actions) on the exact commit. A PR opened with GITHUB_TOKEN runs
-# no workflows, and a GITHUB_TOKEN push to main runs none either, so neither can
-# satisfy it. Instead:
+# (from GitHub Actions) on the exact commit. GITHUB_TOKEN pushes and PRs start
+# no workflows, and dispatch-started checks do not count for rulesets. So the
+# bot works through a GitHub App (cyborg-garden-readme-sync, installed on this
+# repo only; tokens last one hour):
 #   1. sync: translate, validate, and run both sanitization layers on the file
 #      in-job (so nothing unvetted reaches a public branch), then commit on top
-#      of the main it started from and force-push that commit to
-#      bot/readme-zh-sync. Touches README.zh-CN.md only (the job checks).
-#   2. land: dispatch sanitization.yml on bot/readme-zh-sync (a GITHUB_TOKEN
-#      dispatch does start a run). That is the real gate, full-tree, and its
-#      check is named `sanitize / sanitize` on that SHA. When it succeeds,
-#      fast-forward main to the SHA. If main moved meanwhile, stop without
-#      rebasing: the gate passed on a tree main no longer matches, and the
-#      next README.md push or the weekly run redoes the sync from fresh main.
+#      of the main it started from, force-push that commit to
+#      bot/readme-zh-sync with an App token, and open (or reuse) a PR to main.
+#      Touches README.zh-CN.md only (the job checks).
+#   2. land: the App-authored push runs sanitization.yml on the PR, the real
+#      gate. When `sanitize / sanitize` succeeds on that exact SHA, merge the
+#      PR with --match-head-commit, so a commit the gate never saw cannot land.
+#      If either README changed on main meanwhile, stop: that push re-runs
+#      the sync from fresh main. Unrelated commits on main do not block it.
 # No check run is ever created by hand: only the gate's own run can pass it.
 #
 # A failed run writes nothing to main. The weekly schedule retries, so drift
@@ -54,15 +55,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write   # push the side branch; nothing else
+      contents: read    # pushes go through the App token, not this one
     outputs:
       sha: ${{ steps.push.outputs.sha }}
       base: ${{ steps.push.outputs.base }}
+      pr: ${{ steps.push.outputs.pr }}
     steps:
       - name: Checkout main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: main
+          # The push below must not ride on GITHUB_TOKEN (it would start no gate).
+          persist-credentials: false
           # Full history: the marker names an older commit to diff against.
           fetch-depth: 0
 
@@ -106,7 +110,7 @@ jobs:
       # Pre-publication check: the side branch is public, so the file is gated
       # before it is pushed anywhere. Gate script and config come from this
       # checkout, which is main, so the translation cannot weaken its judge.
-      # The authoritative gate for main is the dispatched run in `land`.
+      # The authoritative gate for main is the PR's own `sanitize / sanitize` run.
       - name: "Sanitization: config check"
         if: steps.changed.outputs.any == 'true'
         run: python3 scripts/check_sanitization.py --check-config
@@ -123,21 +127,47 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: python3 scripts/check_sanitization.py README.zh-CN.md --require-semantic --require-config
 
-      - name: Commit and push the side branch
+      - name: Mint a short-lived App token
+        id: app
+        if: steps.changed.outputs.any == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.README_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.README_SYNC_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Commit, push the side branch, open the PR
         id: push
         if: steps.changed.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "cyborg-garden-readme-sync[bot]"
+          git config user.email "cyborg-garden-readme-sync[bot]@users.noreply.github.com"
           base="$(git rev-parse HEAD)"
           src="$(sed -n '1s/.*@ \([0-9a-f]*\)；.*/\1/p' README.zh-CN.md)"
           git add README.zh-CN.md
           git commit -q -m "docs(readme): sync zh-CN translation to ${src}" \
             -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
-          git push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Push as the App (not GITHUB_TOKEN) so the PR's gate actually runs.
+          # Basic auth in a one-off header: no credential in the URL or git config.
+          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --force origin "HEAD:refs/heads/$SYNC_BRANCH"
+          sha="$(git rev-parse HEAD)"
+          pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            url="$(gh pr create --repo "$REPO" --head "$SYNC_BRANCH" --base main \
+              --title "docs(readme): sync zh-CN translation to ${src}" \
+              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only \`README.zh-CN.md\` changes. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit.")"
+            pr="${url##*/}"
+          fi
+          { echo "base=$base"; echo "sha=$sha"; echo "pr=$pr"; } >> "$GITHUB_OUTPUT"
 
   land:
     needs: sync
@@ -145,59 +175,61 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
-      actions: write    # dispatch sanitization.yml and read its run
-      checks: read      # confirm the check the ruleset will look for
-      contents: write   # fast-forward main
+      checks: read
     env:
-      GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       SHA: ${{ needs.sync.outputs.sha }}
       BASE: ${{ needs.sync.outputs.base }}
+      PR: ${{ needs.sync.outputs.pr }}
     steps:
-      - name: Run the sanitization gate on the exact commit
+      - name: Wait for the sanitization gate on the exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          main_now="$(gh api "repos/$REPO/git/ref/heads/main" --jq .object.sha)"
-          if [ "$main_now" != "$BASE" ]; then
-            echo "::notice::main moved ($BASE -> $main_now) before the gate ran; not landing. The next trigger redoes the sync from fresh main."
-            exit 0
-          fi
-          started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          gh workflow run sanitization.yml --repo "$REPO" --ref "$SYNC_BRANCH"
-          id=""
-          for _ in $(seq 1 30); do
-            id="$(gh run list --repo "$REPO" --workflow sanitization.yml --branch "$SYNC_BRANCH" \
-                    --event workflow_dispatch --commit "$SHA" --limit 20 --json databaseId,createdAt \
-                    --jq "[.[] | select(.createdAt >= \"$started\")] | sort_by(.createdAt) | last | .databaseId // empty")"
-            [ -n "$id" ] && break
-            sleep 10
+          # The ruleset wants `sanitize / sanitize` from GitHub Actions (app
+          # 15368) on this SHA, from the PR run the App's push started.
+          q="repos/$REPO/commits/$SHA/check-runs?check_name=sanitize%20%2F%20sanitize&filter=latest"
+          for _ in $(seq 1 80); do
+            state="$(gh api "$q" --jq '[.check_runs[] | select(.app.id == 15368)] | if length == 0 then "none" elif any(.status != "completed") then "running" elif all(.conclusion == "success") then "success" else "failed" end')"
+            case "$state" in
+              success) echo "gate=passed" >> "$GITHUB_ENV"; exit 0 ;;
+              failed) echo "::error::sanitization failed on $SHA; not landing. See PR #$PR"; exit 1 ;;
+            esac
+            sleep 30
           done
-          [ -n "$id" ] || { echo "::error::the dispatched sanitization run for $SHA never appeared"; exit 1; }
-          echo "sanitization run: https://github.com/$REPO/actions/runs/$id"
-          gh run watch "$id" --repo "$REPO" --exit-status --interval 30 > /dev/null \
-            || { echo "::error::sanitization failed on $SHA; not landing. See https://github.com/$REPO/actions/runs/$id"; exit 1; }
+          echo "::error::no finished 'sanitize / sanitize' check on $SHA after 40 minutes"
+          exit 1
 
-          # The ruleset wants `sanitize / sanitize` from GitHub Actions (app 15368)
-          # on this SHA. Confirm that is what the run produced before pushing.
-          ok="$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=sanitize%20%2F%20sanitize&filter=latest" \
-                  --jq '[.check_runs[] | select(.app.id == 15368 and .conclusion == "success")] | length')"
-          [ "$ok" -gt 0 ] || { echo "::error::no successful 'sanitize / sanitize' check on $SHA"; exit 1; }
-          echo "gate=passed" >> "$GITHUB_ENV"
-
-      - name: Fast-forward main
+      - name: Mint a short-lived App token
+        id: app
         if: env.gate == 'passed'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.README_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.README_SYNC_APP_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Merge the PR
+        if: env.gate == 'passed'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -uo pipefail
-          # force=false: GitHub only accepts a fast-forward. No rebase, ever:
-          # a rebased commit would be a different SHA the gate never saw.
-          if out="$(gh api -X PATCH "repos/$REPO/git/refs/heads/main" -f sha="$SHA" -F force=false 2>&1)"; then
-            echo "main -> $SHA"
-            exit 0
-          fi
-          echo "$out"
-          if printf '%s' "$out" | grep -qi 'fast.forward'; then
-            echo "::notice::main moved while the gate ran; not landing. The next trigger redoes the sync from fresh main."
-            exit 0
-          fi
-          echo "::error::could not update main"
-          exit 1
+          case "$PR" in ''|*[!0-9]*) echo "::error::bad PR number from the sync job: '$PR'"; exit 1 ;; esac
+          # Other commits on main are fine (the PR touches README.zh-CN.md only).
+          # Refuse only if either README changed since the translation started:
+          # then the gated text is stale. A README.md push re-runs the sync; a
+          # hand edit to README.zh-CN.md alone waits for the weekly run.
+          for f in README.md README.zh-CN.md; do
+            old="$(gh api "repos/$REPO/contents/$f?ref=$BASE" --jq .sha)" || exit 1
+            new="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)" || exit 1
+            if [ -z "$old" ] || [ -z "$new" ]; then echo "::error::could not read $f"; exit 1; fi
+            if [ "$old" != "$new" ]; then
+              echo "::notice::$f changed on main while the gate ran; not landing. The next trigger redoes the sync from fresh main."
+              exit 0
+            fi
+          done
+          # --match-head-commit: refuse if the branch moved off the gated SHA.
+          gh pr merge "$PR" --repo "$REPO" --squash --delete-branch --match-head-commit "$SHA"
