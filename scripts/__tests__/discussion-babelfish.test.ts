@@ -359,8 +359,9 @@ describe('run', () => {
 describe('audit round 3 regressions', () => {
   it('escapes HTML character references so encoded @ and # cannot ping or link', async () => {
     const { defuseMentions: d } = await import('../discussion-babelfish.mjs')
-    for (const x of ['&#64;octocat', '&#x40;octocat', '&commat;octocat', '@&#x6f;ctocat', '&num;5', '#&#x35;']) {
-      expect(d(x)).not.toMatch(/&(?!amp;)#?[A-Za-z0-9]+;/)
+    expect(d('<div>\n&#64octocat 你好\n</div>')).not.toMatch(/&#64/)
+    for (const x of ['&#64octocat', '&#X40;octocat', '&#0064;octocat', '&#64;octocat', '&#x40;octocat', '&commat;octocat', '@&#x6f;ctocat', '&num;5', '#&#x35;']) {
+      expect(d(x)).not.toMatch(/&(?!amp;)[#A-Za-z]/)
     }
     expect(d('a & b')).toBe('a & b')
   })

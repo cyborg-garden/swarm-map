@@ -304,13 +304,15 @@ export function validateTranslation({ source, output, target }) {
  * wrong, and a live mention pings a stranger. Breaking the odd @ inside a URL
  * or code sample is the accepted cost. Runs after validation.
  *
- * HTML character references (&#64;, &#x40;, &commat;, &num;...) are escaped
- * first: GitHub decodes them before it looks for mentions and refs, so an
+ * HTML character references (&#64;, &#64 with no ';', &#x40;, &commat;, &num;...)
+ * are escaped first: GitHub decodes them before it looks for mentions and refs, so an
  * encoded @ or # would otherwise survive both this and the ref check.
  */
 export function defuseMentions(text) {
   return String(text)
-    .replace(/&(?=#?[A-Za-z0-9]+;)/g, '&amp;')
+    // Every & before # or a letter: HTML5 decodes &#64 and some named refs
+    // even without a trailing ';'. Costs: '&nbsp;' inside code shows as '&amp;nbsp;'.
+    .replace(/&(?=[#A-Za-z])/g, '&amp;')
     .replace(/@(?=[A-Za-z0-9_-])/g, `@${ZWSP}`)
 }
 
