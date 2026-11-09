@@ -275,12 +275,13 @@ const cjk = (s) => (s.match(/[一-鿿]/g) || []).length
  * actually produces: truncation, dropped images or code, rewritten commands,
  * English left untranslated, or the API tables re-added.
  */
-export function validate({ newEn, zhBody, prevZhBody = null, diff = null }) {
+export function validate({ newEn, zhBody, prevZhBody = null, diff = null, locale = null }) {
   const problems = []
   if (!zhBody || !zhBody.trim()) return ['empty translation']
 
   if (!/^# Swarm Map\s*$/m.test(zhBody.split('\n')[0] || '')) problems.push('first line is not the "# Swarm Map" title')
   if (!zhBody.includes('[English](README.md)')) problems.push('language switcher "[English](README.md)" is missing')
+  else if (locale && !zhBody.split('\n').some((l) => l.trim() === LOCALES[locale].switcher)) problems.push(`language switcher line is not exactly "${LOCALES[locale].switcher}"`)
   if (/<!--\s*(译自|譯自|Translated from)/.test(zhBody)) problems.push('output contains a marker comment')
   if (/<\/?readme>/.test(zhBody)) problems.push('output contains a <readme> tag')
 
@@ -510,7 +511,7 @@ export async function translate(state, { model, key, fetchImpl, render = null, a
   for (let i = 1; i <= attempts; i++) {
     const { text, finish } = await callModel({ system: prompt.system, user }, { model, key, fetchImpl })
     const body = extractReadme(text, locale)
-    problems = body == null ? [`no <readme> block in the reply (finish_reason ${finish})`] : validate({ newEn: state.newEn, zhBody: body, prevZhBody: zhBody, diff: state.diff })
+    problems = body == null ? [`no <readme> block in the reply (finish_reason ${finish})`] : validate({ newEn: state.newEn, zhBody: body, prevZhBody: zhBody, diff: state.diff, locale })
     if (!problems.length) {
       sourceHtml ??= { en: await render(state.newEn), zh: await render(zhBody) }
       problems = renderedLinkProblems({ enHtml: sourceHtml.en, prevZhHtml: sourceHtml.zh, candidateHtml: await render(body) })

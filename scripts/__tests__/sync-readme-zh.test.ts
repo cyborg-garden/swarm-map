@@ -474,3 +474,17 @@ describe.skipIf(!process.env.README_SYNC_LIVE_TOKEN)('live GitHub render', () =>
     ])
   }, 60_000)
 })
+
+describe('exact switcher per locale', () => {
+  it('accepts the real files and rejects a wrong switcher', async () => {
+    const fs = await import('node:fs')
+    const { validate: v, stripMarker: sm } = await import('../sync-readme-zh.mjs')
+    const en = fs.readFileSync('README.md', 'utf8')
+    for (const [loc, file] of [['zh-CN', 'README.zh-CN.md'], ['zh-TW', 'README.zh-TW.md']] as const) {
+      const body = sm(fs.readFileSync(file, 'utf8'), loc)
+      expect(v({ newEn: en, zhBody: body, prevZhBody: body, locale: loc })).toEqual([])
+      const bad = body.replace(/^\[English\]\(README\.md\).*$/m, '[English](README.md) | **简体中文**')
+      expect(v({ newEn: en, zhBody: bad, prevZhBody: body, locale: loc }).join()).toMatch(/switcher line is not exactly/)
+    }
+  })
+})
