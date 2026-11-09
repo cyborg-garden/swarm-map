@@ -1,22 +1,29 @@
 #!/usr/bin/env node
 /**
- * Keep README.zh-CN.md in step with README.md.
+ * Keep the Chinese READMEs in step with README.md:
+ *   zh-CN  README.zh-CN.md  Simplified Chinese
+ *   zh-TW  README.zh-TW.md  Traditional Chinese, Taiwan usage
  *
- * README.zh-CN.md line 1 records the English commit it was translated from:
+ * Line 1 of each translation records the English commit it was translated from:
  *
- *   <!-- 译自 README.md @ 66ff4b8；如有出入，以英文版为准。 -->
+ *   <!-- 译自 README.md @ 66ff4b8；如有出入，以英文版为准。 -->   (zh-CN)
+ *   <!-- 譯自 README.md @ 66ff4b8；如有出入，以英文版為準。 -->   (zh-TW)
  *
- * When README.md at HEAD differs from README.md at that commit, this script
- * sends the model the old English, the new English, the diff between them and
- * the current Chinese, asks for the Chinese with ONLY the changed parts
+ * and line 2 is the same in English for both. When README.md at HEAD differs
+ * from README.md at that commit, this script sends the model the old English,
+ * the new English, the diff between them and the current translation, asks
+ * for the translation with ONLY the changed parts
  * updated, validates the reply mechanically, writes it, and bumps the marker.
  * Incremental on purpose: a full retranslation every time churns wording that
  * did not change and loses hand-tuned terminology.
  *
- * Usage:
- *   node scripts/sync-readme-zh.mjs --check     exit 0 in sync, 3 drifted
- *   node scripts/sync-readme-zh.mjs --dry-run   print the prompt, call nothing
- *   node scripts/sync-readme-zh.mjs --write     translate, validate, write
+ * Usage (--locale defaults to zh-CN):
+ *   node scripts/sync-readme-zh.mjs --check   [--locale zh-CN|zh-TW|all]
+ *       exit 0 in sync, 3 drifted (with "all": any locale drifted)
+ *   node scripts/sync-readme-zh.mjs --dry-run [--locale zh-CN|zh-TW]
+ *       print the prompt, call nothing
+ *   node scripts/sync-readme-zh.mjs --write   [--locale zh-CN|zh-TW]
+ *       translate, validate, write
  *
  * --write needs OPENROUTER_API_KEY and GITHUB_TOKEN (for GitHub's markdown
  * renderer, the ground truth for the link check; no token means no write). README_SYNC_MODEL overrides the model.
@@ -29,40 +36,71 @@ import { fileURLToPath } from 'node:url'
 
 export const EN = 'README.md'
 export const ZH = 'README.zh-CN.md'
+export const ZH_TW = 'README.zh-TW.md'
 export const DEFAULT_MODEL = 'moonshotai/kimi-k3'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const API_SECTION = '## API Reference'
 
-const MARKER_ZH = /^<!-- 译自 README\.md @ ([0-9a-f]{7,40})；如有出入，以英文版为准。 -->$/
 const MARKER_EN = /^<!-- Translated from README\.md @ ([0-9a-f]{7,40})\. The English README is authoritative\. -->$/
 
-export function markerLines(sha) {
+/**
+ * Per-locale settings. `marker` builds line 1 and `markerRe` parses it; line 2
+ * (MARKER_EN) is shared. `name` is the language for log lines, `switcher` the
+ * three-way language line under the title.
+ */
+export const LOCALES = {
+  'zh-CN': {
+    file: ZH,
+    marker: (sha) => `<!-- 译自 README.md @ ${sha}；如有出入，以英文版为准。 -->`,
+    markerRe: /^<!-- 译自 README\.md @ ([0-9a-f]{7,40})；如有出入，以英文版为准。 -->$/,
+    name: 'Simplified Chinese',
+    switcher: '[English](README.md) | **简体中文** | [繁體中文](README.zh-TW.md)',
+  },
+  'zh-TW': {
+    file: ZH_TW,
+    marker: (sha) => `<!-- 譯自 README.md @ ${sha}；如有出入，以英文版為準。 -->`,
+    markerRe: /^<!-- 譯自 README\.md @ ([0-9a-f]{7,40})；如有出入，以英文版為準。 -->$/,
+    name: 'Traditional Chinese (Taiwan)',
+    switcher: '[English](README.md) | [简体中文](README.zh-CN.md) | **繁體中文**',
+  },
+}
+export const DEFAULT_LOCALE = 'zh-CN'
+const TRANSLATIONS = new Set(Object.values(LOCALES).map((l) => l.file))
+
+function loc(locale) {
+  const l = LOCALES[locale]
+  if (!l) throw new Error(`unknown locale ${locale} (expected ${Object.keys(LOCALES).join(', ')})`)
+  return l
+}
+
+export function markerLines(sha, locale = DEFAULT_LOCALE) {
   return [
-    `<!-- 译自 README.md @ ${sha}；如有出入，以英文版为准。 -->`,
+    loc(locale).marker(sha),
     `<!-- Translated from README.md @ ${sha}. The English README is authoritative. -->`,
   ]
 }
 
 /** The source SHA in the marker, or null when the marker is missing or malformed. */
-export function parseMarker(zh) {
+export function parseMarker(zh, locale = DEFAULT_LOCALE) {
   const [l1 = '', l2 = ''] = zh.split('\n')
-  const a = l1.match(MARKER_ZH)
+  const a = l1.match(loc(locale).markerRe)
   const b = l2.match(MARKER_EN)
   if (!a || !b || a[1] !== b[1]) return null
   return a[1]
 }
 
 /** The translation without its two marker lines (and the blank line after them). */
-export function stripMarker(zh) {
+export function stripMarker(zh, locale = DEFAULT_LOCALE) {
+  const re = loc(locale).markerRe
   const lines = zh.split('\n')
   let i = 0
-  while (i < lines.length && i < 2 && (MARKER_ZH.test(lines[i]) || MARKER_EN.test(lines[i]))) i++
+  while (i < lines.length && i < 2 && (re.test(lines[i]) || MARKER_EN.test(lines[i]))) i++
   while (i < lines.length && lines[i].trim() === '') i++
   return lines.slice(i).join('\n')
 }
 
-export function withMarker(body, sha) {
-  return `${markerLines(sha).join('\n')}\n\n${body.replace(/^\s+/, '').replace(/\s*$/, '\n')}`
+export function withMarker(body, sha, locale = DEFAULT_LOCALE) {
+  return `${markerLines(sha, locale).join('\n')}\n\n${body.replace(/^\s+/, '').replace(/\s*$/, '\n')}`
 }
 
 // ---------------------------------------------------------------- prompt ----
@@ -79,12 +117,33 @@ Rules:
 5. Links to docs (docs/*.md, CONTRIBUTING.md, AGENTS.md) point at English documents; keep the "（英文）" notes where they are.
 6. Terminology: agent = 智能体, runtime = 运行时, model cascade = 模型级联, multi-tenant = 多租户. Product names (Swarm Map, SM, Hermes, Letta) stay in English.
 7. Punctuation: Chinese punctuation (，。：；（）) and curly quotes “” in Chinese prose; straight ASCII quotes inside HTML attributes, inline code and code blocks.
-8. Keep the language switcher line "[English](README.md) | **简体中文**" under the title.
+8. Keep the language switcher line "${LOCALES['zh-CN'].switcher}" under the title.
 9. Do NOT output the two HTML comment marker lines at the top; they are added afterwards.
 
 Output the complete updated Chinese README between <readme> and </readme>, and nothing else.`
 
-export function buildPrompt({ oldEn, newEn, diff, zhBody }) {
+export const SYSTEM_PROMPT_ZH_TW = `You maintain the Traditional Chinese translation (README.zh-TW.md) of an open-source project's English README.md, written for readers in Taiwan. The English README is authoritative.
+
+You are given the OLD English the translation was made from, the NEW English, the diff between them, and the CURRENT Chinese translation. Produce the updated Chinese translation.
+
+Rules:
+1. Update ONLY what the English diff changed. Every Chinese passage whose English did not change must come back byte-for-byte identical. Do not polish, reword or reformat untouched text.
+2. If the current Chinese already reflects a change, leave it as it is.
+3. Keep every image tag, URL, link target, inline code span and fenced code block exactly as in the English. Inside code blocks only "#" comments are translated; commands stay identical.
+4. The "API 參考" section deliberately does NOT translate the route tables: it keeps a short Chinese summary, a link to the English section (README.md#api-reference) and the curl examples. Keep that shape; do not add route tables. If the English changes only inside the route tables, the Chinese needs no change there.
+5. Links to docs (docs/*.md, CONTRIBUTING.md, AGENTS.md) point at English documents; keep the "（英文）" notes where they are.
+6. Write Traditional Chinese as used in Taiwan: Taiwan vocabulary, not Simplified Chinese converted character by character. Use 軟體, 程式, 程式碼, 預設, 設定, 檔案, 資料, 資訊, 支援, 介面, 伺服器, 網路, 使用者, 專案, 連結, 映像檔, 連接埠, 儲存庫, 執行, 即時, 外掛, 快取.
+7. Terminology: agent = 代理 (AI agent = AI 代理), runtime = 執行環境, model cascade = 模型級聯, multi-tenant = 多租戶, dashboard = 儀表板, wizard = 精靈, session = 工作階段, policy = 政策, fallback = 備援, local (machine) = 本機, authentication = 身分驗證. In Taiwan 列 is a row and 行/欄位 a column: a database row is 資料列, a column is 欄位. Avoid Mainland patterns such as 面向…的, 基於, 按…, 實現, 月度, 算力, 接入, 暴露. Product names (Swarm Map, SM, Hermes, Letta) stay in English.
+8. Punctuation: full-width Chinese punctuation (，。：；（）) and Taiwan-style 「」 quotes in Chinese prose; straight ASCII quotes inside HTML attributes, inline code and code blocks.
+9. Keep the language switcher line "${LOCALES['zh-TW'].switcher}" under the title.
+10. Do NOT output the two HTML comment marker lines at the top; they are added afterwards.
+
+Output the complete updated Chinese README between <readme> and </readme>, and nothing else.`
+
+const SYSTEM_PROMPTS = { 'zh-CN': SYSTEM_PROMPT, 'zh-TW': SYSTEM_PROMPT_ZH_TW }
+
+export function buildPrompt({ oldEn, newEn, diff, zhBody }, locale = DEFAULT_LOCALE) {
+  loc(locale)
   const old = oldEn == null
     ? '(unavailable: the source commit in the marker could not be found. Treat the CURRENT Chinese as the base and bring it in line with the NEW English, changing as little as possible.)'
     : oldEn
@@ -94,18 +153,18 @@ export function buildPrompt({ oldEn, newEn, diff, zhBody }) {
     '<english_diff>', diff || '(none available)', '</english_diff>',
     '<current_chinese>', zhBody, '</current_chinese>',
   ].join('\n')
-  return { system: SYSTEM_PROMPT, user }
+  return { system: SYSTEM_PROMPTS[locale], user }
 }
 
 /** The text between <readme> tags; tolerates a ```markdown fence around it. */
-export function extractReadme(reply) {
+export function extractReadme(reply, locale = DEFAULT_LOCALE) {
   if (typeof reply !== 'string') return null
   const m = reply.match(/<readme>\s*\n?([\s\S]*?)\n?\s*<\/readme>/)
   if (!m) return null
   let body = m[1]
   const fenced = body.match(/^```(?:markdown|md)?\n([\s\S]*?)\n```\s*$/)
   if (fenced) body = fenced[1]
-  return stripMarker(body)
+  return stripMarker(body, locale)
 }
 
 // ------------------------------------------------------------ validation ----
@@ -144,7 +203,7 @@ function linkTargets(md) {
   const out = new Set()
   for (const m of md.matchAll(/\]\(([^)\s]+)\)/g)) out.add(m[1])
   for (const m of md.matchAll(/https?:\/\/[^\s)"'<>`]+/g)) out.add(m[0])
-  return [...out].filter((t) => !t.startsWith('#') && t !== ZH)
+  return [...out].filter((t) => !t.startsWith('#') && !TRANSLATIONS.has(t))
 }
 
 // Characters that end a bare URL: whitespace, markup delimiters, and the
@@ -222,7 +281,7 @@ export function validate({ newEn, zhBody, prevZhBody = null, diff = null }) {
 
   if (!/^# Swarm Map\s*$/m.test(zhBody.split('\n')[0] || '')) problems.push('first line is not the "# Swarm Map" title')
   if (!zhBody.includes('[English](README.md)')) problems.push('language switcher "[English](README.md)" is missing')
-  if (/<!--\s*(译自|Translated from)/.test(zhBody)) problems.push('output contains a marker comment')
+  if (/<!--\s*(译自|譯自|Translated from)/.test(zhBody)) problems.push('output contains a marker comment')
   if (/<\/?readme>/.test(zhBody)) problems.push('output contains a <readme> tag')
 
   const ratio = cjk(zhBody) / Math.max(1, zhBody.replace(/\s/g, '').length)
@@ -293,17 +352,19 @@ function tryGit(args) {
 }
 
 /** Everything the decision needs, read from the repo at cwd. */
-export function readState() {
-  const zh = fs.readFileSync(ZH, 'utf8')
+export function readState(locale = DEFAULT_LOCALE) {
+  const file = loc(locale).file
+  if (!fs.existsSync(file)) throw new Error(`${file} not found (locale ${locale}); add it with the marker on lines 1-2 first`)
+  const zh = fs.readFileSync(file, 'utf8')
   const newEn = fs.readFileSync(EN, 'utf8')
-  const sha = parseMarker(zh)
+  const sha = parseMarker(zh, locale)
   const resolved = sha && tryGit(['rev-parse', '--verify', '--quiet', `${sha}^{commit}`])?.trim()
   const oldEn = resolved ? tryGit(['show', `${resolved}:${EN}`]) : null
   const diff = oldEn != null ? tryGit(['diff', '--no-color', resolved, '--', EN]) || '' : null
   // The marker names the last commit that changed README.md, so it only moves
   // when the English does.
   const headSha = (tryGit(['log', '-1', '--format=%h', '--abbrev=7', '--', EN]) || '').trim()
-  return { zh, newEn, sha, oldEn, diff, headSha, inSync: oldEn != null && oldEn === newEn }
+  return { locale, file, zh, newEn, sha, oldEn, diff, headSha, inSync: oldEn != null && oldEn === newEn }
 }
 
 // --------------------------------------------------- rendered link check ----
@@ -440,20 +501,21 @@ async function callModel({ system, user }, { model, key, fetchImpl = fetch }) {
 export async function translate(state, { model, key, fetchImpl, render = null, attempts = 2, log = console.error }) {
   // Fail closed: without GitHub's renderer there is no ground-truth link check.
   if (typeof render !== 'function') throw new Error('no markdown renderer; refusing to translate without the rendered link check')
-  const zhBody = stripMarker(state.zh)
+  const locale = state.locale || DEFAULT_LOCALE
+  const zhBody = stripMarker(state.zh, locale)
   let sourceHtml = null
-  const prompt = buildPrompt({ oldEn: state.oldEn, newEn: state.newEn, diff: state.diff, zhBody })
+  const prompt = buildPrompt({ oldEn: state.oldEn, newEn: state.newEn, diff: state.diff, zhBody }, locale)
   let user = prompt.user
   let problems = []
   for (let i = 1; i <= attempts; i++) {
     const { text, finish } = await callModel({ system: prompt.system, user }, { model, key, fetchImpl })
-    const body = extractReadme(text)
+    const body = extractReadme(text, locale)
     problems = body == null ? [`no <readme> block in the reply (finish_reason ${finish})`] : validate({ newEn: state.newEn, zhBody: body, prevZhBody: zhBody, diff: state.diff })
     if (!problems.length) {
       sourceHtml ??= { en: await render(state.newEn), zh: await render(zhBody) }
       problems = renderedLinkProblems({ enHtml: sourceHtml.en, prevZhHtml: sourceHtml.zh, candidateHtml: await render(body) })
     }
-    if (!problems.length) return withMarker(body, state.headSha)
+    if (!problems.length) return withMarker(body, state.headSha, locale)
     log(`attempt ${i}: rejected:\n  - ${problems.join('\n  - ')}`)
     user = `${prompt.user}\n\nYour previous answer was rejected for these reasons. Fix them:\n- ${problems.join('\n- ')}`
   }
@@ -462,22 +524,56 @@ export async function translate(state, { model, key, fetchImpl, render = null, a
 
 // ------------------------------------------------------------------ main ----
 
+/** Parse `[--check|--dry-run|--write] [--locale zh-CN|zh-TW|all]`, in any order. */
+export function parseArgs(argv) {
+  let mode = null
+  let locale = DEFAULT_LOCALE
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--locale') {
+      locale = argv[++i]
+      if (!locale) return { error: '--locale needs a value' }
+    } else if (a.startsWith('--locale=')) locale = a.slice('--locale='.length)
+    else if (!mode) mode = a
+    else return { error: `unexpected argument ${a}` }
+  }
+  mode ||= '--check'
+  if (locale !== 'all' && !LOCALES[locale]) return { error: `unknown locale ${locale} (expected ${Object.keys(LOCALES).join(', ')} or all)` }
+  if (locale === 'all' && mode !== '--check') return { error: '--locale all works with --check only' }
+  return { mode, locale }
+}
+
 async function main(argv) {
-  const mode = argv[0] || '--check'
-  const state = readState()
-  if (!state.sha) console.error(`${ZH}: marker on lines 1-2 missing or malformed; will retranslate against the current Chinese.`)
-  else if (state.oldEn == null) console.error(`${ZH}: marker commit ${state.sha} not found; will retranslate against the current Chinese.`)
+  const args = parseArgs(argv)
+  if (args.error) {
+    console.error(args.error)
+    return 2
+  }
+  const { mode } = args
+  if (args.locale === 'all') {
+    let worst = 0
+    for (const locale of Object.keys(LOCALES)) worst = Math.max(worst, await run(mode, locale))
+    return worst
+  }
+  return run(mode, args.locale)
+}
+
+async function run(mode, locale) {
+  const state = readState(locale)
+  const file = state.file
+  if (!state.sha) console.error(`${file}: marker on lines 1-2 missing or malformed; will retranslate against the current Chinese.`)
+  else if (state.oldEn == null) console.error(`${file}: marker commit ${state.sha} not found; will retranslate against the current Chinese.`)
 
   if (state.inSync) {
-    console.log(`in sync: ${EN} unchanged since ${state.sha}`)
+    console.log(`${locale} in sync: ${EN} unchanged since ${state.sha}`)
     return 0
   }
   if (mode === '--check') {
-    console.log(`drift: ${EN} changed since ${state.sha || '(no marker)'}; head ${state.headSha}`)
+    console.log(`${locale} drift: ${EN} changed since ${state.sha || '(no marker)'}; head ${state.headSha}`)
     return 3
   }
   if (mode === '--dry-run') {
-    const p = buildPrompt({ oldEn: state.oldEn, newEn: state.newEn, diff: state.diff, zhBody: stripMarker(state.zh) })
+    const p = buildPrompt({ oldEn: state.oldEn, newEn: state.newEn, diff: state.diff, zhBody: stripMarker(state.zh, locale) }, locale)
     console.log(`=== SYSTEM ===\n${p.system}\n\n=== USER ===\n${p.user}`)
     return 0
   }
@@ -497,8 +593,8 @@ async function main(argv) {
   const model = (process.env.README_SYNC_MODEL || '').trim() || DEFAULT_MODEL
   const render = githubRenderer({ token: (process.env.GITHUB_TOKEN || '').trim() })
   const out = await translate(state, { model, key, render })
-  fs.writeFileSync(ZH, out)
-  console.log(`wrote ${ZH} (source ${state.headSha}, model ${model})`)
+  fs.writeFileSync(file, out)
+  console.log(`wrote ${file} (source ${state.headSha}, model ${model})`)
   return 0
 }
 

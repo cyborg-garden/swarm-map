@@ -1,11 +1,12 @@
 name: readme-zh-sync
 
-# Keeps README.zh-CN.md in step with README.md, with no human step.
+# Keeps README.zh-CN.md (Simplified) and README.zh-TW.md (Traditional, Taiwan)
+# in step with README.md, with no human step.
 #
-# When README.md changes on main, scripts/sync-readme-zh.mjs feeds the model the
-# English at the translation's marker commit, the new English, the diff and the
-# current Chinese, and takes back the Chinese with only the changed parts
-# updated. The reply is validated mechanically (images, links, code blocks,
+# When README.md changes on main, scripts/sync-readme-zh.mjs, once per locale,
+# feeds the model the English at that translation's marker commit, the new
+# English, the diff and the current translation, and takes back the translation
+# with only the changed parts updated. The reply is validated mechanically (images, links, code blocks,
 # sections, length, unchanged text kept, no invented URLs or hosts) and its
 # links are checked against GitHub's own render of it before it is written.
 #
@@ -14,15 +15,16 @@ name: readme-zh-sync
 # no workflows, and dispatch-started checks do not count for rulesets. So the
 # bot works through a GitHub App (cyborg-garden-readme-sync, installed on this
 # repo only; tokens last one hour):
-#   1. sync: translate, validate, and run both sanitization layers on the file
-#      in-job (so nothing unvetted reaches a public branch), then commit on top
-#      of the main it started from, force-push that commit to
-#      bot/readme-zh-sync with an App token, and open (or reuse) a PR to main.
-#      Touches README.zh-CN.md only (the job checks).
+#   1. sync: translate each drifted locale, validate, and run both
+#      sanitization layers on the changed files in-job (so nothing unvetted
+#      reaches a public branch), then make one commit on top of the main it
+#      started from, force-push it to bot/readme-zh-sync with an App token, and
+#      open (or reuse) one PR to main. Touches README.zh-CN.md and/or
+#      README.zh-TW.md only (the job checks).
 #   2. land: the App-authored push runs sanitization.yml on the PR, the real
 #      gate. When `sanitize / sanitize` succeeds on that exact SHA, merge the
 #      PR with --match-head-commit, so a commit the gate never saw cannot land.
-#      If either README changed on main meanwhile, stop: that push re-runs
+#      If any README changed on main meanwhile, stop: that push re-runs
 #      the sync from fresh main. Unrelated commits on main do not block it.
 # No check run is ever created by hand: only the gate's own run can pass it.
 #
@@ -56,6 +58,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read    # pushes go through the App token, not this one
+    env:
+      LOCALES: zh-CN zh-TW
     outputs:
       sha: ${{ steps.push.outputs.sha }}
       base: ${{ steps.push.outputs.base }}
@@ -74,13 +78,19 @@ jobs:
         id: drift
         run: |
           set -uo pipefail
-          rc=0
-          node scripts/sync-readme-zh.mjs --check || rc=$?
-          case "$rc" in
-            0) echo "drift=false" >> "$GITHUB_OUTPUT" ;;
-            3) echo "drift=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "::error::drift check failed (exit $rc)"; exit "$rc" ;;
-          esac
+          drifted=""
+          for loc in $LOCALES; do
+            rc=0
+            node scripts/sync-readme-zh.mjs --check --locale "$loc" || rc=$?
+            case "$rc" in
+              0) ;;
+              3) drifted="$drifted $loc" ;;
+              *) echo "::error::drift check failed for $loc (exit $rc)"; exit "$rc" ;;
+            esac
+          done
+          drifted="${drifted# }"
+          echo "locales=$drifted" >> "$GITHUB_OUTPUT"
+          if [ -n "$drifted" ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Translate the changed parts
         if: steps.drift.outputs.drift == 'true'
@@ -88,9 +98,14 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Only for POST /markdown (GitHub's renderer, the link check's ground truth).
           GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/sync-readme-zh.mjs --write
+          DRIFTED: ${{ steps.drift.outputs.locales }}
+        run: |
+          set -euo pipefail
+          for loc in $DRIFTED; do
+            node scripts/sync-readme-zh.mjs --write --locale "$loc"
+          done
 
-      - name: Only the translation may change
+      - name: Only the translations may change
         if: steps.drift.outputs.drift == 'true'
         id: changed
         run: |
@@ -101,10 +116,15 @@ jobs:
             echo "any=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$changed" != " M README.zh-CN.md" ]; then
-            echo "::error::the sync changed files other than README.zh-CN.md; refusing to commit"
-            exit 1
-          fi
+          files=""
+          while IFS= read -r line; do
+            case "$line" in
+              " M README.zh-CN.md") files="$files README.zh-CN.md" ;;
+              " M README.zh-TW.md") files="$files README.zh-TW.md" ;;
+              *) echo "::error::the sync changed something other than README.zh-CN.md / README.zh-TW.md ($line); refusing to commit"; exit 1 ;;
+            esac
+          done <<< "$changed"
+          echo "files=${files# }" >> "$GITHUB_OUTPUT"
           echo "any=true" >> "$GITHUB_OUTPUT"
 
       # Pre-publication check: the side branch is public, so the file is gated
@@ -119,13 +139,19 @@ jobs:
         if: steps.changed.outputs.any == 'true'
         env:
           OPENROUTER_API_KEY: ""
-        run: python3 scripts/check_sanitization.py README.zh-CN.md --deterministic-only --require-config
+          FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          # shellcheck disable=SC2086 # FILES is a space-separated list of fixed names
+          python3 scripts/check_sanitization.py $FILES --deterministic-only --require-config
 
       - name: "Sanitization: particulars (semantic, fails closed)"
         if: steps.changed.outputs.any == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: python3 scripts/check_sanitization.py README.zh-CN.md --require-semantic --require-config
+          FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          # shellcheck disable=SC2086 # FILES is a space-separated list of fixed names
+          python3 scripts/check_sanitization.py $FILES --require-semantic --require-config
 
       - name: Mint a short-lived App token
         id: app
@@ -144,15 +170,20 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
+          FILES: ${{ steps.changed.outputs.files }}
         run: |
           set -euo pipefail
           git config user.name "cyborg-garden-readme-sync[bot]"
           git config user.email "cyborg-garden-readme-sync[bot]@users.noreply.github.com"
           base="$(git rev-parse HEAD)"
-          src="$(sed -n '1s/.*@ \([0-9a-f]*\)；.*/\1/p' README.zh-CN.md)"
-          git add README.zh-CN.md
-          git commit -q -m "docs(readme): sync zh-CN translation to ${src}" \
-            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translation's marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
+          # shellcheck disable=SC2086 # FILES is a list of fixed names
+          set -- $FILES
+          # Line 2 of every translation is the shared English marker.
+          src="$(sed -n '2s/.*@ \([0-9a-f]*\)\. .*/\1/p' "$1")"
+          what="$(printf '%s\n' "$@" | sed 's/^README\.\(.*\)\.md$/\1/' | paste -sd, - | sed 's/,/, /g')"
+          git add -- "$@"
+          git commit -q -m "docs(readme): sync ${what} translation to ${src}" \
+            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translations' marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
           # Push as the App (not GITHUB_TOKEN) so the PR's gate actually runs.
           # Basic auth in a one-off header: no credential in the URL or git config.
           auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
@@ -163,8 +194,8 @@ jobs:
           pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
             url="$(gh pr create --repo "$REPO" --head "$SYNC_BRANCH" --base main \
-              --title "docs(readme): sync zh-CN translation to ${src}" \
-              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only \`README.zh-CN.md\` changes. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit.")"
+              --title "docs(readme): sync ${what} translation to ${src}" \
+              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only the Chinese translations change (${FILES}). The workflow merges this once \`sanitize / sanitize\` passes on this exact commit.")"
             pr="${url##*/}"
           fi
           { echo "base=$base"; echo "sha=$sha"; echo "pr=$pr"; } >> "$GITHUB_OUTPUT"
@@ -218,11 +249,11 @@ jobs:
         run: |
           set -uo pipefail
           case "$PR" in ''|*[!0-9]*) echo "::error::bad PR number from the sync job: '$PR'"; exit 1 ;; esac
-          # Other commits on main are fine (the PR touches README.zh-CN.md only).
-          # Refuse only if either README changed since the translation started:
+          # Other commits on main are fine (the PR touches the translations only).
+          # Refuse only if any README changed since the translation started:
           # then the gated text is stale. A README.md push re-runs the sync; a
-          # hand edit to README.zh-CN.md alone waits for the weekly run.
-          for f in README.md README.zh-CN.md; do
+          # hand edit to a translation alone waits for the weekly run.
+          for f in README.md README.zh-CN.md README.zh-TW.md; do
             old="$(gh api "repos/$REPO/contents/$f?ref=$BASE" --jq .sha)" || exit 1
             new="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)" || exit 1
             if [ -z "$old" ] || [ -z "$new" ]; then echo "::error::could not read $f"; exit 1; fi
