@@ -214,10 +214,11 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           set -uo pipefail
-          [ -n "$PR" ] || { echo "::error::no PR number from the sync job"; exit 1; }
+          case "$PR" in ''|*[!0-9]*) echo "::error::bad PR number from the sync job: '$PR'"; exit 1 ;; esac
           # Other commits on main are fine (the PR touches README.zh-CN.md only).
           # Refuse only if either README changed since the translation started:
-          # then the gated text is stale, and that push re-runs the sync anyway.
+          # then the gated text is stale. A README.md push re-runs the sync; a
+          # hand edit to README.zh-CN.md alone waits for the weekly run.
           for f in README.md README.zh-CN.md; do
             old="$(gh api "repos/$REPO/contents/$f?ref=$BASE" --jq .sha)" || exit 1
             new="$(gh api "repos/$REPO/contents/$f?ref=main" --jq .sha)" || exit 1
