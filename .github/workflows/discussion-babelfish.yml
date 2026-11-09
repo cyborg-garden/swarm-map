@@ -1,0 +1,51 @@
+name: discussion-babelfish
+
+# Machine translation for GitHub Discussions, so Chinese and English speakers
+# can talk with no human translator. scripts/discussion-babelfish.mjs decides
+# and translates:
+#   - a new discussion or comment mostly in Chinese gets an English translation;
+#   - an English comment in a thread opened in Chinese gets a Chinese one
+#     (Traditional if the opener is Traditional, else Simplified);
+#   - anything else, and anything by a bot, gets nothing.
+# It only translates. The post is untrusted input to a model whose output is
+# posted publicly, so the reply is validated mechanically first (no new URLs,
+# links, images or #references, code unchanged, right language, sane length). One retry,
+# then nothing is posted and the run fails. Mentions are defused.
+#
+# Replies are posted with GITHUB_TOKEN, and GITHUB_TOKEN-authored comments start
+# no workflows, so the bot cannot trigger itself. The script also skips bot
+# authors. The checkout is the default branch, never code from the post.
+on:
+  discussion:
+    types: [created]
+  discussion_comment:
+    types: [created]
+
+permissions:
+  discussions: write
+  contents: read
+
+# One group per post (comment, else the discussion opener), so a burst of
+# posts in one thread never drops a pending run; only a re-run of the same
+# post waits for the first.
+concurrency:
+  group: discussion-babelfish-${{ github.event.comment.node_id || github.event.discussion.node_id }}
+  cancel-in-progress: false
+
+jobs:
+  translate:
+    if: github.repository == 'cyborg-garden/swarm-map'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Translate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BABELFISH_MODEL: ${{ vars.BABELFISH_MODEL }}
+        run: node scripts/discussion-babelfish.mjs
