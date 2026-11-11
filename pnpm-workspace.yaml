@@ -3,3 +3,5 @@ allowBuilds:
   msw: true
   sharp: true
   unrs-resolver: true
+overrides:
+  proxy-addr: ^2.0.8
