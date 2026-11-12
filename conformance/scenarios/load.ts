@@ -35,12 +35,15 @@ export type Step =
 export interface Scenario {
   id: string
   rule: string
+  /** The rule whose trace must differ between base and twin. Defaults to `rule`. */
+  witness?: string
   policy: string
   patch?: Record<string, unknown>
   steps: Step[]
   facts?: Facts
   expect: Expectation
-  twin: { patch?: Record<string, unknown>; facts?: Facts; expect: Expectation }
+  /** Same steps under a patched policy. `steps` replaces them, for rules no policy field controls. */
+  twin: { patch?: Record<string, unknown>; facts?: Facts; steps?: Step[]; expect: Expectation }
 }
 
 export function loadScenarios(): Scenario[] {
@@ -80,6 +83,10 @@ export function scenarioPolicy(s: Scenario, which: 'base' | 'twin'): PolicyRecor
 
 export function scenarioFacts(s: Scenario, which: 'base' | 'twin'): Facts {
   return which === 'twin' ? { ...s.facts, ...s.twin.facts } : { ...s.facts }
+}
+
+export function scenarioSteps(s: Scenario, which: 'base' | 'twin'): Step[] {
+  return which === 'twin' && s.twin.steps ? s.twin.steps : s.steps
 }
 
 export function toRoom(room: RoomInput, isDm = false): RoomRef {

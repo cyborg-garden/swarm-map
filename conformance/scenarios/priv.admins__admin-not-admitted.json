@@ -1,0 +1,46 @@
+{
+  "id": "priv.admins/admin-not-admitted",
+  "rule": "priv.admins",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-root",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.users"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.users": [
+        {
+          "kind": "user",
+          "id": "u-alice"
+        },
+        {
+          "kind": "user",
+          "id": "u-root"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      },
+      "privilege": "admin"
+    }
+  }
+}

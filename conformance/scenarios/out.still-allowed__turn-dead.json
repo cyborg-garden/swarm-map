@@ -1,0 +1,33 @@
+{
+  "id": "out.still-allowed/turn-dead",
+  "rule": "out.still-allowed",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "outbound": {
+        "room": "r-general",
+        "text": "reply {{canary}}"
+      }
+    }
+  ],
+  "facts": {
+    "turnLive": false
+  },
+  "expect": {
+    "receipt": {
+      "verdict": "drop",
+      "rule": "out.still-allowed"
+    }
+  },
+  "twin": {
+    "facts": {
+      "turnLive": true
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "out.still-allowed"
+      }
+    }
+  }
+}

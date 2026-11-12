@@ -6,14 +6,14 @@
 import { describe, expect, it } from 'vitest'
 import { decide } from '../decide.ts'
 import {
-  loadScenarios, scenarioFacts, scenarioPolicy, stepEvent, type Scenario,
+  loadScenarios, scenarioFacts, scenarioPolicy, scenarioSteps, stepEvent, type Scenario,
 } from '../../../conformance/scenarios/load.ts'
 
 function run(s: Scenario, which: 'base' | 'twin') {
   const policy = scenarioPolicy(s, which)
   const facts = scenarioFacts(s, which)
   let last = undefined as ReturnType<typeof decide> | undefined
-  for (const step of s.steps) last = decide(policy, stepEvent(step, 'CANARY-table'), facts)
+  for (const step of scenarioSteps(s, which)) last = decide(policy, stepEvent(step, 'CANARY-table'), facts)
   return last!
 }
 
@@ -43,9 +43,10 @@ describe('decide() table', () => {
       const outcome = (d: typeof base) => `${d.verdict}/${d.privilege}`
       expect(outcome(twin)).not.toBe(outcome(base))
       // The rule under test decided one side, or it is in exactly one side's trace.
-      const inTrace = (d: typeof base) => d.trace.some((t) => t.rule === s.rule)
+      const witness = s.witness ?? s.rule
+      const inTrace = (d: typeof base) => d.trace.find((t) => t.rule === witness)?.outcome
       const decided = base.rule === s.rule || twin.rule === s.rule
-      expect(decided || inTrace(base) !== inTrace(twin), `${s.rule} did not take part`).toBe(true)
+      expect(decided || inTrace(base) !== inTrace(twin), `${witness} did not take part`).toBe(true)
     })
 
     it('every decision carries the hash of the policy that made it', () => {

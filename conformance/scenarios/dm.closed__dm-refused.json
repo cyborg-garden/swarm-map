@@ -1,0 +1,39 @@
+{
+  "id": "dm.closed/dm-refused",
+  "rule": "dm.closed",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "dm:u-alice",
+        "sender": "u-alice",
+        "isDm": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "dm.closed"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.dm": {
+        "mode": "open",
+        "users": []
+      }
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "dm.open"
+      }
+    }
+  }
+}

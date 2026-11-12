@@ -1,0 +1,31 @@
+{
+  "id": "out.still-allowed/dm-closed",
+  "rule": "out.still-allowed",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "outbound": {
+        "room": "dm:u-alice",
+        "text": "reply {{canary}}",
+        "isDm": true
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "drop",
+      "rule": "out.still-allowed"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.dm.mode": "open"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "out.still-allowed"
+      }
+    }
+  }
+}

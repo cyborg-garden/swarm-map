@@ -2,8 +2,9 @@
 // mutation. The sidecar, the "why didn't it answer?" view and the tests all
 // call this same function. Spec section 4.3.
 import type { Decision, Event, Facts, InboundEvent, Principal, RoomRef, Verdict } from './events.ts'
-import { assertRendered } from './policy/deferred.ts'
-import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy } from './policy/types.ts'
+import { assertRendered, UnrenderedError } from './policy/deferred.ts'
+import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy, ToolClass } from './policy/types.ts'
+import { sessionKeyFor } from './session-key.ts'
 
 type Trace = Decision['trace']
 type Privilege = Decision['privilege']
@@ -29,49 +30,154 @@ function roomMode(surface: SurfacePolicy, room: RoomRef): RoomRule['mode'] | und
   return hits[0]?.mode
 }
 
-function privilegeOf(surface: SurfacePolicy | undefined, p: Principal, facts: Facts, admitted: 'listed' | 'open'): Privilege {
-  if (surface && matches(surface.admins, p, facts)) return 'admin'
-  return admitted === 'listed' ? 'member' : 'guest'
-}
-
 function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omit<Decision, 'policyHash'> {
   const trace: Trace = []
   const surface = policy.surfaces[e.surface]
-  const done = (verdict: Verdict, rule: string, why: string, privilege: Privilege = 'guest') => {
-    trace.push({ rule, outcome: verdict === 'drop' ? 'fail' : 'pass' })
-    return { verdict, rule, why, privilege, trace }
-  }
   const pass = (rule: string) => { trace.push({ rule, outcome: 'pass' }) }
+  const drop = (rule: string, why: string) => {
+    trace.push({ rule, outcome: 'fail' })
+    return { verdict: 'drop' as Verdict, rule, why, privilege: 'guest' as Privilege, trace }
+  }
 
-  if (!surface || !surface.enabled) return done('drop', 'adm.surface', `The ${e.surface} surface is switched off.`)
+  if (!surface || !surface.enabled) return drop('adm.surface', `The ${e.surface} surface is switched off.`)
   pass('adm.surface')
 
+  if (e.sender.isSelf) return drop('bots.no-self', 'The agent never answers itself.')
+  if (e.sender.isBot) {
+    if (surface.bots.mode === 'none') return drop('bots.mode', 'Other bots are ignored here.')
+    pass('bots.mode')
+  }
+
+  // Privilege comes from the admin list and the sender's id as the surface
+  // reported it. Nothing in the text or the display name can change it.
+  const privilegeFor = (admitted: 'listed' | 'open'): Privilege => {
+    const admin = matches(surface.admins, e.sender, facts)
+    trace.push({ rule: 'priv.admins', outcome: admin ? 'pass' : 'n/a' })
+    return admin ? 'admin' : admitted === 'listed' ? 'member' : 'guest'
+  }
+  const heard = (verdict: 'deliver' | 'observe', rule: string, why: string, privilege: Privilege) => {
+    pass(rule)
+    return { verdict: verdict as Verdict, rule, why, privilege, trace,
+      sessionKey: sessionKeyFor(e.surface, e.room, e.sender.id, e.isDm) }
+  }
+
+  // Direct messages have their own admission. The room and user lists do not apply.
+  if (e.isDm) {
+    const dm = surface.dm
+    if (dm.mode === 'closed') return drop('dm.closed', 'Direct messages are off.')
+    if (dm.mode === 'open') return heard('deliver', 'dm.open', 'Direct messages are open to anyone.', privilegeFor('open'))
+    if (dm.users.length === 0) return drop('adm.empty-is-closed', 'Nobody is listed for direct messages, so nobody is heard.')
+    if (!matches(dm.users, e.sender, facts)) return drop('dm.allowlist', 'The sender is not on the direct-message list.')
+    return heard('deliver', 'dm.allowlist', 'The sender is on the direct-message list.', privilegeFor('listed'))
+  }
+
   // Where
-  if (surface.rooms.length === 0) return done('drop', 'adm.empty-is-closed', 'No rooms are listed, so no room is heard.')
+  if (surface.rooms.length === 0) return drop('adm.empty-is-closed', 'No rooms are listed, so no room is heard.')
   const mode = roomMode(surface, e.room)
-  if (mode === 'ignore') return done('drop', 'adm.rooms.ignore', 'This room is on the ignore list.')
-  if (mode === undefined) return done('drop', 'adm.rooms', 'This room is not on the list.')
+  if (mode === 'ignore') return drop('adm.rooms.ignore', 'This room is on the ignore list.')
+  if (mode === undefined) return drop('adm.rooms', 'This room is not on the list.')
   pass('adm.rooms')
 
-  // Who
+  // Who. A bot was already admitted by the bots rule above.
   let admitted: 'listed' | 'open'
-  if (matches(surface.users, e.sender, facts)) {
+  if (e.sender.isBot) {
+    admitted = 'open'
+  } else if (matches(surface.users, e.sender, facts)) {
     admitted = 'listed'
     pass('adm.users')
   } else if (surface.anyoneInAllowedRoom) {
     admitted = 'open'
     pass('adm.anyone-in-room')
   } else if (surface.users.length === 0) {
-    return done('drop', 'adm.empty-is-closed', 'Nobody is listed, so nobody is heard.')
+    return drop('adm.empty-is-closed', 'Nobody is listed, so nobody is heard.')
   } else {
-    return done('drop', 'adm.users', 'The sender is not on the list.')
+    return drop('adm.users', 'The sender is not on the list.')
   }
-  const privilege = privilegeOf(surface, e.sender, facts, admitted)
 
-  // Addressing
-  const addressed = e.mention || e.inlineMention || e.replyToAgent
-  if (addressed) return done('deliver', 'addr.mention', 'The agent was addressed in an approved room.', privilege)
-  return done('drop', 'addr.mention', 'This room needs a mention and there was none.', privilege)
+  // Addressing. From a bot, a reply-ping only counts when the policy says so.
+  const pinged = e.mention || e.inlineMention || e.replyToAgent
+  const addressed = e.sender.isBot && surface.bots.inlineMentionOnly ? e.inlineMention : pinged
+  if (e.sender.isBot && surface.bots.mode === 'mentions' && !addressed) {
+    return pinged
+      ? drop('bots.inline-mention', 'From a bot, a reply-ping is not a mention.')
+      : drop('bots.mode', 'Bots are heard only when they address the agent.')
+  }
+
+  const privilege = privilegeFor(admitted)
+  const isThread = e.room.kind === 'thread'
+  const needsMention = isThread ? surface.threadsRequireMention : mode === 'mention'
+  const rule = isThread ? 'addr.threads' : 'addr.mention'
+  if (!needsMention) {
+    return heard('deliver', isThread ? 'addr.threads' : 'addr.free-rooms', 'This room needs no mention.', privilege)
+  }
+  if (addressed) return heard('deliver', rule, 'The agent was addressed in an approved room.', privilege)
+  if (surface.observeUnmentioned) {
+    return heard('observe', 'addr.observe', 'Not addressed: kept as context, not answered.', privilege)
+  }
+  trace.push({ rule, outcome: 'fail' })
+  return { verdict: 'drop', rule, why: 'This room needs a mention and there was none.', privilege, trace }
+}
+
+/** Tool classes a public agent never gets, whatever its allow list says. */
+const PUBLIC_LOSES: ToolClass[] = ['shell', 'file_read', 'file_write', 'code_exec', 'chat_admin']
+
+type Partial_ = Omit<Decision, 'policyHash'>
+
+function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, facts: Facts): Partial_ {
+  const trace: Trace = []
+  const surface = e.surface ? policy.surfaces[e.surface] : undefined
+  // The privilege of whoever triggered the turn, from the door's own record.
+  const privilege: Privilege = surface && matches(surface.admins, e.actor, facts) ? 'admin' : 'guest'
+  const end = (verdict: 'allow' | 'deny', rule: string, why: string): Partial_ => {
+    trace.push({ rule, outcome: verdict === 'allow' ? 'pass' : 'fail' })
+    return { verdict, rule, why, privilege, trace }
+  }
+  if (policy.posture === 'public') {
+    if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', `'${e.toolName}' is not a classified tool, and this agent is public.`)
+    if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', `Public agents do not get ${e.toolClass} tools.`)
+    trace.push({ rule: 'tools.posture', outcome: 'pass' })
+  }
+  if (policy.tools.deny.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are on the deny list.`)
+  if (!policy.tools.allow.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are not on the allow list.`)
+  return end('allow', 'tools.lists', `${e.toolClass} tools are allowed.`)
+}
+
+function decideModel(policy: PolicyRecord, facts: Facts): Partial_ {
+  const budget = policy.budget
+  const spent = facts.spentUsdThisMonth ?? 0
+  const end = (verdict: 'allow' | 'deny', why: string): Partial_ => ({
+    verdict, rule: 'budget.cap', why, privilege: 'guest',
+    trace: [{ rule: 'budget.cap', outcome: verdict === 'allow' ? 'pass' : 'fail' }],
+  })
+  if (!budget) return end('allow', 'No budget is set.')
+  if (spent < budget.monthlyUsd) return end('allow', 'Spend is under the monthly cap.')
+  if (budget.onExceed === 'warn') return end('allow', 'Spend is over the monthly cap, and the cap is set to warn only.')
+  return end('deny', 'The monthly budget is spent.')
+}
+
+function decideOutbound(policy: PolicyRecord, e: Extract<Event, { kind: 'outbound' }>, facts: Facts): Partial_ {
+  const surface = policy.surfaces[e.surface]
+  const end = (verdict: 'allow' | 'drop', why: string): Partial_ => ({
+    verdict, rule: 'out.still-allowed', why, privilege: 'guest',
+    trace: [{ rule: 'out.still-allowed', outcome: verdict === 'allow' ? 'pass' : 'fail' }],
+  })
+  if (!surface || !surface.enabled) return end('drop', `The ${e.surface} surface is switched off.`)
+  if (facts.turnLive === false) return end('drop', 'The turn this reply belongs to is no longer live.')
+  if (e.room.kind === 'dm') {
+    return surface.dm.mode === 'closed'
+      ? end('drop', 'Direct messages are off now.')
+      : end('allow', 'Direct messages are still on.')
+  }
+  const mode = roomMode(surface, e.room)
+  if (mode === undefined || mode === 'ignore') return end('drop', 'This room is no longer approved.')
+  return end('allow', 'The room is still approved.')
+}
+
+/** Event kinds this slice has no rule for, and the rule that will cover each. */
+const UNBUILT_EVENTS: Partial<Record<Event['kind'], string>> = {
+  invite: 'invite.policy',
+  memory: 'mem.scope',
+  egress: 'sub.g1',
 }
 
 /**
@@ -81,6 +187,12 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
  */
 export function decide(policy: PolicyRecord, event: Event, facts: Facts): Decision {
   assertRendered(policy)
-  if (event.kind === 'inbound') return { ...decideInbound(policy, event, facts), policyHash: policy.hash }
-  throw new Error(`decide: no rule yet for '${event.kind}' events`)
+  const done = (d: Partial_): Decision => ({ ...d, policyHash: policy.hash })
+  switch (event.kind) {
+    case 'inbound': return done(decideInbound(policy, event, facts))
+    case 'tool': return done(decideTool(policy, event, facts))
+    case 'model': return done(decideModel(policy, facts))
+    case 'outbound': return done(decideOutbound(policy, event, facts))
+    default: throw new UnrenderedError(`event.${event.kind}`, UNBUILT_EVENTS[event.kind] ?? 'unknown')
+  }
 }

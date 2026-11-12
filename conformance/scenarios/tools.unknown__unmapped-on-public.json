@@ -1,0 +1,32 @@
+{
+  "id": "tools.unknown/unmapped-on-public",
+  "rule": "tools.unknown",
+  "policy": "policy-public.json",
+  "steps": [
+    {
+      "tool": {
+        "room": "r-plaza",
+        "actor": "u-alice",
+        "toolClass": "unknown",
+        "toolName": "mystery_tool"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.unknown"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

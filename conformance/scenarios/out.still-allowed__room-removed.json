@@ -1,0 +1,47 @@
+{
+  "id": "out.still-allowed/room-removed",
+  "rule": "out.still-allowed",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.rooms": [
+      {
+        "match": {
+          "room": "r-lounge"
+        },
+        "mode": "free"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "outbound": {
+        "room": "r-general",
+        "text": "reply {{canary}}"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "drop",
+      "rule": "out.still-allowed"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-general"
+          },
+          "mode": "mention"
+        }
+      ]
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "out.still-allowed"
+      }
+    }
+  }
+}

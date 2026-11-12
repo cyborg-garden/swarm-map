@@ -1,0 +1,47 @@
+{
+  "id": "dm.allowlist/stranger-dm",
+  "rule": "dm.allowlist",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.dm": {
+      "mode": "allowlist",
+      "users": [
+        {
+          "kind": "user",
+          "id": "u-alice"
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "dm:u-mallory",
+        "sender": "u-mallory",
+        "isDm": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "dm.allowlist"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.dm.mode": "open"
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "dm.open"
+      }
+    }
+  }
+}
