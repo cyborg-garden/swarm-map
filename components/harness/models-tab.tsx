@@ -5,6 +5,7 @@ import { useApi } from '@/lib/hooks/use-api'
 import { ModelCascadeEditor, type FallbackProviderEntry } from './model-cascade-editor'
 import { SavedCascades } from './saved-cascades'
 import { isTrackableProvider, isRetiredIn, rowKey, type LiveListLike } from '@/lib/model-row-status'
+import { isCatalogRetired } from '@/lib/model-catalog'
 import type { ModelUpdateReport } from '@/lib/services/model-update-scheduler'
 import { toast } from 'sonner'
 
@@ -130,7 +131,9 @@ export function ModelsTab({
     const set = new Set<string>()
     for (const r of rows) {
       const list = live[r.provider.trim().toLowerCase()]
-      if (list && isRetiredIn(list, r.model)) set.add(rowKey(r))
+      // The catalog flags announced retirements, so the badge does not wait
+      // on the provider dropping the id (or on a live list being reachable).
+      if (isCatalogRetired(r.provider, r.model) || (list && isRetiredIn(list, r.model))) set.add(rowKey(r))
     }
     return set
   }, [rows, live])

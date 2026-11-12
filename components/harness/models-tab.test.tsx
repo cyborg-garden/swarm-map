@@ -132,6 +132,19 @@ describe('ModelsTab', () => {
     expect(screen.getAllByText('retired')).toHaveLength(1)
   })
 
+  it('a stored cascade still naming Sonnet 4.5 is shown with a retired badge even with no live list', async () => {
+    const chain = [
+      { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    ]
+    const config = { ...CONFIG, provider: 'anthropic', primary: 'claude-sonnet-4-5', models: chain.map((c) => c.model), fallbackProviders: chain, chain, primaryEntry: chain[0], primaryDuplicatedAsRow0: false }
+    // anthropic answers 204 (no key / provider down): the catalog alone flags it.
+    render(<ModelsTab {...baseProps()} modelConfig={config} modelTracking={{}} />)
+    const badge = await screen.findByText('retired')
+    expect(badge.closest('[data-row]')).toHaveTextContent('claude-sonnet-4-5')
+    expect(screen.getAllByText('retired')).toHaveLength(1)
+  })
+
   it('seeds Track latest from harness.modelTracking and PUTs a change', async () => {
     routes['PUT /api/harnesses/h_test/models/tracking'] = { status: 200, body: { modelTracking: { 'openrouter/z-ai/glm-5.2': true, 'anthropic/claude-sonnet-4-6': true } } }
     render(<ModelsTab {...baseProps()} />)

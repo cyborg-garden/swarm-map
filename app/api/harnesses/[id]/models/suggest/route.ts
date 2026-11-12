@@ -61,6 +61,8 @@ export async function GET(
   for (const provider of providers) {
     const models = MODEL_CATALOG[provider] ?? []
     for (const model of models) {
+      // Retired rows are in the catalog for display only — never offered.
+      if (model.retired) continue
       const entry: (typeof suggested)[number] = {
         provider,
         model: model.id,
