@@ -70,3 +70,43 @@ export interface ContainerRuntimeAdapter {
   /** Registry repo the CD path resolves `:latest` against when no pin exists. */
   defaultImageRepo: string
 }
+
+/**
+ * Runtimes Swarm Map once tagged rows with and no longer drives. A stored row
+ * carrying one of these is kept, labelled, and never handed to an adapter.
+ * The value is the one-line reason shown to the operator.
+ */
+export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
+  letta: 'Retired runtime: the old self-hosted Letta server path was removed. Swarm Map no longer manages this row.',
+  'letta-server': 'Retired runtime: the old self-hosted Letta server path was removed. Swarm Map no longer manages this row.',
+}
+
+/**
+ * Thrown instead of quietly treating a row as Hermes. `reason` is 'retired'
+ * for a tag in RETIRED_RUNTIMES and 'unknown' for anything else that has no
+ * registered adapter.
+ */
+export class UnsupportedRuntimeError extends Error {
+  constructor(
+    readonly runtime: string,
+    readonly reason: 'retired' | 'unknown',
+  ) {
+    super(
+      reason === 'retired'
+        ? `Runtime "${runtime}" is retired. Swarm Map no longer manages it and will not treat it as Hermes.`
+        : `Unknown runtime "${runtime}": no adapter is registered for it, and Swarm Map will not treat it as Hermes.`,
+    )
+    this.name = 'UnsupportedRuntimeError'
+  }
+}
+
+/** A stored row Swarm Map keeps but does not manage. See HarnessService.listRetired(). */
+export interface RetiredHarnessRow {
+  id: string
+  name: string
+  /** The tag exactly as stored. */
+  runtime: string
+  reason: 'retired' | 'unknown'
+  /** One plain sentence for the UI. */
+  note: string
+}

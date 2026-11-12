@@ -38,8 +38,11 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
     expect(adapterForRuntime(undefined)).toBe(hermesAdapter)
   })
 
-  it('falls back to hermes for runtimes with no container adapter (letta)', () => {
-    expect(adapterForRuntime('letta')).toBe(hermesAdapter)
+  // Was: "falls back to hermes for runtimes with no container adapter (letta)".
+  // That fallback is the bug: a leftover row of another runtime became Hermes.
+  // Full coverage lives in retired-runtime.test.ts.
+  it('does NOT fall back to hermes for a runtime with no container adapter', () => {
+    expect(() => adapterForRuntime('letta' as never)).toThrow(/retired/i)
   })
 
   // Registration mutates the module-global registry, so this block runs LAST
