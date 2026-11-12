@@ -20,13 +20,20 @@ name: readme-zh-sync
 #      reaches a public branch), then make one commit on top of the main it
 #      started from, force-push it to bot/readme-zh-sync with an App token, and
 #      open (or reuse) one PR to main. Touches README.zh-CN.md and/or
-#      README.zh-TW.md only (the job checks).
+#      README.zh-TW.md, plus their test snapshot, only (the job checks).
 #   2. land: the App-authored push runs sanitization.yml on the PR, the real
 #      gate. When `sanitize / sanitize` succeeds on that exact SHA, merge the
 #      PR with --match-head-commit, so a commit the gate never saw cannot land.
 #      If any README changed on main meanwhile, stop: that push re-runs
 #      the sync from fresh main. Unrelated commits on main do not block it.
 # No check run is ever created by hand: only the gate's own run can pass it.
+#
+# THE TEST SNAPSHOT. scripts/__tests__/fixtures/readme-pair/ holds a copy of
+# the three READMEs taken while they are in step; the unit tests validate
+# against it, not the live files (a PR that changes README.md puts the live
+# files out of step until this workflow has run). The same commit that carries
+# a translation carries the refreshed snapshot, and a run that finds the
+# snapshot behind the live files with no drift repairs it the same way.
 #
 # A failed run writes nothing to main. The weekly schedule retries, so drift
 # heals without anyone re-running it.
@@ -105,9 +112,16 @@ jobs:
             node scripts/sync-readme-zh.mjs --write --locale "$loc"
           done
 
-      - name: Only the translations may change
-        if: steps.drift.outputs.drift == 'true'
+      # --write already refreshes the snapshot once every locale is in step.
+      # This run also repairs a snapshot that fell behind with no drift (a
+      # translation that landed without it), and fails if the set is not in step.
+      - name: Refresh the test snapshot
+        run: node scripts/sync-readme-zh.mjs --snapshot
+
+      - name: Only the translations and their snapshot may change
         id: changed
+        env:
+          SNAPSHOT: scripts/__tests__/fixtures/readme-pair
         run: |
           set -euo pipefail
           changed="$(git status --porcelain)"
@@ -116,27 +130,43 @@ jobs:
             echo "any=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # files: the translations that changed (these get sanitized below).
+          # add: everything to commit, the snapshot copies included.
           files=""
+          add=""
           while IFS= read -r line; do
             case "$line" in
-              " M README.zh-CN.md") files="$files README.zh-CN.md" ;;
-              " M README.zh-TW.md") files="$files README.zh-TW.md" ;;
-              *) echo "::error::the sync changed something other than README.zh-CN.md / README.zh-TW.md ($line); refusing to commit"; exit 1 ;;
+              " M README.zh-CN.md") files="$files README.zh-CN.md"; add="$add README.zh-CN.md" ;;
+              " M README.zh-TW.md") files="$files README.zh-TW.md"; add="$add README.zh-TW.md" ;;
+              " M $SNAPSHOT/README.md") add="$add $SNAPSHOT/README.md" ;;
+              " M $SNAPSHOT/README.zh-CN.md") add="$add $SNAPSHOT/README.zh-CN.md" ;;
+              " M $SNAPSHOT/README.zh-TW.md") add="$add $SNAPSHOT/README.zh-TW.md" ;;
+              *) echo "::error::the sync changed something other than README.zh-CN.md / README.zh-TW.md and their snapshot ($line); refusing to commit"; exit 1 ;;
             esac
           done <<< "$changed"
-          echo "files=${files# }" >> "$GITHUB_OUTPUT"
-          echo "any=true" >> "$GITHUB_OUTPUT"
+          # The snapshot is a byte copy of the live files, nothing else. That is
+          # why sanitizing the live translations below covers it: README.md is
+          # already on main, and the translations are checked in this job.
+          for f in README.md README.zh-CN.md README.zh-TW.md; do
+            if ! cmp -s "$f" "$SNAPSHOT/$f"; then
+              echo "::error::$SNAPSHOT/$f is not a byte copy of $f; refusing to commit"
+              exit 1
+            fi
+          done
+          { echo "files=${files# }"; echo "add=${add# }"; echo "any=true"; } >> "$GITHUB_OUTPUT"
 
       # Pre-publication check: the side branch is public, so the file is gated
       # before it is pushed anywhere. Gate script and config come from this
       # checkout, which is main, so the translation cannot weaken its judge.
       # The authoritative gate for main is the PR's own `sanitize / sanitize` run.
+      # A snapshot-only repair skips these three: every byte of it is already on
+      # main (checked just above), and the PR's own gate still runs.
       - name: "Sanitization: config check"
-        if: steps.changed.outputs.any == 'true'
+        if: steps.changed.outputs.files != ''
         run: python3 scripts/check_sanitization.py --check-config
 
       - name: "Sanitization: secrets & PII (deterministic)"
-        if: steps.changed.outputs.any == 'true'
+        if: steps.changed.outputs.files != ''
         env:
           OPENROUTER_API_KEY: ""
           FILES: ${{ steps.changed.outputs.files }}
@@ -145,7 +175,7 @@ jobs:
           python3 scripts/check_sanitization.py $FILES --deterministic-only --require-config
 
       - name: "Sanitization: particulars (semantic, fails closed)"
-        if: steps.changed.outputs.any == 'true'
+        if: steps.changed.outputs.files != ''
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           FILES: ${{ steps.changed.outputs.files }}
@@ -171,19 +201,28 @@ jobs:
           APP_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           FILES: ${{ steps.changed.outputs.files }}
+          ADD: ${{ steps.changed.outputs.add }}
         run: |
           set -euo pipefail
           git config user.name "cyborg-garden-readme-sync[bot]"
           git config user.email "cyborg-garden-readme-sync[bot]@users.noreply.github.com"
           base="$(git rev-parse HEAD)"
-          # shellcheck disable=SC2086 # FILES is a list of fixed names
-          set -- $FILES
           # Line 2 of every translation is the shared English marker.
-          src="$(sed -n '2s/.*@ \([0-9a-f]*\)\. .*/\1/p' "$1")"
-          what="$(printf '%s\n' "$@" | sed 's/^README\.\(.*\)\.md$/\1/' | paste -sd, - | sed 's/,/, /g')"
-          git add -- "$@"
-          git commit -q -m "docs(readme): sync ${what} translation to ${src}" \
-            -m "Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translations' marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. Lands on main only after sanitization.yml passes on this exact commit."
+          src="$(sed -n '2s/.*@ \([0-9a-f]*\)\. .*/\1/p' README.zh-CN.md)"
+          if [ -n "$FILES" ]; then
+            # shellcheck disable=SC2086 # FILES is a list of fixed names
+            what="$(printf '%s\n' $FILES | sed 's/^README\.\(.*\)\.md$/\1/' | paste -sd, - | sed 's/,/, /g')"
+            title="docs(readme): sync ${what} translation to ${src}"
+            why="Automated by .github/workflows/readme-zh-sync.yml: README.md changed since the translations' marker commit, so only the changed parts were retranslated and validated by scripts/sync-readme-zh.mjs. The test snapshot in scripts/__tests__/fixtures/readme-pair/ is refreshed in this same commit. Lands on main only after sanitization.yml passes on this exact commit."
+            body="Automated by \`.github/workflows/readme-zh-sync.yml\`. Only the Chinese translations (${FILES}) and their test snapshot change. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit."
+          else
+            title="test(readme): refresh the README snapshot to ${src}"
+            why="Automated by .github/workflows/readme-zh-sync.yml: the test snapshot in scripts/__tests__/fixtures/readme-pair/ was behind the READMEs on main, which are in step. It is a byte copy of them; no README changes. Lands on main only after sanitization.yml passes on this exact commit."
+            body="Automated by \`.github/workflows/readme-zh-sync.yml\`. Only the test snapshot changes, to a byte copy of the READMEs on main. The workflow merges this once \`sanitize / sanitize\` passes on this exact commit."
+          fi
+          # shellcheck disable=SC2086 # ADD is a list of fixed names
+          git add -- $ADD
+          git commit -q -m "$title" -m "$why"
           # Push as the App (not GITHUB_TOKEN) so the PR's gate actually runs.
           # Basic auth in a one-off header: no credential in the URL or git config.
           auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
@@ -194,8 +233,7 @@ jobs:
           pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr" ]; then
             url="$(gh pr create --repo "$REPO" --head "$SYNC_BRANCH" --base main \
-              --title "docs(readme): sync ${what} translation to ${src}" \
-              --body "Automated by \`.github/workflows/readme-zh-sync.yml\`. Only the Chinese translations change (${FILES}). The workflow merges this once \`sanitize / sanitize\` passes on this exact commit.")"
+              --title "$title" --body "$body")"
             pr="${url##*/}"
           fi
           { echo "base=$base"; echo "sha=$sha"; echo "pr=$pr"; } >> "$GITHUB_OUTPUT"

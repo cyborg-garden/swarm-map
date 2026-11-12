@@ -5,8 +5,15 @@
  * parsing, drift detection against a real git history, prompt assembly, and the
  * validation that must refuse a model reply that would damage the README.
  *
- * The validation tests run against the REAL README pair, so a check that is too
+ * The validation tests run against a REAL README pair, so a check that is too
  * strict to pass the translation we actually ship fails here, not in CI at 3am.
+ *
+ * That pair is the snapshot in fixtures/readme-pair/, not the files at the repo
+ * root. The root files are only in step on main: a pull request that changes
+ * README.md (say, a new link) is ahead of the translations until the sync runs
+ * after the merge, and tests reading the root files failed every such PR with
+ * "link target dropped". The sync refreshes the snapshot in the same commit as
+ * the translations, and the 'snapshot' tests below hold it to the shipped files.
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -15,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   parseMarker, stripMarker, withMarker, markerLines, buildPrompt, extractReadme,
-  validate, readState, translate, parseArgs, LOCALES,
+  validate, readState, translate, parseArgs, LOCALES, SNAPSHOT_DIR, refreshSnapshot,
   htmlUrls, normalizeUrl, renderedUrlKeys, renderedLinkProblems, githubRenderer,
 } from '../sync-readme-zh.mjs'
 // Real POST /markdown responses (gfm, context cyborg-garden/swarm-map), captured
@@ -24,8 +31,9 @@ import RENDERS from './fixtures/readme-zh-render.json'
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const SCRIPT = path.join(ROOT, 'scripts', 'sync-readme-zh.mjs')
-const EN = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8')
-const ZH = fs.readFileSync(path.join(ROOT, 'README.zh-CN.md'), 'utf8')
+const SNAP = path.join(ROOT, SNAPSHOT_DIR)
+const EN = fs.readFileSync(path.join(SNAP, 'README.md'), 'utf8')
+const ZH = fs.readFileSync(path.join(SNAP, 'README.zh-CN.md'), 'utf8')
 const BODY = stripMarker(ZH)
 
 type Problems = string[]
@@ -125,7 +133,11 @@ describe('validate', () => {
     expect(check(BODY, { diff: '--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-a\n+b\n' })).toEqual([])
   })
   it('treats the same target written another way as known', () => {
-    const same = '<a href="https://www.nimbleco.ai">NimbleCo</a> //github.com/letta-ai/letta/ www.nimbleco.ai'
+    // Targets come from the snapshot English, not from a hard-coded URL: the
+    // README's links change, and the snapshot follows them.
+    const www = EN.match(/\]\(https:\/\/(www\.[^)\s]+?)\/?\)/)?.[1]
+    const gh = EN.match(/\]\(https:(\/\/github\.com\/[^)\s#]+?)\/?\)/)![1]
+    const same = `${gh}/ ` + (www ? `<a href="https://${www}">x</a> ${www}` : '')
     expect(check(BODY.replace('## 许可证', `## 许可证\n\n${same}\n`))).toEqual([])
   })
   it('rejects a truncated reply', () => {
@@ -184,8 +196,8 @@ describe('buildPrompt', () => {
 
 // Traditional Chinese (Taiwan). README.zh-TW.md is new, so the synthetic body
 // (the zh-CN body with the zh-TW switcher) keeps these tests independent of it;
-// the shipped file is checked too when present.
-const TW_PATH = path.join(ROOT, 'README.zh-TW.md')
+// the shipped file (its snapshot) is checked too when present.
+const TW_PATH = path.join(SNAP, 'README.zh-TW.md')
 const TW = fs.existsSync(TW_PATH) ? fs.readFileSync(TW_PATH, 'utf8') : null
 const TW_SYNTH = BODY.replace(/^\[English\]\(README\.md\).*$/m, LOCALES['zh-TW'].switcher)
 
@@ -479,12 +491,159 @@ describe('exact switcher per locale', () => {
   it('accepts the real files and rejects a wrong switcher', async () => {
     const fs = await import('node:fs')
     const { validate: v, stripMarker: sm } = await import('../sync-readme-zh.mjs')
-    const en = fs.readFileSync('README.md', 'utf8')
+    const en = fs.readFileSync(path.join(SNAP, 'README.md'), 'utf8')
     for (const [loc, file] of [['zh-CN', 'README.zh-CN.md'], ['zh-TW', 'README.zh-TW.md']] as const) {
-      const body = sm(fs.readFileSync(file, 'utf8'), loc)
+      const body = sm(fs.readFileSync(path.join(SNAP, file), 'utf8'), loc)
       expect(v({ newEn: en, zhBody: body, prevZhBody: body, locale: loc })).toEqual([])
       const bad = body.replace(/^\[English\]\(README\.md\).*$/m, '[English](README.md) | **简体中文**')
       expect(v({ newEn: en, zhBody: bad, prevZhBody: body, locale: loc }).join()).toMatch(/switcher line is not exactly/)
     }
+  })
+})
+
+// The snapshot must stay the pair we ship. The translations at the repo root
+// are written only by the sync, which refreshes the snapshot in the same
+// commit, so this holds on main and on any PR that does not hand-edit them.
+// README.md is deliberately NOT compared: a PR is allowed to be ahead there.
+describe('snapshot (fixtures/readme-pair)', () => {
+  it.each(Object.values(LOCALES).map((l) => l.file))('%s at the repo root equals its snapshot', (file) => {
+    const live = fs.readFileSync(path.join(ROOT, file), 'utf8')
+    const snap = fs.readFileSync(path.join(SNAP, file), 'utf8')
+    expect(live === snap, `${file} differs from ${SNAPSHOT_DIR}/${file}. The sync refreshes both in one commit; `
+      + 'after a hand edit to a translation run: node scripts/sync-readme-zh.mjs --snapshot').toBe(true)
+  })
+
+  // The script's own state check, against this repo's history. A shallow clone
+  // (CI) may not have the marker commit; then there is nothing to compare.
+  const sha = parseMarker(ZH)
+  const show = (rev: string) => {
+    try { return execFileSync('git', ['show', `${rev}:README.md`], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 16 << 20 }) } catch { return null }
+  }
+  const markerEn = sha ? show(sha) : null
+  it('both snapshot translations name the same English commit', () => {
+    expect(sha).toMatch(/^[0-9a-f]{7,40}$/)
+    expect(parseMarker(TW as string, 'zh-TW')).toBe(sha)
+  })
+  it.skipIf(markerEn == null)('the snapshot English is README.md at the commit the translations name', () => {
+    expect(EN).toBe(markerEn)
+  })
+})
+
+describe('refreshSnapshot (real git)', () => {
+  let dir = ''
+  afterEach(() => { if (dir) fs.rmSync(dir, { recursive: true, force: true }); dir = '' })
+  const g = (...a: string[]) => execFileSync('git', a, { cwd: dir, encoding: 'utf8' }).trim()
+  const inDir = <T>(fn: () => T): T => { const cwd = process.cwd(); process.chdir(dir); try { return fn() } finally { process.chdir(cwd) } }
+  const cli = (...a: string[]) => {
+    try { return { code: 0, out: execFileSync('node', [SCRIPT, ...a], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) } } catch (e) {
+      const err = e as { status: number; stdout: string; stderr: string }
+      return { code: err.status, out: err.stdout + err.stderr }
+    }
+  }
+  const snapFile = (f: string) => path.join(dir, SNAPSHOT_DIR, f)
+
+  it('copies an in-step set, reports only what changed, and refuses a drifted one', () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-snap-'))
+    g('init', '-q', '-b', 'main')
+    g('config', 'user.email', 'test@example.com'); g('config', 'user.name', 'test'); g('config', 'commit.gpgsign', 'false')
+    fs.writeFileSync(path.join(dir, 'README.md'), EN)
+    g('add', '.'); g('commit', '-qm', 'en')
+    const sha = g('rev-parse', '--short=7', 'HEAD')
+    fs.writeFileSync(path.join(dir, 'README.zh-CN.md'), withMarker(BODY, sha))
+    fs.writeFileSync(path.join(dir, 'README.zh-TW.md'), withMarker(TW_SYNTH, sha, 'zh-TW'))
+    g('add', '.'); g('commit', '-qm', 'zh')
+
+    // No snapshot yet: all three files are written, byte for byte.
+    expect(inDir(() => refreshSnapshot())).toEqual({ drifted: [], changed: ['README.md', 'README.zh-CN.md', 'README.zh-TW.md'].map((f) => path.join(SNAPSHOT_DIR, f)) })
+    for (const f of ['README.md', 'README.zh-CN.md', 'README.zh-TW.md']) {
+      expect(fs.readFileSync(snapFile(f), 'utf8')).toBe(fs.readFileSync(path.join(dir, f), 'utf8'))
+    }
+    expect(cli('--snapshot')).toMatchObject({ code: 0, out: expect.stringMatching(/already current/) })
+
+    // A translation moved on (as --write leaves it): only that copy is rewritten.
+    fs.appendFileSync(path.join(dir, 'README.zh-TW.md'), '\n新的一行。\n')
+    const again = cli('--snapshot')
+    expect(again.code).toBe(0)
+    expect(again.out).toMatch(/snapshot refreshed: .*README\.zh-TW\.md/)
+    expect(again.out).not.toMatch(/README\.zh-CN\.md/)
+    expect(fs.readFileSync(snapFile('README.zh-TW.md'), 'utf8')).toMatch(/新的一行。/)
+
+    // English ahead of the translations: an out-of-step set is never snapshotted.
+    const before = fs.readFileSync(snapFile('README.md'), 'utf8')
+    fs.writeFileSync(path.join(dir, 'README.md'), EN.replace('## Quick Start', '## Quick Start\n\nNew paragraph.'))
+    g('commit', '-qam', 'en change')
+    const refused = cli('--snapshot')
+    expect(refused.code).toBe(3)
+    expect(refused.out).toMatch(/snapshot not refreshed: zh-CN, zh-TW drifted/)
+    expect(fs.readFileSync(snapFile('README.md'), 'utf8')).toBe(before)
+  })
+})
+
+// The case that broke: a pull request adds a link to README.md. The
+// translations get it only after the merge, when the sync runs on main.
+describe('English ahead of the translations (a PR that adds a link)', () => {
+  const LINK = 'https://new-home.example.org/'
+  const EN_AHEAD = EN.replace('## Quick Start', `See [the new home](${LINK}).\n\n## Quick Start`)
+  const BODY_AHEAD = BODY.replace('## 快速开始', `参见[新主页](${LINK})。\n\n## 快速开始`)
+  const reply = (text: string) => async () => new Response(JSON.stringify({ choices: [{ message: { content: text }, finish_reason: 'stop' }] }), { status: 200 })
+  const state = { zh: ZH, newEn: EN_AHEAD, oldEn: EN, diff: '', headSha: 'abc1234', sha: parseMarker(ZH), inSync: false }
+
+  it('the fixture really is ahead: the link is new to both snapshot translations', () => {
+    expect(EN_AHEAD).not.toBe(EN)
+    expect(BODY_AHEAD).not.toBe(BODY)
+    expect(ZH).not.toContain(LINK)
+    expect(TW as string).not.toContain(LINK)
+  })
+
+  it('the validator still rejects a reply that drops the new link, and accepts one that carries it', async () => {
+    expect(validate({ newEn: EN_AHEAD, zhBody: BODY, prevZhBody: BODY })).toContain(`link target dropped: ${LINK}`)
+    expect(validate({ newEn: EN_AHEAD, zhBody: BODY_AHEAD, prevZhBody: BODY })).toEqual([])
+    // Through the whole model loop: the old translation echoed back is refused,
+    await expect(translate(state, { model: 'm/x', key: 'k', fetchImpl: reply(`<readme>\n${BODY}</readme>`), render: fakeRender, log: () => {} }))
+      .rejects.toThrow(`link target dropped: ${LINK}`)
+    // and a reply with the link is written.
+    const out = await translate(state, { model: 'm/x', key: 'k', fetchImpl: reply(`<readme>\n${BODY_AHEAD}</readme>`), render: fakeRender, log: () => {} })
+    expect(stripMarker(out)).toBe(BODY_AHEAD)
+  })
+
+  // The suite itself must not fail on such a PR. Run this very file in a copy
+  // of the tree whose root README.md is ahead (nested runs skip this block).
+  const nested = (edit: (dir: string) => void) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-pr-'))
+    try {
+      for (const f of ['README.md', 'README.zh-CN.md', 'README.zh-TW.md']) fs.copyFileSync(path.join(ROOT, f), path.join(dir, f))
+      fs.mkdirSync(path.join(dir, 'scripts'))
+      fs.copyFileSync(SCRIPT, path.join(dir, 'scripts', 'sync-readme-zh.mjs'))
+      fs.cpSync(path.join(ROOT, 'scripts', '__tests__', 'fixtures'), path.join(dir, 'scripts', '__tests__', 'fixtures'), { recursive: true })
+      fs.copyFileSync(__filename, path.join(dir, 'scripts', '__tests__', path.basename(__filename)))
+      fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(dir, 'node_modules'), 'dir')
+      edit(dir)
+      try {
+        const out = execFileSync('node', [path.join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--root', dir, 'scripts/__tests__'], {
+          cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, README_PAIR_NESTED: '1' },
+        })
+        return { code: 0, out }
+      } catch (e) {
+        const err = e as { status: number; stdout: string; stderr: string }
+        return { code: err.status, out: err.stdout + err.stderr }
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  describe.skipIf(!!process.env.README_PAIR_NESTED)('the suite on such a tree', () => {
+    it('passes when only README.md at the repo root is ahead', () => {
+      const run = nested((dir) => fs.writeFileSync(path.join(dir, 'README.md'), EN_AHEAD))
+      expect(run.out).not.toMatch(/link target dropped/)
+      expect(run.out).toMatch(/Tests\s+\d+ passed/)
+      expect(run.code, run.out).toBe(0)
+    }, 120_000)
+    // The same harness must be able to fail, or the test above proves nothing.
+    it('fails when a translation at the repo root is hand-edited away from the snapshot', () => {
+      const run = nested((dir) => fs.appendFileSync(path.join(dir, 'README.zh-CN.md'), '\n手动修改。\n'))
+      expect(run.code).not.toBe(0)
+      expect(run.out).toMatch(/README\.zh-CN\.md differs from/)
+    }, 120_000)
   })
 })

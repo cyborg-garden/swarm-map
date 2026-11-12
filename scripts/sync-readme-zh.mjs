@@ -23,7 +23,16 @@
  *   node scripts/sync-readme-zh.mjs --dry-run [--locale zh-CN|zh-TW]
  *       print the prompt, call nothing
  *   node scripts/sync-readme-zh.mjs --write   [--locale zh-CN|zh-TW]
- *       translate, validate, write
+ *       translate, validate, write (and refresh the test snapshot, below)
+ *   node scripts/sync-readme-zh.mjs --snapshot
+ *       copy README.md and both translations into the test snapshot;
+ *       exit 0 done or already current, 3 refused because a locale is drifted
+ *
+ * The test snapshot (scripts/__tests__/fixtures/readme-pair/) is a copy of the
+ * three READMEs taken while they are in step. The tests validate against it and
+ * not against the live files, because a pull request that changes README.md
+ * puts the live files out of step until this script runs on main. It is
+ * refreshed here, in the same commit as the translations, so it cannot rot.
  *
  * --write needs OPENROUTER_API_KEY and GITHUB_TOKEN (for GitHub's markdown
  * renderer, the ground truth for the link check; no token means no write). README_SYNC_MODEL overrides the model.
@@ -38,6 +47,7 @@ export const EN = 'README.md'
 export const ZH = 'README.zh-CN.md'
 export const ZH_TW = 'README.zh-TW.md'
 export const DEFAULT_MODEL = 'moonshotai/kimi-k3'
+export const SNAPSHOT_DIR = 'scripts/__tests__/fixtures/readme-pair'
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const API_SECTION = '## API Reference'
 
@@ -371,6 +381,29 @@ export function readState(locale = DEFAULT_LOCALE) {
   return { locale, file, zh, newEn, sha, oldEn, diff, headSha, inSync: oldEn != null && oldEn === newEn }
 }
 
+// -------------------------------------------------------------- snapshot ----
+
+/**
+ * Copy README.md and every translation into SNAPSHOT_DIR, so the tests keep
+ * running against the pair we actually ship. Only an in-step set is copied: if
+ * any locale is drifted nothing is written and `drifted` names it.
+ * Returns the snapshot files whose content changed.
+ */
+export function refreshSnapshot() {
+  const drifted = Object.keys(LOCALES).filter((locale) => !readState(locale).inSync)
+  if (drifted.length) return { drifted, changed: [] }
+  const changed = []
+  fs.mkdirSync(SNAPSHOT_DIR, { recursive: true })
+  for (const file of [EN, ...Object.values(LOCALES).map((l) => l.file)]) {
+    const to = path.join(SNAPSHOT_DIR, file)
+    const text = fs.readFileSync(file, 'utf8')
+    if (fs.existsSync(to) && fs.readFileSync(to, 'utf8') === text) continue
+    fs.writeFileSync(to, text)
+    changed.push(to)
+  }
+  return { drifted, changed }
+}
+
 // --------------------------------------------------- rendered link check ----
 //
 // Ground truth for links: what GitHub actually renders. Regex extraction keeps
@@ -528,7 +561,7 @@ export async function translate(state, { model, key, fetchImpl, render = null, a
 
 // ------------------------------------------------------------------ main ----
 
-/** Parse `[--check|--dry-run|--write] [--locale zh-CN|zh-TW|all]`, in any order. */
+/** Parse `[--check|--dry-run|--write|--snapshot] [--locale zh-CN|zh-TW|all]`, in any order. */
 export function parseArgs(argv) {
   let mode = null
   let locale = DEFAULT_LOCALE
@@ -554,6 +587,15 @@ async function main(argv) {
     return 2
   }
   const { mode } = args
+  if (mode === '--snapshot') {
+    const { drifted, changed } = refreshSnapshot()
+    if (drifted.length) {
+      console.error(`snapshot not refreshed: ${drifted.join(', ')} drifted from ${EN}; it is only taken from an in-step set`)
+      return 3
+    }
+    console.log(changed.length ? `snapshot refreshed: ${changed.join(', ')}` : 'snapshot already current')
+    return 0
+  }
   if (args.locale === 'all') {
     let worst = 0
     for (const locale of Object.keys(LOCALES)) worst = Math.max(worst, await run(mode, locale))
@@ -599,6 +641,11 @@ async function run(mode, locale) {
   const out = await translate(state, { model, key, render })
   fs.writeFileSync(file, out)
   console.log(`wrote ${file} (source ${state.headSha}, model ${model})`)
+  // Same working tree, same commit: the snapshot follows once every locale is
+  // in step again (after the last drifted locale is written).
+  const snap = refreshSnapshot()
+  if (snap.drifted.length) console.log(`snapshot waits for ${snap.drifted.join(', ')}`)
+  else if (snap.changed.length) console.log(`snapshot refreshed: ${snap.changed.join(', ')}`)
   return 0
 }
 
