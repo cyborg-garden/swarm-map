@@ -31,14 +31,11 @@ type WizardState = {
   persona: string
   tier: string
   template: string
-  runtime: 'hermes' | 'letta'
   // Step 2
   provider: string
   primaryModel: string
   fallbackModel: string
   bundledOllama: boolean
-  // Step 2 (Letta): a single model handle, e.g. anthropic/claude-3-5-sonnet
-  lettaModel: string
   // Step 3
   mattermostEnabled: boolean
   mattermostUrl: string
@@ -73,12 +70,10 @@ const INITIAL_STATE: WizardState = {
   persona: '',
   tier: 'individual',
   template: '',
-  runtime: 'hermes',
   provider: 'anthropic',
   primaryModel: '',
   fallbackModel: '',
   bundledOllama: false,
-  lettaModel: '',
   mattermostEnabled: false,
   mattermostUrl: '',
   mattermostToken: '',
@@ -129,14 +124,6 @@ const MODEL_SUGGESTIONS: Record<string, string[]> = {
   bedrock: ['anthropic.claude-sonnet-4-6-v1', 'anthropic.claude-haiku-4-5-v1'],
 }
 
-// Letta uses provider-independent model handles (provider/model). These map to
-// the SERVER-WIDE provider key the Letta compose expects (anthropic → OPENAI etc.).
-const LETTA_MODEL_SUGGESTIONS = [
-  'anthropic/claude-sonnet-4-6',
-  'anthropic/claude-sonnet-5-5',
-  'openai/gpt-4o',
-]
-
 const PROVIDER_KEY_MAP: Record<string, string | null> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
@@ -166,7 +153,7 @@ export default function WizardPage() {
   const [step, setStep] = useState(1)
   const [state, setState] = useState<WizardState>(INITIAL_STATE)
   const [deploying, setDeploying] = useState(false)
-  const [deployResult, setDeployResult] = useState<{ ok: boolean; error?: string; port?: number; healthy?: boolean; harnessId?: string; agentId?: string; runtime?: string } | null>(null)
+  const [deployResult, setDeployResult] = useState<{ ok: boolean; error?: string; port?: number; healthy?: boolean; harnessId?: string } | null>(null)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const [dockerChecking, setDockerChecking] = useState(true)
   const [dockerError, setDockerError] = useState<string | null>(null)
@@ -236,63 +223,17 @@ export default function WizardPage() {
     setState((prev) => ({ ...prev, ...partial }))
   }
 
-  // Switching runtime must reset the Hermes-only state that would otherwise leak
-  // into a Letta deploy payload: a stale `useExistingKey`/`existingKeyId` would
-  // inject a Hermes registry key into the Letta server, and a captured Signal
-  // registration would fire a bogus post-deploy connect against the
-  // (non-container) Letta agent. Switching back to Hermes needs no reset — the
-  // Letta-only `lettaModel` is never sent on a Hermes deploy.
-  function selectRuntime(runtime: 'hermes' | 'letta') {
-    if (runtime === 'letta') {
-      setState((prev) => ({
-        ...prev,
-        runtime,
-        // Hermes-only key selection
-        useExistingKey: false,
-        existingKeyId: '',
-        // Hermes-only messaging surfaces (Letta has none in v1)
-        mattermostEnabled: false,
-        telegramEnabled: false,
-        discordEnabled: false,
-        slackEnabled: false,
-        signalEnabled: false,
-        googleEnabled: false,
-        githubMcpEnabled: false,
-        notionEnabled: false,
-        browserEnabled: false,
-        // Hermes-only template (Librarian packaging is Phase 5)
-        template: '',
-      }))
-      // Drop any captured Signal registration so the post-deploy connect can't fire.
-      setSignalCaptured(null)
-      setSignalConnectFailed(false)
-    } else {
-      update({ runtime })
-    }
-  }
-
   const slug = slugify(state.name)
-
-  const isLetta = state.runtime === 'letta'
 
   function canAdvance(): boolean {
     switch (step) {
       case 1: return state.name.trim().length > 0 && slug.length > 0
-      case 2: return isLetta
-        ? state.lettaModel.trim().length > 0
-        : state.provider.length > 0 && state.primaryModel.trim().length > 0
+      case 2: return state.provider.length > 0 && state.primaryModel.trim().length > 0
       case 3: return true
       case 4: return true
       default: return false
     }
   }
-
-  // The server-wide provider key var a Letta model handle implies (for the Keys step copy).
-  const lettaKeyVar = state.lettaModel.startsWith('openai/')
-    ? 'OPENAI_API_KEY'
-    : state.lettaModel.startsWith('anthropic/')
-      ? 'ANTHROPIC_API_KEY'
-      : null
 
   async function handleDeploy() {
     setDeploying(true)
@@ -303,9 +244,7 @@ export default function WizardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: slug,
-          runtime: state.runtime,
-          // Letta: a single provider/model handle; the server-wide key rides llmKey below.
-          lettaModel: isLetta ? state.lettaModel : undefined,
+          runtime: 'hermes',
           provider: state.provider,
           primaryModel: state.primaryModel,
           fallbackModel: state.fallbackModel || undefined,
@@ -332,13 +271,10 @@ export default function WizardPage() {
           notionKey: state.notionEnabled ? (state.notionKey || undefined) : undefined,
           // Key: reuse an existing registry key by id, or pass a new key (and
           // optionally persist it for reuse). The pasted value never includes a
-          // resolved existing key — that resolution happens server-side. For
-          // Letta the key is a server-wide provider key pasted directly; the
-          // registry "use existing" path is Hermes-only, so never forward a
-          // (possibly stale) existingKeyId on a Letta deploy.
-          existingKeyId: !isLetta && state.useExistingKey ? state.existingKeyId || undefined : undefined,
-          llmKey: isLetta ? (state.llmKey || undefined) : (state.useExistingKey ? undefined : (state.llmKey || undefined)),
-          saveKeyToRegistry: !isLetta && !state.useExistingKey && state.saveKeyToRegistry,
+          // resolved existing key — that resolution happens server-side.
+          existingKeyId: state.useExistingKey ? state.existingKeyId || undefined : undefined,
+          llmKey: state.useExistingKey ? undefined : (state.llmKey || undefined),
+          saveKeyToRegistry: !state.useExistingKey && state.saveKeyToRegistry,
           githubToken: state.githubToken || undefined,
           braveKey: state.braveKey || undefined,
         }),
@@ -349,10 +285,7 @@ export default function WizardPage() {
         await fetch('/api/setup/complete', { method: 'POST' })
         // Deferred surface connect: Signal was registered in the wizard (pending
         // mode) before the harness existed — bind it now that we have an id.
-        // Hermes-only: a Letta agent has no messaging surface and its harnessId
-        // (h_letta_*) isn't a connectable Hermes overlay, so never fire this for
-        // a Letta deploy even if stale Signal state somehow survived.
-        if (data.runtime !== 'letta' && signalCaptured && data.harnessId) {
+        if (signalCaptured && data.harnessId) {
           try {
             const connectRes = await fetch(`/api/harnesses/${data.harnessId}/surfaces/connect`, {
               method: 'POST',
@@ -436,46 +369,6 @@ export default function WizardPage() {
         {dockerAvailable && step === 1 && (
           <Section>
             <div>
-              <FieldLabel>Runtime</FieldLabel>
-              <div className="grid grid-cols-2 gap-2">
-                <label
-                  className={`flex flex-col gap-1 p-3 rounded-lg border cursor-pointer transition-colors ${
-                    !isLetta ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] hover:bg-muted/30'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name="runtime"
-                      checked={!isLetta}
-                      onChange={() => selectRuntime('hermes')}
-                      className="accent-[var(--accent)]"
-                    />
-                    <span className="font-medium text-sm">Hermes agent</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">One container per agent. Messaging surfaces, per-agent keys, full lifecycle.</span>
-                </label>
-                <label
-                  className={`flex flex-col gap-1 p-3 rounded-lg border cursor-pointer transition-colors ${
-                    isLetta ? 'border-[var(--accent)] bg-[var(--accent)]/10' : 'border-[var(--border)] hover:bg-muted/30'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name="runtime"
-                      checked={isLetta}
-                      onChange={() => selectRuntime('letta')}
-                      className="accent-[var(--accent)]"
-                    />
-                    <span className="font-medium text-sm">Letta swarm</span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">A memory-first agent on the shared Letta server — a row, not a container of its own. Read-only in Swarm Map after deploy, plus sending a message; messaging surfaces come later via a Hermes front.</span>
-                </label>
-              </div>
-            </div>
-
-            <div>
               <FieldLabel>Agent Name</FieldLabel>
               <Input
                 value={state.name}
@@ -530,7 +423,7 @@ export default function WizardPage() {
               </div>
             </div>
 
-            {!isLetta && templates.length > 0 && (
+            {templates.length > 0 && (
               <div>
                 <FieldLabel>Use-case package (optional)</FieldLabel>
                 <p className="text-xs text-muted-foreground mb-2">
@@ -580,42 +473,8 @@ export default function WizardPage() {
           </Section>
         )}
 
-        {/* Step 2: Model — Letta (single handle) */}
-        {dockerAvailable && step === 2 && isLetta && (
-          <Section>
-            <div>
-              <FieldLabel>Model handle</FieldLabel>
-              <Input
-                value={state.lettaModel}
-                onChange={(e) => update({ lettaModel: e.target.value })}
-                placeholder="anthropic/claude-sonnet-4-6"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                A Letta <span className="font-mono">provider/model</span> handle. The provider key is configured once on the Letta server (next step), not per agent.
-              </p>
-              <div className="flex flex-wrap gap-1 mt-2">
-                {LETTA_MODEL_SUGGESTIONS.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => update({ lettaModel: s })}
-                    className="text-xs px-2 py-1 rounded border border-[var(--border)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition-colors font-mono"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-lg bg-muted/30 border border-[var(--border)] p-3">
-              <p className="text-xs text-muted-foreground">
-                Letta agents keep their memory in <span className="font-medium">core-memory blocks</span> on the shared server. Letta&apos;s git-backed memory files (<span className="font-medium">memfs</span>) are <span className="font-medium">not enabled</span> on this deploy path yet, so the context-files view will be empty. Letta agents also have no per-agent fallback model and no bundled Ollama — those are Hermes-only.
-              </p>
-            </div>
-          </Section>
-        )}
-
-        {/* Step 2: Model — Hermes */}
-        {dockerAvailable && step === 2 && !isLetta && (
+        {/* Step 2: Model */}
+        {dockerAvailable && step === 2 && (
           <Section>
             <div>
               <FieldLabel>Provider</FieldLabel>
@@ -702,23 +561,8 @@ export default function WizardPage() {
           </Section>
         )}
 
-        {/* Step 3: Platforms — Letta has no messaging surface in v1 */}
-        {dockerAvailable && step === 3 && isLetta && (
-          <Section>
-            <div className="rounded-lg bg-muted/30 border border-[var(--border)] p-4 space-y-2">
-              <p className="font-medium text-sm">No messaging surface for Letta agents (yet)</p>
-              <p className="text-sm text-muted-foreground">
-                A Letta agent is a stateful brain on the shared server — it&apos;s reached over REST, not Signal/Telegram/Slack directly. Multiplayer messaging arrives via a separate <span className="font-medium">Hermes front</span> that proxies a group conversation to this agent (v1 bridge). Nothing to configure here.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Through that front, group approval and the audit trail carry over — they gate the turn before it runs. <span className="font-medium">Budget enforcement does not carry over at all.</span> The spend check sums the token columns an agent writes to its own state DB, and the Letta bridge never writes them, so proxied turns count as zero spend on every path. Do not rely on the front&apos;s budget cap to bound a Letta agent.
-              </p>
-            </div>
-          </Section>
-        )}
-
-        {/* Step 3: Platforms — Hermes */}
-        {dockerAvailable && step === 3 && !isLetta && (
+        {/* Step 3: Platforms */}
+        {dockerAvailable && step === 3 && (
           <Section>
             <p className="text-sm text-muted-foreground">
               Connect your agent to messaging platforms. You can skip this and configure later.
@@ -1040,36 +884,8 @@ export default function WizardPage() {
           </Section>
         )}
 
-        {/* Step 4: Keys — Letta (server-wide provider key) */}
-        {dockerAvailable && step === 4 && isLetta && (
-          <Section>
-            {lettaKeyVar ? (
-              <div>
-                <FieldLabel>{lettaKeyVar} (Letta server key)</FieldLabel>
-                <Input
-                  type="password"
-                  value={state.llmKey}
-                  onChange={(e) => update({ llmKey: e.target.value })}
-                  placeholder="Paste your provider API key"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Configured <span className="font-medium">once on the Letta server</span> (shared by every agent it hosts), stored in{' '}
-                  <span className="font-mono">~/.hermes-swarm-map/letta/.env</span>. If the server is already running with a key, you can leave this blank.
-                </p>
-              </div>
-            ) : (
-              <div className="rounded-lg bg-muted/30 border border-[var(--border)] p-4">
-                <p className="text-sm font-medium">Provider key set on the server</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Pick a model handle in the previous step to see which provider key the server needs. Anthropic and OpenAI handles are wired; others assume the key is already configured on the Letta server.
-                </p>
-              </div>
-            )}
-          </Section>
-        )}
-
-        {/* Step 4: Keys — Hermes */}
-        {dockerAvailable && step === 4 && !isLetta && (
+        {/* Step 4: Keys */}
+        {dockerAvailable && step === 4 && (
           <Section>
             {/* Required key */}
             {providerKeyVar ? (
@@ -1195,30 +1011,21 @@ export default function WizardPage() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Runtime</span>
-                <span>{isLetta ? 'Letta swarm' : 'Hermes agent'}</span>
+                <span>Hermes agent</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Tier</span>
                 <span>{state.tier}</span>
               </div>
-              {isLetta ? (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Model handle</span>
-                  <span className="font-mono">{state.lettaModel}</span>
-                </div>
-              ) : (
-                <>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Provider</span>
-                    <span>{state.provider}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Primary model</span>
-                    <span className="font-mono">{state.primaryModel}</span>
-                  </div>
-                </>
-              )}
-              {!isLetta && state.fallbackModel && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Provider</span>
+                <span>{state.provider}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Primary model</span>
+                <span className="font-mono">{state.primaryModel}</span>
+              </div>
+              {state.fallbackModel && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Fallback model</span>
                   <span className="font-mono">{state.fallbackModel}</span>
@@ -1273,8 +1080,8 @@ export default function WizardPage() {
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-muted-foreground">{isLetta ? 'Hosted on' : 'Data dir'}</span>
-                <span className="font-mono">{isLetta ? 'Letta server (:8283)' : `~/.hermes-${slug}/`}</span>
+                <span className="text-muted-foreground">Data dir</span>
+                <span className="font-mono">{`~/.hermes-${slug}/`}</span>
               </div>
             </div>
 
@@ -1286,12 +1093,8 @@ export default function WizardPage() {
             )}
 
             <p className="text-xs text-muted-foreground">
-              {isLetta ? (
-                <>This will ensure the Letta server is running (<span className="font-mono">docker/letta-compose.yml</span>) and create the agent <span className="font-mono">{slug}</span> on it via the REST API.</>
-              ) : (
-                <>This will pull <span className="font-mono">ghcr.io/cyborg-garden/hermes-agent-mt:latest</span>, scaffold{' '}
-                <span className="font-mono">~/.hermes-{slug}/</span>, and start the container.</>
-              )}
+              This will pull <span className="font-mono">ghcr.io/cyborg-garden/hermes-agent-mt:latest</span>, scaffold{' '}
+              <span className="font-mono">~/.hermes-{slug}/</span>, and start the container.
             </p>
           </Section>
         )}
@@ -1301,18 +1104,11 @@ export default function WizardPage() {
           <div className="space-y-4">
             <div className="rounded-lg bg-green-500/10 border border-green-500/30 p-4">
               <p className="font-semibold text-green-700 dark:text-green-400">Agent deployed!</p>
-              {deployResult.runtime === 'letta' ? (
-                <p className="text-sm text-muted-foreground mt-1">
-                  <span className="font-mono">{slug}</span> was created on the Letta server
-                  {deployResult.agentId && <> (agent <span className="font-mono">{deployResult.agentId}</span>)</>}.
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground mt-1">
-                  <span className="font-mono">{slug}</span> is running on port{' '}
-                  <span className="font-mono">{deployResult.port}</span>.{' '}
-                  {deployResult.healthy ? 'Health check passed.' : 'Health check timed out — agent may still be starting.'}
-                </p>
-              )}
+              <p className="text-sm text-muted-foreground mt-1">
+                <span className="font-mono">{slug}</span> is running on port{' '}
+                <span className="font-mono">{deployResult.port}</span>.{' '}
+                {deployResult.healthy ? 'Health check passed.' : 'Health check timed out — agent may still be starting.'}
+              </p>
             </div>
             {signalConnectFailed && (
               <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 p-3">

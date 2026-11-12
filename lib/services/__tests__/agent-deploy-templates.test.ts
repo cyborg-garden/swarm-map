@@ -171,40 +171,29 @@ describe('generateEnvContent', () => {
     expect(env).not.toContain('NOTION_TOKEN')
   })
 
-  // ── B2: Letta-brain "door" env seam ───────────────────────────────────────
-  // A Hermes gateway becomes a Letta-brained door when LETTA_BRAIN_URL +
-  // LETTA_BRAIN_AGENT_ID are set (B1 contract, gateway/letta_brain.py reads
-  // exactly these names, plus optional LETTA_BRAIN_API_KEY).
-  it('writes LETTA_BRAIN_URL + LETTA_BRAIN_AGENT_ID (and no API key line) when lettaBrain is set', () => {
+  // R3: the Hermes-to-Letta bridge is gone. No input may produce its env vars,
+  // including a caller that still passes the old `lettaBrain` argument.
+  it('never emits a LETTA_BRAIN_* line, even when handed the old lettaBrain argument', () => {
+    const stale = {
+      ...base,
+      lettaBrain: { url: 'http://host.docker.internal:1', agentId: 'agent-x', apiKey: 'FAKE-key' },
+    } as Parameters<typeof generateEnvContent>[0]
+    const env = generateEnvContent(stale)
+    expect(env).not.toMatch(/LETTA_BRAIN/i)
+    expect(env).not.toContain('agent-x')
+    expect(env).not.toContain('FAKE-key')
+  })
+
+  it('never emits a LETTA_BRAIN_* line with every optional field set', () => {
     const env = generateEnvContent({
       ...base,
-      lettaBrain: { url: 'http://host.docker.internal:8283', agentId: 'agent-x' },
+      fallbackModel: 'm2', llmKey: 'FAKE-llm', bundledOllama: true,
+      mattermostUrl: 'http://mm.invalid', mattermostToken: 'FAKE-mm', telegramToken: 'FAKE-tg',
+      discordToken: 'FAKE-dc', slackBotToken: 'FAKE-sb', slackAppToken: 'FAKE-sa',
+      signalPhone: '+10000000000', githubToken: 'FAKE-gh', braveKey: 'FAKE-brave', notionKey: 'FAKE-notion',
+      googleClientId: 'FAKE-gid', googleClientSecret: 'FAKE-gsecret', browserEnabled: true,
     })
-    expect(env).toMatch(/^LETTA_BRAIN_URL=http:\/\/host\.docker\.internal:8283$/m)
-    expect(env).toMatch(/^LETTA_BRAIN_AGENT_ID=agent-x$/m)
-    expect(env).not.toContain('LETTA_BRAIN_API_KEY')
-  })
-
-  it('writes LETTA_BRAIN_API_KEY when the brain apiKey is set', () => {
-    const env = generateEnvContent({
-      ...base,
-      lettaBrain: { url: 'http://host.docker.internal:8283', agentId: 'agent-x', apiKey: 'sk-letta-1' },
-    })
-    expect(env).toMatch(/^LETTA_BRAIN_API_KEY=sk-letta-1$/m)
-  })
-
-  it('rejects a newline in the brain agentId (env-line injection guard)', () => {
-    expect(() =>
-      generateEnvContent({
-        ...base,
-        lettaBrain: { url: 'http://host.docker.internal:8283', agentId: 'agent-x\nEVIL=1' },
-      }),
-    ).toThrow()
-  })
-
-  it('emits no LETTA_BRAIN_* lines without lettaBrain', () => {
-    const env = generateEnvContent({ ...base })
-    expect(env).not.toContain('LETTA_BRAIN_')
+    expect(env).not.toMatch(/LETTA/i)
   })
 })
 

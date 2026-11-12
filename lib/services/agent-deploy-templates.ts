@@ -31,16 +31,9 @@ export function generateEnvContent(params: {
   googleClientId?: string
   googleClientSecret?: string
   browserEnabled?: boolean
-  /**
-   * Letta-brain "door" wiring (B1 contract): when set, the gateway forwards
-   * each turn to this Letta agent over REST. Var names must match exactly what
-   * gateway/letta_brain.py reads: LETTA_BRAIN_URL, LETTA_BRAIN_AGENT_ID,
-   * LETTA_BRAIN_API_KEY (optional).
-   */
-  lettaBrain?: { url: string; agentId: string; apiKey?: string }
 }): string {
   const { name, port, provider, llmKey, bundledOllama, mattermostUrl, mattermostToken, telegramToken, discordToken, slackBotToken, slackAppToken, signalPhone, githubToken, braveKey, notionKey,
-    googleClientId, googleClientSecret, browserEnabled, lettaBrain } = params
+    googleClientId, googleClientSecret, browserEnabled } = params
 
   // Every user-supplied string below is spliced onto its own `.env` line. A
   // newline in any of them would inject extra env lines — including overriding
@@ -52,12 +45,6 @@ export function generateEnvContent(params: {
   })) {
     if (typeof value === 'string') assertNoNewline(value, field)
   }
-  if (lettaBrain) {
-    assertNoNewline(lettaBrain.url, 'lettaBrain.url')
-    assertNoNewline(lettaBrain.agentId, 'lettaBrain.agentId')
-    if (typeof lettaBrain.apiKey === 'string') assertNoNewline(lettaBrain.apiKey, 'lettaBrain.apiKey')
-  }
-
   const providerKeyMap: Record<string, string> = {
     anthropic: 'ANTHROPIC_API_KEY',
     openrouter: 'OPENROUTER_API_KEY',
@@ -219,15 +206,6 @@ export function generateEnvContent(params: {
     lines.push('')
     lines.push('# Browser tools (Camofox)')
     lines.push('CAMOFOX_URL=http://host.docker.internal:9377')
-  }
-  // Letta brain (door mode, B1 contract): the gateway detects these vars and
-  // forwards each turn to the Letta agent instead of running its own loop.
-  if (lettaBrain) {
-    lines.push('')
-    lines.push(`# Letta brain (door mode)`)
-    lines.push(`LETTA_BRAIN_URL=${lettaBrain.url}`)
-    lines.push(`LETTA_BRAIN_AGENT_ID=${lettaBrain.agentId}`)
-    if (lettaBrain.apiKey) lines.push(`LETTA_BRAIN_API_KEY=${lettaBrain.apiKey}`)
   }
   if (googleClientId || googleClientSecret) {
     lines.push('')
