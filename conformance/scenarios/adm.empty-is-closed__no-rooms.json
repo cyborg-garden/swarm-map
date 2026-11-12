@@ -1,0 +1,46 @@
+{
+  "id": "adm.empty-is-closed/no-rooms",
+  "rule": "adm.empty-is-closed",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.rooms": []
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-alice",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.empty-is-closed"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-general"
+          },
+          "mode": "mention"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

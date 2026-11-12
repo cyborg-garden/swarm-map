@@ -1,0 +1,43 @@
+{
+  "id": "adm.rooms/unlisted-room",
+  "rule": "adm.rooms",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-elsewhere",
+        "sender": "u-alice",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.rooms"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-elsewhere"
+          },
+          "mode": "mention"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

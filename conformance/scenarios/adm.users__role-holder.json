@@ -1,0 +1,46 @@
+{
+  "id": "adm.users/role-holder",
+  "rule": "adm.users",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": {
+          "id": "u-bob",
+          "roles": [
+            "role-staff"
+          ]
+        },
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": true,
+    "answered": true,
+    "receipt": {
+      "verdict": "deliver",
+      "rule": "addr.mention"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.users": [
+        {
+          "kind": "user",
+          "id": "u-alice"
+        }
+      ]
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "adm.users"
+      }
+    }
+  }
+}

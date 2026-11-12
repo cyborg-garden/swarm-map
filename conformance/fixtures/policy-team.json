@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "agentId": "agent-team",
+  "version": 1,
+  "hash": "",
+  "posture": "team",
+  "mode": "door",
+  "surfaces": {
+    "fake": {
+      "enabled": true,
+      "account": "fake-bot",
+      "users": [{ "kind": "user", "id": "u-alice" }, { "kind": "role", "id": "role-staff" }],
+      "anyoneInAllowedRoom": false,
+      "rooms": [
+        { "match": { "room": "r-general" }, "mode": "mention" },
+        { "match": { "room": "r-lounge" }, "mode": "free" },
+        { "match": { "category": "c-projects" }, "mode": "mention" }
+      ],
+      "dm": { "mode": "closed", "users": [] },
+      "bots": { "mode": "none", "inlineMentionOnly": true, "roles": [], "maxAlternatingTurns": 4 },
+      "invites": { "mode": "closed" },
+      "threadsRequireMention": true,
+      "observeUnmentioned": false,
+      "admins": [{ "kind": "user", "id": "u-root" }],
+      "approverRoles": []
+    }
+  },
+  "tools": { "allow": ["file_read", "network", "shell"], "ask": [], "deny": [], "browserGuard": "off" },
+  "keys": [],
+  "egress": { "default": "deny", "hosts": [], "blockPrivateRanges": true },
+  "memory": {
+    "threadsPoolIntoParent": true,
+    "dmIsolated": true,
+    "team": { "dm": "none", "group": "none", "public": "none" },
+    "store": { "kind": "git-markdown", "repo": "" }
+  },
+  "session": { "groupShared": true, "timezone": "UTC" }
+}

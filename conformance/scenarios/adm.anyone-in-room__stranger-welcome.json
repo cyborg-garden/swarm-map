@@ -1,0 +1,40 @@
+{
+  "id": "adm.anyone-in-room/stranger-welcome",
+  "rule": "adm.anyone-in-room",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.anyoneInAllowedRoom": true
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-mallory",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": true,
+    "answered": true,
+    "receipt": {
+      "verdict": "deliver",
+      "rule": "addr.mention"
+    },
+    "privilege": "guest"
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.anyoneInAllowedRoom": false
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "adm.users"
+      }
+    }
+  }
+}
