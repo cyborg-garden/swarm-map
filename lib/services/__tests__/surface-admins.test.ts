@@ -410,11 +410,11 @@ describe('SurfaceAdminService.isGroupAllowed', () => {
 })
 
 // Ids that exist on the Mini (ls ~/.hermes-* + docker ps, 2026-10-22), the
-// bare slug the policy plugin sends, and a Letta id from deploy-route tests.
+// bare slug the policy plugin sends, and ids carrying a hyphen and a UUID.
 const REAL_IDS = [
   'h_personal', 'h_cyborg', 'h_cyborg_public', 'h_evil_duck', 'h_garden_admin',
-  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_letta_server',
-  'h_letta_agent-xyz', 'h_letta_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
+  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_ext_server',
+  'h_ext_agent-xyz', 'h_ext_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
 ]
 const TRAVERSAL_IDS = [
   'x/../.hermes-cryptids', '../.hermes-cryptids', '..', '.', '', 'h_a/b', 'h_a\\b',

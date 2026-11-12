@@ -68,9 +68,6 @@ export async function POST(
 
   const harness = services.harness.get(id)
   if (!harness) return fail(404, `Unknown harness: ${id}`)
-  if (harness.runtime === 'letta' || harness.runtime === 'letta-server') {
-    return fail(400, 'Letta rows have no agent state.db to migrate')
-  }
 
   const target = services.harness.composeTarget(id)
   if (!target || !fs.existsSync(target.composeFile)) {

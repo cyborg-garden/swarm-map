@@ -12,7 +12,6 @@ import { applyChatUpdatesToHarness, isChatUpdateLevel, readHarnessChatUpdates, C
 function hermesHarnessIds(): string[] {
   return services.harness
     .list()
-    .filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
     .map((h) => h.id)
 }
 

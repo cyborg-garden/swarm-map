@@ -31,7 +31,6 @@ import { ADMISSION_FIELD_LABELS, SURFACE_LIST_ICONS } from '@/components/surface
 import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
-import { LettaAgentDetail } from '@/components/harness/letta-agent-detail'
 import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
 
 type PairingUser = {
@@ -142,25 +141,7 @@ function fmtUsd(v: number | null | undefined, costStatus?: 'estimated' | 'partia
   return `${costStatus === 'estimated' ? '~' : ''}$${v.toFixed(2)}`
 }
 
-// Runtime-branching wrapper (design §4a). Letta harnesses have no container, so
-// their detail view is a dedicated read-only component rather than a thicket of
-// `runtime === 'letta'` branches through the container-shaped Hermes page below.
-// Fetching harness here (before branching) keeps rules-of-hooks intact — each
-// child owns its own hooks.
 export default function HarnessDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params)
-  const { data: harness, loading } = useApi<Harness>(`/api/harnesses/${id}`)
-
-  if (loading && !harness) {
-    return <p className="text-muted-foreground">Loading...</p>
-  }
-  if (harness && (harness.runtime === 'letta' || harness.runtime === 'letta-server')) {
-    return <LettaAgentDetail harness={harness} />
-  }
-  return <HermesHarnessDetail params={params} />
-}
-
-function HermesHarnessDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
 

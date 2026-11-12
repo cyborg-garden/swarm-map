@@ -369,8 +369,6 @@ export function driftTargets(opts: {
   const byId = new Map<string, DriftTarget>()
 
   for (const h of opts.harnesses) {
-    // Letta agents are Postgres rows, not containers — nothing to build.
-    if (h.runtime === 'letta' || h.runtime === 'letta-server') continue
     byId.set(h.id, {
       harnessId: h.id,
       name: h.name,

@@ -35,8 +35,8 @@ export function isSupportedSurface(platform: string): boolean {
 
 // Harness ids reach these paths straight from URL segments, some on routes
 // agents call without the operator cookie. Real ids are `h_<name>` (e.g.
-// h_personal, h_cyborg_public), bare agent slugs (`seraph-doer`, sent by the
-// policy plugin), or Letta ids (`h_letta_agent-<uuid>`). All are ASCII
+// h_personal, h_cyborg_public), or bare agent slugs (`seraph-doer`, sent by the
+// policy plugin). All are ASCII
 // letters, digits, '_' and '-'. Anything else ('/', '.', '%', whitespace) is
 // rejected so an id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
 const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/

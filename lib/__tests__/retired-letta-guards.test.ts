@@ -87,3 +87,94 @@ describe('R1/R3: the Hermes-to-Letta bridge stays deleted', () => {
     expect(wizard).not.toMatch(/letta/i)
   })
 })
+
+// Translations of README.md and their frozen test snapshot. They are written
+// by the readme-zh-sync workflow after README.md changes on main, never by
+// hand, so they trail the English by one sync.
+const TRANSLATED = (f: string) =>
+  f === 'README.zh-CN.md' || f === 'README.zh-TW.md' || f.startsWith('scripts/__tests__/fixtures/readme-pair/')
+
+describe('R1: the old Letta server client stays deleted', () => {
+  const allow = (f: string) =>
+    f === SELF || MIGRATION_DOCS.includes(f) || f.startsWith(LETTA_CODE_DIR) || TRANSLATED(f)
+
+  it('nothing pins the retired server image', () => {
+    expect(hits(/letta\/letta:/i, allow)).toEqual([])
+  })
+
+  it('nothing names the retired server port', () => {
+    expect(hits(/(?<![0-9a-f]):8283\b/i, (f) => allow(f) || /(^|\/)(package-lock\.json|pnpm-lock\.yaml)$/.test(f))).toEqual([])
+  })
+
+  it('nothing calls the retired REST agents API', () => {
+    expect(hits(/\/v1\/agents/i, allow)).toEqual([])
+  })
+
+  it('the word "letta" appears only where this list says it may', () => {
+    // Each entry is a reason, not a convenience. Adding one is a decision.
+    const MAY_SAY_LETTA: Record<string, string> = {
+      'lib/services/runtime-adapter.ts': 'the retired-runtime table (R4)',
+      'lib/services/__tests__/retired-runtime.test.ts': 'R4 tests',
+      'lib/services/__tests__/runtime-adapter.test.ts': 'R4: no Hermes fallback',
+      'lib/services/__tests__/agent-deploy-templates.test.ts': 'R3 test',
+      'lib/services/__tests__/deploy-route.integration.test.ts': 'R5 tests',
+      'app/api/setup/deploy/route.ts': 'the R5 refusal message',
+      'app/api/harnesses/retired/route.test.ts': 'retired-row fixture',
+      'scripts/sync-readme-zh.mjs': 'translator glossary: product names stay in English',
+      'docs/runtimes.md': 'says what was removed and what comes next',
+      'README.md': 'points at docs/runtimes.md for the retired runtime',
+    }
+    const allowWord = (f: string) => allow(f) || Object.hasOwn(MAY_SAY_LETTA, f)
+    expect(hits(/letta/i, allowWord)).toEqual([])
+    // An allow entry for a file that no longer exists is a stale hole.
+    const files = new Set(repoFiles())
+    expect(Object.keys(MAY_SAY_LETTA).filter((f) => !files.has(f))).toEqual([])
+  })
+
+  it('the files of the old integration are gone', () => {
+    const gone = [
+      'lib/services/letta.ts',
+      'lib/services/letta-agent-provider.ts',
+      'lib/services/letta-deploy-templates.ts',
+      'lib/services/__tests__/letta-client.test.ts',
+      'lib/services/__tests__/letta-deploy-templates.test.ts',
+      'docker/letta-compose.yml',
+      'components/harness/letta-agent-detail.tsx',
+    ]
+    expect(gone.filter((f) => fs.existsSync(path.join(ROOT, f)))).toEqual([])
+  })
+})
+
+describe('R2: no elizaOS code', () => {
+  it('nothing mentions eliza', () => {
+    expect(hits(/eliza/i, (f) => f === SELF || MIGRATION_DOCS.includes(f))).toEqual([])
+  })
+})
+
+describe('R6: no Letta routes, page or sidebar entry', () => {
+  it('there is no /api/letta route tree and no /letta page (so both are 404)', () => {
+    // Next.js routes are files. No file under these paths means no route.
+    expect(repoFiles().filter((f) => /^app\/(api\/letta|\(dashboard\)\/letta)(\/|$)/.test(f))).toEqual([])
+    expect(fs.existsSync(path.join(ROOT, 'app/api/letta'))).toBe(false)
+    expect(fs.existsSync(path.join(ROOT, 'app/(dashboard)/letta'))).toBe(false)
+  })
+
+  it('nothing links to /letta or /api/letta', () => {
+    expect(hits(/['"`(]\/(api\/)?letta\b/, (f) => f === SELF || MIGRATION_DOCS.includes(f) || TRANSLATED(f))).toEqual([])
+  })
+
+  it('the sidebar has no Letta entry', () => {
+    const sidebar = fs.readFileSync(path.join(ROOT, 'components/shell/sidebar.tsx'), 'utf-8')
+    expect(sidebar).not.toMatch(/letta/i)
+  })
+})
+
+describe('R7: the sanitization gate needs no Letta exception', () => {
+  it('sanitize.config.json allows no Letta connection string', () => {
+    const raw = fs.readFileSync(path.join(ROOT, 'sanitize.config.json'), 'utf-8')
+    expect(raw).not.toMatch(/letta/i)
+    // And it still parses, with its allow list intact.
+    const cfg = JSON.parse(raw)
+    expect(cfg.deterministic.allow_substrings).toContain('+1234567890')
+  })
+})

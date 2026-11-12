@@ -13,11 +13,10 @@ import { checkGithubCredentials } from './github-credential-check'
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1000 // 6h
 const INITIAL_DELAY_MS = 30 * 1000 // let the server finish booting first
 
-/** Current container harnesses as sweep targets (Letta rows have no state.db). */
+/** Current container harnesses as sweep targets. */
 export function sweepTargets(): SweepTarget[] {
   return services.harness
     .list()
-    .filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
     .map((h) => ({ ...sweepTargetFor(h.id, h.name, h.runtime), composeFile: h.composeFile }))
 }
 

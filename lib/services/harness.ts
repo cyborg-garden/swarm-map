@@ -893,8 +893,7 @@ export const hermesAdapter: ContainerRuntimeAdapter = {
 }
 
 // Registry of container adapters. Hermes is the only member;
-// claude-code-proxy/custom slot in here later (design §1b). Letta is NOT here —
-// it's an AgentResourceProvider (REST), not a container adapter.
+// claude-code-proxy/custom slot in here later (design §1b).
 const containerAdapters: ContainerRuntimeAdapter[] = [hermesAdapter]
 
 /** Register a container adapter (future runtimes; exported for tests). */
@@ -2096,8 +2095,7 @@ export class HarnessService {
     // Agent data directory (where .env, config.yaml, SOUL.md live)
     const agentDir = path.join(os.homedir(), `.hermes-${input.name}`)
 
-    // createOverlay provisions Hermes agents only — the Letta path branches at
-    // the deploy route (design §3c) and never reaches container provisioning.
+    // createOverlay provisions Hermes agents only.
     const adapter = hermesAdapter
 
     // Scaffold agent data directory if it doesn't exist

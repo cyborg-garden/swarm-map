@@ -1,8 +1,6 @@
 /**
  * ContainerRuntimeAdapter — the container-runtime seam.
  *
- * Design: memory/specs/2026-07-18-letta-wizard-fork-design.md §1b.
- *
  * HSM's discovery/detail code currently hardcodes Hermes assumptions inline
  * (the `hermes-`/`seraph-` name gate, `~/.hermes*` data dir, the SOUL/model
  * readers). This interface factors those out so `HarnessService.discover()`
@@ -15,10 +13,9 @@
  * `defaultImageRepo`). The Hermes implementation delegates to the same module
  * functions the call sites used inline, so extraction is behavior-preserving.
  *
- * NOTE: Letta agents do NOT go through this adapter. They are not containers;
- * they are enumerated from the Letta server over REST by the separate
- * AgentResourceProvider (lib/services/letta-agent-provider.ts). This interface
- * is exclusively the *container* seam.
+ * This interface is exclusively the *container* seam. A runtime with no
+ * registered adapter is never driven: see RETIRED_RUNTIMES and
+ * UnsupportedRuntimeError below.
  */
 
 import type { Harness } from '@/lib/types'

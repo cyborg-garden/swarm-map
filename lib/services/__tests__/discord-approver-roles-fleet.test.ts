@@ -37,7 +37,8 @@ beforeEach(() => {
   listMock.mockReturnValue([
     { id: 'h_iris', name: 'iris', runtime: 'hermes' },
     { id: 'h_mare', name: 'mare', runtime: 'hermes' },
-    { id: 'h_l', name: 'l', runtime: 'letta' },
+    // A listed agent with no data dir on disk: skipped, never created.
+    { id: 'h_l', name: 'l', runtime: 'hermes' },
   ])
   getSettingsMock.mockReturnValue({ discordApproverRoles: [APPROVER] })
 })

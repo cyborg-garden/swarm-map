@@ -85,11 +85,10 @@ export type ExecInContainer = (
 const defaultDocker = new DockerService()
 const defaultExec: ExecInContainer = (c, argv, t) => defaultDocker.execInContainer(c, argv, t)
 
-/** Current container harnesses as snapshot candidates (Letta rows have no state.db). */
+/** Current container harnesses as snapshot candidates. */
 export function snapshotTargets(): SnapshotTarget[] {
   return services.harness
     .list()
-    .filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
     .map((h) => ({
       harnessId: h.id,
       name: h.name,

@@ -37,7 +37,6 @@ beforeEach(() => {
     { id: 'h_nimbleco', name: 'nimbleco', runtime: 'hermes' },
     { id: 'h_blackhouse', name: 'blackhouse', runtime: 'hermes' },
     { id: 'h_cyborg_public', name: 'cyborg-public', runtime: 'hermes' },
-    { id: 'h_letta_x', name: 'letta-x', runtime: 'letta' },
   ])
   getSettingsMock.mockReturnValue({ discordThreadMentionOptOuts: ['blackhouse'] })
 })
@@ -47,7 +46,7 @@ afterEach(() => {
 })
 
 describe('fleetThreadGateTargets', () => {
-  it('maps harness ids to data dirs and skips Letta (no .env)', () => {
+  it('maps harness ids to data dirs', () => {
     expect(fleetThreadGateTargets()).toEqual([
       { name: 'nimbleco', dataDir: agentDir('nimbleco') },
       { name: 'blackhouse', dataDir: agentDir('blackhouse') },

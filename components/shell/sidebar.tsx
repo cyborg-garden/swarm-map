@@ -4,20 +4,18 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Bot, MessageSquare, Wrench, KeyRound,
-  Brain, Users, ScrollText, Settings, Plug, Boxes,
+  Brain, Users, ScrollText, Settings, Plug,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 const icons: Record<string, LucideIcon> = {
   LayoutDashboard, Bot, MessageSquare, Wrench, KeyRound,
-  Brain, Users, ScrollText, Settings, Plug, Boxes,
+  Brain, Users, ScrollText, Settings, Plug,
 }
 
 const NAV_ITEMS = [
   { label: 'Dashboard', href: '/', icon: 'LayoutDashboard' },
   { label: 'Harnesses', href: '/harnesses', icon: 'Bot' },
-  // SPIKE (Path 1): read-only Letta agents view (agents-as-API-resources).
-  { label: 'Letta', href: '/letta', icon: 'Boxes' },
   // { label: 'Surfaces', href: '/surfaces', icon: 'Plug' },
   { label: 'Tools', href: '/tools', icon: 'Wrench' },
   { label: 'Keys', href: '/keys', icon: 'KeyRound' },

@@ -5,6 +5,7 @@ import { StatusDot } from '@/components/shared/status-dot'
 import { TierBadge } from '@/components/shared/tier-badge'
 import { DbHealthBadge, type DbIntegritySummary, type DbWriteFailureSummary } from '@/components/shared/db-health-badge'
 import { DriftChip, DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
+import { RetiredRows } from '@/components/fleet/retired-rows'
 import { Button } from '@/components/ui/button'
 import type { Harness } from '@/lib/types'
 import Link from 'next/link'
@@ -27,10 +28,7 @@ type FleetDbHealth = {
 
 export default function HarnessesPage() {
   const router = useRouter()
-  const { data: containerHarnesses, loading, refetch } = useApi<Harness[]>('/api/harnesses', 5000)
-  // Letta agents come from a separate async REST path (design §1c) — merge them
-  // into the fleet list. Failure is soft: no Letta server → just no Letta rows.
-  const { data: lettaHarnesses } = useApi<Harness[]>('/api/letta/harnesses', 10000)
+  const { data: harnesses, loading, refetch } = useApi<Harness[]>('/api/harnesses', 5000)
   // DB integrity + write-failure signals (#204) — cached server-side, so a
   // slower poll is plenty.
   const { data: dbHealth } = useApi<FleetDbHealth>('/api/integrity', 30000)
@@ -41,15 +39,7 @@ export default function HarnessesPage() {
   const { data: drift } = useApi<FleetDrift>('/api/fleet/drift', 60000)
   const driftById = new Map((drift?.agents ?? []).map((a) => [a.harnessId, a]))
 
-  const harnesses =
-    containerHarnesses || lettaHarnesses
-      ? [...(containerHarnesses ?? []), ...(Array.isArray(lettaHarnesses) ? lettaHarnesses : [])]
-      : undefined
-
-  // Only container harnesses can be bulk-restarted (Letta agents aren't containers).
-  const running = containerHarnesses?.filter((h) => h.status === 'running') ?? []
-
-  const isLetta = (h: Harness) => h.runtime === 'letta' || h.runtime === 'letta-server'
+  const running = harnesses?.filter((h) => h.status === 'running') ?? []
 
   async function restartAll() {
     try {
@@ -221,53 +211,37 @@ export default function HarnessesPage() {
                       {h.health?.errors > 0 && (
                         <span className="text-xs text-destructive">({h.health.errors} err)</span>
                       )}
-                      {!isLetta(h) && (
-                        <DbHealthBadge
-                          integrity={dbHealthById.get(h.id)?.integrity}
-                          writeFailures={dbHealthById.get(h.id)?.writeFailures}
-                        />
-                      )}
-                      {!isLetta(h) && drift && <DriftChip drift={driftById.get(h.id)} />}
+                      <DbHealthBadge
+                        integrity={dbHealthById.get(h.id)?.integrity}
+                        writeFailures={dbHealthById.get(h.id)?.writeFailures}
+                      />
+                      {drift && <DriftChip drift={driftById.get(h.id)} />}
                     </Link>
                   </td>
                   <td className="px-4 py-3">
                     <TierBadge tier={h.tier} />
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
-                    {isLetta(h) ? (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-xs uppercase tracking-wide">{h.runtime}</span>
-                    ) : (
-                      <>{h.platform} / {h.channel}</>
-                    )}
+                    {h.platform} / {h.channel}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{h.models?.[0] ?? '—'}</td>
-                  {/* Letta agents have no per-agent container stats (design §4b) */}
                   {/* null cost/invocations = unknown (migrated, snapshot pending) — '—', never $0 */}
-                  <td className="px-4 py-3 text-right">{isLetta(h) || h.costToday == null ? '—' : `$${h.costToday.toFixed(2)}`}</td>
-                  <td className="px-4 py-3 text-right">{isLetta(h) ? '—' : (h.invocations ?? '—')}</td>
+                  <td className="px-4 py-3 text-right">{h.costToday == null ? '—' : `$${h.costToday.toFixed(2)}`}</td>
+                  <td className="px-4 py-3 text-right">{h.invocations ?? '—'}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      {isLetta(h) ? (
-                        // No container lifecycle for a Postgres row — just open it.
-                        <Link href={`/harnesses/${h.id}`}>
-                          <Button variant="ghost" size="xs">Open</Button>
-                        </Link>
-                      ) : (
-                        <>
-                          <Button variant="ghost" size="xs" onClick={() => restartOne(h.id)} disabled={h.status === 'restarting'}>
-                            {h.status === 'restarting' ? 'Rebuilding...' : 'Restart'}
-                          </Button>
-                          <Button variant="ghost" size="xs" onClick={() => stopOne(h.id)}>
-                            Stop
-                          </Button>
-                          <Button variant="ghost" size="xs" onClick={() => duplicateOne(h.id, h.name)} title="Duplicate">
-                            ⧉
-                          </Button>
-                          <Button variant="ghost" size="xs" onClick={() => removeOne(h.id, h.name)} title="Remove" className="text-destructive hover:text-destructive">
-                            ✕
-                          </Button>
-                        </>
-                      )}
+                      <Button variant="ghost" size="xs" onClick={() => restartOne(h.id)} disabled={h.status === 'restarting'}>
+                        {h.status === 'restarting' ? 'Rebuilding...' : 'Restart'}
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={() => stopOne(h.id)}>
+                        Stop
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={() => duplicateOne(h.id, h.name)} title="Duplicate">
+                        ⧉
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={() => removeOne(h.id, h.name)} title="Remove" className="text-destructive hover:text-destructive">
+                        ✕
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -276,6 +250,8 @@ export default function HarnessesPage() {
           </table>
         </div>
       )}
+
+      <RetiredRows />
     </div>
   )
 }

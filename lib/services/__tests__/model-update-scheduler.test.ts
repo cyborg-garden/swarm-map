@@ -217,10 +217,9 @@ describe('checkModelUpdates — report', () => {
     expect(deps.freshness.fetchLiveModels).not.toHaveBeenCalledWith('ollama')
   })
 
-  it('fetches each live provider once per run and skips Letta harnesses', async () => {
+  it('fetches each live provider once per run', async () => {
     makeHarness('c1', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]) })
     makeHarness('c2', { config: fpConfig([['openrouter', 'moonshotai/kimi-k2.7']]) })
-    makeHarness('letta', { config: fpConfig([['openrouter', 'z-ai/glm-5.2']]), runtime: 'letta' })
     const report = await checkModelUpdates(deps)
     expect(report.harnesses.map((h) => h.id)).toEqual(['h_c1', 'h_c2'])
     expect(deps.freshness.fetchLiveModels).toHaveBeenCalledTimes(1)
