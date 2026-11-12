@@ -4,7 +4,7 @@
 
 > **Swarm Map (SM)** — formerly Hermes Swarm Map / HSM.
 
-A commons, public goods project of [NimbleCo](https://www.nimbleco.ai/). 
+A commons, public goods project of [Cyborg Garden](https://www.cyborg.garden/). 
 
 **Multiplayer admin and orchestrator platform for heterogeneous agent runtimes.** One dashboard for two shapes of agent: [Hermes](https://github.com/cyborg-garden/hermes-agent-mt) agents, where each agent is its own container, and [Letta](https://github.com/letta-ai/letta) agents, where memory-first agents live as rows on one shared server. Multi-tenant security, model cascades, and platform connections come from the same control plane either way.
 
