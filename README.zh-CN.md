@@ -1,5 +1,5 @@
-<!-- 译自 README.md @ 4313403；如有出入，以英文版为准。 -->
-<!-- Translated from README.md @ 4313403. The English README is authoritative. -->
+<!-- 译自 README.md @ 9ff54e3；如有出入，以英文版为准。 -->
+<!-- Translated from README.md @ 9ff54e3. The English README is authoritative. -->
 
 # Swarm Map
 
@@ -7,7 +7,7 @@
 
 > **Swarm Map (SM)** —— 原名 Hermes Swarm Map / HSM。
 
-[NimbleCo](https://www.nimbleco.ai/) 的公共品（commons）开源项目。
+[Cyborg Garden](https://www.cyborg.garden/) 的公共品（commons）开源项目。
 
 **面向异构智能体运行时的多人协作管理与编排平台。** 一个控制台，管理两种形态的智能体：[Hermes](https://github.com/cyborg-garden/hermes-agent-mt) 智能体（每个智能体是一个独立容器），以及 [Letta](https://github.com/letta-ai/letta) 智能体（以记忆为核心，作为数据行运行在同一台共享服务器上）。无论哪种形态，多租户安全、模型级联和平台连接都来自同一个控制平面。
 

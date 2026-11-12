@@ -1,5 +1,5 @@
-<!-- 譯自 README.md @ 4313403；如有出入，以英文版為準。 -->
-<!-- Translated from README.md @ 4313403. The English README is authoritative. -->
+<!-- 譯自 README.md @ 9ff54e3；如有出入，以英文版為準。 -->
+<!-- Translated from README.md @ 9ff54e3. The English README is authoritative. -->
 
 # Swarm Map
 
@@ -7,11 +7,11 @@
 
 > **Swarm Map (SM)** —— 原名 Hermes Swarm Map / HSM。
 
-[NimbleCo](https://www.nimbleco.ai/) 的公共財（commons）開源專案。
+[Cyborg Garden](https://www.cyborg.garden/) 的公共財（commons）開源專案。
 
 **專為異質代理執行環境打造的多人協作管理與編排平台。** 一個儀表板，管理兩種型態的代理：[Hermes](https://github.com/cyborg-garden/hermes-agent-mt) 代理（每個代理是一個獨立容器），以及 [Letta](https://github.com/letta-ai/letta) 代理（以記憶為核心，作為資料列執行在同一台共享伺服器上）。無論哪種型態，多租戶安全、模型級聯和平台連線都來自同一個控制平面。
 
-*同類首創：一個點選式圖形介面，不僅管理代理執行環境，還管理「誰能在哪裡做什麼」。解決多租戶代理問題。正視複雜性的全貌，而不迷失其中。共享運算資源。*
+*同類首創：一個點選式圖形介面，不僅管理代理管理代理執行環境，還管理「誰能在哪裡做什麼」。解決多租戶代理問題。正視複雜性的全貌，而不迷失其中。共享運算資源。*
 
 **兩種執行環境的支援程度還不對等。** Hermes 是成熟路徑；Letta 目前只支援唯讀檢視和傳送訊息。具體哪些已上線、哪些未上線，請看 [Runtimes](docs/runtimes.md)（英文）——我們寧願你讀一張枯燥的對照表，也不願你部署之後才發現缺口。
 
