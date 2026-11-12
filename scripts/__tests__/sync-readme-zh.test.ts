@@ -608,6 +608,8 @@ describe('English ahead of the translations (a PR that adds a link)', () => {
 
   // The suite itself must not fail on such a PR. Run this very file in a copy
   // of the tree whose root README.md is ahead (nested runs skip this block).
+  // CI forces colour on; the assertions read plain text.
+  const plain = (t: string) => t.replace(/\u001b\[[0-9;]*m/g, '')
   const nested = (edit: (dir: string) => void) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'readme-pr-'))
     try {
@@ -622,10 +624,10 @@ describe('English ahead of the translations (a PR that adds a link)', () => {
         const out = execFileSync('node', [path.join(ROOT, 'node_modules', 'vitest', 'vitest.mjs'), 'run', '--root', dir, 'scripts/__tests__'], {
           cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, README_PAIR_NESTED: '1' },
         })
-        return { code: 0, out }
+        return { code: 0, out: plain(out) }
       } catch (e) {
         const err = e as { status: number; stdout: string; stderr: string }
-        return { code: err.status, out: err.stdout + err.stderr }
+        return { code: err.status, out: plain(err.stdout + err.stderr) }
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
