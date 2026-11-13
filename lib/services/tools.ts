@@ -1,22 +1,14 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import crypto from 'crypto'
 import type { Tool, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
+import { agentHomeIfManaged, type StoredRow } from './agent-home'
 
 const TOOLS_FILE = 'tools.json'
 
 // Tool overrides stored by user (risk levels, allowed tiers)
 type ToolOverride = Pick<Tool, 'id' | 'risk' | 'allowedTiers' | 'reviewed'>
-
-// Agent data directory: ~/.hermes-{name}/ or ~/.hermes/ for "personal"
-function agentDataDir(harnessName: string): string {
-  if (harnessName === 'personal') {
-    return path.join(os.homedir(), '.hermes')
-  }
-  return path.join(os.homedir(), `.hermes-${harnessName}`)
-}
 
 // Parse mcp_servers section from a config.yaml string — returns server names
 function parseMcpServers(yaml: string): string[] {
@@ -130,11 +122,13 @@ function defaultRisk(source: Tool['source']): Tool['risk'] {
 }
 
 // Discover tools from all harness data directories
-function discoverTools(harnessNames: string[]): Map<string, { tool: Tool; harnesses: string[] }> {
+function discoverTools(harnessNames: string[], rows: readonly StoredRow[]): Map<string, { tool: Tool; harnesses: string[] }> {
   const registry = new Map<string, { tool: Tool; harnesses: string[] }>()
 
   for (const name of harnessNames) {
-    const dataDir = agentDataDir(name)
+    // A name whose stored row Swarm Map does not manage is not a Hermes agent.
+    const dataDir = agentHomeIfManaged(name, rows)
+    if (!dataDir) continue
 
     // Read config.yaml for this agent
     let yamlContent = ''
@@ -218,6 +212,10 @@ export function getDefaultToolsForTier(tier: HabitatTier, allTools: Tool[]): str
 export class ToolsService {
   constructor(private storage: Storage) {}
 
+  private harnessRows(): StoredRow[] {
+    return this.storage.read<StoredRow[]>('harnesses.json', [])
+  }
+
   // Load user overrides for specific tool IDs
   private loadOverrides(): Map<string, ToolOverride> {
     const stored = this.storage.read<ToolOverride[]>(TOOLS_FILE, [])
@@ -229,7 +227,7 @@ export class ToolsService {
   }
 
   discover(harnessNames: string[]): Tool[] {
-    const registry = discoverTools(harnessNames)
+    const registry = discoverTools(harnessNames, this.harnessRows())
     const overrides = this.loadOverrides()
 
     const tools: Tool[] = []
@@ -246,7 +244,7 @@ export class ToolsService {
    * Returns an array of tool IDs (e.g. ['t_abc12345', ...]).
    */
   discoverForHarness(harnessName: string): string[] {
-    const registry = discoverTools([harnessName])
+    const registry = discoverTools([harnessName], this.harnessRows())
     return Array.from(registry.keys())
   }
 

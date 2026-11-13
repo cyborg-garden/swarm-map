@@ -194,14 +194,15 @@ export function canonicalHarnessId(idOrSlug: string): string {
   return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
 }
 
-/** The agent name an id stands for: `h_seraph_doer` is "seraph-doer". A bare name is returned as is. */
+/** The agent name an id stands for: `h_seraph_doer` is "seraph-doer". A bare slug comes back unchanged. */
 export function harnessNameOfId(idOrSlug: string): string {
-  return idOrSlug.startsWith('h_') ? idOrSlug.slice(2).replace(/_/g, '-') : idOrSlug
+  return idOrSlug.replace(/^h_/, '').replace(/_/g, '-')
 }
 
 /**
  * The stored row for this id or bare slug, if Swarm Map does not manage it.
- * Every writer that turns an id into `~/.hermes-<name>` asks this first.
+ * agentHome() (./agent-home), the one place an id becomes `~/.hermes-<name>`,
+ * asks this first.
  */
 export function findUnmanagedRow<T extends { id?: string; runtime?: string }>(
   rows: readonly T[],

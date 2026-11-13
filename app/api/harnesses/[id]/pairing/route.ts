@@ -1,14 +1,8 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
-
-function agentDataDir(harnessId: string): string {
-  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
-  if (name === 'personal') return path.join(os.homedir(), '.hermes')
-  return path.join(os.homedir(), `.hermes-${name}`)
-}
+import { agentHome } from '@/lib/services/agent-home'
 
 type ApprovedEntry = {
   user_name: string
@@ -29,7 +23,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const dataDir = agentDataDir(id)
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
+  const dataDir = agentHome(id)
   const pairingDir = path.join(dataDir, 'platforms', 'pairing')
 
   const users: PairingUser[] = []
@@ -69,7 +65,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Missing platform or userId' }, { status: 400 })
   }
 
-  const dataDir = agentDataDir(id)
+  const dataDir = agentHome(id)
   const filePath = path.join(dataDir, 'platforms', 'pairing', `${platform}-approved.json`)
 
   if (!fs.existsSync(filePath)) {

@@ -1,21 +1,13 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { execFileSync } from 'child_process'
 import crypto from 'crypto'
 import type { MemoryScope, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
 import { resolveStateDbPath } from './db-path'
+import { agentHomeIfManaged, type StoredRow } from './agent-home'
 
 const MEMORY_FILE = 'memory-scopes.json'
-
-// Agent data directory mapping
-function agentDataDir(harnessName: string): string {
-  if (harnessName === 'personal') {
-    return path.join(os.homedir(), '.hermes')
-  }
-  return path.join(os.homedir(), `.hermes-${harnessName}`)
-}
 
 // Heuristically map harness name to tier
 function inferTier(harnessName: string): HabitatTier {
@@ -42,11 +34,13 @@ function memoryId(harnessName: string): string {
 }
 
 // Discover memory scopes from agent data directories
-function discoverMemoryScopes(harnessNames: string[]): MemoryScope[] {
+function discoverMemoryScopes(harnessNames: string[], rows: readonly StoredRow[]): MemoryScope[] {
   const scopes: MemoryScope[] = []
 
   for (const name of harnessNames) {
-    const dataDir = agentDataDir(name)
+    // A name whose stored row Swarm Map does not manage is not a Hermes agent.
+    const dataDir = agentHomeIfManaged(name, rows)
+    if (!dataDir) continue
     const memoriesDir = path.join(dataDir, 'memories')
 
     // Check if this agent has a memories directory or state.db. lstat-aware:
@@ -91,7 +85,7 @@ export class MemoryService {
 
   list(harnessNames?: string[]): MemoryScope[] {
     const names = harnessNames ?? this.defaultHarnessNames()
-    return discoverMemoryScopes(names)
+    return discoverMemoryScopes(names, this.storage.read<StoredRow[]>('harnesses.json', []))
   }
 
   // Kept for backward compat — reads stored data if discovery fails

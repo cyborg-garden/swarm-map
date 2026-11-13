@@ -3,8 +3,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import {
-  SurfaceAdminService, isValidIdentity, isSupportedSurface, isValidHarnessId, sanitizeGroupId, agentDataDir,
+  SurfaceAdminService, isValidIdentity, isSupportedSurface, isValidHarnessId, sanitizeGroupId, agentDataDir, writableAgentDataDir,
 } from '../surface-admins'
+import { UnsupportedRuntimeError } from '../runtime-adapter'
 import { Storage } from '../storage'
 
 // Each test gets an isolated fake $HOME (for agent .env files) and an isolated
@@ -516,6 +517,15 @@ describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', ()
     expect(svc.setAdmins('h_letta_server', 'discord', [A, B], A)).toMatchObject({ ok: true, admins: [A, B] })
     expect(svc.approveGroupInvite('h_letta_server', 'telegram', '-1002', '111')).toMatchObject({ ok: true, approved: true })
     expect(fs.readFileSync(path.join(SERVER_HOME(), '.env'), 'utf-8')).toContain('-1002')
+  })
+
+  it('the write mapping itself refuses, whatever its caller checked; the self-read mapping does not', () => {
+    for (const id of ['h_old', 'old', 'h_odd', LEFTOVER_AGENT]) {
+      expect(() => writableAgentDataDir(id, ROWS), id).toThrow(UnsupportedRuntimeError)
+    }
+    expect(writableAgentDataDir('h_iris', ROWS)).toBe(path.join(home, '.hermes-iris'))
+    expect(agentDataDir('h_old')).toBe(path.join(home, '.hermes-old'))
+    expect(() => writableAgentDataDir('x/../y', ROWS)).toThrow(/invalid harness id/i)
   })
 
   it('control: the same calls on a Hermes row DO write', () => {

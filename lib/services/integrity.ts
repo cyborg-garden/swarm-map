@@ -42,6 +42,7 @@ import fs from 'fs'
 import Database from 'better-sqlite3'
 import type { Harness } from '@/lib/types'
 import { adapterForRuntime, agentDataDirForName, tailLogFile } from './harness'
+import { agentHome } from './agent-home'
 import { DockerService } from './docker'
 
 export type DbIntegrityStatus =
@@ -107,13 +108,10 @@ function writeFailureAlertWindowMs(): number {
   return Number.isFinite(env) && env > 0 ? env : DEFAULT_WRITE_FAILURE_ALERT_WINDOW_MS
 }
 
-// name-keyed like usage.ts: h_foo_bar → foo-bar → ~/.hermes-foo-bar
-function harnessIdToName(harnessId: string): string {
-  return harnessId.replace(/^h_/, '').replace(/_/g, '-')
-}
-
+// h_foo_bar → ~/.hermes-foo-bar. Throws for an id whose stored row Swarm Map
+// does not manage.
 function dataDirForHarnessId(harnessId: string): string {
-  return agentDataDirForName(harnessIdToName(harnessId))
+  return agentHome(harnessId)
 }
 
 // --- Transport seam (PR2) ---------------------------------------------------

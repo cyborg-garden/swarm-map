@@ -9,7 +9,8 @@ import { GROUPS_VARS as GROUP_VARS } from '@/lib/surfaces/derive'
 // Shared id guards: this route is agent-callable without the operator cookie,
 // so the harness id must never escape ~/.hermes-* and a chatId must never
 // add a line to the .env.
-import { agentDataDir, isValidHarnessId, sanitizeGroupId } from '@/lib/services/surface-admins'
+import { agentDataDir, isValidHarnessId, sanitizeGroupId, writableAgentDataDir } from '@/lib/services/surface-admins'
+import { agentHomeForSelfRead } from '@/lib/services/agent-home'
 import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function invalidHarnessId() {
@@ -96,7 +97,8 @@ export async function GET(
  * Budget check: compare monthly spend against key budgets assigned to this harness.
  */
 function handleBudgetCheck(harnessId: string) {
-  const costMonth = getCostMonth(harnessId)
+  // The agent asks about its own spend: read its own state.db (self-read).
+  const costMonth = getCostMonth(harnessId, agentHomeForSelfRead)
 
   // Sum budgets from all keys assigned to this harness
   const allKeys = services.keys.list()
@@ -173,7 +175,8 @@ export async function POST(
     return NextResponse.json({ error: `Unsupported platform: ${platform}` }, { status: 400 })
   }
 
-  const dataDir = agentDataDir(id)
+  // The checked mapping: it throws for a row Swarm Map does not manage.
+  const dataDir = writableAgentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
   if (!fs.existsSync(envPath)) {

@@ -1,6 +1,5 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import crypto from 'crypto'
 import type { Key, KeyInput } from '@/lib/types'
 import type { Storage } from './storage'
@@ -10,7 +9,8 @@ import { assertNoNewline } from '@/lib/env-helpers'
 import { SURFACES } from '@/lib/surfaces/registry'
 import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { readEnvValue } from './discord-thread-gate'
-import { unsupportedRowReason } from './runtime-adapter'
+import { harnessNameOfId, unsupportedRowReason } from './runtime-adapter'
+import { agentHomeIfManaged, type StoredRow } from './agent-home'
 
 const KEYS_FILE = 'keys.json'
 
@@ -205,25 +205,17 @@ function nameToId(name: string): string {
   return 'h_' + name.replace(/-/g, '_')
 }
 
-// Convert harness ID back to name (h_seraph_doer → seraph-doer)
-function idToName(id: string): string {
-  return id.replace(/^h_/, '').replace(/_/g, '-')
-}
-
-// Agent data directory mapping
-// A refused agent must not show as assigned on paper either.
-function withoutBlockedAgents(provider: string, assignedTo: string[]): string[] {
+// A refused agent must not show as assigned on paper either. Two kinds are
+// dropped: an id whose stored row Swarm Map does not manage (it is not a
+// Hermes agent, so there is no .env of its own to write), and, for the
+// providers that have one, an agent with a block marker in its home.
+function withoutBlockedAgents(provider: string, assignedTo: string[], rows: readonly StoredRow[]): string[] {
   const p = provider.trim().toLowerCase()
-  if (p !== 'anthropic' && p !== 'github') return assignedTo
-  const blocked = p === 'anthropic' ? anthropicBlocked : githubBrokered
-  return assignedTo.filter((h) => !blocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)))
-}
-
-function agentDataDir(harnessName: string): string {
-  if (harnessName === 'personal') {
-    return path.join(os.homedir(), '.hermes')
-  }
-  return path.join(os.homedir(), `.hermes-${harnessName}`)
+  const blocked = p === 'anthropic' ? anthropicBlocked : p === 'github' ? githubBrokered : () => false
+  return assignedTo.filter((h) => {
+    const home = agentHomeIfManaged(h, rows)
+    return home !== null && !blocked(home)
+  })
 }
 
 // Parse a .env file into key=value pairs (skip comments and empty lines)
@@ -250,12 +242,18 @@ function parseEnvFile(envPath: string): Array<{ varName: string; value: string }
 
 // Discover all keys from agent env files
 // encryption is optional: if provided, values are encrypted before storing in the registry
-function discoverKeys(harnessNames: string[], encryption?: Encryption): Map<string, { key: StoredKey; harnesses: string[] }> {
+function discoverKeys(
+  harnessNames: string[],
+  rows: readonly StoredRow[],
+  encryption?: Encryption,
+): Map<string, { key: StoredKey; harnesses: string[] }> {
   // Deduplicate by fingerprint: same key value = same key
   const registry = new Map<string, { key: StoredKey; harnesses: string[] }>()
 
   for (const harnessName of harnessNames) {
-    const dataDir = agentDataDir(harnessName)
+    // A name whose stored row Swarm Map does not manage is not a Hermes agent.
+    const dataDir = agentHomeIfManaged(harnessName, rows)
+    if (!dataDir) continue
     const envPath = path.join(dataDir, '.env')
     const pairs = parseEnvFile(envPath)
 
@@ -306,6 +304,21 @@ export class KeysService {
     this.encryption = new Encryption(dir)
   }
 
+  private harnessRows(): StoredRow[] {
+    const rows = this.storage.read<StoredRow[]>('harnesses.json', [])
+    return Array.isArray(rows) ? rows : []
+  }
+
+  // The agent's home, or null (and an audit line) when the stored row for
+  // this id is one Swarm Map does not manage. Every .env write goes through
+  // here: harness ids reach this service from request bodies and from
+  // keys.json, neither of which says whether the id is a Hermes agent's.
+  private homeOrRefuse(harnessIdOrName: string): string | null {
+    const home = agentHomeIfManaged(harnessIdOrName, this.harnessRows())
+    if (!home) this.audit.append({ who: 'admin', what: 'key:refused-unmanaged-row', target: harnessNameOfId(harnessIdOrName) })
+    return home
+  }
+
   private defaultHarnessNames(): string[] {
     return [
       'personal',
@@ -346,7 +359,7 @@ export class KeysService {
 
   list(harnessNames?: string[]): Key[] {
     const names = harnessNames ?? this.allHarnessNames()
-    const registry = discoverKeys(names, this.encryption)
+    const registry = discoverKeys(names, this.harnessRows(), this.encryption)
     const storedAll = this.storage.read<StoredKey[]>(KEYS_FILE, [])
 
     // A stored key is "persistent" if it carries its own value: manual adds,
@@ -446,7 +459,7 @@ export class KeysService {
       ...(input.identifier ? { identifier: input.identifier } : {}),
       maskedValue: maskValue(input.value),
       encryptedValue: this.encryption.encrypt(input.value),
-      assignedTo: withoutBlockedAgents(input.provider, input.assignedTo ?? []),
+      assignedTo: withoutBlockedAgents(input.provider, input.assignedTo ?? [], this.harnessRows()),
       budgetUsd: input.budgetUsd,
       health: 'good',
       manuallyAdded: true,
@@ -487,8 +500,9 @@ export class KeysService {
 
   // Returns whether the .env changed. An already-correct .env is not rewritten.
   writeKeyToEnv(harnessIdOrName: string, provider: string, value: string, hints?: EnvVarHints): boolean {
-    const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
-    const dataDir = agentDataDir(name)
+    const name = harnessNameOfId(harnessIdOrName)
+    const dataDir = this.homeOrRefuse(harnessIdOrName)
+    if (!dataDir) return false
     const envPath = path.join(dataDir, '.env')
 
     let content = ''
@@ -548,8 +562,8 @@ export class KeysService {
   }
 
   removeKeyFromEnv(harnessIdOrName: string, provider: string, hints?: EnvVarHints): void {
-    const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
-    const dataDir = agentDataDir(name)
+    const dataDir = this.homeOrRefuse(harnessIdOrName)
+    if (!dataDir) return
     const envPath = path.join(dataDir, '.env')
 
     try {
@@ -587,7 +601,7 @@ export class KeysService {
     // Fall back to live discovery — discovered keys aren't persisted to keys.json
     // until explicitly modified, but we can read the actual value from .env files
     const names = this.allHarnessNames()
-    const registry = discoverKeys(names, this.encryption)
+    const registry = discoverKeys(names, this.harnessRows(), this.encryption)
     const discovered = registry.get(id)
     if (discovered?.key.encryptedValue) {
       try {
@@ -649,7 +663,7 @@ export class KeysService {
     const before = this.list().find((k) => k.id === id)
     if (!before) return []
     const prev = before.assignedTo ?? []
-    const next = withoutBlockedAgents(before.provider, assignedTo ?? [])
+    const next = withoutBlockedAgents(before.provider, assignedTo ?? [], this.harnessRows())
     const added = next.filter((h) => !prev.includes(h))
     const removed = prev.filter((h) => !next.includes(h))
 
@@ -729,7 +743,7 @@ export class KeysService {
     const newFpId = fingerprintId(newValue)
 
     // Determine final assignedTo (from updates or existing)
-    const finalAssignedTo = withoutBlockedAgents(key.provider, updates?.assignedTo ?? key.assignedTo)
+    const finalAssignedTo = withoutBlockedAgents(key.provider, updates?.assignedTo ?? key.assignedTo, this.harnessRows())
 
     // Update stored entry with new value + fingerprint-based ID + any metadata updates
     stored[index] = {

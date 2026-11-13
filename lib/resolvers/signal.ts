@@ -2,7 +2,7 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
+import { agentHome } from '@/lib/services/agent-home'
 
 export type ResolvedIdentity = {
   display: string      // what the admin entered (e.g. phone number)
@@ -11,10 +11,8 @@ export type ResolvedIdentity = {
 }
 
 function getSignalConfig(harnessId: string): { url: string; account: string } | null {
-  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
-  const dataDir = name === 'personal'
-    ? path.join(os.homedir(), '.hermes')
-    : path.join(os.homedir(), `.hermes-${name}`)
+  // Throws for an id whose stored row Swarm Map does not manage.
+  const dataDir = agentHome(harnessId)
   const envPath = path.join(dataDir, '.env')
 
   try {

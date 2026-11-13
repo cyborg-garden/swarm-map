@@ -22,6 +22,7 @@ import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-d
 import { defaultKeyPath } from '@/lib/services/github-credential-check'
 import { RETIRED_RUNTIMES, unmanagedRowNote } from '@/lib/services/runtime-adapter'
 import { storedUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
+import { newAgentHomeForName } from '@/lib/services/data-dir'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -276,7 +277,7 @@ export async function POST(request: Request) {
         .filter((p): p is number => typeof p === 'number'),
     })
 
-    const agentDataDir = path.join(os.homedir(), `.hermes-${slug}`)
+    const agentDataDir = newAgentHomeForName(slug)
 
     // Guard against clobbering an existing agent. Deploy is a CREATE-new flow and
     // every write below (.env with API keys, config.yaml, SOUL.md, BOOT.md) is

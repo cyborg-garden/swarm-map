@@ -32,12 +32,16 @@ import { generateStandaloneCompose, setComposeImage, readComposeImage, readCompo
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import {
-  UnsupportedRuntimeError, canonicalHarnessId, markRuntimeDrivable, unmanagedRowNote,
+  UnsupportedRuntimeError, canonicalHarnessId, harnessNameOfId, markRuntimeDrivable, unmanagedRowNote,
   unsupportedRowReason, unsupportedRuntimeReason,
 } from './runtime-adapter'
 
 export { unsupportedRowReason, unsupportedRuntimeReason }
 import type { ContainerRuntimeAdapter, RetiredHarnessRow } from './runtime-adapter'
+import { agentHomeForName, newAgentHomeForName, personalAgentHome } from './data-dir'
+
+/** The home of an id HarnessService has already found to be a Hermes agent's. */
+const managedHomeOfId = (id: string): string => agentHomeForName(harnessNameOfId(id))
 
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
@@ -857,21 +861,17 @@ export function guessDataDir(serviceName: string, containerName: string): string
   // hermes-personal → ~/.hermes (the default/personal instance)
   // hermes-osint → ~/.hermes-osint
   // seraph-thinker → ~/.hermes-seraph-thinker
-  const home = os.homedir()
   if (containerName === 'hermes-personal' || serviceName === 'hermes-personal') {
-    return path.join(home, '.hermes')
+    return personalAgentHome()
   }
   if (!serviceName) {
-    return path.join(home, '.hermes-' + (containerName || 'unknown'))
+    return newAgentHomeForName(containerName || 'unknown')
   }
   if (serviceName.startsWith('hermes-')) {
-    return path.join(home, '.' + serviceName)
+    return newAgentHomeForName(serviceName.slice('hermes-'.length))
   }
-  // seraph-* agents
-  if (serviceName.startsWith('seraph-')) {
-    return path.join(home, '.hermes-' + serviceName)
-  }
-  return path.join(home, '.hermes-' + serviceName)
+  // seraph-* agents, and anything else
+  return newAgentHomeForName(serviceName)
 }
 
 // --- Container-runtime seam (design §1b) ------------------------------------
@@ -934,8 +934,7 @@ export function adapterForRuntime(runtime?: Harness['runtime']): ContainerRuntim
 // name-keyed twin of guessDataDir — used by duplicate/remove, which work from
 // the harness name rather than the service name (D1).
 export function agentDataDirForName(name: string): string {
-  const home = os.homedir()
-  return name === 'personal' ? path.join(home, '.hermes') : path.join(home, '.hermes-' + name)
+  return agentHomeForName(name)
 }
 
 // Read the last N lines of a log file without slurping the whole thing.
@@ -1173,8 +1172,10 @@ export class HarnessService {
         platform: overlay.platform ?? 'hermes',
         channel: overlay.channel ?? (port ? `:${port}` : ''),
         models: overlay.models?.length ? overlay.models : effAdapter.readModels(dataDir),
-        costToday: getCostToday(id),
-        invocations: getInvocationsToday(id),
+        // This id's row was checked above (unsupportedRowReason), so the
+        // usage readers need not read harnesses.json again per agent.
+        costToday: getCostToday(id, managedHomeOfId),
+        invocations: getInvocationsToday(id, managedHomeOfId),
         tools: overlay.tools?.length ? overlay.tools : (this.autoDiscoverTools(name) ?? []),
         ...(overlay.health ? { health: overlay.health } : {}),
         ...(overlay.cacheState ? { cacheState: overlay.cacheState } : {}),
@@ -2038,7 +2039,7 @@ export class HarnessService {
       // Never delete the personal base ~/.hermes from a dashboard action — it's
       // the root install, not a disposable overlay. Guard is explicit rather
       // than relying on the old accidental ~/.hermes-personal miss.
-      const personalBase = path.join(os.homedir(), '.hermes')
+      const personalBase = personalAgentHome()
       if (dataDir !== personalBase && fs.existsSync(dataDir)) {
         fs.rmSync(dataDir, { recursive: true, force: true })
         filesDeleted = true
@@ -2115,7 +2116,7 @@ export class HarnessService {
     })
 
     // Agent data directory (where .env, config.yaml, SOUL.md live)
-    const agentDir = path.join(os.homedir(), `.hermes-${input.name}`)
+    const agentDir = newAgentHomeForName(input.name)
 
     // createOverlay provisions Hermes agents only.
     const adapter = hermesAdapter
@@ -2191,9 +2192,7 @@ export class HarnessService {
     // 2. Determine destination
     const slug = toHarnessSlug(name)
     this.assertNameNotHeld(slug)
-    const destDir = slug === 'personal'
-      ? path.join(os.homedir(), '.hermes')
-      : path.join(os.homedir(), `.hermes-${slug}`)
+    const destDir = agentHomeForName(slug)
 
     // 3. Copy source to managed location (fail if dest exists)
     let copied = false

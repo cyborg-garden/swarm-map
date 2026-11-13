@@ -1,9 +1,9 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import type { Settings, Model, Person, Surface, ModelAutoUpdateSettings } from '@/lib/types'
 import type { Storage } from './storage'
 import { assertNoNewline } from '@/lib/env-helpers'
+import { agentHomeIfManaged, type StoredRow } from './agent-home'
 
 /**
  * Validate a settings patch against an explicit allowlist before it is merged
@@ -167,14 +167,6 @@ const DEFAULT_SETTINGS: Settings = {
   controlBindHost: '127.0.0.1',
 }
 
-// Agent data directory mapping
-function agentDataDir(harnessName: string): string {
-  if (harnessName === 'personal') {
-    return path.join(os.homedir(), '.hermes')
-  }
-  return path.join(os.homedir(), `.hermes-${harnessName}`)
-}
-
 // Parse a .env file, return key→value map (raw, unmasked — for internal use only)
 function parseEnvFile(envPath: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -262,8 +254,11 @@ export class ConfigService {
     const surfaces: Surface[] = []
     const seenPlatforms = new Set<string>()
 
+    const rows = this.storage.read<StoredRow[]>('harnesses.json', [])
     for (const name of names) {
-      const dataDir = agentDataDir(name)
+      // A name whose stored row Swarm Map does not manage is not a Hermes agent.
+      const dataDir = agentHomeIfManaged(name, rows)
+      if (!dataDir) continue
       const envPath = path.join(dataDir, '.env')
       const env = parseEnvFile(envPath)
       const harnessId = `h_${name.replace(/-/g, '_')}`

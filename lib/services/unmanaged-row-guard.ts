@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server'
-import type { Harness } from '@/lib/types'
-import { Storage } from './storage'
-import { DATA_DIR } from './data-dir'
+import { storedHarnessRows } from './agent-home'
 import { findUnmanagedRow, unmanagedRowNote } from './runtime-adapter'
 
 /**
- * The first line of every route that changes one agent.
+ * The first line of every per-agent route, reads and writes alike.
  *
  * A stored row with a retired or unknown runtime is not a Hermes agent, but
  * its id still maps to a Hermes path: `h_foo` becomes `~/.hermes-foo` and
@@ -14,11 +12,16 @@ import { findUnmanagedRow, unmanagedRowNote } from './runtime-adapter'
  * This does: it answers 409 before the route reads its body.
  *
  * It reads harnesses.json and nothing else (no Docker call), so it is cheap
- * enough for the routes agents call. The only write that works on such a row
- * is DELETE /api/harnesses/:id, which forgets it.
+ * enough for the routes agents call. Two kinds of route do not call it:
+ * DELETE /api/harnesses/:id, which forgets the row, and the four GETs a
+ * running agent makes about itself (see agentHomeForSelfRead).
+ *
+ * This is the route-level half. The other half is agentHome() in
+ * ./agent-home, which the code below the routes uses to turn an id into a
+ * directory and which throws for the same rows.
  *
  * Returns the response to send, or null when the id is fine to act on.
- * app/api/harnesses/__tests__/retired-row-routes.test.ts calls every mutating
+ * app/api/harnesses/__tests__/retired-row-routes.test.ts calls every
  * per-agent route and fails if one of them skips this.
  */
 export function refuseUnmanagedRow(idOrSlug: string): NextResponse | null {
@@ -36,6 +39,5 @@ export function refuseUnmanagedRow(idOrSlug: string): NextResponse | null {
 
 /** The row harnesses.json holds for this id or agent name, if Swarm Map does not manage it. */
 export function storedUnmanagedRow(idOrSlug: string) {
-  const rows = new Storage(DATA_DIR).read<Partial<Harness>[]>('harnesses.json', [])
-  return findUnmanagedRow(Array.isArray(rows) ? rows : [], idOrSlug)
+  return findUnmanagedRow(storedHarnessRows(), idOrSlug)
 }

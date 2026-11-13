@@ -1,6 +1,5 @@
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import type { Harness } from '@/lib/types'
 import type { Storage } from './storage'
 import type { AuditService } from './audit'
@@ -8,6 +7,7 @@ import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/l
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
 import { canonicalHarnessId, findUnmanagedRow, retiredRuntimeOfId, unmanagedRowNote } from './runtime-adapter'
+import { agentHome, agentHomeForSelfRead, type StoredRow } from './agent-home'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
   GROUPS_VARS as DERIVED_GROUPS_VARS,
@@ -58,14 +58,22 @@ export function sanitizeGroupId(raw: unknown): string | null {
   return group
 }
 
-// Resolve an agent's data dir from its harness id — same convention the settings
-// and policy routes use (hermes-personal lives at ~/.hermes, others at
-// ~/.hermes-<name>). Throws on an id that fails isValidHarnessId.
+// An agent's data dir from its harness id, for READING what that agent's own
+// .env says about itself (its allowlists, its approved groups). This is the
+// self-read lane: the callers answer a running Hermes agent that asks by its
+// own slug, so the stored row is not consulted. Never write through this:
+// use writableAgentDataDir. Throws on an id that fails isValidHarnessId.
 export function agentDataDir(harnessId: string): string {
   if (!isValidHarnessId(harnessId)) throw new Error('Invalid harness id')
-  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
-  if (name === 'personal') return path.join(os.homedir(), '.hermes')
-  return path.join(os.homedir(), `.hermes-${name}`)
+  return agentHomeForSelfRead(harnessId)
+}
+
+// The same directory, for WRITING. Throws UnsupportedRuntimeError when the
+// stored row for this id is one Swarm Map does not manage: that row is not a
+// Hermes agent, and the directory its id maps to may be a real one's.
+export function writableAgentDataDir(harnessId: string, rows?: readonly StoredRow[]): string {
+  if (!isValidHarnessId(harnessId)) throw new Error('Invalid harness id')
+  return agentHome(harnessId, rows)
 }
 
 // Validate a native identity key before it enters the store. This is auth
@@ -339,7 +347,7 @@ export class SurfaceAdminService {
     let envPath: string
     let env: string
     try {
-      envPath = path.join(agentDataDir(harnessId), '.env')
+      envPath = path.join(writableAgentDataDir(harnessId, this.readOverlays()), '.env')
       env = fs.readFileSync(envPath, 'utf-8')
     } catch {
       return {} // no .env means no surface to update
@@ -487,7 +495,7 @@ export class SurfaceAdminService {
       return { ok: false, status: 400, error: 'addedByUserId is required (max 128 chars)' }
     }
 
-    const envPath = path.join(agentDataDir(harnessId), '.env')
+    const envPath = path.join(writableAgentDataDir(harnessId, this.readOverlays()), '.env')
     if (!fs.existsSync(envPath)) {
       return { ok: false, status: 400, error: 'Agent .env not found' }
     }
