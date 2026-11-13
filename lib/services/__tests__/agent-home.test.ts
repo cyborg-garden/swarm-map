@@ -136,6 +136,16 @@ describe('agentHome', () => {
     expect(agentHomeForSelfRead('h_foo.bar')).toBe(path.join(home, '.hermes-foo.bar'))
   })
 
+  // Docker also allows `hermes--x` and `hermes-_x`. Discovery gives both the
+  // id `h__x`; the readers called with it must get a path, not a throw.
+  it('maps a name that starts with a hyphen, and caps the length', () => {
+    expect(agentHome('h__x', [])).toBe(path.join(home, '.hermes--x'))
+    expect(agentHomeIfManaged('_x', [])).toBe(path.join(home, '.hermes-_x'))
+    expect(agentHome('a'.repeat(128), [])).toBe(path.join(home, '.hermes-' + 'a'.repeat(128)))
+    expect(() => agentHome('a'.repeat(129), [])).toThrow(/invalid harness id/i)
+    expect(agentHomeIfManaged('a'.repeat(129), [])).toBeNull()
+  })
+
   // A case-insensitive disk folds more than ASCII case: "ſeraph-doer" (long
   // s) and "ﬁsh" (fi ligature) open the directories of seraph-doer and fish.
   // No agent name holds such a character, so neither lane accepts one.

@@ -42,8 +42,8 @@ export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedH
 
 /**
  * Is this a name an agent can have? Every lane asks before the name goes
- * into a path. The alphabet is what Docker allows in a container name:
- * ASCII letters and digits, then '_', '.' and '-'. Agents Swarm Map makes
+ * into a path. The alphabet is the one Docker allows in a container name:
+ * ASCII letters and digits, '_', '.' and '-', up to 128 of them. Agents Swarm Map makes
  * use less (no '_' or '.'), but a container made by hand may use all of it,
  * and discovery gives such an agent the id `h_<that name>`.
  *
@@ -53,7 +53,8 @@ export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedH
  * slash and no whitespace, so the path stays one directory inside the home.
  */
 function isAgentName(name: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)
+  // A name of dots alone is never an agent's, and reads like a path step.
+  return /^[A-Za-z0-9_.-]{1,128}$/.test(name) && !/^\.+$/.test(name)
 }
 
 /**
