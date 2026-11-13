@@ -80,7 +80,10 @@ export const RULES: Rule[] = [
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'] },
 
   { id: 'budget.cap', statement: 'Monthly spend is capped.',
-    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only'] },
+    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter'] },
+
+  { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'model-route', tests: ['U:key-swap'] },
 
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.enabled`], enforcer: 'door', tests: ['D:out.still-allowed/dm-closed', 'D:out.still-allowed/room-removed', 'D:out.still-allowed/turn-dead'] },
