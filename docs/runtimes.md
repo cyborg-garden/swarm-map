@@ -28,7 +28,15 @@ runtimes. Hermes is its only member.
 Every stored agent row carries a `runtime` tag. A row with no tag is Hermes (rows written
 before the tag existed). Any other tag must have a registered adapter. There is no fallback.
 
+One exception to "no tag is Hermes": the old Letta integration never stored a tag. The only
+rows it could leave behind have the ids it minted (`h_letta_agent-<uuid>`, `h_letta_server`)
+and no tag. A row with one of those ids and no tag counts as retired. An explicit tag wins,
+so a Hermes agent that happens to be named `letta-server` and is tagged `hermes` is unaffected.
+
 - `adapterForRuntime` throws `UnsupportedRuntimeError` for a retired or unknown tag.
+- The row owns its id while it is stored. If a live container maps to the same id (a
+  `hermes-foo` container beside a retired `h_foo` row), it is not shown or driven until the
+  row is forgotten. It then appears as a plain Hermes agent with none of the row's settings.
 - Such rows are left out of `GET /api/harnesses` and have no detail page, so no start, stop,
   restart, duplicate, settings or delete-files call can reach them.
 - `GET /api/harnesses/retired` lists them with the stored tag and a reason. The fleet page

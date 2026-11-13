@@ -79,6 +79,38 @@ export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
 }
 
 /**
+ * Ids the old integration minted. It never wrote a `runtime` field to
+ * harnesses.json: its harnesses were built in memory. The one way such an id
+ * reached the file was the surface-admins write, which stores `{ id,
+ * surfaceAdmins }` with no tag. So a leftover row is recognised by its id.
+ *
+ * The agent form keeps the hyphens of `agent-<uuid>`. An id derived from a
+ * Hermes agent name has its hyphens turned into underscores, so the two
+ * cannot collide. The server id can equal that of a Hermes agent named
+ * `letta-server`, which is why the id only counts on a row with no tag: see
+ * retiredRuntimeOfRow.
+ */
+const RETIRED_ID_RUNTIME: ReadonlyArray<[RegExp, string]> = [
+  [/^h_letta_agent-/, 'letta'],
+  [/^h_letta_server$/, 'letta-server'],
+]
+
+/**
+ * The retired runtime a stored row belongs to, or null. A stored tag always
+ * wins. Only a row with no tag is judged by its id.
+ */
+export function retiredRuntimeOfRow(row: { id?: string; runtime?: string }): string | null {
+  if (row.runtime !== undefined) {
+    return Object.hasOwn(RETIRED_RUNTIMES, row.runtime) ? row.runtime : null
+  }
+  if (!row.id) return null
+  for (const [pattern, runtime] of RETIRED_ID_RUNTIME) {
+    if (pattern.test(row.id)) return runtime
+  }
+  return null
+}
+
+/**
  * Thrown instead of quietly treating a row as Hermes. `reason` is 'retired'
  * for a tag in RETIRED_RUNTIMES and 'unknown' for anything else that has no
  * registered adapter.
@@ -101,7 +133,7 @@ export class UnsupportedRuntimeError extends Error {
 export interface RetiredHarnessRow {
   id: string
   name: string
-  /** The tag exactly as stored. */
+  /** The tag as stored. For a row with no tag, the retired runtime its id marks. */
   runtime: string
   reason: 'retired' | 'unknown'
   /** One plain sentence for the UI. */

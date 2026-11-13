@@ -31,7 +31,7 @@ import type { ToolsService } from './tools'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
-import { RETIRED_RUNTIMES, UnsupportedRuntimeError } from './runtime-adapter'
+import { RETIRED_RUNTIMES, UnsupportedRuntimeError, retiredRuntimeOfRow } from './runtime-adapter'
 import type { ContainerRuntimeAdapter, RetiredHarnessRow } from './runtime-adapter'
 
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
@@ -922,6 +922,22 @@ export function unsupportedRuntimeReason(runtime?: string): 'retired' | 'unknown
 }
 
 /**
+ * Why a stored ROW cannot be driven, or null when it can. This is the check
+ * every reader of harnesses.json uses. It is unsupportedRuntimeReason plus one
+ * case the tag cannot see: a row with no tag whose id the old integration
+ * minted (see retiredRuntimeOfRow). `runtime` is the label to show for it.
+ */
+export function unsupportedRowReason(
+  row: { id?: string; runtime?: string } | undefined,
+): { reason: 'retired' | 'unknown'; runtime: string } | null {
+  if (!row) return null
+  const byTag = unsupportedRuntimeReason(row.runtime)
+  if (byTag) return { reason: byTag, runtime: String(row.runtime) }
+  const retired = retiredRuntimeOfRow(row)
+  return retired ? { reason: 'retired', runtime: retired } : null
+}
+
+/**
  * Pick the adapter for a harness's *persisted* runtime. `undefined` means
  * Hermes (rows that predate the field). A retired or unknown tag THROWS: it
  * used to fall back to Hermes, which would let a leftover row of another
@@ -1139,10 +1155,15 @@ export class HarnessService {
       // (pre-seam overlays) keep Hermes semantics, the historical default.
       const adapter = pickContainerAdapter(containerName)
       if (!adapter && !overlays[id]) continue
-      // A container only its overlay claims, whose overlay names a retired or
-      // unknown runtime, is not ours to project. It is reported by
-      // listRetired() instead; treating it as Hermes is the bug this prevents.
-      if (!adapter && unsupportedRuntimeReason(overlays[id]?.runtime)) continue
+      // A stored row with a retired or unknown runtime owns its id. No
+      // container is projected under that id while the row exists, whether
+      // the overlay is the only thing claiming the container or an adapter
+      // claims it by name too (a live `hermes-foo` beside a retired `h_foo`).
+      // Projecting it would merge the retired row's tier, mounts and env onto
+      // a Hermes agent and put the id in both list() and listRetired(). The
+      // row is reported by listRetired(); once it is forgotten, the container
+      // shows up here as a plain agent with none of the row's fields.
+      if (unsupportedRowReason(overlays[id])) continue
       const effAdapter = adapter ?? adapterForRuntime(overlays[id]?.runtime)
 
       const dataDir = effAdapter.dataDir(live.serviceName, containerName)
@@ -1254,7 +1275,7 @@ export class HarnessService {
       // (else a Docker-down dashboard shows a phantom "running").
       return this.storage
         .read<Partial<Harness>[]>(HARNESSES_FILE, [])
-        .filter((o) => o.id && !unsupportedRuntimeReason(o.runtime))
+        .filter((o) => o.id && !unsupportedRowReason(o))
         .map((o) => this.normalizeStored(o, 'stopped'))
     }
 
@@ -1264,7 +1285,7 @@ export class HarnessService {
     const overlays = this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])
     for (const overlay of overlays) {
       if (!overlay.id || discoveredIds.has(overlay.id)) continue
-      if (unsupportedRuntimeReason(overlay.runtime)) continue
+      if (unsupportedRowReason(overlay)) continue
       harnesses.push(this.normalizeStored(overlay, 'stopped'))
     }
 
@@ -1323,17 +1344,18 @@ export class HarnessService {
   }
 
   /**
-   * Stored rows whose runtime is retired or unknown. They are deliberately
-   * absent from list()/get(), so no route can reach a container verb through
-   * them. The only operation that works on one is remove(), which forgets the
-   * row and touches nothing else.
+   * Stored rows whose runtime is retired or unknown, including untagged rows
+   * with an id the old integration minted. They are deliberately absent from
+   * list()/get(), and discover() projects no container under their id, so no
+   * route can reach a container verb through them. The only operation that
+   * works on one is remove(), which forgets the row and touches nothing else.
    */
   listRetired(): RetiredHarnessRow[] {
     const rows: RetiredHarnessRow[] = []
     for (const o of this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])) {
-      const reason = unsupportedRuntimeReason(o.runtime)
-      if (!o.id || !reason) continue
-      const runtime = String(o.runtime)
+      const unsupported = unsupportedRowReason(o)
+      if (!o.id || !unsupported) continue
+      const { reason, runtime } = unsupported
       rows.push({
         id: o.id,
         name: o.name ?? o.id.replace(/^h_/, '').replace(/_/g, '-'),
@@ -1353,7 +1375,7 @@ export class HarnessService {
     const overlays = this.storage.read<Harness[]>(HARNESSES_FILE, [])
     const index = overlays.findIndex((h) => h.id === id)
     // A retired or unknown-runtime row is read-only.
-    if (index !== -1 && unsupportedRuntimeReason(overlays[index].runtime)) return undefined
+    if (index !== -1 && unsupportedRowReason(overlays[index])) return undefined
     if (index !== -1) {
       overlays[index] = { ...overlays[index], ...partial }
     } else {
@@ -1733,7 +1755,7 @@ export class HarnessService {
     const source = overlays.find((h) => h.id === sourceId)
     if (!source) return undefined
     // Never clone a retired or unknown-runtime row into a Hermes agent.
-    if (unsupportedRuntimeReason(source.runtime)) return undefined
+    if (unsupportedRowReason(source)) return undefined
 
     const newId = 'h_' + newName.replace(/-/g, '_').replace(/\s+/g, '_')
 
@@ -1976,7 +1998,7 @@ export class HarnessService {
     // A retired or unknown-runtime row: forget the row and nothing else. Its
     // name must never be resolved to `hermes-<name>` or `~/.hermes-<name>`,
     // which may belong to a real agent or to nothing Swarm Map created.
-    const unsupported = unsupportedRuntimeReason(overlay.runtime)
+    const unsupported = unsupportedRowReason(overlay)
     if (unsupported) {
       overlays.splice(index, 1)
       this.storage.write(HARNESSES_FILE, overlays)
@@ -1984,7 +2006,7 @@ export class HarnessService {
         who: 'admin',
         what: 'unregister',
         target: name,
-        meta: { runtime: String(overlay.runtime), reason: unsupported },
+        meta: { runtime: unsupported.runtime, reason: unsupported.reason },
       })
       return { removed: true, stopped: false, filesDeleted: false, volumeRemoved: false }
     }

@@ -94,9 +94,55 @@ describe('R1/R3: the Hermes-to-Letta bridge stays deleted', () => {
 const TRANSLATED = (f: string) =>
   f === 'README.zh-CN.md' || f === 'README.zh-TW.md' || f.startsWith('scripts/__tests__/fixtures/readme-pair/')
 
+// Each entry is a reason, not a convenience. Adding one is a decision.
+const MAY_SAY_LETTA: Record<string, string> = {
+  'lib/services/runtime-adapter.ts': 'the retired-runtime table (R4)',
+  'lib/services/__tests__/retired-runtime.test.ts': 'R4 tests',
+  'lib/services/__tests__/runtime-adapter.test.ts': 'R4: no Hermes fallback',
+  'lib/services/__tests__/agent-deploy-templates.test.ts': 'R3 test',
+  'lib/services/__tests__/deploy-route.integration.test.ts': 'R5 tests',
+  'app/api/setup/deploy/route.ts': 'the R5 refusal message',
+  'app/api/harnesses/retired/route.test.ts': 'retired-row fixture',
+  'scripts/sync-readme-zh.mjs': 'translator glossary: product names stay in English',
+  'docs/runtimes.md': 'says what was removed and what comes next',
+  'README.md': 'points at docs/runtimes.md for the retired runtime',
+}
+
+/**
+ * Where the harness-agnostic contract lives (spec section 4: `lib/core/` for
+ * types and pure functions, `lib/door/` for the sidecar). That contract names
+ * every harness by id, `'letta-code'` included (spec 4.5,
+ * `Capabilities.harness`), so the bare word is expected there. The specific
+ * strings of the old integration (server image, port, REST path, bridge
+ * vars) are still banned in these directories by the checks around this one.
+ */
+const SHARED_CONTRACT_DIRS = ['lib/core/', 'lib/door/']
+
+const removedPathAllowed = (f: string) =>
+  f === SELF || MIGRATION_DOCS.includes(f) || f.startsWith(LETTA_CODE_DIR) || TRANSLATED(f)
+
+/** May this file contain the bare word "letta"? */
+const mayNameLetta = (f: string) =>
+  removedPathAllowed(f) ||
+  Object.hasOwn(MAY_SAY_LETTA, f) ||
+  SHARED_CONTRACT_DIRS.some((dir) => f.startsWith(dir))
+
 describe('R1: the old Letta server client stays deleted', () => {
-  const allow = (f: string) =>
-    f === SELF || MIGRATION_DOCS.includes(f) || f.startsWith(LETTA_CODE_DIR) || TRANSLATED(f)
+  const allow = removedPathAllowed
+
+  it('the shared contract may name the new harness id; the old paths stay banned there', () => {
+    // The Pi branch's lib/door/protocol.ts lists 'letta-code' as a harness id.
+    expect(mayNameLetta('lib/door/protocol.ts')).toBe(true)
+    expect(mayNameLetta('lib/core/policy/types.ts')).toBe(true)
+    // Not a blanket pass: the word is still refused everywhere else...
+    expect(mayNameLetta('lib/services/harness.ts')).toBe(false)
+    expect(mayNameLetta('lib/corex/a.ts')).toBe(false)
+    expect(mayNameLetta('app/api/harnesses/route.ts')).toBe(false)
+    // ...and the removed integration's own strings are refused in the shared
+    // dirs too, because those checks do not consult the word list.
+    expect(allow('lib/door/protocol.ts')).toBe(false)
+    expect(allow('lib/core/policy/types.ts')).toBe(false)
+  })
 
   it('nothing pins the retired server image', () => {
     expect(hits(/letta\/letta:/i, allow)).toEqual([])
@@ -111,21 +157,7 @@ describe('R1: the old Letta server client stays deleted', () => {
   })
 
   it('the word "letta" appears only where this list says it may', () => {
-    // Each entry is a reason, not a convenience. Adding one is a decision.
-    const MAY_SAY_LETTA: Record<string, string> = {
-      'lib/services/runtime-adapter.ts': 'the retired-runtime table (R4)',
-      'lib/services/__tests__/retired-runtime.test.ts': 'R4 tests',
-      'lib/services/__tests__/runtime-adapter.test.ts': 'R4: no Hermes fallback',
-      'lib/services/__tests__/agent-deploy-templates.test.ts': 'R3 test',
-      'lib/services/__tests__/deploy-route.integration.test.ts': 'R5 tests',
-      'app/api/setup/deploy/route.ts': 'the R5 refusal message',
-      'app/api/harnesses/retired/route.test.ts': 'retired-row fixture',
-      'scripts/sync-readme-zh.mjs': 'translator glossary: product names stay in English',
-      'docs/runtimes.md': 'says what was removed and what comes next',
-      'README.md': 'points at docs/runtimes.md for the retired runtime',
-    }
-    const allowWord = (f: string) => allow(f) || Object.hasOwn(MAY_SAY_LETTA, f)
-    expect(hits(/letta/i, allowWord)).toEqual([])
+    expect(hits(/letta/i, mayNameLetta)).toEqual([])
     // An allow entry for a file that no longer exists is a stale hole.
     const files = new Set(repoFiles())
     expect(Object.keys(MAY_SAY_LETTA).filter((f) => !files.has(f))).toEqual([])

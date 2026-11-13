@@ -11,6 +11,16 @@
  * The rule under test: such a row is kept out of list()/get() entirely (so no
  * route can reach a container verb through it), is reported by listRetired()
  * with a label, and the only thing that works on it is "forget the row".
+ *
+ * The row owns its id for as long as it is stored. That holds even when a
+ * live container called `hermes-<name>` maps to the same id: the container is
+ * not projected until the row is forgotten, and then it appears as a plain
+ * Hermes agent with none of the row's fields.
+ *
+ * A row can also be retired by its id alone. The old integration never wrote
+ * a `runtime` field to harnesses.json; the only rows it could leave there
+ * have the ids it minted (`h_letta_agent-<uuid>`, `h_letta_server`) and no
+ * tag at all.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { HarnessService, adapterForRuntime, hermesAdapter } from '../harness'
@@ -161,6 +171,178 @@ describe('a stored row with a retired runtime (R4)', () => {
     ])
     expect(() => service.list()).not.toThrow()
     expect(service.list().map((h) => h.id)).not.toContain('h_old')
+  })
+
+  describe('a live container named hermes-<name> shares the retired row\'s id', () => {
+    const runHermesOld = () => {
+      mock(docker.listComposeProjects).mockReturnValue([
+        { name: 'old', status: 'running', configFiles: [composeFile] },
+      ])
+      mock(docker.inspectContainers).mockReturnValue([
+        {
+          name: 'hermes-old',
+          service: 'hermes-old',
+          state: 'running',
+          status: 'Up',
+          ports: [{ published: 8650, target: 8000 }],
+          composeFile,
+        },
+      ])
+    }
+
+    beforeEach(() => {
+      // Fields that would be rendered into a Hermes compose if the row's
+      // overlay were ever merged onto the container.
+      const rows = storage.read<Record<string, unknown>[]>('harnesses.json', [])
+      storage.write(
+        'harnesses.json',
+        rows.map((r) =>
+          r.id === 'h_old'
+            ? {
+                ...r,
+                tier: 'public',
+                extraMounts: [{ host: '/etc', container: '/host-etc' }],
+                extraEnv: { LEFTOVER: '1' },
+                pinnedImageRef: 'example.invalid/leftover:1',
+              }
+            : r,
+        ),
+      )
+      runHermesOld()
+    })
+
+    it('the container is not projected: the id is in neither list() nor get()', () => {
+      expect(service.list().map((h) => h.id)).not.toContain('h_old')
+      expect(service.get('h_old')).toBeUndefined()
+    })
+
+    it('the id is reported once, by listRetired() only', () => {
+      expect(service.listRetired().filter((r) => r.id === 'h_old')).toHaveLength(1)
+      expect(service.list().filter((h) => h.id === 'h_old')).toHaveLength(0)
+    })
+
+    it('start, stop, restart and composeTarget never reach Docker', () => {
+      expect(() => service.start('h_old')).toThrow()
+      expect(() => service.stop('h_old')).toThrow()
+      expect(() => service.restart('h_old', 'quick')).toThrow()
+      expect(service.composeTarget('h_old')).toBeUndefined()
+      expect(docker.start).not.toHaveBeenCalled()
+      expect(docker.stop).not.toHaveBeenCalled()
+      expect(docker.restart).not.toHaveBeenCalled()
+    })
+
+    it('forgetting the row touches no container, and the container then appears as plain Hermes', () => {
+      const result = service.remove('h_old', true)
+      expect(result).toEqual({ removed: true, stopped: false, filesDeleted: false, volumeRemoved: false })
+      expect(docker.down).not.toHaveBeenCalled()
+      expect(docker.stop).not.toHaveBeenCalled()
+      expect(fs.existsSync(path.join(decoyDataDir, 'SOUL.md'))).toBe(true)
+
+      const live = service.get('h_old')
+      expect(live).toMatchObject({ id: 'h_old', runtime: 'hermes', status: 'running', tier: 'individual' })
+      // Nothing from the forgotten row survives onto the Hermes agent.
+      expect(live).not.toHaveProperty('extraMounts')
+      expect(live).not.toHaveProperty('extraEnv')
+      expect(live).not.toHaveProperty('pinnedImageRef')
+      expect(service.listRetired().map((r) => r.id)).not.toContain('h_old')
+      // And it is an ordinary, editable agent again.
+      expect(service.updateConfig('h_old', { tier: 'team' })?.tier).toBe('team')
+    })
+
+    it('control: without the retired row the same container IS listed and stoppable', () => {
+      // Proves the checks above can fail: this is what "treated as Hermes" looks like.
+      storage.write('harnesses.json', [{ id: 'h_old', name: 'old', runtime: 'hermes' }])
+      expect(service.get('h_old')).toMatchObject({ runtime: 'hermes', status: 'running' })
+      service.stop('h_old')
+      expect(docker.stop).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('a row the old integration left behind: its id, and no runtime tag', () => {
+    const AGENT_ID = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
+    const SERVER_ID = 'h_letta_server'
+    let agentDecoy: string
+    let serverDecoy: string
+
+    beforeEach(() => {
+      // Exactly what SurfaceAdminsService wrote for an id it had no row for:
+      // `{ id, surfaceAdmins }` and nothing else.
+      storage.write('harnesses.json', [
+        { id: 'h_iris', name: 'iris', runtime: 'hermes', tier: 'team' },
+        { id: AGENT_ID, surfaceAdmins: { discord: ['1'] } },
+        { id: SERVER_ID, surfaceAdmins: { discord: ['1'] } },
+      ])
+      // What remove(id, true) would resolve these to if they were Hermes.
+      agentDecoy = path.join(tmpDir, '.hermes-' + AGENT_ID.replace(/^h_/, '').replace(/_/g, '-'))
+      serverDecoy = path.join(tmpDir, '.hermes-letta-server')
+      for (const d of [agentDecoy, serverDecoy]) {
+        fs.mkdirSync(d)
+        fs.writeFileSync(path.join(d, 'SOUL.md'), 'not yours to delete')
+      }
+    })
+
+    it('is not in list() or get(), on the stored path and on the merge path', () => {
+      expect(service.list().map((h) => h.id)).toEqual(['h_iris'])
+      runIris()
+      expect(service.list().map((h) => h.id)).toEqual(['h_iris'])
+      expect(service.get(AGENT_ID)).toBeUndefined()
+      expect(service.get(SERVER_ID)).toBeUndefined()
+    })
+
+    it('listRetired() reports both as retired', () => {
+      const retired = service.listRetired()
+      expect(retired.map((r) => r.id).sort()).toEqual([AGENT_ID, SERVER_ID].sort())
+      for (const r of retired) {
+        expect(r.reason).toBe('retired')
+        expect(r.note).toMatch(/retired/i)
+      }
+    })
+
+    it('updateConfig, start and stop refuse', () => {
+      const before = fs.readFileSync(path.join(tmpDir, 'harnesses.json'), 'utf-8')
+      expect(service.updateConfig(AGENT_ID, { tier: 'public' })).toBeUndefined()
+      expect(fs.readFileSync(path.join(tmpDir, 'harnesses.json'), 'utf-8')).toBe(before)
+      expect(() => service.start(AGENT_ID)).toThrow()
+      expect(() => service.stop(SERVER_ID)).toThrow()
+      expect(docker.start).not.toHaveBeenCalled()
+      expect(docker.stop).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['agent', () => AGENT_ID, () => agentDecoy],
+      ['server', () => SERVER_ID, () => serverDecoy],
+    ])('remove(%s row, deleteFiles) only forgets the row', (_label, id, decoy) => {
+      const result = service.remove(id(), true)
+      expect(result).toEqual({ removed: true, stopped: false, filesDeleted: false, volumeRemoved: false })
+      expect(docker.down).not.toHaveBeenCalled()
+      expect(docker.removeVolume).not.toHaveBeenCalled()
+      expect(fs.existsSync(path.join(decoy(), 'SOUL.md'))).toBe(true)
+      expect(service.listRetired().map((r) => r.id)).not.toContain(id())
+    })
+
+    it('a live hermes-letta-server container is not projected while the untagged row is stored', () => {
+      mock(docker.listComposeProjects).mockReturnValue([
+        { name: 'x', status: 'running', configFiles: [composeFile] },
+      ])
+      mock(docker.inspectContainers).mockReturnValue([
+        { name: 'hermes-letta-server', service: 'hermes-letta-server', state: 'running', status: 'Up', ports: [], composeFile },
+      ])
+      expect(service.list().map((h) => h.id)).not.toContain(SERVER_ID)
+      expect(() => service.stop(SERVER_ID)).toThrow()
+      expect(docker.stop).not.toHaveBeenCalled()
+    })
+
+    it('control: Hermes agents whose names merely start with "letta" are untouched', () => {
+      storage.write('harnesses.json', [
+        // Untagged, name-derived id: underscores only, so not an old agent id.
+        { id: 'h_letta_agent_smith', name: 'letta-agent-smith' },
+        { id: 'h_letta_fan', name: 'letta-fan' },
+        // The server id, but explicitly tagged Hermes: the tag wins.
+        { id: SERVER_ID, name: 'letta-server', runtime: 'hermes' },
+      ])
+      expect(service.list().map((h) => h.id).sort()).toEqual(['h_letta_agent_smith', 'h_letta_fan', SERVER_ID])
+      expect(service.listRetired()).toEqual([])
+    })
   })
 
   it('listRetired() reports each one with its stored tag and a reason', () => {
