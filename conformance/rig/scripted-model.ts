@@ -26,6 +26,10 @@ export interface ScriptEntry {
   noUsage?: boolean
   /** Report exactly this where usage goes, plain or streamed, however little sense it makes. */
   usage?: unknown
+  /** Streamed only: report usage once, on the opening event, before any text has gone out. */
+  usageFirstOnly?: boolean
+  /** Streamed only: write events as `data:{...}` with no space after the colon, which SSE allows. */
+  tightData?: boolean
   /** Streamed only: report running usage on every event, not once at the end. */
   usageEveryEvent?: boolean
   /** Streamed only: drop the connection after the text, before the finish, usage and [DONE] events. */
@@ -125,19 +129,19 @@ export function startScriptedModel(opts: {
       return
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const send = (data: unknown): void => { res.write(`data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`) }
+    const send = (data: unknown): void => { res.write(`data:${entry?.tightData ? '' : ' '}${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`) }
     let sent = 0
     // Running totals, as some providers send them: they end at the true figure.
     const running = () => ({ prompt_tokens: USAGE.prompt_tokens, completion_tokens: Math.min(++sent, USAGE.completion_tokens), total_tokens: 0 })
     const chunk = (delta: unknown, finish_reason: string | null = null) =>
       ({ ...base, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason }], ...(entry?.usageEveryEvent ? { usage: running() } : {}) })
-    send(chunk({ role: 'assistant', content: '' }))
+    send({ ...chunk({ role: 'assistant', content: '' }), ...(entry?.usageFirstOnly ? { usage: { prompt_tokens: USAGE.prompt_tokens, completion_tokens: 0 } } : {}) })
     if (toolCall) send(chunk({ tool_calls: [{ index: 0, ...toolCall }] }))
     else for (const piece of text.match(pieceOf) ?? []) send(chunk({ content: piece }))
     // Dropped only once the text has really gone out, as a provider that dies mid-reply.
     if (entry?.cutStream) { res.write(': cut\n\n', () => res.destroy()); return }
     if (!entry?.noFinish) send(chunk({}, finish))
-    if (body.stream_options?.include_usage && !entry?.noUsage) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: usageOf(entry) })
+    if (body.stream_options?.include_usage && !entry?.noUsage && !entry?.usageFirstOnly) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: usageOf(entry) })
     send('[DONE]')
     res.end()
   }

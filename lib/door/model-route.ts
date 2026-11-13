@@ -25,6 +25,8 @@
 //   agent's sessions wait for each other's model calls.
 // - Spend lives in a ledger (spend-ledger.ts), by calendar month, not in this
 //   process. A restart does not reset it and a new month starts from nothing.
+//   A ledger that cannot be written stops the route: no call is forwarded
+//   while the ledger refuses a write, or ever again once it has lost a charge.
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { decide } from '../core/decide.ts'
@@ -99,13 +101,23 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   const count = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
   const believed = (u: Usage | undefined): Usage | undefined =>
     u && count(u.inTokens) && count(u.outTokens) && u.inTokens > 0 ? u : undefined
-  const charge = (model: string, usage: Usage): void => {
+  // Once the ledger has failed to take a charge, what it holds is less than what was spent,
+  // and the next process would start from that. So the route stops forwarding for good.
+  let ledgerFailed = false
+  /** Put a charge on the books. False if the ledger would not take it. */
+  const charge = (model: string, usage: Usage): boolean => {
     const price = opts.prices[model]
     const usd = (usage.inTokens * price.inPerMTok + usage.outTokens * price.outPerMTok) / 1_000_000
     meter.inTokens += usage.inTokens
     meter.outTokens += usage.outTokens
     meter.usd += usd
-    opts.ledger.add(now(), usd)
+    try { opts.ledger.add(now(), usd) } catch { ledgerFailed = true }
+    return !ledgerFailed
+  }
+  /** Can the ledger be written right now? Asked before a call is forwarded, by writing nothing to it. */
+  const ledgerWritable = (): boolean => {
+    if (ledgerFailed) return false
+    try { opts.ledger.add(now(), 0); return true } catch { return false }
   }
 
   // One at a time, in arrival order, for calls made under a refusing cap.
@@ -143,11 +155,18 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     const release = opts.policy().budget?.onExceed === 'refuse' ? await takeTurn() : () => {}
     try {
       const policy = opts.policy()
-      const d = decide(policy, { kind: 'model', provider: shape.id, model }, { spentUsdThisMonth: opts.ledger.spent(now()) })
+      let rule = 'budget.cap'
       const receipt = (verdict: 'allow' | 'deny', why: string, bytes: number, note?: string): void => opts.receipts.write({
         ts: now().toISOString(), agentId: policy.agentId, policyHash: policy.hash,
-        event: { kind: 'model', bytes }, verdict, rule: d.rule, why, ...(note ? { note } : {}),
+        event: { kind: 'model', bytes }, verdict, rule, why, ...(note ? { note } : {}),
       })
+      const NO_LEDGER = 'Spend cannot be recorded, so no model call is forwarded.'
+      if (!ledgerWritable()) {
+        receipt('deny', NO_LEDGER, Buffer.byteLength(raw), 'ledger')
+        return fail(res, 503, NO_LEDGER)
+      }
+      const d = decide(policy, { kind: 'model', provider: shape.id, model }, { spentUsdThisMonth: opts.ledger.spent(now()) })
+      rule = d.rule
       receipt(d.verdict === 'allow' ? 'allow' : 'deny', d.why, Buffer.byteLength(raw))
       if (d.verdict !== 'allow') return fail(res, 402, d.why)
 
@@ -172,15 +191,19 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         billable = upstream.ok
         await relay(upstream, res, Boolean(body.stream), {
           usage: (u) => { usage = believed(u) ?? usage },
+          // A figure covers what came before it. Text after it is not in it, so it no longer stands.
+          textAfterUsage: () => { usage = undefined },
           received: (n) => { received += n },
         })
       } finally {
-        if (usage) charge(model, usage)
+        let recorded = true
+        if (usage) recorded = charge(model, usage)
         else if (billable) {
           state.unmetered++
-          charge(model, { inTokens: Buffer.byteLength(forward), outTokens: received })
+          recorded = charge(model, { inTokens: Buffer.byteLength(forward), outTokens: received })
           receipt('allow', 'The provider reported no usage, so the call was charged at one token per byte.', received, 'unmetered')
         }
+        if (!recorded) receipt('deny', 'A charge could not be recorded. No further model call is forwarded.', received, 'ledger')
       }
     } finally {
       release()
@@ -190,7 +213,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   /** Pass the provider's reply back to the cell, redacted, reporting usage and size as they go by. */
   async function relay(
     upstream: Response, res: http.ServerResponse, stream: boolean,
-    seen: { usage(u: { inTokens: number; outTokens: number } | undefined): void; received(bytes: number): void },
+    seen: { usage(u: { inTokens: number; outTokens: number } | undefined): void; textAfterUsage(): void; received(bytes: number): void },
   ): Promise<void> {
     if (!stream || !upstream.body) {
       const text = await upstream.text()
@@ -215,14 +238,17 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     }
     const flush = (event: string): void => {
       const lines = event.split('\n')
-      const at = lines.findIndex((line) => line.startsWith('data: '))
-      const data = at === -1 ? undefined : lines[at].slice('data: '.length)
+      // SSE allows `data:` with or without one space after the colon.
+      const at = lines.findIndex((line) => line.startsWith('data:'))
+      const data = at === -1 ? undefined : lines[at].slice('data:'.length).replace(/^ /, '')
       if (data === undefined) return write(event) // a comment or a bare event name
       if (data === '[DONE]') { drain(); return write(event) }
       let json: unknown
       try { json = JSON.parse(data) } catch { return write(event) } // not JSON: checked as it stands
-      seen.usage(shape.usage(json))
+      const reported = shape.usage(json)
       const pieces = shape.streamText(json)
+      if (reported) seen.usage(reported)
+      else if (pieces.some((piece) => piece.text !== '')) seen.textAfterUsage()
       if (pieces.length === 0) return write(event)
       for (const piece of pieces) {
         const clean = redact((held.get(piece.key) ?? '') + piece.text)

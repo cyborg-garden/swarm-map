@@ -2,7 +2,7 @@
 //
 // The model route: the harness talks to the sidecar with a placeholder, the
 // sidecar swaps in the real key, counts tokens and refuses over budget.
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,7 +10,7 @@ import { armTripwire, tripwireAttempts } from '../../../conformance/guards/tripw
 import { startScriptedModel, type ScriptedModel, type ScriptEntry } from '../../../conformance/rig/scripted-model.ts'
 import { applyPatch, loadFixturePolicy } from '../../../conformance/scenarios/load.ts'
 import { withHash } from '../../core/policy/canonical.ts'
-import { startModelRoute, type ModelRoute } from '../model-route.ts'
+import { REDACTED, startModelRoute, type ModelRoute } from '../model-route.ts'
 import { OPENAI_CHAT, type ModelShape } from '../model-shapes.ts'
 import { createReceiptLog } from '../receipts.ts'
 import { createFileLedger, createMemoryLedger, type SpendLedger } from '../spend-ledger.ts'
@@ -87,6 +87,16 @@ describe('model route', () => {
     const streamed = await (await ask(user('CANARY-m', { stream: true }))).text()
     expect(streamed).not.toContain(UPSTREAM)
     expect(streamedText(streamed)).toBe(`my key is [redacted:held-secret] ok FAKE-MODEL-${NONCE}`)
+  })
+
+  it('[U:key-swap] a split key is still redacted when events are written as data: with no space', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: `the key is ${UPSTREAM} ok`, noStamp: true, tightData: true }], { streamChunk: 5 })
+    const raw = await (await ask(user('CANARY-m', { stream: true }))).text()
+    expect(raw).not.toContain(UPSTREAM)
+    const text = raw.split('\n\n').map((e) => e.replace(/^data: ?/, '')).filter((d) => d && d !== '[DONE]')
+      .map((d) => (JSON.parse(d) as { choices: { delta?: { content?: string } }[] }).choices[0]?.delta?.content ?? '').join('')
+    expect(text).toBe(`the key is ${REDACTED} ok`)
+    expect(route!.meter().inTokens).toBe(100) // and its usage event was still read
   })
 
   it('[U:key-swap] a key that arrives whole in one stream event is redacted', async () => {
@@ -212,6 +222,13 @@ describe('model route', () => {
     expect((await ask(user('CANARY-m two'))).status).toBe(200)
   })
 
+  it('[U:budget-meter] under a record that is not valid the call is refused, and the receipt names that rule', async () => {
+    const { receipts } = await start(policy({ posture: 'Public' }))
+    expect((await ask(user('CANARY-m'))).status).toBe(402)
+    expect(model!.requests).toEqual([])
+    expect(receipts.all().map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/ctl.valid'])
+  })
+
   it('[U:budget-meter] a model with no price is refused rather than counted as free', async () => {
     await start()
     const res = await ask({ model: 'unpriced', messages: [{ role: 'user', content: 'x' }] })
@@ -322,6 +339,15 @@ describe('model route: a call the provider did not meter', () => {
     expect(route!.unmetered).toBe(0)
   })
 
+  it('[U:budget-unmetered] a usage figure given before the text does not cover the text that follows it', async () => {
+    const long = 'y'.repeat(4000)
+    await start(policy(), [{ match: 'CANARY-m', text: long, usageFirstOnly: true }])
+    await (await ask(user('CANARY-m', { stream: true }))).text()
+    const m = route!.meter()
+    expect(m.outTokens).toBeGreaterThanOrEqual(4000)
+    expect(route!.unmetered).toBe(1)
+  })
+
   it('[U:budget-unmetered] a reply that is not JSON is charged the same way', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: 'ignored', rawBody: '<html>gateway says hi</html>' }])
     const res = await ask(user('CANARY-m'))
@@ -377,6 +403,53 @@ describe('model route: the cap under parallel calls', () => {
     await start(policy({ budget: { monthlyUsd: 1, onExceed: 'warn' } }), [{ match: 'CANARY-p', text: 'slow', delayMs: 200 }])
     expect(await five()).toEqual([200, 200, 200, 200, 200])
     expect(model!.maxInFlight).toBeGreaterThan(1)
+  })
+})
+
+// A cap is only as good as the record of what was spent. If the record cannot
+// be written, the next process would start from an old figure, so the route
+// stops forwarding instead of carrying on unrecorded.
+describe('model route: a ledger that cannot be written', () => {
+  let dir: string | undefined
+  afterEach(() => { if (dir) { chmodSync(dir, 0o755); rmSync(dir, { recursive: true, force: true }) } dir = undefined })
+
+  it('[U:budget-ledger] a ledger file that cannot be written refuses the call before it reaches the model', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-ledger-'))
+    const ledger = createFileLedger(path.join(dir, 'spend.json'))
+    chmodSync(dir, 0o555)
+    const { receipts } = await start(capped(2), undefined, { ledger })
+    const res = await ask(user('CANARY-m'))
+    expect(res.status).toBe(503)
+    expect(model!.requests).toEqual([])
+    expect(receipts.all().map((r) => `${r.verdict}/${r.rule}/${r.note ?? ''}`)).toEqual(['deny/budget.cap/ledger'])
+    expect(route!.meter().requests).toBe(0)
+  })
+
+  it('[U:budget-ledger] with no cap set the spend is still recorded, so the same refusal applies', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-ledger-'))
+    const ledger = createFileLedger(path.join(dir, 'spend.json'))
+    chmodSync(dir, 0o555)
+    await start(policy(), undefined, { ledger })
+    expect((await ask(user('CANARY-m'))).status).toBe(503)
+    expect(model!.requests).toEqual([])
+  })
+
+  it('[U:budget-ledger] a charge that could not be recorded stops every later call, and a receipt says why', async () => {
+    const inner = createMemoryLedger()
+    // Takes the check before the call, then fails on the real charge.
+    const flaky: SpendLedger = { spent: (at) => inner.spent(at), add: (at, usd) => { if (usd > 0) throw new Error('disk full'); inner.add(at, usd) } }
+    const { receipts } = await start(capped(100), undefined, { ledger: flaky })
+    expect((await ask(user('CANARY-m one'))).status).toBe(200) // already answered when the charge failed
+    const second = await ask(user('CANARY-second'))
+    expect(second.status).toBe(503)
+    expect(model!.heard('CANARY-second')).toBe(false)
+    expect(receipts.all().map((r) => `${r.verdict}/${r.note ?? ''}`)).toEqual(['allow/', 'deny/ledger', 'deny/ledger'])
+  })
+
+  it('[U:budget-ledger] positive control: a ledger that can be written lets the call through', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-ledger-'))
+    await start(capped(2), undefined, { ledger: createFileLedger(path.join(dir, 'spend.json')) })
+    expect((await ask(user('CANARY-m'))).status).toBe(200)
   })
 })
 
