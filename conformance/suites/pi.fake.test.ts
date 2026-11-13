@@ -32,7 +32,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
-      ['chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env'])
+      ['chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'unwatched'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)
@@ -45,6 +45,12 @@ describe('must-fail: broken shims turn their named checks red', () => {
     for (const id of red) expect(results[id].pass, `${shim} must fail ${id}`).toBe(false)
     for (const id of green) expect(results[id].pass, `${shim} must still pass ${id}: ${results[id].detail}`).toBe(true)
   }, 120_000)
+
+  it('[U:must-fail] a harness that ran with no tripwire inside it fails C9p for that reason, not for another', async () => {
+    const [c9p] = await runChecks({ harness, shim: 'unwatched' }, ['C9p'])
+    expect(c9p.pass).toBe(false)
+    expect(c9p.detail).toBe('no tripwire was armed inside the harness process, so nothing was checked')
+  }, 30_000)
 
   it('[U:must-fail] with no gate, the shim sends the harness nothing: no turn reaches the model and no tool runs', async () => {
     for (const shim of ['gate-missing', 'gate-silent']) {

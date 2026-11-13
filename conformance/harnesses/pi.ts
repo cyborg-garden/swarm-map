@@ -58,6 +58,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       case 'leaks-env': return { ...base, rigEnv: { ...watched, SWARMLAB_LEAK: cell.upstreamKey } }
       case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(piEnv(base)), ...watched } }
       case 'dials-out': return { ...base, gate: { path: path.join(BROKEN, 'gate-dials-out.ts') } }
+      case 'unwatched': return { ...base, rigEnv: {} }
       default: throw new Error(`the Pi harness has no shim variant '${variant}'`)
     }
   }
@@ -112,6 +113,11 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       'dials-out': {
         what: 'A working gate that also tries to connect to an address outside this machine when Pi starts',
         red: allBut('C3'), green: ['C3'],
+      },
+      // Everything works, but nothing was watching. No evidence is not a pass: C9p must say so.
+      'unwatched': {
+        what: 'Pi started without the tripwire loaded inside it',
+        red: ['C9p'], green: allBut('C9p'),
       },
     },
     rows: [
