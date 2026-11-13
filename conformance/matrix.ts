@@ -51,7 +51,7 @@ export interface Matrix extends MatrixMeta {
   suiteTrusted: boolean
 }
 
-const NEEDS_DOCKER = 'needs the Docker cell, which is not built yet'
+const NEEDS_DOCKER = 'needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version'
 const NOT_BUILT = 'not built in this slice'
 
 /** Checks in the spec that this suite does not run for any harness, and why. */

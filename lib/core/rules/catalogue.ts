@@ -112,11 +112,14 @@ export const RULES: Rule[] = [
   // Both model-route rules hold only for a harness whose model wire format has
   // a ModelShape (lib/door/model-shapes.ts). One exists: OpenAI chat-completions.
   // A harness that speaks the Anthropic Messages API has neither rule yet.
+  // Both are walls, and the route is only half of each. C12 and C8p show the
+  // route does its part. That the harness has no other way to a model (C9) or
+  // to a key (C8) needs a sealed cell, so neither rule is claimed without one.
   { id: 'budget.cap', statement: 'Monthly spend is capped, for a harness that talks to its model in the OpenAI chat format.',
-    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], surfaces: 'all', enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:budget-unmetered', 'U:budget-parallel', 'U:budget-ledger', 'U:model-shape'], checks: ['C12'] },
+    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], surfaces: 'all', enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:budget-unmetered', 'U:budget-parallel', 'U:budget-ledger', 'U:model-shape'], checks: ['C12', 'C9'] },
 
   { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key. This holds for a harness that talks to its model in the OpenAI chat format.',
-    klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'model-route', tests: ['U:key-swap', 'U:model-shape'], checks: ['C8p'] },
+    klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'model-route', tests: ['U:key-swap', 'U:model-shape'], checks: ['C8p', 'C8'] },
 
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.enabled`], surfaces: 'all', enforcer: 'door', tests: ['D:out.still-allowed/dm-closed', 'D:out.still-allowed/room-removed', 'D:out.still-allowed/turn-dead'], checks: [] },

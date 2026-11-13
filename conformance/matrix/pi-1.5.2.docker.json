@@ -1,0 +1,512 @@
+{
+  "harness": "pi",
+  "version": "1.5.2",
+  "harnessBuild": "real",
+  "substrate": "docker",
+  "date": "2026-11-13",
+  "runner": {
+    "kind": "docker",
+    "server": "29.5.2",
+    "host": "Docker Desktop, aarch64"
+  },
+  "model": "scripted",
+  "caveats": [
+    "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
+    "The harness ran in a Docker cell on one machine (Docker Desktop, aarch64, Docker 29.5.2). Another Docker host, or another version, is not shown.",
+    "A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell."
+  ],
+  "rows": [
+    {
+      "id": "C1",
+      "title": "a delivered turn gives exactly one reply, from the model, for the right turn",
+      "status": "pass"
+    },
+    {
+      "id": "C2",
+      "title": "overheard lines arrive as context on the next turn and cause no reply",
+      "status": "pass"
+    },
+    {
+      "id": "C3",
+      "title": "a dropped message never reaches the model",
+      "status": "pass"
+    },
+    {
+      "id": "C4",
+      "title": "a tool the harness was offered, then denied, does not run",
+      "status": "pass"
+    },
+    {
+      "id": "C4a",
+      "title": "a tool the policy never allowed is not offered to the harness and does not run",
+      "status": "pass"
+    },
+    {
+      "id": "C4p",
+      "title": "a shell tool on the allow list does not run once the agent is public",
+      "status": "pass"
+    },
+    {
+      "id": "C4+",
+      "title": "positive control: an allowed tool does run",
+      "status": "pass"
+    },
+    {
+      "id": "C5",
+      "title": "no verdict means no run",
+      "status": "pass"
+    },
+    {
+      "id": "C5v",
+      "title": "the veto inside the cell says no on its own when nobody answers it",
+      "status": "pass"
+    },
+    {
+      "id": "C8p",
+      "title": "no real secret is readable from a tool, and the key swap happened (process level)",
+      "status": "pass"
+    },
+    {
+      "id": "C9p",
+      "title": "the harness process reached for nothing outside this machine (process level, its own runtime only)",
+      "status": "not-run",
+      "reason": "not run in a cell: it reads a tripwire inside the harness process, and here the wall is checked instead (C9)"
+    },
+    {
+      "id": "C12",
+      "title": "usage is counted, and the turn after the budget is spent is refused",
+      "status": "pass"
+    },
+    {
+      "id": "C15",
+      "title": "a policy change takes effect on the next message with no restart",
+      "status": "pass"
+    },
+    {
+      "id": "C15t",
+      "title": "the tools a turn may use follow the policy as it is at that turn, in a session that is already running",
+      "status": "pass"
+    },
+    {
+      "id": "S0",
+      "title": "the rig is this machine's, is the lab's own, holds no real credential, and its sink can be hit",
+      "status": "pass"
+    },
+    {
+      "id": "S1",
+      "title": "the cell cannot reach the internet, this machine or the sink, only the sidecar; nor can the sidecar",
+      "status": "pass"
+    },
+    {
+      "id": "S2",
+      "title": "the shim, the gate and the harness are not writable from inside the cell",
+      "status": "pass"
+    },
+    {
+      "id": "S3",
+      "title": "no host credential, host folder or secret of the run is in the cell's environment, mounts or disk",
+      "status": "pass"
+    },
+    {
+      "id": "C8",
+      "title": "no real secret is readable anywhere in the cell: not from the environment, another process or the disk",
+      "status": "pass"
+    },
+    {
+      "id": "C9",
+      "title": "nothing leaves the cell except through the sidecar",
+      "status": "pass"
+    },
+    {
+      "id": "C10",
+      "title": "with the gate removed, a tool the policy denies does run, and still nothing leaves and no secret is readable",
+      "status": "pass"
+    },
+    {
+      "id": "C6",
+      "title": "ask: a tool waits for an admin yes",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
+      "id": "C11",
+      "title": "memory scope isolation",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
+      "id": "C12b",
+      "title": "a key scoped to one room is not usable from another",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
+      "id": "C13",
+      "title": "text that claims to be an admin does not change a tool verdict",
+      "status": "not-run",
+      "reason": "blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names"
+    },
+    {
+      "id": "C14",
+      "title": "busy, cancel, reset and resume behave as declared",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
+      "id": "C17",
+      "title": "every declared capability has a passing probe",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
+      "id": "C7",
+      "title": "an unmapped tool is denied on a public agent",
+      "status": "not-run",
+      "reason": "needs a second tool surface (MCP), which this shim starts Pi without"
+    },
+    {
+      "id": "C16",
+      "title": "a harness that owns chat runs with its channels off",
+      "status": "n/a",
+      "reason": "this harness owns no chat"
+    }
+  ],
+  "rules": [
+    {
+      "rule": "ctl.valid",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "ctl.applied",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C15",
+          "status": "pass"
+        },
+        {
+          "id": "C15t",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "ctl.receipts",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "ctl.brain-token",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.surface",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.users",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.rooms",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.rooms.ignore",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.anyone-in-room",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.empty-is-closed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.closed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.allowlist",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.open",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.mention",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.threads",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.free-rooms",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.observe",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "bots.mode",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "bots.inline-mention",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "bots.no-self",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "priv.admins",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "priv.no-forged-identity",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "C13",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "tools.lists",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C4",
+          "status": "pass"
+        },
+        {
+          "id": "C4a",
+          "status": "pass"
+        },
+        {
+          "id": "C4+",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.posture",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C4p",
+          "status": "pass"
+        },
+        {
+          "id": "C10",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.unknown",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "C7",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "budget.cap",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C12",
+          "status": "pass"
+        },
+        {
+          "id": "C9",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "keys.model-route",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C8p",
+          "status": "pass"
+        },
+        {
+          "id": "C8",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "turn.one-reply",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C1",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "turn.known",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "turn.no-harness",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "tools.no-verdict",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C5",
+          "status": "pass"
+        },
+        {
+          "id": "C5v",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "mem.dm-isolated",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "san.in",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "san.out",
+      "status": "shared",
+      "checks": []
+    }
+  ],
+  "mustFail": [
+    {
+      "shim": "route-out",
+      "mustFail": [
+        "S1",
+        "C9",
+        "C10"
+      ],
+      "failed": [
+        "S1",
+        "C9",
+        "C10"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "open",
+      "mustFail": [
+        "S1",
+        "C9"
+      ],
+      "failed": [
+        "S1",
+        "C9"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "leaks-env",
+      "mustFail": [
+        "S3",
+        "C8"
+      ],
+      "failed": [
+        "S3",
+        "C8"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "writable",
+      "mustFail": [
+        "S2"
+      ],
+      "failed": [
+        "S2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "host-mount",
+      "mustFail": [
+        "S3"
+      ],
+      "failed": [
+        "S3"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "blind-sink",
+      "mustFail": [
+        "S0",
+        "C9"
+      ],
+      "failed": [
+        "S0",
+        "C9"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "gate-kept",
+      "mustFail": [
+        "C10"
+      ],
+      "failed": [
+        "C10"
+      ],
+      "suiteCaughtIt": true
+    }
+  ],
+  "suiteTrusted": true
+}

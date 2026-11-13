@@ -85,25 +85,25 @@
       "id": "S0",
       "title": "fake-proof preflight for the Docker rig",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
       "id": "S1",
       "title": "the cell cannot reach the internet, only the sidecar",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
       "id": "S2",
       "title": "shim and gate are not writable from inside the cell",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
       "id": "S3",
       "title": "no host credential in the cell env or mounts",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
       "id": "C6",
@@ -115,19 +115,19 @@
       "id": "C8",
       "title": "no real secret readable anywhere in the cell (env, /proc, disk)",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet; C8p covers the harness environment only"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version; C8p covers the harness environment only"
     },
     {
       "id": "C9",
       "title": "nothing leaves the cell except through the sidecar",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet; C9p covers the harness's own runtime only, not programs it starts"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version; C9p covers the harness's own runtime only, not programs it starts"
     },
     {
       "id": "C10",
       "title": "with the gate removed, egress and secrets still hold",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
       "id": "C11",
@@ -346,21 +346,29 @@
     },
     {
       "rule": "budget.cap",
-      "status": "pass",
+      "status": "not-run",
       "checks": [
         {
           "id": "C12",
           "status": "pass"
+        },
+        {
+          "id": "C9",
+          "status": "not-run"
         }
       ]
     },
     {
       "rule": "keys.model-route",
-      "status": "pass",
+      "status": "not-run",
       "checks": [
         {
           "id": "C8p",
           "status": "pass"
+        },
+        {
+          "id": "C8",
+          "status": "not-run"
         }
       ]
     },
