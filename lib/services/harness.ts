@@ -1303,6 +1303,17 @@ export class HarnessService {
     return this.list().find((h) => h.id === id)
   }
 
+  // Whether a stored agent already has this name: the same slug, or the id
+  // built from it. Every flow that makes a new agent from a name (create,
+  // import, deploy) asks this before it writes anything.
+  nameTaken(name: string): boolean {
+    const slug = toHarnessSlug(name)
+    const id = 'h_' + slug.replace(/-/g, '_')
+    return this.storage
+      .read<Partial<Harness>[]>(HARNESSES_FILE, [])
+      .some((h) => h.id === id || h.name === slug)
+  }
+
   updateConfig(id: string, partial: Partial<Harness>): Harness | undefined {
     // Load existing overlays, merge, persist
     const overlays = this.storage.read<Harness[]>(HARNESSES_FILE, [])
@@ -2096,8 +2107,12 @@ export class HarnessService {
       throw new Error(`Not a Hermes data directory: missing .env and config.yaml`)
     }
 
-    // 2. Determine destination
+    // 2. Determine destination. A name a stored agent already has is refused
+    //    here, before the copy and the .env patch below.
     const slug = toHarnessSlug(name)
+    if (this.nameTaken(slug)) {
+      throw new Error(`Harness "${slug}" already exists`)
+    }
     const destDir = slug === 'personal'
       ? path.join(os.homedir(), '.hermes')
       : path.join(os.homedir(), `.hermes-${slug}`)
