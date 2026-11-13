@@ -52,7 +52,9 @@ const CREDENTIAL_SHAPES: RegExp[] = [
 /** The only secret-shaped values a run may carry: fakes stamped with its own nonce. */
 function isRunFake(name: string, value: string, nonce: string | undefined): boolean {
   if (!nonce || !name.startsWith('SWARMLAB_')) return false
-  return value === nonce || value === `FAKECHAT-${nonce}` || value === `UPSTREAM-${nonce}` || value === `PLACEHOLDER-${nonce}`
+  if (value === nonce || value === `FAKECHAT-${nonce}` || value === `UPSTREAM-${nonce}` || value === `PLACEHOLDER-${nonce}`) return true
+  // The per-cell token of a Docker rig: this run's nonce, then sixteen hex digits.
+  return value.startsWith(`BRAIN-${nonce}-`) && /^[0-9a-f]{16}$/.test(value.slice(`BRAIN-${nonce}-`.length))
 }
 
 /** F2. Refuses if the env names or holds anything shaped like a real credential. Never prints a value. */
@@ -83,7 +85,9 @@ export function assertLocalDocker(docker: { dockerHost?: string; contextEndpoint
   }
 }
 
-export const PROJECT_NAME = /^swarmlab-[0-9a-f]{8}$/
+// Every Docker object the lab makes carries this prefix, and the lab only ever
+// stops or removes objects that carry it.
+export const PROJECT_NAME = /^smlab-[0-9a-f]{8}$/
 
 /** F5. Refuses a compose project or container that is not the lab's own. */
 export function assertOurProject(project: string, containerNames: string[]): void {

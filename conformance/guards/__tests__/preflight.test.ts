@@ -134,9 +134,21 @@ describe('F5: Docker is the local one, and the project is ours', () => {
 
   it('refuses a project or container name that is not from the lab', () => {
     expect(() => assertOurProject('hermes-swarm', [])).toThrow(/^REFUSING TO RUN: F5 /)
-    expect(() => assertOurProject('swarmlab-DEADBEEF', [])).toThrow(RefusingToRun)
-    expect(() => assertOurProject('swarmlab-deadbeef', ['hermes-agent-1'])).toThrow(/hermes-agent-1/)
-    expect(() => assertOurProject('swarmlab-deadbeef', ['swarmlab-deadbeef-cell-1'])).not.toThrow()
+    expect(() => assertOurProject('smlab-DEADBEEF', [])).toThrow(RefusingToRun)
+    expect(() => assertOurProject('smlab-deadbeef-x', [])).toThrow(RefusingToRun)
+    expect(() => assertOurProject('smlab-deadbeef', ['hermes-agent-1'])).toThrow(/hermes-agent-1/)
+    // Another lab run's container is not this run's either.
+    expect(() => assertOurProject('smlab-deadbeef', ['smlab-0badf00d-cell-1'])).toThrow(/smlab-0badf00d-cell-1/)
+    expect(() => assertOurProject('smlab-deadbeef', ['smlab-deadbeef-cell-1'])).not.toThrow()
+  })
+
+  it('accepts a cell token only when it carries the nonce of this run', () => {
+    const token = 'BRAIN-deadbeef-' + '0123456789abcdef'
+    expect(() => assertNoCredentials({ SWARMLAB_BRAIN: token }, { nonce: 'deadbeef' })).not.toThrow()
+    expect(() => assertNoCredentials({ SWARMLAB_BRAIN: token }, { nonce: '0badf00d' })).toThrow(RefusingToRun)
+    expect(() => assertNoCredentials({ SWARMLAB_BRAIN: token + 'x' }, { nonce: 'deadbeef' })).toThrow(RefusingToRun)
+    // Only under a lab name: a name that says "token" is refused whatever it holds.
+    expect(() => assertNoCredentials({ CELL_TOKEN: token }, { nonce: 'deadbeef' })).toThrow(RefusingToRun)
   })
 
   it('refuses a work dir outside the temp dir or inside an agent home', () => {
