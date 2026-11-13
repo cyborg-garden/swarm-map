@@ -522,6 +522,16 @@
       "suiteCaughtIt": true
     },
     {
+      "shim": "unwatched",
+      "mustFail": [
+        "C9p"
+      ],
+      "failed": [
+        "C9p"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
       "shim": "chatty",
       "mustFail": [
         "C1",

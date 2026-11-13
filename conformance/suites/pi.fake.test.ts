@@ -7,10 +7,14 @@
 //
 // Must-fail: the same checks against deliberately broken shims. A broken shim
 // that passes a check it is meant to fail means the check is wrong.
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
 import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks, type CheckResult } from './checks.ts'
+import type { Matrix } from '../matrix.ts'
 import { brokenVariants } from './harness.ts'
 
 armTripwire()
@@ -59,4 +63,35 @@ describe('must-fail: broken shims turn their named checks red', () => {
       expect(c4plus.detail, shim).toContain('the allowed tool did not run')
     }
   }, 60_000)
+})
+
+// The matrix file is evidence from a real-Pi run, and only `npm run conformance`
+// may write it. CI cannot repeat that run, but it can tell when the file no
+// longer matches the suite: a check or a broken shim added since means the
+// evidence is out of date and the run has to be done again.
+describe('the committed matrix for the pinned Pi', () => {
+  const file = path.resolve(import.meta.dirname, '..', 'matrix', `pi-${PI_VERSION}.process.json`)
+  const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
+
+  it('[U:matrix-fresh] is from a real Pi of the pinned version, run as a plain process', () => {
+    expect(committed).toMatchObject({ harness: harness.caps.harness, version: PI_VERSION, harnessBuild: 'real', substrate: 'process' })
+  })
+
+  it('[U:matrix-fresh] has a result for every check the suite runs today, under today\'s title', () => {
+    const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
+    for (const check of CHECKS) {
+      expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance`).toBeDefined()
+      expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)
+      expect(rows[check.id].title, check.id).toBe(check.title)
+    }
+  })
+
+  it('[U:matrix-fresh] names every broken shim the suite has today, with the checks each must fail today', () => {
+    const today = Object.fromEntries(Object.entries(brokenVariants(harness)).map(([shim, v]) => [shim, v.red]))
+    const then = Object.fromEntries(committed.mustFail.map((m) => [m.shim, m.mustFail]))
+    expect(then).toEqual(today)
+    // And on that run, each one did turn its checks red.
+    for (const m of committed.mustFail) for (const id of m.mustFail) expect(m.failed, `${m.shim} must fail ${id}`).toContain(id)
+    expect(committed.suiteTrusted).toBe(true)
+  })
 })
