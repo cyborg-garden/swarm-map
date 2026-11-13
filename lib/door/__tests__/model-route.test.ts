@@ -273,6 +273,55 @@ describe('model route: a call the provider did not meter', () => {
     expect(receipts.all().at(-1)).toMatchObject({ verdict: 'deny', rule: 'budget.cap' })
   })
 
+  // A usage figure is only believed when it could be true. Every call sends
+  // something, so no real call uses zero input tokens: a provider that says so
+  // has not metered the call, and one that sends nonsense has not either.
+  const NOT_A_COUNT: [string, unknown][] = [
+    ['all zeros', { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }],
+    ['an empty object', {}],
+    ['zero in, some out', { prompt_tokens: 0, completion_tokens: 20 }],
+    ['words where numbers go', { prompt_tokens: 'lots', completion_tokens: 'more' }],
+    ['a negative count', { prompt_tokens: -100, completion_tokens: -20 }],
+    ['a negative output count that would pay money back', { prompt_tokens: 100, completion_tokens: -20 }],
+    ['a count that is not a whole number of tokens', { prompt_tokens: 0.001, completion_tokens: 0.001 }],
+    ['a missing output count', { prompt_tokens: 100 }],
+  ]
+  it.each(NOT_A_COUNT)('[U:budget-unmetered] usage that cannot be true (%s) is not believed: the call is charged by size', async (_what, usage) => {
+    for (const stream of [false, true]) {
+      const { receipts } = await start(policy(), [{ match: 'CANARY-m', text: 'claims to be free', usage }])
+      const res = await ask(user('CANARY-m', stream ? { stream: true } : {}))
+      const reply = await res.text()
+      expect(res.status, `stream=${stream}`).toBe(200)
+      const m = route!.meter()
+      expect(m.inTokens, `stream=${stream}`).toBe(bytes(model!.requests[0].body))
+      expect(m.outTokens, `stream=${stream}`).toBe(bytes(reply))
+      expect(m.usd, `stream=${stream}`).toBeCloseTo((m.inTokens * 5000 + m.outTokens * 25000) / 1_000_000, 9)
+      expect(route!.unmetered, `stream=${stream}`).toBe(1)
+      expect(receipts.all().at(-1)).toMatchObject({ rule: 'budget.cap', note: 'unmetered' })
+      await route!.close()
+      await model!.close()
+    }
+  })
+
+  it('[U:budget-unmetered] the cap still trips when the provider says every call used nothing', async () => {
+    const ledger = createMemoryLedger()
+    await start(capped(1), [{ match: 'CANARY', text: 'x'.repeat(200), usage: { prompt_tokens: 0, completion_tokens: 0 } }], { ledger })
+    expect((await ask(user('CANARY one'))).status).toBe(200)
+    expect(ledger.spent(new Date())).toBeGreaterThan(1)
+    const second = await ask(user('CANARY-second'))
+    expect(second.status).toBe(402)
+    expect(model!.heard('CANARY-second')).toBe(false)
+  })
+
+  it('[U:budget-unmetered] a stream whose last usage event is nonsense keeps the last figure that could be true', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'running totals', usageEveryEvent: true, usage: {} }], { streamChunk: 4 })
+    await (await ask(user('CANARY-m', { stream: true }))).text()
+    // Eleven events carried a running total (the opening one, nine of text, the finish), so the
+    // last believable figure is 100 in and 11 out. The empty object after them changes nothing.
+    expect(route!.meter()).toEqual({ requests: 1, inTokens: 100, outTokens: 11, usd: (100 * 5000 + 11 * 25000) / 1_000_000 })
+    expect(route!.unmetered).toBe(0)
+  })
+
   it('[U:budget-unmetered] a reply that is not JSON is charged the same way', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: 'ignored', rawBody: '<html>gateway says hi</html>' }])
     const res = await ask(user('CANARY-m'))

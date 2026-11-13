@@ -14,9 +14,11 @@
 // Three things keep the cap honest:
 // - Every call the provider accepted is metered. When the reply says nothing
 //   about usage (many OpenAI-compatible servers never do, and a stream that is
-//   cut short cannot), the call is charged at one token per byte sent and
-//   received, which is more than any tokeniser would count, and a receipt
-//   marked `unmetered` is written. An unreported call is never free.
+//   cut short cannot), or reports a figure that cannot be true (zeros, a
+//   missing count, anything that is not a whole number), the call is charged
+//   at one token per byte sent and received, which is more than any tokeniser
+//   would count, and a receipt marked `unmetered` is written. An unreported
+//   call is never free.
 // - While a cap is set to refuse, an agent's calls go one at a time: the next
 //   one is checked only after the one before has been charged. Calls sent at
 //   once would otherwise all pass the same check. The cost is that a capped
@@ -91,6 +93,12 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   const state = { refused: 0, unmetered: 0 }
 
   type Usage = { inTokens: number; outTokens: number }
+  // A figure is believed only if it could be true: whole, not negative, and
+  // with some input, since every call sends something. A provider that reports
+  // zeros or nonsense has not metered the call, and the call is charged by size.
+  const count = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
+  const believed = (u: Usage | undefined): Usage | undefined =>
+    u && count(u.inTokens) && count(u.outTokens) && u.inTokens > 0 ? u : undefined
   const charge = (model: string, usage: Usage): void => {
     const price = opts.prices[model]
     const usd = (usage.inTokens * price.inPerMTok + usage.outTokens * price.outPerMTok) / 1_000_000
@@ -163,7 +171,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         })
         billable = upstream.ok
         await relay(upstream, res, Boolean(body.stream), {
-          usage: (u) => { usage = u ?? usage },
+          usage: (u) => { usage = believed(u) ?? usage },
           received: (n) => { received += n },
         })
       } finally {

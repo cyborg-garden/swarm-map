@@ -24,6 +24,8 @@ export interface ScriptEntry {
   // The rest make it misbehave the way real providers do, for the model route's tests.
   /** Say nothing about usage, plain or streamed, even when asked to. */
   noUsage?: boolean
+  /** Report exactly this where usage goes, plain or streamed, however little sense it makes. */
+  usage?: unknown
   /** Streamed only: report running usage on every event, not once at the end. */
   usageEveryEvent?: boolean
   /** Streamed only: drop the connection after the text, before the finish, usage and [DONE] events. */
@@ -51,6 +53,7 @@ export interface ScriptedModel {
 }
 
 const USAGE = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }
+const usageOf = (entry: ScriptEntry | undefined): unknown => (entry && 'usage' in entry ? entry.usage : USAGE)
 
 export function startScriptedModel(opts: {
   nonce: string; script: ScriptEntry[]; host?: string; port?: number
@@ -118,7 +121,7 @@ export function startScriptedModel(opts: {
     if (!body.stream) {
       const message = toolCall ? { role: 'assistant', content: null, tool_calls: [toolCall] } : { role: 'assistant', content: text }
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ ...base, object: 'chat.completion', choices: [{ index: 0, message, finish_reason: finish }], ...(entry?.noUsage ? {} : { usage: USAGE }) }))
+      res.end(JSON.stringify({ ...base, object: 'chat.completion', choices: [{ index: 0, message, finish_reason: finish }], ...(entry?.noUsage ? {} : { usage: usageOf(entry) }) }))
       return
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
@@ -134,7 +137,7 @@ export function startScriptedModel(opts: {
     // Dropped only once the text has really gone out, as a provider that dies mid-reply.
     if (entry?.cutStream) { res.write(': cut\n\n', () => res.destroy()); return }
     if (!entry?.noFinish) send(chunk({}, finish))
-    if (body.stream_options?.include_usage && !entry?.noUsage) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: USAGE })
+    if (body.stream_options?.include_usage && !entry?.noUsage) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: usageOf(entry) })
     send('[DONE]')
     res.end()
   }

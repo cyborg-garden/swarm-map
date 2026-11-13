@@ -36,7 +36,10 @@ export interface ModelShape {
   upstreamAuth(key: string): Record<string, string>
   /** The body to forward for a streamed call, changed only so the stream reports usage. */
   forStream(body: Record<string, unknown>): Record<string, unknown>
-  /** Tokens reported by a reply body or by one stream event, if it reports any. */
+  /**
+   * Tokens reported by a reply body or by one stream event, if it reports both counts.
+   * The route still checks the figure could be true before it believes it.
+   */
   usage(json: unknown): { inTokens: number; outTokens: number } | undefined
   /** The running text in one parsed stream event. The route redacts across these. */
   streamText(json: unknown): StreamText[]
@@ -61,8 +64,9 @@ export const OPENAI_CHAT: ModelShape = {
   forStream: (body) => ({ ...body, stream_options: { ...(body.stream_options as object | undefined), include_usage: true } }),
   usage(json) {
     const u = (json as OpenAiChunk | null)?.usage
-    if (!u) return undefined
-    return { inTokens: u.prompt_tokens ?? 0, outTokens: u.completion_tokens ?? 0 }
+    // Both counts or nothing: a missing one is not read as zero.
+    if (!u || typeof u.prompt_tokens !== 'number' || typeof u.completion_tokens !== 'number') return undefined
+    return { inTokens: u.prompt_tokens, outTokens: u.completion_tokens }
   },
   streamText(json) {
     const choices = (json as OpenAiChunk | null)?.choices
