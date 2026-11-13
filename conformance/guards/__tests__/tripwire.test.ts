@@ -83,6 +83,18 @@ describe('F6 tripwire', () => {
     ])
   })
 
+  it('stops a reverse lookup of an address that is not this machine', async () => {
+    expect(() => dns.lookupService('192.0.2.1', 22, () => {})).toThrow(TripwireError)
+    await expect(dns.promises.lookupService('192.0.2.1', 22)).rejects.toThrow(TripwireError)
+    expect(tripwireAttempts()).toEqual(['dns.lookupService 192.0.2.1', 'dns.promises.lookupService 192.0.2.1'])
+  })
+
+  it('stops a connect to a local socket file, which is how a Docker daemon or an ssh agent is reached', () => {
+    expect(() => net.connect({ path: '/var/run/docker.sock' })).toThrow(TripwireError)
+    expect(() => net.connect('/var/run/docker.sock')).toThrow(TripwireError)
+    expect(tripwireAttempts()).toEqual(['net.connect socket /var/run/docker.sock', 'net.connect socket /var/run/docker.sock'])
+  })
+
   it('code that imported a DNS function by name gets the guarded one too', () => {
     expect(() => dnsNamed.lookup('example.com', () => {})).toThrow(TripwireError)
     expect(() => dnsNamed.resolve4('example.com', () => {})).toThrow(TripwireError)

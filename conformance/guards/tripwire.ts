@@ -2,7 +2,9 @@
 //
 // Once armed, any attempt by THIS PROCESS to reach something that is not this
 // machine throws and is recorded: a TCP connect, a UDP send, a DNS lookup or
-// query, a fetch. A prompt or a comment saying "tests use fakes" is not a
+// query, a fetch. So does a connect to a local socket file. It patches the
+// ways Node offers to do these things; code that reaches under them (a native
+// addon, Node's internal bindings) is not seen. A prompt or a comment saying "tests use fakes" is not a
 // guard; this is. Lab test files arm it at the top and fail if anything was
 // recorded.
 //
@@ -75,8 +77,8 @@ function guardHost(holder: Record<string, unknown>, name: string, label: string,
   }
 }
 
-/** Every DNS query function: resolve, resolve4, resolveTxt, ..., and reverse. */
-const isQuery = (name: string): boolean => /^resolve([A-Z0-9]\w*)?$/.test(name) || name === 'reverse'
+/** Every DNS query function: resolve, resolve4, resolveTxt, ..., reverse and lookupService. */
+const isQuery = (name: string): boolean => /^resolve([A-Z0-9]\w*)?$/.test(name) || name === 'reverse' || name === 'lookupService'
 const queriesOf = (holder: object): string[] => Object.getOwnPropertyNames(holder).filter(isQuery)
 
 /** Where a UDP send() is going. Its port sits after an optional offset and length. */
@@ -98,7 +100,10 @@ export function armTripwire(opts: { onTrip?: (what: string) => void } = {}): voi
   const realConnect = net.Socket.prototype.connect
   net.Socket.prototype.connect = function tripwiredConnect(this: net.Socket, ...args: unknown[]) {
     const target = connectTarget(args)
-    if (target.path === undefined && !isLoopback(target.host)) trip(`net.connect ${target.host}:${target.port}`)
+    // A socket file is not the network, but it is how a Docker daemon or an ssh agent is
+    // reached, and nothing in the lab has a reason to open one.
+    if (target.path !== undefined) trip(`net.connect socket ${target.path}`)
+    if (!isLoopback(target.host)) trip(`net.connect ${target.host}:${target.port}`)
     return (realConnect as (...a: unknown[]) => net.Socket).apply(this, args)
   } as typeof net.Socket.prototype.connect
 
