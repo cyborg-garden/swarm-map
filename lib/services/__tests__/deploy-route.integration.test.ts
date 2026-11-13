@@ -6,7 +6,7 @@
 // against temp dirs. This exercises the full Phase 1 wiring end-to-end in-process
 // — the only thing not covered is the actual `docker compose up` (no Docker here).
 import { scanEnvText } from '../../../scripts/token-broker/rollout.mjs'
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -70,6 +70,8 @@ vi.mock('@/lib/services', () => ({
 }))
 
 import { POST } from '@/app/api/setup/deploy/route'
+
+afterAll(() => fs.rmSync(store.dir, { recursive: true, force: true }))
 
 function deploy(body: Record<string, unknown>) {
   return POST(new Request('http://localhost/api/setup/deploy', {

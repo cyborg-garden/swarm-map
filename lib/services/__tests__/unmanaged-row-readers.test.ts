@@ -8,7 +8,7 @@
  * Each case has a twin on a managed row that proves the reader does find
  * what was planted, so "found nothing" is not a broken fixture.
  */
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -68,6 +68,10 @@ beforeEach(() => {
   }
   _resetIntegrityStateForTests()
 })
+
+// The resolver cases replace fetch. Put it back after each one, so a failure
+// in one case cannot turn the next one red too.
+afterEach(() => vi.restoreAllMocks())
 
 afterAll(() => {
   vi.restoreAllMocks()

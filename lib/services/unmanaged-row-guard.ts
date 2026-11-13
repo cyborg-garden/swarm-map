@@ -12,8 +12,9 @@ import { findUnmanagedRow, unmanagedRowNote } from './runtime-adapter'
  * This does: it answers 409 before the route reads its body.
  *
  * It reads harnesses.json and nothing else (no Docker call), so it is cheap
- * enough for the routes agents call. Two kinds of route do not call it:
- * DELETE /api/harnesses/:id, which forgets the row, and the four GETs a
+ * enough for the routes agents call. Three kinds of route do not call it:
+ * GET /api/harnesses/:id, which answers 404 because the row is not an agent;
+ * DELETE /api/harnesses/:id, which forgets the row; and the four GETs a
  * running agent makes about itself (see agentHomeForSelfRead).
  *
  * This is the route-level half. The other half is agentHome() in

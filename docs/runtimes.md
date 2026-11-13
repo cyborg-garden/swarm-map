@@ -35,8 +35,8 @@ counts as retired.
 
 A Hermes agent named `letta-server` gets the id `h_letta_server` too. Three things keep it
 out of that rule. The row Swarm Map stores for it carries Hermes fields (name, compose file,
-port). Every row written from now on is tagged `runtime: 'hermes'`, and an explicit tag
-always wins. And for the bare `{ id, surfaceAdmins }` row an older build wrote for a Hermes
+port). Every row made by create, deploy or import from now on is tagged `runtime: 'hermes'`,
+and an explicit tag always wins. And for the bare `{ id, surfaceAdmins }` row an older build wrote for a Hermes
 agent it had only discovered, the disk decides: a Hermes agent has a home at
 `~/.hermes-letta-server`, and the old server never had one. If that directory exists, the
 row is the Hermes agent's. The agent ids (`h_letta_agent-<uuid>`) keep a hyphen that no
@@ -57,14 +57,22 @@ Hermes name derives, so they are retired whatever is on disk.
   slug: `GET .../policy`, `GET .../surfaces/:platform/admins`, `.../admins/:userId` and
   `.../groups/:groupId`. They answer from that agent's own `.env`, never from the row's
   stored fields, and write nothing.
-- An id or agent name becomes a Hermes home in one function, `agentHome()`
-  (`lib/services/agent-home.ts`), which throws for such a row. Key assignment, key
-  discovery, tool and memory discovery, the surface list, usage, the integrity log scan and
-  the username resolvers all go through it, so a retired id in a request body or in
-  `keys.json` is skipped: nothing is read from or written to the directory it maps to, and
-  it is not recorded as assigned.
-- A new agent cannot take a name such a row still holds. Deploy, create and import refuse
-  with 409 (or an error) before their first write. Forget the row first.
+- The path `~/.hermes-<name>` is built in one file, `lib/services/data-dir.ts`. Code that
+  was handed an id or a name (a URL, a request body, `keys.json`, a list of names) reaches
+  it through `agentHome()` / `agentHomeIfManaged()` in `lib/services/agent-home.ts`, which
+  refuse such a row. Key assignment, key discovery, tool and memory discovery, the surface
+  list, usage, the integrity log scan and the username resolvers all go that way. So a
+  retired id in a request body is skipped: nothing is read from or written to the directory
+  it maps to, and a new assignment to it is not recorded. An assignment already in
+  `keys.json` from before the row was retired stays listed, but is never written again.
+  Code that got the name from `HarnessService.list()` or `get()` uses the unchecked helper;
+  `lib/__tests__/agent-home-guards.test.ts` names the files that may.
+- The row is matched on what the id means, not how it is spelled: `h_foo_bar`, `foo-bar`,
+  `h_foo-bar` and `FOO-BAR` all find the row `h_foo_bar`. An id with any character outside
+  letters, digits, `_` and `-` is refused before it becomes a path.
+- A new agent cannot take a name such a row still holds. Deploy answers 409 and create and
+  import fail, each before its first write. Duplicate onto such a name is refused as any
+  taken name is. Forget the row first.
 - `GET /api/harnesses/retired` lists them with the stored tag and a reason. The fleet page
   shows them under "Rows Swarm Map no longer manages".
 - `DELETE /api/harnesses/:id` on such a row forgets the row and nothing else. It does not

@@ -19,9 +19,14 @@ import path from 'path'
 
 const ROOT = path.resolve(__dirname, '../..')
 
+// Everything the Next.js server loads. scripts/ is left out on purpose: the
+// one script that builds these paths (scripts/token-broker/rollout.mjs) walks
+// the directories that exist on disk and never starts from a stored id.
+const SCANNED = ['lib', 'app/api', 'instrumentation.ts', 'proxy.ts']
+
 /** Server-side source: everything that runs with the operator's file access. */
 function serverSources(): string[] {
-  const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'lib', 'app/api'], {
+  const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...SCANNED], {
     cwd: ROOT,
     encoding: 'utf-8',
     maxBuffer: 64 * 1024 * 1024,
@@ -39,7 +44,7 @@ function linesMatching(pattern: RegExp, files = serverSources()): string[] {
     fs.readFileSync(path.join(ROOT, file), 'utf-8')
       .split('\n')
       .forEach((line, i) => {
-        if (pattern.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line)) found.push(`${file}:${i + 1}`)
+        if (pattern.test(line) && !/^\s*(\/\/|\*|\/\*)/.test(line) && !READS_DIR_LISTING.test(line)) found.push(`${file}:${i + 1}`)
       })
   }
   return found
@@ -47,10 +52,17 @@ function linesMatching(pattern: RegExp, files = serverSources()): string[] {
 
 const filesOf = (hits: string[]) => [...new Set(hits.map((h) => h.split(':')[0]))].sort()
 
-// `.hermes-${name}`, '.hermes-' + name, '.' + serviceName: a Hermes home
-// being put together by hand. `.hermes-swarm-map` (Swarm Map's own data dir)
-// and `.hermes-swarm` do not match: a literal follows the hyphen.
-const BUILDS_HOME = /\.hermes-(\$\{|['"`]\s*\+)|['"`]\.hermes['"`]\s*[),]|['"`]\.['"`]\s*\+\s*serviceName/
+// A Hermes home being put together by hand. Any string literal that ENDS in
+// `.hermes-` or is exactly `.hermes` is one half of such a path, however the
+// other half is joined on (+, a template, .concat, a constant). So is a bare
+// '.' glued to a variable, which is how the old guessDataDir did it.
+// `.hermes-swarm-map` (Swarm Map's own data dir) and `.hermes-swarm` do not
+// match: the literal goes on past the hyphen.
+const BUILDS_HOME = /\.hermes-(\$\{|['"`])|['"`]\.hermes['"`]|['"`]\.['"`]\s*\+|`\.\$\{/
+
+// The one line that names these prefixes without building a path: the port
+// scan lists the home directory and keeps the entries that look like agents.
+const READS_DIR_LISTING = /entry\.name (!==|===) '\.hermes' && !entry\.name\.startsWith\('\.hermes-'\)/
 
 describe('the scan can see the code (a scan over nothing passes everything)', () => {
   it('lists the server sources, without tests', () => {
@@ -58,6 +70,7 @@ describe('the scan can see the code (a scan over nothing passes everything)', ()
     expect(files.length).toBeGreaterThan(150)
     expect(files).toContain('lib/services/data-dir.ts')
     expect(files).toContain('app/api/harnesses/[id]/settings/route.ts')
+    expect(files).toContain('instrumentation.ts')
     expect(files.some((f) => f.includes('.test.'))).toBe(false)
   })
 
@@ -71,16 +84,26 @@ describe('the scan can see the code (a scan over nothing passes everything)', ()
       "return path.join(home, '.hermes-' + serviceName)",
       "const dir = path.join(os.homedir(), '.hermes')",
       "return path.join(home, '.' + serviceName)",
+      "return path.join(home, '.' + containerName)",
+      'return path.join(home, `.${serviceName}`)',
+      "return path.join(home, '.hermes-'.concat(name))",
+      "return path.join(home, '.hermes' + '-' + name)",
+      "const PREFIX = '.hermes-'",
     ]) {
       expect(BUILDS_HOME.test(line), line).toBe(true)
     }
     for (const line of [
       ": path.join(os.homedir(), '.hermes-swarm-map')",
       "const swarmDir = path.join(os.homedir(), '.hermes-swarm')",
-      "if (entry.name !== '.hermes' && !entry.name.startsWith('.hermes-')) continue",
     ]) {
       expect(BUILDS_HOME.test(line), line).toBe(false)
     }
+    // The directory-listing line matches the pattern and is let through by
+    // its own exact shape, not by a looser pattern.
+    const listing = "    if (entry.name !== '.hermes' && !entry.name.startsWith('.hermes-')) continue"
+    expect(BUILDS_HOME.test(listing)).toBe(true)
+    expect(READS_DIR_LISTING.test(listing)).toBe(true)
+    expect(READS_DIR_LISTING.test("const d = entry.name === 'x' ? '.hermes-' + entry.name : ''")).toBe(false)
   })
 })
 

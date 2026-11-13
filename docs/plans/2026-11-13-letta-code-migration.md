@@ -20,12 +20,15 @@ to that commit.
 
 Where the built Track A differs from the text below:
 
-- **One change, three commits**, not three pull requests. The commits follow A0, A1, A2 and can be
-  split.
+- **One change**, not three pull requests. Its first three commits follow A0, A1, A2 and can be
+  split. The commits after the docs commit are fixes from review of A0.
 - **R4 is stricter than written.** A stored row with a retired or unknown runtime is not shown as a
   row in the fleet table. It is left out of `list()` and `get()` altogether, so no per-agent route
   can resolve it, and is reported by `listRetired()` and `GET /api/harnesses/retired`. The fleet page
   lists such rows in their own block with one action, "Forget row".
+  Review then widened this from "container verbs" to every path that turns an id into
+  `~/.hermes-<name>`: per-agent reads, key assignment, discovery, and making a new agent
+  under a held name. `docs/runtimes.md` has the rules as built.
 - **The skip-checks were deleted, not kept.** With those rows gone from `list()`, the
   `runtime === 'letta'` filters in the schedulers have nothing left to skip.
 - **The Chinese READMEs and the README test snapshot were not edited.** The sync workflow rewrites
