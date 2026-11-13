@@ -21,6 +21,10 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
     { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', tier: 'primary' },
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', tier: 'primary' },
     { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', tier: 'fallback' },
+    // Anthropic retires Sonnet 4.5 on 2026-11-30. Never offered; listed only
+    // so an agent whose config still names it shows a retired badge. (#136)
+    { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5 (retired)', tier: 'fallback', retired: true, deprecates: '2026-11-30' },
+    { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5 (retired)', tier: 'fallback', retired: true, deprecates: '2026-11-30' },
   ],
   openai: [
     { id: 'gpt-4o', name: 'GPT-4o', tier: 'primary' },
@@ -86,6 +90,17 @@ export const MODEL_CATALOG: Record<string, ModelEntry[]> = {
   bedrock: [
     { id: 'us.anthropic.claude-sonnet-4-6-20250527-v1:0', name: 'Claude Sonnet 4.6 (Bedrock)', tier: 'primary' },
   ],
+}
+
+/**
+ * True when the catalog flags this provider's model id as retired. Such a row
+ * stays readable in a stored cascade but must not be offered to pick.
+ * Unknown providers and free-text ids are never retired.
+ */
+export function isCatalogRetired(provider: string, model: string): boolean {
+  const p = String(provider ?? '').trim().toLowerCase()
+  if (!Object.hasOwn(MODEL_CATALOG, p)) return false
+  return MODEL_CATALOG[p].some((m) => m.id === model && m.retired === true)
 }
 
 export type CascadeEntry = {
