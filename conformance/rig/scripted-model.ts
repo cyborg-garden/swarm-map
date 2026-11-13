@@ -28,6 +28,10 @@ export interface ScriptEntry {
   usage?: unknown
   /** Streamed only: report usage once, on the opening event, before any text has gone out. */
   usageFirstOnly?: boolean
+  /** Streamed only: end lines the other ways SSE allows, with CRLF or with a bare CR. */
+  lineEnd?: '\r\n' | '\r'
+  /** Streamed only: send each event in two pieces, cut inside its last line ending. */
+  splitLineEnds?: boolean
   /** Streamed only: write events as `data:{...}` with no space after the colon, which SSE allows. */
   tightData?: boolean
   /** Streamed only: report running usage on every event, not once at the end. */
@@ -129,7 +133,19 @@ export function startScriptedModel(opts: {
       return
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
-    const send = (data: unknown): void => { res.write(`data:${entry?.tightData ? '' : ' '}${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`) }
+    // With `splitLineEnds`, each event goes out in two writes a moment apart, cut inside its
+    // last line ending, the way a network can cut a stream anywhere.
+    const queue: string[] = []
+    const send = (data: unknown): void => {
+      const event = `data:${entry?.tightData ? '' : ' '}${typeof data === 'string' ? data : JSON.stringify(data)}${(entry?.lineEnd ?? '\n').repeat(2)}`
+      if (entry?.splitLineEnds) queue.push(event.slice(0, -1), event.slice(-1))
+      else res.write(event)
+    }
+    const finishUp = (): void => {
+      const next = queue.shift()
+      if (next === undefined) { res.end(); return }
+      res.write(next, () => setTimeout(finishUp, 3))
+    }
     let sent = 0
     // Running totals, as some providers send them: they end at the true figure.
     const running = () => ({ prompt_tokens: USAGE.prompt_tokens, completion_tokens: Math.min(++sent, USAGE.completion_tokens), total_tokens: 0 })
@@ -143,7 +159,7 @@ export function startScriptedModel(opts: {
     if (!entry?.noFinish) send(chunk({}, finish))
     if (body.stream_options?.include_usage && !entry?.noUsage && !entry?.usageFirstOnly) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: usageOf(entry) })
     send('[DONE]')
-    res.end()
+    finishUp()
   }
 
   return new Promise((resolve, reject) => {

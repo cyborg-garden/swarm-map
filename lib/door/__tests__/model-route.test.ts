@@ -99,6 +99,47 @@ describe('model route', () => {
     expect(route!.meter().inTokens).toBe(100) // and its usage event was still read
   })
 
+  // SSE lets a stream end its lines with LF, CRLF or a bare CR. Read as LF only, a CRLF stream
+  // is one long "event": only its first line is looked at, and the rest goes by unread.
+  describe.each([['CRLF', '\r\n'], ['a bare CR', '\r']] as const)('a stream whose lines end with %s', (_name, lineEnd) => {
+    it('[U:key-swap] a key split across its events is still redacted', async () => {
+      await start(policy(), [{ match: 'CANARY-m', text: `the key is ${UPSTREAM} ok`, noStamp: true, lineEnd }], { streamChunk: 5 })
+      const raw = await (await ask(user('CANARY-m', { stream: true }))).text()
+      expect(raw).not.toContain(UPSTREAM)
+      expect(streamedText(raw)).toBe(`the key is ${REDACTED} ok`)
+    })
+
+    it('[U:key-swap] a line ending cut in two by the network is still one line ending', async () => {
+      await start(policy(), [{ match: 'CANARY-m', text: `the key is ${UPSTREAM} ok`, noStamp: true, lineEnd, splitLineEnds: true }], { streamChunk: 5 })
+      const raw = await (await ask(user('CANARY-m', { stream: true }))).text()
+      expect(raw).not.toContain(UPSTREAM)
+      expect(raw).not.toContain('\r')
+      expect(raw).not.toContain('\n\n\n')
+      expect(streamedText(raw)).toBe(`the key is ${REDACTED} ok`)
+      expect(route!.meter()).toMatchObject({ inTokens: 100, outTokens: 20 })
+    })
+
+    it('[U:budget-meter] its usage event is read', async () => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'via the route', lineEnd }])
+      await (await ask(user('CANARY-m', { stream: true }))).text()
+      expect(route!.meter()).toEqual({ requests: 1, inTokens: 100, outTokens: 20, usd: 1 })
+      expect(route!.unmetered).toBe(0)
+    })
+
+    it('[U:budget-unmetered] a usage figure on its first event does not cover the text after it', async () => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'y'.repeat(4000), usageFirstOnly: true, lineEnd }])
+      await (await ask(user('CANARY-m', { stream: true }))).text()
+      expect(route!.meter().outTokens).toBeGreaterThanOrEqual(4000)
+      expect(route!.unmetered).toBe(1)
+    })
+
+    it('[U:budget-unmetered] running totals are counted once, at the last figure', async () => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'running totals', usageEveryEvent: true, lineEnd }], { streamChunk: 4 })
+      await (await ask(user('CANARY-m', { stream: true }))).text()
+      expect(route!.meter()).toEqual({ requests: 1, inTokens: 100, outTokens: 20, usd: 1 })
+    })
+  })
+
   it('[U:key-swap] a key that arrives whole in one stream event is redacted', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: `my key is ${UPSTREAM} ok` }], { streamChunk: 4000 })
     const streamed = await (await ask(user('CANARY-m', { stream: true }))).text()
@@ -227,6 +268,19 @@ describe('model route', () => {
     expect((await ask(user('CANARY-m'))).status).toBe(402)
     expect(model!.requests).toEqual([])
     expect(receipts.all().map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/ctl.valid'])
+  })
+
+  it.each([
+    ['null', null], ['a negative rate', { inPerMTok: -1, outPerMTok: 1 }], ['a rate that is not a number', { inPerMTok: 'cheap', outPerMTok: 1 }],
+    ['a missing rate', { inPerMTok: 1 }],
+  ])('[U:budget-meter] a price that is %s is no price: the call is refused', async (_what, price) => {
+    model = await startScriptedModel({ nonce: NONCE, script: [] })
+    route = await startModelRoute({
+      upstream: model.baseUrl, upstreamKey: UPSTREAM, placeholder: PLACEHOLDER, shape: OPENAI_CHAT, policy: () => policy(),
+      receipts: createReceiptLog(), prices: { scripted: price as never }, ledger: createMemoryLedger(),
+    })
+    expect((await ask(user('CANARY-m'))).status).toBe(400)
+    expect(model.requests).toEqual([])
   })
 
   it('[U:budget-meter] a model with no price is refused rather than counted as free', async () => {

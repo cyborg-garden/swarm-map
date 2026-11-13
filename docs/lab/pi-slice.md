@@ -211,8 +211,9 @@ build a matrix from it.
 - **The model route stops when spend cannot be recorded.** It checks the ledger can be written
   before it forwards a call, and a charge lost after a call stops every later one until the route
   is restarted. Stream events
-  written as `data:` with no space are now parsed, and a usage figure no longer stands once any
-  output (text, a tool call) follows it.
+  written as `data:` with no space, or with lines ending in CRLF or a bare CR, are now parsed, and
+  a usage figure no longer stands once any output (text, a tool call) follows it. A price that is
+  not two plain rates counts as no price.
 - **`mem.dm-isolated` does not mean what the spec's row says.** The spec's rule is "a DM never
   shares scope with a group", proven by C11. Memory scopes are not built, so the rule here is
   narrower and blunter: no DM is delivered to a harness that does not keep sessions apart.

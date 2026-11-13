@@ -154,7 +154,9 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     try { body = JSON.parse(raw) } catch { return fail(res, 400, 'model route: body is not JSON') }
     if (body === null || typeof body !== 'object') return fail(res, 400, 'model route: body is not a JSON object')
     const model = typeof body.model === 'string' ? body.model : ''
-    if (!Object.hasOwn(opts.prices, model)) return fail(res, 400, 'model route: no price for that model, so it cannot be metered')
+    const rate = (n: unknown): boolean => typeof n === 'number' && Number.isFinite(n) && n >= 0
+    const price = Object.hasOwn(opts.prices, model) ? opts.prices[model] as Price | null : undefined
+    if (!price || !rate(price.inPerMTok) || !rate(price.outPerMTok)) return fail(res, 400, 'model route: no price for that model, so it cannot be metered')
 
     // Under a refusing cap this call waits here until every call ahead of it has been charged.
     const release = opts.policy().budget?.onExceed === 'refuse' ? await takeTurn() : () => {}
@@ -266,16 +268,22 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     }
     const decoder = new TextDecoder()
     let pending = ''
+    let carry = ''
     const reader = upstream.body.getReader()
     try {
       for (let part = await reader.read(); !part.done; part = await reader.read()) {
         seen.received(part.value.byteLength)
-        pending += decoder.decode(part.value, { stream: true })
+        // SSE lines may end with LF, CRLF or a bare CR. All three are read as LF. A CR at the
+        // very end of a piece is kept back: the LF that makes it one line ending may come next.
+        pending = (pending + carry + decoder.decode(part.value, { stream: true }))
+        carry = pending.endsWith('\r') ? '\r' : ''
+        pending = pending.slice(0, pending.length - carry.length).replace(/\r\n?/g, '\n')
         const events = pending.split('\n\n')
         pending = events.pop() ?? ''
         for (const event of events) flush(event)
       }
-      if (pending.trim()) flush(pending)
+      // What is left when the stream ends is its last event, with or without its line endings.
+      if (pending.trim()) flush(pending.replace(/\n+$/, ''))
     } finally {
       // Whatever was held back is sent even when the provider drops the stream half way.
       drain()
