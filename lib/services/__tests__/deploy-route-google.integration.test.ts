@@ -65,7 +65,6 @@ vi.mock('@/lib/services', () => ({
     config: { getSettings: () => ({ ...h.settings, dataDir: h.tmpData }) },
     keys: { getDecryptedValue: h.getDecryptedValue, list: h.list, update: h.update, setAssignment: h.setAssignment, add: h.add },
     harness: { createOverlay: h.createOverlay, list: () => [], nameTaken: () => false },
-    letta: { listAgents: vi.fn(async () => []), createAgent: vi.fn(), deleteAgent: vi.fn() },
   },
 }))
 

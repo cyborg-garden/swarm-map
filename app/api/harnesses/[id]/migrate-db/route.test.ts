@@ -51,12 +51,6 @@ describe('POST /api/harnesses/[id]/migrate-db', () => {
     expect(res.status).toBe(404)
   })
 
-  it('400s for letta rows (no container state.db)', async () => {
-    mockHarness.get.mockReturnValue({ id: 'h_l', name: 'l', runtime: 'letta' })
-    const res = await POST({} as Request, makeParams('h_l'))
-    expect(res.status).toBe(400)
-  })
-
   it('409s when there is no compose file', async () => {
     mockHarness.get.mockReturnValue({ id: 'h_x', name: 'x', runtime: 'hermes' })
     mockHarness.composeTarget.mockReturnValue(undefined)

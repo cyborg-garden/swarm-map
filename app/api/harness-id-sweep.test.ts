@@ -18,9 +18,15 @@
  *
  * What is checked, with every service mocked and every fs write stubbed:
  *
- *   malformed id  → 400, no service call at all, no fs write   (every method)
- *   unknown id    → 404, nothing but harness.get, no fs write  (POST/PUT/PATCH/DELETE)
- *   unknown id    → no fs write                                (GET)
+ *   malformed id   → 400, no service call at all, no fs write        (every method)
+ *   unknown id     → 404, nothing but harness.get, no fs write  (POST/PUT/PATCH/DELETE)
+ *   unknown id     → no fs write                                (GET)
+ *   unmanaged row  → 409, no service call at all, no fs write   (POST/PUT/PATCH/DELETE)
+ *
+ * An unmanaged row is a stored row whose runtime tag Swarm Map does not know
+ * (the sweep stores one in a real harnesses.json for that check). It is
+ * read-only on every route; the one exception is DELETE /api/harnesses/:id,
+ * which forgets the row.
  *
  * Both checks run with an empty body, so the id check has to come before the
  * body is looked at.
@@ -45,6 +51,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { syncBuiltinESMExports } from 'module'
+import { DATA_DIR } from '@/lib/services/data-dir'
 
 const state = vi.hoisted(() => ({
   calls: [] as string[],
@@ -174,11 +181,9 @@ const OTHER_FIELDS: Record<string, string> = {
   './health/docker/route.ts': 'data ts',
   './keys/[id]/route.ts': 'metadata value',
   './keys/route.ts': 'envVar identifier name provider value',
-  './letta/agents/[id]/files/route.ts': '?open',
-  './letta/agents/[id]/messages/route.ts': 'text',
   './models/live/route.ts': '?force ?provider',
   './settings/route.ts': 'discordAllowedBotRoles',
-  './setup/deploy/route.ts': 'agentId apiKey baseUrl brainAgentId brainHarnessId braveKey browserEnabled bundledOllama discordEnabled discordToken existingKeyId fallbackModel githubMcpEnabled githubToken googleClientId googleClientSecret googleEnabled googleIdentity harnessId image lettaModel llmKey mattermostEnabled mattermostToken mattermostUrl name notionEnabled notionKey packs persona primaryModel provider runtime saveKeyToRegistry signalEnabled signalPhone slackAppToken slackBotToken slackEnabled surface telegramEnabled telegramToken template tier url',
+  './setup/deploy/route.ts': 'braveKey browserEnabled bundledOllama discordEnabled discordToken existingKeyId fallbackModel githubMcpEnabled githubToken googleClientId googleClientSecret googleEnabled googleIdentity image llmKey mattermostEnabled mattermostToken mattermostUrl name notionEnabled notionKey packs persona primaryModel provider runtime saveKeyToRegistry signalEnabled signalPhone slackAppToken slackBotToken slackEnabled surface telegramEnabled telegramToken template tier',
   './surfaces/discord/verify/route.ts': 'id token username',
   './surfaces/mattermost/channels/route.ts': '?token ?url id',
   './surfaces/mattermost/verify/route.ts': 'id token url username',
@@ -211,8 +216,8 @@ const NEW_NAME: Record<string, string> = {
   './setup/deploy/route.ts': 'lib/services/__tests__/deploy-route.integration.test.ts',
 }
 
-// Routes that take no agent id. `[id]` / `[name]` here is a key id, a tool id,
-// a cascade name or a Letta agent id (passed to the Letta API URL-encoded).
+// Routes that take no agent id. `[id]` / `[name]` here is a key id, a tool id
+// or a cascade name.
 const NO_AGENT_ID = new Set([
   './audit/route.ts',
   './auth/login/route.ts',
@@ -228,14 +233,10 @@ const NO_AGENT_ID = new Set([
   './fleet/model-updates/check/route.ts',
   './fleet/model-updates/route.ts',
   './harnesses/restart-running/route.ts',
+  './harnesses/retired/route.ts',
   './harnesses/route.ts',
   './health/docker/route.ts',
   './integrity/route.ts',
-  './letta/agents/[id]/blocks/route.ts',
-  './letta/agents/[id]/files/route.ts',
-  './letta/agents/[id]/messages/route.ts',
-  './letta/agents/route.ts',
-  './letta/harnesses/route.ts',
   './memory-scopes/route.ts',
   './models/live/route.ts',
   './models/route.ts',
@@ -260,8 +261,15 @@ const NO_AGENT_ID = new Set([
   './usecase-templates/route.ts',
 ])
 
-const MALFORMED = ['x/../.hermes-other', '..', '.', 'h_a.b', 'h_a b', '', 'h_' + 'a'.repeat(200), 'h_letta_agent-x/../y']
+const MALFORMED = ['x/../.hermes-other', '..', '.', 'h_a.b', 'h_a b', '', 'h_' + 'a'.repeat(200), 'h_agent-x/../y']
 const UNKNOWN = 'h_no_such_agent'
+// A stored row whose runtime tag has no adapter, and the one route that may
+// act on it.
+const UNMANAGED = { id: 'h_old', name: 'old', runtime: 'some-other-runtime' }
+const FORGET_ROUTE = './harnesses/[id]/route.ts'
+// The sweep stubs fs writes; the stored rows are put in place with the real one.
+const realWriteFileSync = fs.writeFileSync
+const storeRows = (rows: unknown[]) => realWriteFileSync(path.join(DATA_DIR, 'harnesses.json'), JSON.stringify(rows))
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const FS_WRITES = [
   'writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'rmdirSync', 'unlinkSync',
@@ -291,6 +299,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   syncBuiltinESMExports()
   fs.rmSync(home, { recursive: true, force: true })
+  fs.rmSync(path.join(DATA_DIR, 'harnesses.json'), { force: true })
 })
 
 function request(method: string, body: unknown = {}): Request {
@@ -373,6 +382,30 @@ describe('routes with the agent id in the URL', () => {
       expect(state.calls, method).toEqual(['harness.get'])
       expect(fsWrites, method).toEqual([])
     }
+  })
+
+  it.each(URL_ID_ROUTES)('%s changes nothing on a row with an unknown runtime tag', async (file) => {
+    for (const [method, handler] of await handlers(file)) {
+      if (method === 'GET') continue
+      state.calls.length = 0
+      state.canned = { 'harness.remove': { removed: true } }
+      storeRows([UNMANAGED])
+      const res = await handler(request(method), { params: Promise.resolve({ id: UNMANAGED.id }) })
+      if (file === FORGET_ROUTE && method === 'DELETE') {
+        // Forgetting the row is the one thing that works on it.
+        expect(res.status, method).toBe(200)
+        expect(state.calls, method).toEqual(['harness.remove'])
+      } else {
+        expect(res.status, method).toBe(409)
+        expect(await res.json(), method).toMatchObject({ reason: 'unknown', runtime: UNMANAGED.runtime })
+        expect(state.calls, method).toEqual([])
+      }
+      expect(fsWrites, method).toEqual([])
+    }
+  })
+
+  it('the route that forgets a row is one of them', () => {
+    expect(URL_ID_ROUTES).toContain(FORGET_ROUTE)
   })
 })
 
@@ -512,10 +545,6 @@ describe('the body fields each route reads are all declared', () => {
     const EXPLAINED: Record<string, string> = {
       './cascades/route.ts sourceHarness': 'stored on the cascade record as a note of where it was saved from',
       './harnesses/[id]/artifacts/sync/route.ts assignKeys': 'a boolean: whether to assign the base-package keys',
-      './setup/deploy/route.ts agentId': 'a Letta agent id read from the Letta API response',
-      './setup/deploy/route.ts brainAgentId': 'a Letta agent id read from the Letta API response',
-      './setup/deploy/route.ts brainHarnessId': 'the id of the brain row this same request just created',
-      './setup/deploy/route.ts harnessId': 'the id of the row this same request just created',
     }
     const found: string[] = []
     for (const [file, fields] of Object.entries(OTHER_FIELDS)) {
@@ -558,6 +587,20 @@ describe('routes with the agent id in the body', () => {
       const res = await handler(request(spec.method, bodyWith(spec, field, UNKNOWN)), { params: Promise.resolve(spec.params ?? {}) })
       expect([400, 404]).toContain(res.status)
       expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual(['harness.get'])
+      expect(fsWrites).toEqual([])
+    },
+  )
+
+  it.each(BODY_CASES.filter(([, , s]) => !s.unknown))(
+    '%s changes nothing when %s is a row with an unknown runtime tag',
+    async (file, field, spec) => {
+      const handler = (await modules[file]())[spec.method]!
+      state.canned = spec.reads ?? {}
+      storeRows([UNMANAGED])
+      const res = await handler(request(spec.method, bodyWith(spec, field, UNMANAGED.id)), { params: Promise.resolve(spec.params ?? {}) })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ reason: 'unknown', runtime: UNMANAGED.runtime })
+      expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual([])
       expect(fsWrites).toEqual([])
     },
   )

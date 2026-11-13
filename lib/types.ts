@@ -13,12 +13,10 @@ export type RestartMode = 'quick' | 'recreate' | 'rebuild' | 'purge'
 export type Harness = {
   id: string
   name: string
-  // 'letta'        — a Letta agent (a row in the Letta server's Postgres, not a
-  //                  container). Managed over REST via AgentResourceProvider.
-  // 'letta-server' — the Letta server itself, a real container-backed harness
-  //                  (docker/letta-compose.yml, service `letta`) that hosts N
-  //                  'letta' agents as children (parentId = its id).
-  runtime: 'hermes' | 'claude-code-proxy' | 'custom' | 'letta' | 'letta-server'
+  // Only 'hermes' has a container adapter today. A stored row carrying any
+  // other tag (a retired runtime, or one this build does not know) never
+  // becomes a Harness: see HarnessService.listRetired().
+  runtime: 'hermes' | 'claude-code-proxy' | 'custom'
   parentId?: string
   status: HarnessStatus
   health: { errors: number; errorMsg?: string }

@@ -8,12 +8,11 @@ import { services } from '@/lib/services'
 import { agentDataDirForName } from './harness'
 import { healDiscordThreadGates, type ThreadGateHealResult, type ThreadGateTarget } from './discord-thread-gate'
 
-/** Every Hermes agent HSM manages, as (name, data dir). Letta has no .env. */
+/** Every Hermes agent HSM manages, as (name, data dir). */
 export function fleetThreadGateTargets(): ThreadGateTarget[] {
   const seen = new Set<string>()
   const targets: ThreadGateTarget[] = []
   for (const h of services.harness.list()) {
-    if (h.runtime === 'letta' || h.runtime === 'letta-server') continue
     // Same id→name rule the settings route and integrity sweep use.
     const name = h.id.replace(/^h_/, '').replace(/_/g, '-')
     if (seen.has(name)) continue

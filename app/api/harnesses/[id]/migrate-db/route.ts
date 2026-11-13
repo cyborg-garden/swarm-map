@@ -69,10 +69,6 @@ export async function POST(
   const fail = (status: number, error: string) =>
     NextResponse.json({ ok: false, error, steps }, { status })
 
-  if (harness.runtime === 'letta' || harness.runtime === 'letta-server') {
-    return fail(400, 'Letta rows have no agent state.db to migrate')
-  }
-
   const target = services.harness.composeTarget(id)
   if (!target || !fs.existsSync(target.composeFile)) {
     return fail(409, `Harness ${id} has no compose file to transform`)

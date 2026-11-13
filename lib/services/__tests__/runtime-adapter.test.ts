@@ -6,6 +6,7 @@ import {
   pickContainerAdapter,
   registerContainerAdapter,
 } from '../harness'
+import { unsupportedRowReason } from '../runtime-adapter'
 import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
@@ -38,8 +39,29 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
     expect(adapterForRuntime(undefined)).toBe(hermesAdapter)
   })
 
-  it('falls back to hermes for runtimes with no container adapter (letta)', () => {
-    expect(adapterForRuntime('letta')).toBe(hermesAdapter)
+  // There is no default adapter. Full coverage lives in retired-runtime.test.ts.
+  it('does NOT fall back to hermes for a runtime with no container adapter', () => {
+    expect(() => adapterForRuntime('letta' as never)).toThrow(/retired/i)
+  })
+
+  it('reads a null tag (a hand edit) as a missing one', () => {
+    expect(adapterForRuntime(null as never)).toBe(hermesAdapter)
+    expect(unsupportedRowReason({ runtime: null })).toBeNull()
+  })
+
+  it('only the tag decides whether a row is managed', () => {
+    expect(unsupportedRowReason({ runtime: 'letta' })).toEqual({ reason: 'retired', runtime: 'letta' })
+    expect(unsupportedRowReason({ runtime: 'pi-from-the-future' })).toEqual({ reason: 'unknown', runtime: 'pi-from-the-future' })
+    for (const row of [{ id: 'h_c', runtime: 'hermes' }, { id: 'h_d' }, { id: 'h_letta_server', surfaceAdmins: {} }, undefined]) {
+      expect(unsupportedRowReason(row), JSON.stringify(row)).toBeNull()
+    }
+  })
+
+  it('a newly registered runtime stops being unknown', () => {
+    const tag = 'test-runtime-registered-here'
+    expect(unsupportedRowReason({ runtime: tag })).toMatchObject({ reason: 'unknown' })
+    registerContainerAdapter({ ...hermesAdapter, runtime: tag as never, matches: () => false })
+    expect(unsupportedRowReason({ runtime: tag })).toBeNull()
   })
 
   // Registration mutates the module-global registry, so this block runs LAST
