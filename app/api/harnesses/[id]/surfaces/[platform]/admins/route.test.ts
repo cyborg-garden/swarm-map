@@ -48,7 +48,7 @@ describe('GET admins', () => {
 
 describe('PUT admins', () => {
   it('200 + persisted list when the service authorizes', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['+64222'] })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['+64222'] })
     const req = new Request('http://x', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -67,21 +67,39 @@ describe('PUT admins', () => {
   }), makeParams('h_seraph', 'discord'))
 
   it('recreates the container when the .env changed, so the running bot gets the new DM list', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvUpdated: true })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvUpdated: true })
     const res = await putDiscord()
     expect(res.status).toBe(200)
     expect(services.harness.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
     expect(await res.json()).toMatchObject({ success: true, restarted: true })
   })
 
+  it('recreates the agent the service resolved, not the id in the URL', async () => {
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph_doer', admins: ['100000000000000001'], dmEnvUpdated: true })
+    await PUT(new Request('http://x', {
+      method: 'PUT',
+      body: JSON.stringify({ admins: ['100000000000000001'], actor: '100000000000000001' }),
+    }), makeParams('seraph-doer', 'discord'))
+    expect(services.harness.restart).toHaveBeenCalledTimes(1)
+    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph_doer', 'recreate')
+  })
+
+  it('404 and no recreate when the service knows no such agent', async () => {
+    setAdmins.mockReturnValue({ ok: false, status: 404, error: 'Unknown agent' })
+    const res = await putDiscord()
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'Unknown agent' })
+    expect(services.harness.restart).not.toHaveBeenCalled()
+  })
+
   it('does not recreate when only the overlay changed', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'] })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'] })
     await putDiscord()
     expect(services.harness.restart).not.toHaveBeenCalled()
   })
 
   it('still answers 200 when no container exists to recreate', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvUpdated: true })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvUpdated: true })
     vi.mocked(services.harness.restart).mockImplementationOnce(() => { throw new Error('no compose') })
     const res = await putDiscord()
     expect(res.status).toBe(200)
@@ -89,7 +107,7 @@ describe('PUT admins', () => {
   })
 
   it('passes a DM list warning on to the caller instead of reporting a clean save', async () => {
-    setAdmins.mockReturnValue({ ok: true, admins: ['100000000000000001'], dmEnvWarning: 'DM list not updated' })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvWarning: 'DM list not updated' })
     const res = await putDiscord()
     expect(await res.json()).toMatchObject({ success: true, warning: 'DM list not updated' })
     expect(services.harness.restart).not.toHaveBeenCalled()

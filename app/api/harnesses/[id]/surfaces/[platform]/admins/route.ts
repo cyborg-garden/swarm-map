@@ -38,11 +38,15 @@ export async function GET(
  * is defense-in-depth + semantic attribution (which surface identity made the
  * change), and keeps self-escalation closed even with the middleware
  * kill-switch (HSM_OPERATOR_TOKEN unset) engaged.
+ *
+ * `:id` is the agent's id or its bare slug. 404 when it names no agent.
  */
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string; platform: string }> },
 ) {
+  // `id` is only ever handed to the service, which resolves it to one agent
+  // (or 404s); everything after that uses the id the service resolved.
   const { id, platform } = await params
   let body: { admins?: unknown; actor?: unknown }
   try {
@@ -63,7 +67,7 @@ export async function PUT(
   let restarted: boolean | undefined
   if (result.dmEnvUpdated) {
     try {
-      services.harness.restart(id, 'recreate')
+      services.harness.restart(result.harnessId, 'recreate')
       restarted = true
     } catch {
       restarted = false // no compose file yet; a later start picks up the .env
