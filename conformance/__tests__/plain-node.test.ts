@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest'
 describe('the lab runs under plain Node', () => {
   it('[U:plain-node] a door round trip with no bundler and no transpiler', () => {
     const smoke = path.resolve(import.meta.dirname, '..', 'smoke.ts')
-    const out = execFileSync(process.execPath, [smoke], { env: { PATH: process.env.PATH ?? '' } as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
+    const env: Record<string, string> = { PATH: process.env.PATH ?? '' }
+    const out = execFileSync(process.execPath, [smoke], { env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'ignore'] }).toString()
     expect(JSON.parse(out)).toEqual({ posts: ['echo: plain node'], receipts: ['deliver/addr.mention', 'allow/out.still-allowed'] })
   })
 })
