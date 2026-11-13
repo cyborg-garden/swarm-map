@@ -45,6 +45,11 @@ describe('brain server', () => {
     shim.close()
   })
 
+  it.each([['an empty token', ''], ['a token too short to be a secret', 'abc'], ['no token', undefined as unknown as string]])(
+    '[P:hello-token] a brain server is not started with %s', async (_what, token) => {
+      await expect(createBrainServer({ token, onShim: () => {} })).rejects.toThrow(/token/)
+    })
+
   it('[P:hello-token] refuses a wrong token and hangs up', async () => {
     const seen: Capabilities[] = []
     const { port, refused } = await start((_link, caps) => seen.push(caps))

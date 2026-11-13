@@ -36,6 +36,10 @@ function sameToken(a: string, b: string): boolean {
 }
 
 export function createBrainServer(opts: BrainServerOptions): Promise<BrainServer> {
+  // An empty token would match a shim that presents an empty one. No token, no server.
+  if (typeof opts.token !== 'string' || opts.token.length < 8) {
+    return Promise.reject(new Error('brain server: refusing to start without a per-cell token of at least 8 characters'))
+  }
   const sockets = new Set<net.Socket>()
   let current: net.Socket | undefined
   let announce: (() => void) | undefined

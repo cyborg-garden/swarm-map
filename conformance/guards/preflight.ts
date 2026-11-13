@@ -4,6 +4,7 @@
 //
 // Why these exist: a test harness once ran against a real host because the
 // fake it expected was not on PATH. "The tests use fakes" has to be proven.
+import { realpathSync } from 'node:fs'
 import path from 'node:path'
 
 export class RefusingToRun extends Error {
@@ -13,19 +14,39 @@ export class RefusingToRun extends Error {
   }
 }
 
-// Refusing too much is the safe side, so any name ending in KEY counts.
-const CREDENTIAL_NAME = /(TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?)$|SECRET/i
+// Refusing too much is the safe side, so a telling word anywhere in the name
+// counts (API_KEY_PROD, MYSQL_PWD, SSH_AUTH_SOCK), and so does a name that
+// says it holds a connection string. This is a list of known names and
+// shapes. It cannot know every credential there is: what it has not been
+// taught, it lets through. The lab's own environment is listed by hand for
+// that reason, and this guard is the second check on it, not the first.
+const CREDENTIAL_NAME = new RegExp([
+  'TOKEN', 'KEY', 'SECRET', 'PASSW', 'PWD', 'PGPASS', 'CREDENTIAL', 'AUTH', 'COOKIE', 'KUBECONFIG',
+  '(^|_)PAT($|_)', '(^|_)(URL|URI|DSN)$',
+].join('|'), 'i')
 
 // Shapes of real credentials. Sources are split so this file never contains
 // a string the repo's own secret scanner would stop on.
 const CREDENTIAL_SHAPES: RegExp[] = [
   new RegExp('\\bsk-' + '[A-Za-z0-9_-]{20,}'),
+  new RegExp('\\b[sr]k_' + '(live|test)_[A-Za-z0-9]{16,}'),
   new RegExp('\\bgh[pousr]_' + '[A-Za-z0-9]{30,}'),
   new RegExp('\\bgithub_pat_' + '[A-Za-z0-9_]{20,}'),
-  new RegExp('\\bxox[baprs]-' + '[A-Za-z0-9-]{10,}'),
+  new RegExp('\\bgl' + 'pat-[A-Za-z0-9_-]{20,}'),
+  new RegExp('\\bx(ox[baprs]|app)-' + '[A-Za-z0-9-]{10,}'),
   new RegExp('\\bAKIA' + '[0-9A-Z]{16}\\b'),
+  new RegExp('\\bAI' + 'za[0-9A-Za-z_-]{35}'),
   new RegExp('\\bntn_' + '[A-Za-z0-9]{20,}'),
+  new RegExp('\\bhf_' + '[A-Za-z0-9]{30,}'),
+  new RegExp('\\bnpm_' + '[A-Za-z0-9]{36}'),
   new RegExp('-----BEGIN ' + '[A-Z ]*PRIVATE KEY-----'),
+  // A JSON web token: three dotted parts, the first two starting the way encoded JSON does.
+  new RegExp('\\bey' + 'J[A-Za-z0-9_-]{8,}\\.ey' + 'J[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}'),
+  // Chat bot tokens: three dotted parts of fixed lengths, or a numeric id, a colon and a secret.
+  /\b[A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}/,
+  /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/,
+  // Any URL that carries a password.
+  /[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@/i,
 ]
 
 /** The only secret-shaped values a run may carry: fakes stamped with its own nonce. */
@@ -72,16 +93,38 @@ export function assertOurProject(project: string, containerNames: string[]): voi
 }
 
 function inside(child: string, parent: string): boolean {
-  const rel = path.relative(path.resolve(parent), path.resolve(child))
+  const rel = path.relative(parent, child)
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
-/** F5. Refuses a work dir outside the temp dir, or anywhere near an agent's home. */
+/** Where a path really is: links followed as far as the path exists, the rest kept as written. */
+function realPlace(p: string): string {
+  const resolved = path.resolve(p)
+  const rest: string[] = []
+  let at = resolved
+  for (;;) {
+    try { return path.join(realpathSync(at), ...rest) } catch { /* does not exist yet: try its parent */ }
+    const parent = path.dirname(at)
+    if (parent === at) return resolved
+    rest.unshift(path.basename(at))
+    at = parent
+  }
+}
+
+/**
+ * F5. Refuses a work dir that is not under the temp dir, or is anywhere in the
+ * home directory or an agent's home. Judged by where the path really is, so a
+ * link under the temp dir that points somewhere else is refused too.
+ */
 export function assertSafeWorkDir(dir: string, where: { home: string; tmp: string }): void {
-  const resolved = path.resolve(dir)
-  const agentHome = resolved.split(path.sep).some((seg) => seg.startsWith('.hermes') || seg === 'hermes-swarm')
+  const resolved = realPlace(dir)
+  const tmp = realPlace(where.tmp)
+  const agentHome = [path.resolve(dir), resolved].some((p) => p.split(path.sep).some((seg) => seg.startsWith('.hermes') || seg === 'hermes-swarm'))
   if (agentHome) throw new RefusingToRun('F5', `work dir is inside an agent home: ${resolved}`)
-  if (!inside(resolved, where.tmp) || resolved === path.resolve(where.tmp)) {
+  if (!inside(resolved, tmp) || resolved === tmp) {
     throw new RefusingToRun('F5', `work dir is not under the temp dir: ${resolved}`)
+  }
+  if (inside(resolved, realPlace(where.home))) {
+    throw new RefusingToRun('F5', `work dir is inside the home directory: ${resolved}`)
   }
 }
