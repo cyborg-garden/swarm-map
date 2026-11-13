@@ -246,7 +246,7 @@ export function ModelCascadeEditor({
                     {retired && (
                       <span
                         className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--danger)]/10 text-[var(--danger)] font-medium uppercase tracking-wide shrink-0"
-                        title="The provider no longer serves this model id"
+                        title="The provider has retired this model id, or announced its retirement"
                       >
                         retired
                       </span>
