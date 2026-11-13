@@ -33,28 +33,38 @@ rows it could leave behind have the ids it minted (`h_letta_agent-<uuid>`, `h_le
 and no field except `surfaceAdmins`. A row with one of those ids, no tag and no other field
 counts as retired.
 
-A Hermes agent named `letta-server` gets the id `h_letta_server` too. It is not caught by
-that rule: the row Swarm Map stores for it carries Hermes fields (name, compose file, port),
-and every row written from now on is tagged `runtime: 'hermes'`. An explicit tag always wins.
-The one case left is a bare `{ id, surfaceAdmins }` row under that id that an older build
-wrote for a Hermes agent it had no row for: it reads as retired, and "Forget row" on the
-fleet page brings the agent back.
+A Hermes agent named `letta-server` gets the id `h_letta_server` too. Three things keep it
+out of that rule. The row Swarm Map stores for it carries Hermes fields (name, compose file,
+port). Every row written from now on is tagged `runtime: 'hermes'`, and an explicit tag
+always wins. And for the bare `{ id, surfaceAdmins }` row an older build wrote for a Hermes
+agent it had only discovered, the disk decides: a Hermes agent has a home at
+`~/.hermes-letta-server`, and the old server never had one. If that directory exists, the
+row is the Hermes agent's. The agent ids (`h_letta_agent-<uuid>`) keep a hyphen that no
+Hermes name derives, so they are retired whatever is on disk.
 
 - `adapterForRuntime` throws `UnsupportedRuntimeError` for a retired or unknown tag.
 - The row owns its id while it is stored. If a live container maps to the same id (a
   `hermes-foo` container beside a retired `h_foo` row), it is not shown or driven until the
   row is forgotten. It then appears as a plain Hermes agent with none of the row's settings.
 - Such rows are left out of `GET /api/harnesses` and have no detail page.
-- Every route that changes one agent (`POST`, `PUT`, `PATCH`, `DELETE` under
-  `/api/harnesses/:id/`) answers 409 for such a row before it does anything. That covers the
-  routes that never look the agent up and write `~/.hermes-<name>` straight from the id:
-  surface connect and disconnect, policy, pairing, admins, group invites, settings. The
-  shared check is `refuseUnmanagedRow` (`lib/services/unmanaged-row-guard.ts`). A bare agent
-  slug is refused the same way as the stored id.
-- `SurfaceAdminService` and key discovery skip such rows too: its stored admins are not
-  served as policy, and its name is not resolved to a Hermes data directory.
-- Read routes are not blocked. A `GET` on such an id that reads `~/.hermes-<name>` still
-  answers from that directory if it exists. Nothing is written.
+- Every route under `/api/harnesses/:id/` answers 409 for such a row before it does
+  anything, reads included. That covers the routes that never look the agent up and go
+  straight from the id to `~/.hermes-<name>`: surface connect and disconnect, policy,
+  pairing, admins, group invites, settings. The shared check is `refuseUnmanagedRow`
+  (`lib/services/unmanaged-row-guard.ts`). A bare agent slug is refused the same way as the
+  stored id. `GET /api/harnesses/:id` itself answers 404.
+- Four reads are the exception, because a running agent calls them about itself by its own
+  slug: `GET .../policy`, `GET .../surfaces/:platform/admins`, `.../admins/:userId` and
+  `.../groups/:groupId`. They answer from that agent's own `.env`, never from the row's
+  stored fields, and write nothing.
+- An id or agent name becomes a Hermes home in one function, `agentHome()`
+  (`lib/services/agent-home.ts`), which throws for such a row. Key assignment, key
+  discovery, tool and memory discovery, the surface list, usage, the integrity log scan and
+  the username resolvers all go through it, so a retired id in a request body or in
+  `keys.json` is skipped: nothing is read from or written to the directory it maps to, and
+  it is not recorded as assigned.
+- A new agent cannot take a name such a row still holds. Deploy, create and import refuse
+  with 409 (or an error) before their first write. Forget the row first.
 - `GET /api/harnesses/retired` lists them with the stored tag and a reason. The fleet page
   shows them under "Rows Swarm Map no longer manages".
 - `DELETE /api/harnesses/:id` on such a row forgets the row and nothing else. It does not
@@ -63,9 +73,14 @@ fleet page brings the agent back.
   nothing.
 
 Tests: `lib/services/__tests__/retired-runtime.test.ts`,
-`app/api/harnesses/__tests__/retired-row-routes.test.ts` (calls every mutating per-agent
-route, found by walking the directory), `lib/services/__tests__/surface-admins.test.ts`,
-`lib/services/__tests__/deploy-route.integration.test.ts`.
+`app/api/harnesses/__tests__/retired-row-routes.test.ts` (calls every per-agent route,
+reads and writes, found by walking the directory),
+`lib/services/__tests__/surface-admins.test.ts`,
+`lib/services/__tests__/keys-discovery.test.ts`,
+`lib/services/__tests__/unmanaged-row-readers.test.ts`,
+`lib/services/__tests__/deploy-route.integration.test.ts`, and
+`lib/__tests__/agent-home-guards.test.ts`, which reads the source and fails when a second
+copy of the id-to-directory mapping appears.
 
 ## What was removed: the old Letta integration
 
