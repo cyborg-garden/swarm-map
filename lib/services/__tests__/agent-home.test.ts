@@ -9,8 +9,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { agentHome, agentHomeIfManaged, agentHomeForSelfRead } from '../agent-home'
-import { agentHomeForName } from '../data-dir'
+import { agentHome, agentHomeIfManaged, agentHomeForSelfRead, storedHarnessRows } from '../agent-home'
+import { DATA_DIR, agentHomeForName } from '../data-dir'
 import { RETIRED_RUNTIMES, UnsupportedRuntimeError } from '../runtime-adapter'
 
 let home: string
@@ -34,6 +34,16 @@ const ROWS = [
   { id: 'h_old', name: 'old', runtime: RETIRED_TAG },
   { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future' },
 ]
+
+describe('where tests keep Swarm Map state', () => {
+  it('DATA_DIR is a scratch directory, never this machine\'s real ~/.hermes-swarm-map', () => {
+    // vitest.setup.ts sets it. Without that, every test that reaches
+    // harnesses.json through DATA_DIR reads the live fleet's file.
+    expect(DATA_DIR.startsWith(fs.realpathSync(os.tmpdir())) || DATA_DIR.startsWith(os.tmpdir())).toBe(true)
+    expect(DATA_DIR).not.toContain('.hermes-swarm-map')
+    expect(storedHarnessRows()).toEqual([])
+  })
+})
 
 describe('agentHome', () => {
   it('maps a managed id, its bare slug, and an id with no stored row', () => {
@@ -117,6 +127,31 @@ describe('agentHome', () => {
 
   it('agentHomeIfManaged still maps a discovered name with a dot', () => {
     expect(agentHomeIfManaged('foo.bar', [])).toBe(path.join(home, '.hermes-foo.bar'))
+  })
+
+  // Discovery mints `h_foo.bar` for a hand-made container `hermes-foo.bar`,
+  // and the integrity scan and usage readers are then called with that id.
+  it('agentHome maps the id discovery mints for a container name with a dot', () => {
+    expect(agentHome('h_foo.bar', [])).toBe(path.join(home, '.hermes-foo.bar'))
+    expect(agentHomeForSelfRead('h_foo.bar')).toBe(path.join(home, '.hermes-foo.bar'))
+  })
+
+  // A case-insensitive disk folds more than ASCII case: "ſeraph-doer" (long
+  // s) and "ﬁsh" (fi ligature) open the directories of seraph-doer and fish.
+  // No agent name holds such a character, so neither lane accepts one.
+  it.each(['\u017feraph-doer', 'h_\u017feraph_doer', '\ufb01sh', 'caf\u00e9', 'a b', 'a\tb'])(
+    'no lane maps the name %j',
+    (odd) => {
+      const rows = [{ id: 'h_seraph_doer', runtime: RETIRED_TAG }, { id: 'h_fish', runtime: RETIRED_TAG }]
+      expect(agentHomeIfManaged(odd, rows)).toBeNull()
+      expect(() => agentHome(odd, rows)).toThrow(/invalid harness id/i)
+      expect(() => agentHomeForSelfRead(odd)).toThrow(/invalid harness id/i)
+    },
+  )
+
+  it('a stored row with no usable id is passed over, not crashed on', () => {
+    const rows = [{ id: 7 as unknown as string, runtime: RETIRED_TAG }, { runtime: RETIRED_TAG }, null as unknown as { id?: string }]
+    expect(agentHome('h_iris', rows)).toBe(path.join(home, '.hermes-iris'))
   })
 
   it('agentHomeIfManaged returns the path for a managed id', () => {

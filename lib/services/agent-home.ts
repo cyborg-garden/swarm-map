@@ -1,6 +1,6 @@
 import { Storage } from './storage'
 import { DATA_DIR, agentHomeForName } from './data-dir'
-import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId, isValidHarnessId } from './runtime-adapter'
+import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId } from './runtime-adapter'
 
 /**
  * From an id or an agent name to its Hermes home (`~/.hermes-<name>`).
@@ -28,20 +28,32 @@ export function storedHarnessRows(): StoredRow[] {
 
 /**
  * The Hermes home for this ID (or the bare slug an agent sends). Throws when
- * the id is not an agent id at all, and UnsupportedRuntimeError when the
+ * the id does not stand for an agent name (see isAgentName), and UnsupportedRuntimeError when the
  * stored row for it is one Swarm Map does not manage. `rows` is
  * harnesses.json as the caller already holds it; left out, it is read.
  */
 export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedHarnessRows()): string {
-  if (!isValidHarnessId(idOrSlug)) throw new Error('Invalid harness id')
+  const name = harnessNameOfId(idOrSlug)
+  if (!isAgentName(name)) throw new Error('Invalid harness id')
   const unmanaged = findUnmanagedRow(rows, idOrSlug)
   if (unmanaged) throw new UnsupportedRuntimeError(unmanaged.runtime, unmanaged.reason)
-  return agentHomeForName(harnessNameOfId(idOrSlug))
+  return agentHomeForName(name)
 }
 
-/** A name that stays inside the home directory when `.hermes-` is put in front of it. */
-function isPathSafeName(name: string): boolean {
-  return name.length > 0 && name !== '.' && name !== '..' && !/[/\\\0]/.test(name) && !name.includes('..')
+/**
+ * Is this a name an agent can have? Every lane asks before the name goes
+ * into a path. The alphabet is what Docker allows in a container name:
+ * ASCII letters and digits, then '_', '.' and '-'. Agents Swarm Map makes
+ * use less (no '_' or '.'), but a container made by hand may use all of it,
+ * and discovery gives such an agent the id `h_<that name>`.
+ *
+ * ASCII only, on purpose. A case-insensitive disk folds more than A-Z: a
+ * long s or an "fi" ligature opens the same directory as the plain letters,
+ * while the row check, which lower-cases, would see a different name. No
+ * slash and no whitespace, so the path stays one directory inside the home.
+ */
+function isAgentName(name: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(name)
 }
 
 /**
@@ -50,11 +62,11 @@ function isPathSafeName(name: string): boolean {
  * the throw so a loop can skip what it may not touch. An `h_` id is turned
  * into its name; a bare name is used as it stands, because a container made
  * by hand can carry an underscore or a dot and its home is
- * `~/.hermes-<that name>`. Null too for a name that would leave the home dir.
+ * `~/.hermes-<that name>`. Null too for anything that is not an agent name.
  */
 export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] = storedHarnessRows()): string | null {
   const name = idOrName.startsWith('h_') ? harnessNameOfId(idOrName) : idOrName
-  if (!isPathSafeName(name)) return null
+  if (!isAgentName(name)) return null
   return findUnmanagedRow(rows, idOrName) ? null : agentHomeForName(name)
 }
 
@@ -67,6 +79,7 @@ export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] 
  * lists the files that may use this.
  */
 export function agentHomeForSelfRead(idOrSlug: string): string {
-  if (!isValidHarnessId(idOrSlug)) throw new Error('Invalid harness id')
-  return agentHomeForName(harnessNameOfId(idOrSlug))
+  const name = harnessNameOfId(idOrSlug)
+  if (!isAgentName(name)) throw new Error('Invalid harness id')
+  return agentHomeForName(name)
 }

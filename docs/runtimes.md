@@ -68,8 +68,9 @@ Hermes name derives, so they are retired whatever is on disk.
   Code that got the name from `HarnessService.list()` or `get()` uses the unchecked helper;
   `lib/__tests__/agent-home-guards.test.ts` names the files that may.
 - The row is matched on what the id means, not how it is spelled: `h_foo_bar`, `foo-bar`,
-  `h_foo-bar` and `FOO-BAR` all find the row `h_foo_bar`. An id with any character outside
-  letters, digits, `_` and `-` is refused before it becomes a path.
+  `h_foo-bar` and `FOO-BAR` all find the row `h_foo_bar`. A name must be one a
+  container can have (ASCII letters, digits, `_`, `.`, `-`) before it becomes a
+  path; the routes agents call are stricter and allow no `.`.
 - A new agent cannot take a name such a row still holds. Deploy answers 409 and create and
   import fail, each before its first write. Duplicate onto such a name is refused as any
   taken name is. Forget the row first.

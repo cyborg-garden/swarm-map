@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest'
+import { afterAll } from 'vitest'
 
 // Tests must never read this machine's real Swarm Map state. Several
 // services find harnesses.json through DATA_DIR (lib/services/data-dir.ts),
@@ -12,5 +13,7 @@ import path from 'path'
 if (!process.env.DATA_DIR) {
   const scratchDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-test-data-'))
   process.env.DATA_DIR = scratchDataDir
-  process.on('exit', () => fs.rmSync(scratchDataDir, { recursive: true, force: true }))
+  // One scratch dir per test file, removed when that file is done. (An exit
+  // hook would not do: vitest's workers are stopped without one.)
+  afterAll(() => fs.rmSync(scratchDataDir, { recursive: true, force: true }))
 }
