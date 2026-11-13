@@ -76,12 +76,16 @@ Hermes name derives, so they are retired whatever is on disk.
   `keys.json` from before the row was retired stays listed, but is never written again.
   Code that got the name from `HarnessService.list()` or `get()` uses the unchecked helper;
   `lib/__tests__/agent-home-guards.test.ts` names the files that may.
-- The row is matched on what the id means, not how it is spelled. Two spellings are the
-  same agent when they build the same directory: `h_foo_bar`, `foo-bar` and `h_foo-bar`
-  always, `FOO-BAR` only where the disk folds case (macOS by default). On a disk that keeps
-  case, an agent `Old` beside a retired `h_old` is a different agent and is left alone. A name must be one a
-  container can have (ASCII letters, digits, `_`, `.`, `-`) before it becomes a
-  path; the routes agents call are stricter and allow no `.`.
+- What an id means is decided by the disk, not by comparing strings
+  (`lib/services/home-resolver.ts`). An agent home is an entry `.hermes-<name>` of the home
+  directory that is a directory once symlinks are followed, and it is identified by the
+  directory it really is. It has one id: `h_` plus its name with `-` turned into `_`. A
+  spelling reaches a home when the path it spells is that same directory on this disk, so
+  `h_foo_bar`, `foo-bar` and `h_foo-bar` always meet, and `FOO-BAR` meets them only where
+  the disk folds case. One directory never answers to two ids: a symlink beside its target
+  is not a second agent. A row is "such a row" for a request when the two touch the same
+  directory. A name must be one a container can have (ASCII letters, digits, `_`, `.`,
+  `-`) before it becomes a path; the routes agents call are stricter and allow no `.`.
 - A new agent cannot take a name such a row still holds. Deploy answers 409 and create and
   import fail, each before its first write. Duplicate onto such a name is refused as any
   taken name is. Forget the row first.
@@ -100,7 +104,9 @@ reads and writes, found by walking the directory),
 `lib/services/__tests__/unmanaged-row-readers.test.ts`,
 `lib/services/__tests__/deploy-route.integration.test.ts`, and
 `lib/__tests__/agent-home-guards.test.ts`, which reads the source and fails when a second
-copy of the id-to-directory mapping appears.
+copy of the id-to-directory mapping appears, and
+`lib/services/__tests__/home-resolver.property.test.ts`, which generates names, symlinks
+and mounts on a model disk and checks the rules above hold for all of them.
 
 ## What was removed: the old Letta integration
 

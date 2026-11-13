@@ -18,9 +18,8 @@
  * UnsupportedRuntimeError below.
  */
 
-import fs from 'fs'
 import type { Harness } from '@/lib/types'
-import { agentHomeForName, homeFoldsCase } from './data-dir'
+import { diskIo, reach, reachesSame, resolveAgentHome, type HomeIo } from './home-resolver'
 import type { ComposeOptions } from './harness-compose'
 
 export interface ContainerRuntimeAdapter {
@@ -111,7 +110,7 @@ const LEFTOVER_ROW_FIELDS: ReadonlySet<string> = new Set(['id', 'surfaceAdmins']
 
 /** Is there a Hermes home on disk for this agent name? */
 function hermesHomeExists(name: string): boolean {
-  return fs.existsSync(agentHomeForName(name))
+  return resolveAgentHome(name)?.exists === true
 }
 
 /**
@@ -215,36 +214,31 @@ export function isValidHarnessId(raw: unknown): raw is string {
 }
 
 /**
- * What an id or slug MEANS, for comparing two spellings: the agent name.
- * Two spellings are the same agent when they build the same directory.
- * `h_seraph_doer`, `seraph-doer` and `h_seraph-doer` always do. `SERAPH-DOER`
- * does only where the disk folds case (`foldCase`); on a disk that keeps
- * case it is another agent, and must not be refused for this one's row.
- */
-function harnessKey(idOrSlug: string, foldCase: boolean): string {
-  const name = harnessNameOfId(idOrSlug)
-  return foldCase ? name.toLowerCase() : name
-}
-
-/**
  * The stored row for this id or bare slug, if Swarm Map does not manage it.
- * agentHome() (./agent-home), the one place an id becomes `~/.hermes-<name>`,
- * asks this first. Rows are matched by harnessKey, not by the exact string,
- * and one unmanaged row is enough when several share an id. A harnesses.json
- * that is not a list holds no rows. `foldCase` is whether the disk under the
- * home directory folds case; left out, the disk is asked.
+ * agentHome() (./agent-home) asks this before it hands out a directory.
+ *
+ * A row is found by the directory its id means, not by its spelling: the
+ * question is whether what the caller wrote and what the row's id says
+ * touch the same directory on this disk (see ./home-resolver, `reach`). One
+ * unmanaged row is enough when several qualify. A harnesses.json that is not
+ * a list holds no rows.
  */
 export function findUnmanagedRow<T extends { id?: string; runtime?: string | null }>(
   rows: readonly T[],
   idOrSlug: string,
-  foldCase: boolean = homeFoldsCase(),
+  io: HomeIo = diskIo,
 ): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
   if (!Array.isArray(rows)) return null
-  const key = harnessKey(idOrSlug, foldCase)
+  let asked: ReturnType<typeof reach> | undefined
   for (const row of rows) {
-    if (typeof row?.id !== 'string' || harnessKey(row.id, foldCase) !== key) continue
+    if (typeof row?.id !== 'string') continue
     const unsupported = unsupportedRowReason(row)
-    if (unsupported) return { row, ...unsupported }
+    if (!unsupported) continue
+    // Only now is the disk read: a fleet with no such row never pays for it.
+    if (asked === undefined) asked = reach(idOrSlug, io)
+    const rowReach = reach(row.id, io)
+    const same = asked && rowReach ? reachesSame(asked, rowReach) : row.id === idOrSlug
+    if (same) return { row, ...unsupported }
   }
   return null
 }

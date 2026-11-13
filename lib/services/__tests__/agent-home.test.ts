@@ -10,7 +10,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { agentHome, agentHomeIfManaged, agentHomeForSelfRead, storedHarnessRows } from '../agent-home'
-import { DATA_DIR, agentHomeForName, homeFoldsCase } from '../data-dir'
+import { DATA_DIR, agentHomeForName } from '../data-dir'
 import { RETIRED_RUNTIMES, UnsupportedRuntimeError, findUnmanagedRow } from '../runtime-adapter'
 
 let home: string
@@ -94,42 +94,9 @@ describe('agentHome', () => {
     const rows = [{ id: 'h_old', name: 'old', runtime: RETIRED_TAG }]
     const CASED = ['h_Old', 'Old', 'OLD', 'h_OLD']
 
-    it.each(CASED)('%s is a different agent on a disk that keeps case', (spelling) => {
-      expect(findUnmanagedRow(rows, spelling, false)).toBeNull()
-      expect(findUnmanagedRow(rows, 'h_old', false)).not.toBeNull()
-    })
-
-    it.each(CASED)('%s is the same directory on a disk that folds case', (spelling) => {
-      expect(findUnmanagedRow(rows, spelling, true)).toMatchObject({ reason: 'retired' })
-    })
-
-    it('homeFoldsCase() reports what this disk really does', () => {
-      fs.mkdirSync(path.join(home, 'CaseProbe'))
-      const reallyFolds = fs.existsSync(path.join(home, 'caseprobe'))
-      expect(homeFoldsCase()).toBe(reallyFolds)
-    })
-
-    // The same question with the disk's answer supplied, so both answers
-    // are exercised on every machine.
-    it.each([
-      ['the other spelling is the same directory', { ino: 7, dev: 1 }, { ino: 7, dev: 1 }, true],
-      ['the other spelling is another directory', { ino: 7, dev: 1 }, { ino: 8, dev: 1 }, false],
-      ['the same inode number on another device', { ino: 7, dev: 1 }, { ino: 7, dev: 2 }, false],
-    ])('homeFoldsCase(): %s', (_label, a, b, want) => {
-      const real = home
-      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike) => (String(p) === real ? a : b)) as never)
-      expect(homeFoldsCase()).toBe(want)
-    })
-
-    it('homeFoldsCase(): the other spelling is not there at all', () => {
-      const real = home
-      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike) => {
-        if (String(p) === real) return { ino: 7, dev: 1 }
-        throw new Error('ENOENT')
-      }) as never)
-      expect(homeFoldsCase()).toBe(false)
-    })
-
+    // Both kinds of disk, and a home that is a mount with its own rule, are
+    // exercised on every machine by home-resolver.property.test.ts against
+    // a model disk. This case checks the real disk the suite is running on.
     it('agentHome follows the disk: refused exactly when the two names are one directory', () => {
       fs.mkdirSync(path.join(home, '.hermes-old'))
       const sameDirectory = fs.existsSync(path.join(home, '.hermes-Old'))
@@ -140,6 +107,7 @@ describe('agentHome', () => {
         } else {
           expect(agentHome(spelling, rows), spelling).toBe(path.join(home, '.hermes-' + spelling.replace(/^h_/, '')))
           expect(agentHomeIfManaged(spelling, rows), spelling).not.toBeNull()
+          expect(findUnmanagedRow(rows, spelling), spelling).toBeNull()
         }
       }
     })
@@ -165,10 +133,42 @@ describe('agentHome', () => {
       expect(agentHome('h_foo_bar', [])).toBe(path.join(home, '.hermes-foo-bar'))
     })
 
-    it('does not guess between two candidates', () => {
+    it('does not guess between two candidates: the id means neither', () => {
       fs.mkdirSync(path.join(home, '.hermes-a_b_c'))
       fs.mkdirSync(path.join(home, '.hermes-a-b_c'))
-      expect(agentHome('h_a_b_c', [])).toBe(path.join(home, '.hermes-a-b-c'))
+      expect(() => agentHome('h_a_b_c', [])).toThrow(/invalid harness id/i)
+      expect(agentHomeIfManaged('h_a_b_c', [])).toBeNull()
+      // Still sealed if either is an unmanaged row's.
+      expect(findUnmanagedRow([{ id: 'h_a_b_c', runtime: RETIRED_TAG }], 'a-b_c')).not.toBeNull()
+    })
+
+    it('a home whose name starts with h_ answers only to its own id', () => {
+      // `.hermes-h_foo_bar` is the agent "h_foo_bar", id `h_h_foo_bar`. The
+      // id `h_foo_bar` belongs to "foo-bar" and must not land here.
+      fs.mkdirSync(path.join(home, '.hermes-h_foo_bar'))
+      expect(agentHome('h_h_foo_bar', [])).toBe(path.join(home, '.hermes-h_foo_bar'))
+      expect(agentHome('h_foo_bar', [])).toBe(path.join(home, '.hermes-foo-bar'))
+      const rows = [{ id: 'h_h_foo_bar', runtime: RETIRED_TAG }]
+      expect(() => agentHome('h_h_foo_bar', rows)).toThrow(UnsupportedRuntimeError)
+      expect(agentHomeIfManaged('h_foo_bar', rows)).toBe(path.join(home, '.hermes-foo-bar'))
+    })
+
+    it('a symlinked home is a home, and an alias beside its target is not a second one', () => {
+      const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-agent-elsewhere-'))
+      try {
+        fs.symlinkSync(elsewhere, path.join(home, '.hermes-far'))
+        expect(agentHome('h_far', [])).toBe(path.join(home, '.hermes-far'))
+        expect(() => agentHome('h_far', [{ id: 'h_far', runtime: RETIRED_TAG }])).toThrow(UnsupportedRuntimeError)
+
+        fs.mkdirSync(path.join(home, '.hermes-real'))
+        fs.symlinkSync(path.join(home, '.hermes-real'), path.join(home, '.hermes-alias'))
+        expect(agentHome('h_real', [])).toBe(path.join(home, '.hermes-real'))
+        expect(() => agentHome('h_alias', [])).toThrow(/invalid harness id/i)
+        // And the alias never leads into an unmanaged row's home.
+        expect(findUnmanagedRow([{ id: 'h_real', runtime: RETIRED_TAG }], 'h_alias')).not.toBeNull()
+      } finally {
+        fs.rmSync(elsewhere, { recursive: true, force: true })
+      }
     })
 
     it('still refuses when the row for that id is unmanaged', () => {
@@ -198,10 +198,13 @@ describe('agentHome', () => {
   // A bare NAME is used as it stands: an agent discovered from a hand-made
   // container can carry an underscore, and its home is ~/.hermes-<that name>.
   // Only the `h_` id form turns underscores back into hyphens.
-  it('agentHomeIfManaged keeps a bare name verbatim and converts only an id', () => {
-    expect(agentHomeIfManaged('foo_bar', ROWS)).toBe(path.join(home, '.hermes-foo_bar'))
+  it('a bare name reaches the home that exists under it; with none, the hyphen form is meant', () => {
+    expect(agentHomeIfManaged('foo_bar', ROWS)).toBe(path.join(home, '.hermes-foo-bar'))
     expect(agentHomeIfManaged('h_foo_bar', ROWS)).toBe(path.join(home, '.hermes-foo-bar'))
     expect(agentHomeIfManaged('personal', ROWS)).toBe(path.join(home, '.hermes'))
+    fs.mkdirSync(path.join(home, '.hermes-foo_bar'))
+    expect(agentHomeIfManaged('foo_bar', ROWS)).toBe(path.join(home, '.hermes-foo_bar'))
+    expect(agentHomeIfManaged('h_foo_bar', ROWS)).toBe(path.join(home, '.hermes-foo_bar'))
   })
 
   it.each(['h_../../etc', '../x', 'a/b', 'h_a b', ''])('refuses the id %j: it is not an agent id at all', (bad) => {
@@ -230,7 +233,7 @@ describe('agentHome', () => {
   // id `h__x`; the readers called with it must get a path, not a throw.
   it('maps a name that starts with a hyphen, and caps the length', () => {
     expect(agentHome('h__x', [])).toBe(path.join(home, '.hermes--x'))
-    expect(agentHomeIfManaged('_x', [])).toBe(path.join(home, '.hermes-_x'))
+    expect(agentHomeIfManaged('_x', [])).toBe(path.join(home, '.hermes--x'))
     expect(agentHome('a'.repeat(128), [])).toBe(path.join(home, '.hermes-' + 'a'.repeat(128)))
     expect(() => agentHome('a'.repeat(129), [])).toThrow(/invalid harness id/i)
     expect(agentHomeIfManaged('a'.repeat(129), [])).toBeNull()

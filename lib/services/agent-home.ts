@@ -1,7 +1,7 @@
 import { Storage } from './storage'
-import fs from 'fs'
-import { DATA_DIR, agentHomeForName, existingAgentHomeNames } from './data-dir'
-import { UnsupportedRuntimeError, canonicalHarnessId, findUnmanagedRow, harnessNameOfId } from './runtime-adapter'
+import { DATA_DIR } from './data-dir'
+import { diskIo, resolveAgentHome, type HomeIo } from './home-resolver'
+import { UnsupportedRuntimeError, findUnmanagedRow } from './runtime-adapter'
 
 /**
  * From an id or an agent name to its Hermes home (`~/.hermes-<name>`).
@@ -28,66 +28,36 @@ export function storedHarnessRows(): StoredRow[] {
 }
 
 /**
- * The Hermes home for this ID (or the bare slug an agent sends). Throws when
- * the id does not stand for an agent name (see isAgentName), and UnsupportedRuntimeError when the
- * stored row for it is one Swarm Map does not manage. `rows` is
- * harnesses.json as the caller already holds it; left out, it is read.
+ * The Hermes home for this id, slug or agent name. Throws when it means no
+ * home at all (not an agent name, or an alias: see ./home-resolver), and
+ * UnsupportedRuntimeError when the stored row for that directory is one
+ * Swarm Map does not manage. `rows` is harnesses.json as the caller already
+ * holds it; left out, it is read.
  */
-export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedHarnessRows()): string {
-  const name = nameOfId(idOrSlug)
-  if (!isAgentName(name)) throw new Error('Invalid harness id')
-  const unmanaged = findUnmanagedRow(rows, idOrSlug)
+export function agentHome(
+  idOrSlug: string,
+  rows: readonly StoredRow[] = storedHarnessRows(),
+  io: HomeIo = diskIo,
+): string {
+  const agent = resolveAgentHome(idOrSlug, io)
+  if (!agent) throw new Error('Invalid harness id')
+  const unmanaged = findUnmanagedRow(rows, idOrSlug, io)
   if (unmanaged) throw new UnsupportedRuntimeError(unmanaged.runtime, unmanaged.reason)
-  return agentHomeForName(name)
+  return agent.home
 }
 
 /**
- * The agent name an id came from. Making an id turns '-' into '_', which
- * cannot be undone when the name had a '_' of its own: a container made by
- * hand as `hermes-_x` gets `h__x`, the same id `hermes--x` would. Turning
- * every '_' back into '-' is right for every agent Swarm Map makes, so that
- * form wins whenever its home exists, and when nothing exists yet. Only when
- * it does not exist is the disk asked: if exactly one home has a name that
- * makes this id, that is the agent. Two candidates are not guessed between.
+ * The same answer with null in place of both throws, for loops over ids or
+ * names (key assignment, discovery) that skip what they may not touch.
  */
-function nameOfId(idOrSlug: string): string {
-  const hyphened = harnessNameOfId(idOrSlug)
-  if (!idOrSlug.startsWith('h_') || !idOrSlug.slice(2).includes('_')) return hyphened
-  if (!isAgentName(hyphened) || fs.existsSync(agentHomeForName(hyphened))) return hyphened
-  const id = canonicalHarnessId(hyphened)
-  const candidates = existingAgentHomeNames().filter((n) => isAgentName(n) && canonicalHarnessId(n) === id)
-  return candidates.length === 1 ? candidates[0] : hyphened
-}
-
-/**
- * Is this a name an agent can have? Every lane asks before the name goes
- * into a path. The alphabet is the one Docker allows in a container name:
- * ASCII letters and digits, '_', '.' and '-', up to 128 of them. Agents Swarm Map makes
- * use less (no '_' or '.'), but a container made by hand may use all of it,
- * and discovery gives such an agent the id `h_<that name>`.
- *
- * ASCII only, on purpose. A case-insensitive disk folds more than A-Z: a
- * long s or an "fi" ligature opens the same directory as the plain letters,
- * while the row check, which lower-cases, would see a different name. No
- * slash and no whitespace, so the path stays one directory inside the home.
- */
-function isAgentName(name: string): boolean {
-  // A name of dots alone is never an agent's, and reads like a path step.
-  return /^[A-Za-z0-9_.-]{1,128}$/.test(name) && !/^\.+$/.test(name)
-}
-
-/**
- * The same question for the lanes that hold an id OR an agent name (key
- * assignment, and the loops over discovered names), with null in place of
- * the throw so a loop can skip what it may not touch. An `h_` id is turned
- * into its name; a bare name is used as it stands, because a container made
- * by hand can carry an underscore or a dot and its home is
- * `~/.hermes-<that name>`. Null too for anything that is not an agent name.
- */
-export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] = storedHarnessRows()): string | null {
-  const name = idOrName.startsWith('h_') ? nameOfId(idOrName) : idOrName
-  if (!isAgentName(name)) return null
-  return findUnmanagedRow(rows, idOrName) ? null : agentHomeForName(name)
+export function agentHomeIfManaged(
+  idOrName: string,
+  rows: readonly StoredRow[] = storedHarnessRows(),
+  io: HomeIo = diskIo,
+): string | null {
+  const agent = resolveAgentHome(idOrName, io)
+  if (!agent || findUnmanagedRow(rows, idOrName, io)) return null
+  return agent.home
 }
 
 /**
@@ -99,7 +69,7 @@ export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] 
  * lists the files that may use this.
  */
 export function agentHomeForSelfRead(idOrSlug: string): string {
-  const name = nameOfId(idOrSlug)
-  if (!isAgentName(name)) throw new Error('Invalid harness id')
-  return agentHomeForName(name)
+  const agent = resolveAgentHome(idOrSlug)
+  if (!agent) throw new Error('Invalid harness id')
+  return agent.home
 }

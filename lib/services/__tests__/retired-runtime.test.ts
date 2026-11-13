@@ -465,6 +465,32 @@ describe('a stored row with a retired runtime (R4)', () => {
     })
   })
 
+  describe('a container whose home is the retired row\'s directory under another name', () => {
+    // ~/.hermes-alias is a symlink to ~/.hermes-old. A container
+    // `hermes-alias` would be a second way in to the same directory.
+    const liveAlias = () => {
+      fs.symlinkSync(decoyDataDir, path.join(tmpDir, '.hermes-alias'))
+      mock(docker.listComposeProjects).mockReturnValue([{ name: 'alias', status: 'running', configFiles: [composeFile] }])
+      mock(docker.inspectContainers).mockReturnValue([
+        { name: 'hermes-alias', service: 'hermes-alias', state: 'running', status: 'Up', ports: [], composeFile },
+      ])
+    }
+
+    it('is not projected while the row is stored', () => {
+      liveAlias()
+      expect(service.list().map((h) => h.id)).not.toContain('h_alias')
+      expect(service.get('h_alias')).toBeUndefined()
+      expect(() => service.stop('h_alias')).toThrow()
+      expect(docker.stop).not.toHaveBeenCalled()
+    })
+
+    it('control: with the row forgotten the same container is listed', () => {
+      liveAlias()
+      service.remove('h_old', false)
+      expect(service.list().map((h) => h.id)).toContain('h_alias')
+    })
+  })
+
   it('listRetired() reports each one with its stored tag and a reason', () => {
     const retired = service.listRetired()
     expect(retired.map((r) => r.id).sort()).toEqual(['h_odd', 'h_old', 'h_srv'])

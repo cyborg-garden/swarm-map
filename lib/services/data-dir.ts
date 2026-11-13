@@ -1,4 +1,3 @@
-import fs from 'fs'
 import path from 'path'
 import os from 'os'
 
@@ -24,51 +23,27 @@ export function newAgentHomeForName(name: string): string {
  * `~/.hermes-<name>` for every other agent. Path arithmetic only: it does
  * not ask whether the name belongs to a Hermes agent. Code that starts from
  * an id or a name it did not get from HarnessService.list()/get() must use
- * agentHome() in ./agent-home instead, which does ask.
+ * agentHome() in ./agent-home instead, which asks the disk and the stored
+ * rows (see ./home-resolver for the rule).
  */
 export function agentHomeForName(name: string): string {
   return name === 'personal' ? personalAgentHome() : newAgentHomeForName(name)
 }
 
-/** The names of the agent homes that exist: `foo` for `~/.hermes-foo`. */
-export function existingAgentHomeNames(): string[] {
-  const prefix = '.hermes-'
-  try {
-    return fs
-      .readdirSync(os.homedir(), { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name.startsWith(prefix))
-      .map((e) => e.name.slice(prefix.length))
-  } catch {
-    return []
-  }
+/** The directory entry an agent's home has inside the home directory. */
+export function agentHomeEntry(name: string): string {
+  return name === 'personal' ? '.hermes' : '.hermes-' + name
 }
 
-const foldsCaseByHome = new Map<string, boolean>()
-
 /**
- * Does the disk under the home directory fold case, so that `~/.hermes-Old`
- * and `~/.hermes-old` are one directory? macOS does by default; Linux does
- * not. Asked of the disk itself: the home directory, spelled in the other
- * case, is either the same directory or it is not there. When the home's
- * name has no letter to change, the answer is "yes": the careful one, since
- * it only ever makes two names count as the same agent.
+ * The agent a directory entry of the home directory is the home of, or null
+ * when the entry is not an agent home. `.hermes` is "personal". An entry
+ * `.hermes-personal` is nobody's: "personal" already has a home.
  */
-export function homeFoldsCase(): boolean {
-  const home = os.homedir()
-  const known = foldsCaseByHome.get(home)
-  if (known !== undefined) return known
-  const base = path.basename(home)
-  const other = base === base.toUpperCase() ? base.toLowerCase() : base.toUpperCase()
-  let folds = true
-  if (other !== base) {
-    try {
-      const a = fs.statSync(home)
-      const b = fs.statSync(path.join(path.dirname(home), other))
-      folds = a.ino === b.ino && a.dev === b.dev
-    } catch {
-      folds = false
-    }
-  }
-  foldsCaseByHome.set(home, folds)
-  return folds
+export function agentNameOfHomeEntry(entry: string): string | null {
+  if (entry === '.hermes') return 'personal'
+  const prefix = '.hermes-'
+  if (!entry.startsWith(prefix)) return null
+  const name = entry.slice(prefix.length)
+  return name === 'personal' ? null : name
 }

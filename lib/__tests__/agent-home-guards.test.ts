@@ -121,18 +121,26 @@ describe('the unchecked mapping is only used where the name is already known to 
   const UNCHECKED_ALLOWED = [
     'app/api/harnesses/[id]/migrate-db/route.ts', // harness from get()
     'app/api/setup/deploy/route.ts', // new agent, after the held-name refusal
-    'lib/services/agent-home.ts', // the checked wrapper itself
     'lib/services/data-dir.ts', // the definition
     'lib/services/db-snapshot.ts', // names from list()
     'lib/services/discord-thread-gate-fleet.ts', // names from list()
     'lib/services/harness.ts', // discovery, and create/duplicate/import/remove after their own checks
     'lib/services/index.ts', // names from list()
     'lib/services/integrity.ts', // sweep targets from list()
-    'lib/services/runtime-adapter.ts', // asks only whether a home exists
   ]
 
   it('the unchecked helpers appear only in the allowed files', () => {
     expect(filesOf(linesMatching(/\b(agentHomeForName|agentDataDirForName|newAgentHomeForName|personalAgentHome)\b/))).toEqual(UNCHECKED_ALLOWED)
+  })
+
+  it('the entry-name helpers are used only by the resolver', () => {
+    // agentHomeEntry / agentNameOfHomeEntry turn a name into a directory
+    // entry and back. lib/services/home-resolver.ts is the one place that
+    // decides which entry a spelling means.
+    expect(filesOf(linesMatching(/\b(agentHomeEntry|agentNameOfHomeEntry)\b/))).toEqual([
+      'lib/services/data-dir.ts',
+      'lib/services/home-resolver.ts',
+    ])
   })
 
   it('agentHomeForSelfRead is only used by the endpoints an agent calls about itself', () => {

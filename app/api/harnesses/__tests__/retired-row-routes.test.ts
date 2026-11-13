@@ -19,6 +19,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import crypto from 'crypto'
+import { UnsupportedRuntimeError } from '@/lib/services/runtime-adapter'
 
 const scratch = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -356,7 +357,8 @@ describe('a Hermes agent is never refused as unmanaged', () => {
     // Below the guard, agentHome() throws UnsupportedRuntimeError, which a
     // route either lets out or turns into an error body carrying its
     // message. Both count: a Hermes agent must see neither.
-    const REFUSAL_TEXT = /is retired\. Swarm Map no longer manages it|Unknown runtime "[^"]*": no adapter is registered/
+    // In a JSON body the quotes round the runtime arrive escaped.
+    const REFUSAL_TEXT = /is retired\. Swarm Map no longer manages it|Unknown runtime \\?"[^"]*": no adapter is registered/
     let res: Response
     try {
       res = await call(h.handler, h.method, h.file, id)
@@ -412,6 +414,44 @@ describe('a Hermes agent is never refused as unmanaged', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+
+  // Each shape of refusal the sweep looks for, fed to it directly, so no
+  // branch of the detector is there on trust.
+  describe('control: every shape of refusal is recognised, and nothing else is', () => {
+    const asHandler = (fn: () => Response | Promise<Response>): (typeof handlers)[number] => ({
+      label: 'a stand-in route',
+      file: path.join(ROUTES_DIR, 'stand-in', 'route.ts'),
+      method: 'GET',
+      handler: async () => fn(),
+    })
+    const retired = new UnsupportedRuntimeError('letta', 'retired')
+    const unknown = new UnsupportedRuntimeError('pi-from-the-future', 'unknown')
+
+    it.each([
+      ['the guard\'s 409, retired', () => Response.json({ error: 'x', reason: 'retired' }, { status: 409 })],
+      ['the guard\'s 409, unknown', () => Response.json({ error: 'x', reason: 'unknown' }, { status: 409 })],
+      ['the mapping\'s error let out of the route', () => { throw retired }],
+      ['the unknown-runtime error let out of the route', () => { throw unknown }],
+      ['a plain Error carrying the mapping\'s message', () => { throw new Error(retired.message) }],
+      ['a 500 whose body carries the retired message', () => Response.json({ error: retired.message }, { status: 500 })],
+      ['a 500 whose body carries the unknown message', () => Response.json({ error: unknown.message }, { status: 500 })],
+      ['a 200 whose body carries the message', () => Response.json({ ok: false, error: `Restart failed: ${unknown.message}` })],
+      ['a text body carrying the message', () => new Response(retired.message, { status: 500 })],
+    ] as Array<[string, () => Response]>)('%s counts as refused', async (_label, fn) => {
+      expect(await refusedAsUnmanaged(asHandler(fn), 'h_old')).toBe(true)
+    })
+
+    it.each([
+      ['a 409 for another reason', () => Response.json({ error: 'name taken' }, { status: 409 })],
+      ['a 409 with an unrelated reason field', () => Response.json({ reason: 'busy' }, { status: 409 })],
+      ['a 500 of the route\'s own', () => Response.json({ error: 'Docker is not available' }, { status: 500 })],
+      ['a throw of the route\'s own', () => { throw new Error('ENOENT: no such file') }],
+      ['a 200', () => Response.json({ ok: true })],
+      ['a 404', () => Response.json({ error: 'Harness not found' }, { status: 404 })],
+    ] as Array<[string, () => Response]>)('%s does not', async (_label, fn) => {
+      expect(await refusedAsUnmanaged(asHandler(fn), 'h_old')).toBe(false)
+    })
   })
 
   it('control: the same sweep does report a row that IS unmanaged', async () => {

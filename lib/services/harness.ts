@@ -32,7 +32,7 @@ import { generateStandaloneCompose, setComposeImage, readComposeImage, readCompo
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import {
-  UnsupportedRuntimeError, canonicalHarnessId, markRuntimeDrivable, unmanagedRowNote,
+  UnsupportedRuntimeError, findUnmanagedRow, markRuntimeDrivable, unmanagedRowNote,
   unsupportedRowReason, unsupportedRuntimeReason,
 } from './runtime-adapter'
 
@@ -1140,6 +1140,9 @@ export class HarnessService {
       // row is reported by listRetired(); once it is forgotten, the container
       // shows up here as a plain agent with none of the row's fields.
       if (unsupportedRowReason(overlays[id])) continue
+      // The same holds for a container whose home IS such a row's directory
+      // under another name (a symlink beside it): one directory, one owner.
+      if (findUnmanagedRow(Object.values(overlays), id)) continue
       const effAdapter = adapter ?? adapterForRuntime(overlays[id]?.runtime)
 
       const dataDir = effAdapter.dataDir(live.serviceName, containerName)
@@ -1353,8 +1356,9 @@ export class HarnessService {
    * only: no Docker call, so it is cheap enough to run before every write.
    */
   unmanagedRow(idOrSlug: string): RetiredHarnessRow | null {
-    const id = canonicalHarnessId(idOrSlug)
-    return this.listRetired().find((r) => r.id === id) ?? null
+    // Found by the directory the id means, not by its spelling (home-resolver).
+    const found = findUnmanagedRow(this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, []), idOrSlug)
+    return found ? (this.listRetired().find((r) => r.id === found.row.id) ?? null) : null
   }
 
   /**
