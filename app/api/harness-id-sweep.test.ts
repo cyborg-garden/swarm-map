@@ -446,6 +446,16 @@ function passesWholeBody(src: string): boolean {
   return /[(,]\s*body\s*[,)]|Object\.(entries|keys|values)\(\s*body\s*(\)|as\b)|\.\.\.body\b/.test(src)
 }
 
+// Ways of reading the request body that bodyFields() does not follow.
+function otherBodyReads(src: string): string[] {
+  const out: string[] = []
+  for (const m of src.matchAll(/\.(?:clone|text|formData|arrayBuffer|blob|bytes)\(\)|\b_?req(?:uest)?\.body\b/g)) out.push(m[0])
+  for (const m of src.matchAll(/(?:\b(\w+)\s*(?::[^=\n]+)?=\s*(?:\(\s*)?|(\}\s*=\s*(?:\(\s*)?))?await\s+_?req(?:uest)?\.json\(\)/g)) {
+    if (m[1] !== 'body' && !m[2]) out.push(m[0].trim())
+  }
+  return out
+}
+
 const sourceOf = (file: string) => fs.readFileSync(path.resolve(__dirname, file), 'utf-8')
 
 describe('the body fields each route reads are all declared', () => {
@@ -480,6 +490,20 @@ describe('the body fields each route reads are all declared', () => {
 
   it('declares nothing for a route file that does not exist', () => {
     for (const file of [...Object.keys(OTHER_FIELDS), ...Object.keys(WHOLE_BODY)]) expect(ALL_ROUTES, file).toContain(file)
+  })
+
+  it('every handler takes its body the one way the reader follows', () => {
+    // The reader follows `body = await request.json()` and a destructuring of
+    // the same call. Any other way of getting at the request body is not
+    // followed, so it is not allowed in a route file.
+    expect(otherBodyReads('const body = await request.json()\nconst { a } = await request.json()')).toEqual([])
+    expect(otherBodyReads('const { a } = await request.clone().json()')).toEqual(['.clone()'])
+    expect(otherBodyReads('const raw = JSON.parse(await request.text())')).toEqual(['.text()'])
+    expect(otherBodyReads('const form = await request.formData()')).toEqual(['.formData()'])
+    expect(otherBodyReads('const reader = request.body')).toEqual(['request.body'])
+    expect(otherBodyReads('const payload = await request.json()')).toEqual(['payload = await request.json()'])
+    expect(otherBodyReads('use(await request.json())')).toEqual(['await request.json()'])
+    for (const file of ALL_ROUTES) expect(otherBodyReads(sourceOf(file)), file).toEqual([])
   })
 
   it('names no id-like field as something else without saying why', () => {
