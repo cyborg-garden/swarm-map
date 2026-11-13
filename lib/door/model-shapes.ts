@@ -8,8 +8,9 @@
 // A harness that speaks anything else (the Claude Agent SDK and Letta Code's
 // Anthropic path use the Anthropic Messages API: `/v1/messages`, `x-api-key`,
 // `input_tokens`/`output_tokens`) has NO key swap and NO budget cap until its
-// shape is written here and tested. The route refuses what it does not know;
-// it never forwards a call it cannot meter.
+// shape is written here and tested. The route refuses a call in a format it
+// does not know. A call it does forward is always charged: by the usage the
+// reply reports, or, when the reply reports none, at one token per byte.
 import type { IncomingHttpHeaders } from 'node:http'
 
 /** One run of text in a stream event that continues across events. */

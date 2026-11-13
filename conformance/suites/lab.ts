@@ -16,6 +16,7 @@ import { createDoor, type Door } from '../../lib/door/door.ts'
 import { startModelRoute, type ModelRoute } from '../../lib/door/model-route.ts'
 import { createReceiptLog, type ReceiptLog } from '../../lib/door/receipts.ts'
 import { createSanitizer } from '../../lib/door/sanitizer.ts'
+import { createMemoryLedger } from '../../lib/door/spend-ledger.ts'
 import { startChattyShim } from '../broken/chatty.ts'
 import { assertNoCredentials, assertSafeWorkDir } from '../guards/preflight.ts'
 import { startScriptedModel, type ScriptedModel, type ScriptEntry } from '../rig/scripted-model.ts'
@@ -103,7 +104,8 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     closers.push(() => door.close())
     const route = await startModelRoute({
       upstream: model.baseUrl, upstreamKey: secrets.upstream, placeholder, shape: o.harness.modelShape,
-      policy: () => door.policy(), receipts, prices: PRICES,
+      // A lab lives for one check and is never restarted, so its spend need not outlive it.
+      policy: () => door.policy(), receipts, prices: PRICES, ledger: createMemoryLedger(),
     })
     closers.push(() => route.close())
 

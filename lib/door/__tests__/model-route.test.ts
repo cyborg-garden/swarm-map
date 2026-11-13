@@ -2,6 +2,9 @@
 //
 // The model route: the harness talks to the sidecar with a placeholder, the
 // sidecar swaps in the real key, counts tokens and refuses over budget.
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, tripwireAttempts } from '../../../conformance/guards/tripwire.ts'
 import { startScriptedModel, type ScriptedModel, type ScriptEntry } from '../../../conformance/rig/scripted-model.ts'
@@ -10,6 +13,7 @@ import { withHash } from '../../core/policy/canonical.ts'
 import { startModelRoute, type ModelRoute } from '../model-route.ts'
 import { OPENAI_CHAT, type ModelShape } from '../model-shapes.ts'
 import { createReceiptLog } from '../receipts.ts'
+import { createFileLedger, createMemoryLedger, type SpendLedger } from '../spend-ledger.ts'
 
 armTripwire()
 
@@ -31,16 +35,18 @@ afterEach(async () => {
 
 async function start(
   p = policy(), script: ScriptEntry[] = [{ match: 'CANARY-m', text: 'via the route' }],
-  o: { shape?: ModelShape; streamChunk?: number } = {},
+  o: { shape?: ModelShape; streamChunk?: number; ledger?: SpendLedger; now?: () => Date; upstreamTimeoutMs?: number } = {},
 ) {
   model = await startScriptedModel({ nonce: NONCE, script, streamChunk: o.streamChunk })
   const receipts = createReceiptLog()
   route = await startModelRoute({
     upstream: model.baseUrl, upstreamKey: UPSTREAM, placeholder: PLACEHOLDER, shape: o.shape ?? OPENAI_CHAT,
-    policy: () => p, receipts, prices: PRICES,
+    policy: () => p, receipts, prices: PRICES, ledger: o.ledger ?? createMemoryLedger(), now: o.now,
+    upstreamTimeoutMs: o.upstreamTimeoutMs,
   })
   return { receipts }
 }
+const capped = (monthlyUsd: number) => policy({ budget: { monthlyUsd, onExceed: 'refuse' } })
 
 /** What a client would rebuild from a stream: every text piece, joined. */
 function streamedText(sse: string): string {
@@ -211,5 +217,157 @@ describe('model route', () => {
     const res = await ask({ model: 'unpriced', messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(400)
     expect(model!.requests).toEqual([])
+  })
+})
+
+// A provider that says nothing about usage must not be free. Many
+// OpenAI-compatible servers ignore `stream_options.include_usage`, and a
+// stream that is cut short never reaches its usage event.
+describe('model route: a call the provider did not meter', () => {
+  const bytes = (text: string) => Buffer.byteLength(text)
+
+  it('[U:budget-unmetered] a plain reply with no usage is charged at one token per byte, and a receipt says so', async () => {
+    const { receipts } = await start(policy(), [{ match: 'CANARY-m', text: 'no usage here', noUsage: true }])
+    const res = await ask(user('CANARY-m'))
+    const reply = await res.text()
+    expect(res.status).toBe(200)
+    expect(JSON.parse(reply).usage).toBeUndefined()
+    const m = route!.meter()
+    expect(m.requests).toBe(1)
+    expect(m.inTokens).toBe(bytes(model!.requests[0].body))
+    expect(m.outTokens).toBe(bytes(reply))
+    expect(m.usd).toBeCloseTo((m.inTokens * 5000 + m.outTokens * 25000) / 1_000_000, 9)
+    expect(route!.unmetered).toBe(1)
+    expect(receipts.all().map((r) => `${r.verdict}/${r.rule}/${r.note ?? ''}`)).toEqual(['allow/budget.cap/', 'allow/budget.cap/unmetered'])
+    // A receipt holds sizes, never text.
+    expect(JSON.stringify(receipts.all())).not.toContain('no usage here')
+  })
+
+  it('[U:budget-unmetered] a stream that never reports usage is charged for what it sent', async () => {
+    const { receipts } = await start(policy(), [{ match: 'CANARY-m', text: 'streamed with no usage', noUsage: true }])
+    const streamed = await (await ask(user('CANARY-m', { stream: true }))).text()
+    expect(streamedText(streamed)).toBe(`streamed with no usage FAKE-MODEL-${NONCE}`)
+    const m = route!.meter()
+    expect(m.inTokens).toBe(bytes(model!.requests[0].body))
+    expect(m.outTokens).toBeGreaterThanOrEqual(bytes(`streamed with no usage FAKE-MODEL-${NONCE}`))
+    expect(m.usd).toBeGreaterThan(0)
+    expect(route!.unmetered).toBe(1)
+    expect(receipts.all().at(-1)).toMatchObject({ rule: 'budget.cap', note: 'unmetered' })
+  })
+
+  it('[U:budget-unmetered] a stream cut off before its usage event is still charged', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'this reply is cut off before the end', cutStream: true }])
+    await (await ask(user('CANARY-m', { stream: true }))).text().catch(() => '')
+    const m = route!.meter()
+    expect(m.inTokens).toBe(bytes(model!.requests[0].body))
+    expect(m.outTokens).toBeGreaterThan(0)
+    expect(route!.unmetered).toBe(1)
+  })
+
+  it('[U:budget-unmetered] the cap still trips when the provider never reports usage', async () => {
+    const { receipts } = await start(capped(1), [{ match: 'CANARY', text: 'x'.repeat(200), noUsage: true }])
+    expect((await ask(user('CANARY one'))).status).toBe(200)
+    const second = await ask(user('CANARY-second'))
+    expect(second.status).toBe(402)
+    expect(model!.heard('CANARY-second')).toBe(false)
+    expect(receipts.all().at(-1)).toMatchObject({ verdict: 'deny', rule: 'budget.cap' })
+  })
+
+  it('[U:budget-unmetered] a reply that is not JSON is charged the same way', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'ignored', rawBody: '<html>gateway says hi</html>' }])
+    const res = await ask(user('CANARY-m'))
+    expect(await res.text()).toBe('<html>gateway says hi</html>')
+    expect(route!.meter().outTokens).toBe(bytes('<html>gateway says hi</html>'))
+    expect(route!.unmetered).toBe(1)
+  })
+
+  it('[U:budget-unmetered] a call the provider refused is passed back and costs nothing', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'ignored', status: 429 }])
+    const res = await ask(user('CANARY-m'))
+    expect(res.status).toBe(429)
+    expect(route!.meter()).toEqual({ requests: 1, inTokens: 0, outTokens: 0, usd: 0 })
+    expect(route!.unmetered).toBe(0)
+  })
+
+  it('[U:budget-unmetered] a provider that never answers is given up on, charged for what was sent, and does not block the next call', async () => {
+    await start(capped(1000), [{ match: 'CANARY-hang', text: 'never', hang: true }, { match: 'CANARY-m', text: 'after' }], { upstreamTimeoutMs: 150 })
+    expect((await ask(user('CANARY-hang'))).status).toBe(502)
+    expect(route!.meter().inTokens).toBe(bytes(model!.requests[0].body))
+    expect(route!.unmetered).toBe(1)
+    expect((await ask(user('CANARY-m'))).status).toBe(200)
+  })
+
+  it('[U:budget-unmetered] usage a stream reports more than once is counted once, at its last figure', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'running totals', usageEveryEvent: true }], { streamChunk: 4 })
+    await (await ask(user('CANARY-m', { stream: true }))).text()
+    expect(route!.meter()).toEqual({ requests: 1, inTokens: 100, outTokens: 20, usd: 1 })
+    expect(route!.unmetered).toBe(0)
+  })
+})
+
+describe('model route: the cap under parallel calls', () => {
+  const five = () => Promise.all([1, 2, 3, 4, 5].map((n) => ask(user(`CANARY-p${n}`)).then((r) => r.status)))
+
+  it('[U:budget-parallel] calls sent at once cannot all slip under the cap: only what the budget covers reaches the model', async () => {
+    await start(capped(2), [{ match: 'CANARY-p', text: 'slow', delayMs: 60 }])
+    const statuses = await five()
+    expect(statuses.filter((s) => s === 200)).toHaveLength(2)
+    expect(statuses.filter((s) => s === 402)).toHaveLength(3)
+    expect(model!.requests).toHaveLength(2)
+    expect(model!.maxInFlight).toBe(1)
+    expect(route!.meter().usd).toBe(2)
+  })
+
+  it('[U:budget-parallel] positive control: with no cap to hold, calls run side by side', async () => {
+    await start(policy(), [{ match: 'CANARY-p', text: 'slow', delayMs: 200 }])
+    expect(await five()).toEqual([200, 200, 200, 200, 200])
+    expect(model!.maxInFlight).toBeGreaterThan(1)
+  })
+
+  it('[U:budget-parallel] a cap set to warn only holds nothing back', async () => {
+    await start(policy({ budget: { monthlyUsd: 1, onExceed: 'warn' } }), [{ match: 'CANARY-p', text: 'slow', delayMs: 200 }])
+    expect(await five()).toEqual([200, 200, 200, 200, 200])
+    expect(model!.maxInFlight).toBeGreaterThan(1)
+  })
+})
+
+describe('model route: spend outlives the process and follows the calendar', () => {
+  let dir: string | undefined
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined })
+  const ledgerFile = () => path.join(dir = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-ledger-')), 'spend.json')
+
+  it('[U:budget-ledger] a restart does not hand the budget back', async () => {
+    const file = ledgerFile()
+    await start(capped(2), undefined, { ledger: createFileLedger(file) })
+    expect((await ask(user('CANARY-m one'))).status).toBe(200)
+    expect((await ask(user('CANARY-m two'))).status).toBe(200)
+    await route!.close()
+    await model!.close()
+
+    await start(capped(2), undefined, { ledger: createFileLedger(file) })
+    expect(route!.meter().usd).toBe(0) // a new process: its own count starts again
+    expect((await ask(user('CANARY-after-restart'))).status).toBe(402)
+    expect(model!.heard('CANARY-after-restart')).toBe(false)
+  })
+
+  it('[U:budget-ledger] negative control: a ledger kept in memory does forget', async () => {
+    await start(capped(2))
+    await ask(user('CANARY-m one')); await ask(user('CANARY-m two'))
+    expect((await ask(user('CANARY-m three'))).status).toBe(402)
+    await route!.close()
+    await model!.close()
+    await start(capped(2))
+    expect((await ask(user('CANARY-m again'))).status).toBe(200)
+  })
+
+  it('[U:budget-ledger] the cap is per calendar month: a new month starts from nothing, and the old month is kept', async () => {
+    const file = ledgerFile()
+    let now = new Date('2026-11-30T23:59:00Z')
+    await start(capped(2), undefined, { ledger: createFileLedger(file), now: () => now })
+    await ask(user('CANARY-m one')); await ask(user('CANARY-m two'))
+    expect((await ask(user('CANARY-m three'))).status).toBe(402)
+    now = new Date('2026-12-01T00:00:30Z')
+    expect((await ask(user('CANARY-m december'))).status).toBe(200)
+    expect(JSON.parse(readFileSync(file, 'utf8')).months).toEqual({ '2026-11': 2, '2026-12': 1 })
   })
 })

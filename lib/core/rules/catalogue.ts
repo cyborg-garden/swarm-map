@@ -86,7 +86,7 @@ export const RULES: Rule[] = [
   // a ModelShape (lib/door/model-shapes.ts). One exists: OpenAI chat-completions.
   // A harness that speaks the Anthropic Messages API has neither rule yet.
   { id: 'budget.cap', statement: 'Monthly spend is capped, for a harness that talks to its model in the OpenAI chat format.',
-    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:model-shape'] },
+    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:budget-unmetered', 'U:budget-parallel', 'U:budget-ledger', 'U:model-shape'] },
 
   { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key. This holds for a harness that talks to its model in the OpenAI chat format.',
     klass: 'security', kind: 'wall', reads: [], enforcer: 'model-route', tests: ['U:key-swap', 'U:model-shape'] },
