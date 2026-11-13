@@ -4,7 +4,7 @@ Written 2026-11-13, before any code. Follows [`primitives.md`](primitives.md) (s
 Pi facts were from Pi 1.5.2's docs and source only. Repo facts were checked against `main` at `bc350c7`.
 Anything marked **unverified** was to be replaced by a test result in Step 0.
 
-**Status: partly built.** [`pi-slice.md`](pi-slice.md) says what exists, what the spikes found,
+**Status: built, with departures.** [`pi-slice.md`](pi-slice.md) says what exists, what the spikes found,
 where the build departed from this plan, and what is still blocked. This page is kept as written,
 so the plan and the outcome can be compared.
 

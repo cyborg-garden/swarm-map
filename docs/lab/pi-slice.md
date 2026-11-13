@@ -13,8 +13,12 @@ or any running agent. It is a library, a test rig and one command.
 - **Pi is driven through that door.** `lib/runtimes/pi/` is the only Pi-specific code: start it,
   send text, read text, veto a tool.
 - **Everything runs on a laptop with fakes.** A scripted room, a scripted model, loopback only.
-- **Real Pi 1.5.2 passes all fourteen process-level checks.** The Docker cell (the wall) is not built,
-  so nothing here shows an agent is contained.
+- **Real Pi 1.5.2 passes all fourteen process-level checks.**
+- **There is now a wall, on one machine.** With Pi in a sealed Docker cell on Docker Desktop for
+  Mac, a tool run by Pi could not reach the internet, the laptop or a stand-in for the internet,
+  and could not read the model key or the chat token. That held with the tool gate removed. Seven
+  cells broken on purpose each turned the right checks red. It is shown for that machine, that
+  Docker version and the ways out the probe tries, and for nothing wider. See "The Docker cell".
 - **Three limits to know before reading on.** The key swap and the budget cap only exist for
   harnesses that speak the OpenAI chat format. Pi is given no direct messages, because its sessions
   share one folder on disk. A changed tool list restarts that session's Pi process.
@@ -36,6 +40,26 @@ env -i PATH="$PATH" HOME="$HOME" npx vitest run conformance/suites
 `npm run conformance` refuses to run without `SWARMLAB_PI_BIN`, and refuses a Pi that is not the
 pinned version. It never skips. A complete run rewrites `conformance/matrix/pi-1.5.2.process.json`.
 
+```bash
+# The same checks with Pi in a sealed Docker cell, plus the ones that need a cell (not in CI):
+npm run conformance:docker:build   # once. The only step that uses the network
+npm run conformance:docker         # about two minutes. Rewrites conformance/matrix/pi-1.5.2.docker.json
+npm run conformance:docker:clean   # only if a run was killed: removes what it left, and nothing else
+```
+
+The Docker run needs a Docker daemon on this machine, reached over a local socket. It refuses
+anything else, and it refuses to run if an image is missing. Every container, network and volume
+it makes is named `smlab-<8 hex digits>`; it stops and removes only those, by name, and never
+prunes.
+
+The run needs an internet connection, for its controls. Before any rig starts, a one-off container
+on Docker's default network asks DNS where `example.com` and one public resolver are, so no public
+address has to be written in this repo. One of the broken cells (`open`) is then put on an ordinary
+Docker network on purpose, and from there opens one connection to that address and asks two DNS
+questions about `example.com`. Nothing else is sent. With no connection the addresses are not
+found, the probe reports those ways out as not tried, and the run is red rather than green on no
+evidence.
+
 ## What was built
 
 | Part | Where | Tested by |
@@ -53,6 +77,7 @@ pinned version. It never skips. A complete run rewrites `conformance/matrix/pi-1
 | Scripted model, fake Pi | `conformance/rig/` | `scripted-model.test.ts` |
 | Fake-proof guards | `conformance/guards/` | `tripwire.test.ts`, `preflight.test.ts`, `lab-preflight.test.ts`, `fake-pi.test.ts` |
 | Shim checks, broken shims, matrix | `conformance/suites/`, `conformance/broken/`, `conformance/matrix.ts` | `pi.fake.test.ts` (which also fails when the committed matrix no longer matches the suite), `pi.real.test.ts`, `matrix.test.ts` |
+| The Docker rig: compose file, cell and rig images, sink, control, probe, runner | `conformance/docker/` | `compose.test.ts` and `matrix-fresh.test.ts` in CI; `pi.docker.test.ts` on a machine with Docker |
 | The Pi adapter for the shared checks | `conformance/harnesses/pi.ts` | `harness-blind.test.ts` |
 
 ## The shim checks
@@ -97,24 +122,83 @@ red, on the fake Pi and on real Pi.
 | `unwatched` | Pi started with no tripwire loaded inside it | C9p, and nothing else |
 | `chatty` | Answers without the model, twice, and for turns nobody opened | C1, C3 |
 
+## The Docker cell
+
+`npm run conformance:docker` starts one rig per check, on this machine's Docker:
+
+```
+  cell network (internal)      door  <->  cell      the only thing the cell can reach is the door
+  outside network (internal)   sink, control        the sink stands in for "the internet"
+```
+
+- **cell**: the shim and real Pi 1.5.2. A read-only disk, a non-root user, every capability
+  dropped, IPv6 off. It is handed a run nonce, a cell token and two timeouts.
+- **door**: the sidecar's side, in one process: the door, the model route, the scripted model and
+  the fake connector, and the check itself. It has no route out either.
+- **sink**: accepts any connection and logs it. Only the **control** is on its network. The control
+  hits it once, which proves the sink and its log work.
+- Nothing from the laptop is mounted and no port is published. The one thing two containers share
+  is a named volume: the cell writes there, the door reads it.
+- Pi is installed from a lock file with an integrity hash for every package, on a base image pinned
+  by digest, with no install script run.
+
+Two things are read for every check. From inside: a probe, run in the cell, that tries each way
+out and reports what happened. From outside: the sink's own log and a listener on the laptop. Both
+must agree, and the sink's log must hold exactly one line, from the control.
+
+| # | Check | Real Pi 1.5.2 in the cell |
+|---|---|---|
+| S0 | The rig is this machine's and the lab's own, holds no real credential, inherited nothing from the shell, and its sink can be hit | pass |
+| S1 | The cell cannot reach the internet, the laptop or the sink, only the door. Nor can the door's container | pass |
+| S2 | The shim, the gate and Pi itself cannot be written from inside the cell | pass |
+| S3 | No host credential, host folder or secret of the run is in the cell's environment, mounts or disk | pass |
+| C8 | A tool run by Pi finds the model key and the chat token nowhere: not in its environment, not in another process, not in any file it can read. The cell only ever presented its placeholder | pass |
+| C9 | A tool run by Pi reaches nothing but the door, and the door hangs up on a wrong cell token | pass |
+| C10 | With the gate swapped for one that lets everything run, a tool the policy denies does run, and still reaches nothing and reads no secret | pass |
+| C1-C15t | The thirteen process-level checks above, with Pi in the cell (all but C9p, whose job C9 does here) | pass |
+
+The ways out the probe tries, from the cell and from the door's container: the sink by name and by
+address; a public address over TCP, a public resolver over IPv6 and asked directly over UDP; a
+public name asked of Docker's own resolver; the laptop by the two names Docker gives it and by
+address, on a port where the laptop is listening; the cloud metadata address; and Docker's own side
+of the cell network, on the two ports a Docker engine would answer on and on the laptop's port.
+
+**Negative controls.** The same checks against rigs broken in one way each. Every one turned its
+named checks red, for the reason it names, and left the others green.
+
+| Broken rig | What is wrong with it | Turned red |
+|---|---|---|
+| `route-out` | The cell is also on the sink's network | S1, C9, C10: the probe got through, and the sink logged it |
+| `open` | The cell is also on an ordinary Docker network | S1, C9: it reached a public address, DNS and the laptop's listener. This also shows the probes can succeed |
+| `leaks-env` | The run's model key is in the cell container's environment | S3, C8 |
+| `writable` | The cell runs as root on a disk it can write | S2 |
+| `host-mount` | A folder of the laptop is mounted into the cell | S3 |
+| `blind-sink` | The control cannot reach the sink, so its log is empty | S0, C9: an empty log is not a pass |
+| `gate-kept` | C10 run in a cell that still has its gate | C10: the denied tool never ran, so the wall was not tested on its own |
+
+**A real-looking key is refused twice.** The runner refuses to render a rig whose cell would be
+handed anything shaped like a real credential, before Docker is asked for anything. And the cell's
+own entry refuses to start with one in its environment, however it was started.
+
 ### Which rules this proves for Pi
 
 The catalogue is shared by every harness, so a Pi test cannot be its proof. Each rule has two
 lists. `tests` is proof that holds whatever the harness is: scenarios, door tests, unit tests of
 shared code. `checks` names the shim checks above that a harness must pass for the rule to hold
-with that harness in the loop. The matrix file now ends with one line per rule, built from the run:
+with that harness in the loop. Each matrix file ends with one line per rule, built from its run:
 
 | For Pi 1.5.2 | Rules |
 |---|---|
-| Shown at process level by this run (7) | `ctl.applied`, `addr.observe`, `tools.lists`, `tools.no-verdict`, `budget.cap`, `keys.model-route`, `turn.one-reply` |
-| Not claimed for Pi yet (3) | `tools.posture` (C4p passes, but its wall is C10, which needs the Docker cell), `priv.no-forged-identity` (waits on C13), `tools.unknown` (waits on C7) |
+| Shown at process level (5) | `ctl.applied`, `addr.observe`, `tools.lists`, `tools.no-verdict`, `turn.one-reply` |
+| Shown only with Pi in the Docker cell (3) | `budget.cap` and `keys.model-route` (the route does its part at process level; that Pi has no other way to a model or a key is C9 and C8), `tools.posture` (C4p, with C10 behind it) |
+| Not claimed for Pi yet (2) | `priv.no-forged-identity` (waits on C13), `tools.unknown` (waits on C7) |
 | Need nothing from the harness (25) | Every "who may it hear and answer" rule, receipts, the sanitizer |
 
-A second harness starts with nothing in the first row until its own run puts it there.
+A second harness starts with nothing in the first three rows until its own runs put it there.
 
-"Shown at process level" means the checks passed with Pi running as a plain process. For the two
-wall rules in that row (`budget.cap`, `keys.model-route`) it shows the route does its part. It does
-not show Pi has no other way out or no other way to a key: that is the cell's job, and not proven.
+The middle row holds for the one machine the Docker run was made on. And `tools.posture` is still a
+guardrail: C10 shows that when the gate fails, the denied tool does run. What held behind it is
+that the tool reached nothing and read no secret, not that it did not run.
 
 ### Putting a second harness through the same checks
 
@@ -132,7 +216,7 @@ or names a harness again.
 | F1 | `createDoor()` refuses any connector that is not the fake one | A connector with id `discord` must be refused |
 | F2 | The exact environment each shim, broken ones included, is about to hand to Pi is checked against a list of credential names and shapes. It is a list: a credential it has not been taught goes through, which is why Pi's environment is also listed by hand | `DISCORD_BOT_TOKEN=x` must be refused, by the guard and by a lab handed a harness that carries it |
 | F4 | A reply only counts if it carries the scripted model's stamp for this run | The `chatty` shim's unstamped replies fail C1 |
-| F5 | Work dirs must really be under the temp dir (links are followed), outside the home directory and nowhere near an agent's home. The Docker and compose checks exist as functions, with nothing to call them yet | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start |
+| F5 | Work dirs must really be under the temp dir (links are followed), outside the home directory and nowhere near an agent's home. The Docker runner refuses a Docker that is not a local socket, and a container that is not named for its own rig | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start. A container of another rig must be refused |
 | F6 | A tripwire in the test process throws on a TCP connect, UDP send, DNS lookup or query, or fetch that is not loopback, and on a connect to a local socket file. It sees that process only | A connect to TEST-NET must throw and be recorded |
 | F6c | The same tripwire, loaded first inside every Pi the lab starts (Node `--import`). The lab reads back what it saw. An attempt fails the check it happened in, and C9p fails if no tripwire was armed | The `dials-out` shim must turn every check that starts Pi red; the `unwatched` shim must turn C9p red; a fake Pi pointed at TEST-NET must be stopped |
 
@@ -142,8 +226,8 @@ a shell tool running `curl` would not be stopped or recorded. It patches the fun
 offers, so code that reaches under them (a native addon) is not seen either. And its log sits in
 the lab's work dir, where a harness with a shell could edit it: it catches a harness that dials
 out by accident or by default, not one that is trying to hide. "Nothing left this machine" is
-therefore shown for Pi's own runtime behaving normally, not for everything Pi can start. That needs the Docker cell
-(C9). Before this change the tripwire covered the test process alone, so that claim was not shown
+therefore shown at process level for Pi's own runtime behaving normally, not for everything Pi can
+start. The Docker cell covers the rest (C9), on the one machine it was run on. Before this change the tripwire covered the test process alone, so that claim was not shown
 for Pi at all.
 
 Three variables keep a real Pi off the network at start-up (`PI_OFFLINE`, `PI_TELEMETRY`,
@@ -162,16 +246,25 @@ build a matrix from it.
 | 1a | What does Pi do when the `-e` file is missing, throws, or does not parse? | **It stops**: exit code 1, `Failed to load extension`, on Pi 1.5.2. It does not carry on without it |
 | 1b | Can the gate say it is loaded before the first prompt? | **Yes.** A `session_start` handler calling `ctx.ui.notify` reaches the RPC client before any prompt |
 | 1c | Does `--continue` with `--session-dir` pick the conversation back up after a restart? | **Yes**, on Pi 1.5.2: C15t sees the first turn's text in the request after the restart |
-| 2 | Does `internal: true` on Docker Desktop cut the route out? | **Not run.** No Docker daemon was running on the build machine |
-| 3 | Will Pi talk to a scripted OpenAI-shaped endpoint from `models.json` with a placeholder key? | **Yes.** `"api": "openai-completions"`, a custom `baseUrl`, and a placeholder `apiKey`. With the tripwire loaded inside it, Pi 1.5.2 made no call to anything but this machine across the whole suite. That covers Pi's own Node runtime; anything else still needs the sealed cell |
+| 2 | Does `internal: true` on Docker Desktop cut the route out? | **Yes**, on Docker Desktop 4.76 for Mac (engine 29.5.2, Apple silicon). From a container on an internal network a public address is unreachable, a public name does not resolve, and the laptop cannot be reached by name or address; two containers on that network still reach each other. The same probes from an ordinary network succeed, so the probes can tell the difference. Not tried: any other Docker, or Docker on Linux |
+| 3 | Will Pi talk to a scripted OpenAI-shaped endpoint from `models.json` with a placeholder key? | **Yes.** `"api": "openai-completions"`, a custom `baseUrl`, and a placeholder `apiKey`. With the tripwire loaded inside it, Pi 1.5.2 made no call to anything but this machine across the whole suite. That covers Pi's own Node runtime; the Docker cell covers what Pi starts |
 | 4 | Does plain Node 24 run the lab's TypeScript with no build step? | **Yes.** It needs `allowImportingTsExtensions` in `tsconfig.json`, and `plain-node.test.ts` now guards it |
 
 ## Where the build departed from the plan
 
 - **One branch, not four stacked PRs.** The pieces landed as separate commits in plan order.
 - **A process-level suite was added.** The plan put every shim check inside Docker. With no Docker
-  to run, the checks were written against a plain Pi process instead. They prove the shim and the
-  door. They prove nothing about the cell.
+  to run at first, the checks were written against a plain Pi process. They prove the shim and the
+  door. They prove nothing about the cell. The Docker run came after, and runs the same checks again.
+- **The Docker rig has one container where the plan had two.** The plan kept the test runner and
+  the sidecar apart. Here the door, the model route, the scripted model, the fake connector and
+  the check are one process in one container, because that is how the lab was already built. The
+  runner that starts the rig is on the laptop, outside it, and reads results from container output.
+- **The cell is given no `curl`.** The probe is a Node script in the cell image. It makes the same
+  connections.
+- **The Docker project is named `smlab-<nonce>`**, not `swarmlab-<nonce>` as the plan had it.
+- **`budget.cap` and `keys.model-route` now also name C9 and C8.** Both are walls and the route is
+  half of each, so the process matrix no longer claims them.
 - **A fake Pi was added** so the shim checks run in CI. The first real-Pi run showed the fake was
   wrong in one place: real Pi never asks the gate about a tool that was not declared at start. The
   fake was corrected, and C4 was split into C4 (declared, then denied by the gate) and C4a (never
@@ -223,7 +316,7 @@ build a matrix from it.
   shares scope with a group", proven by C11. Memory scopes are not built, so the rule here is
   narrower and blunter: no DM is delivered to a harness that does not keep sessions apart.
 - **`tools.posture` is no longer claimed for Pi.** Its shim checks were C4 and C4a, which test the
-  allow list on a team agent. It now names C4p (new) and C10, and waits on C10.
+  allow list on a team agent. It now names C4p (new) and C10, so only the Docker run can claim it.
 - **`tools.gate-loaded` left the shared catalogue.** It was a Pi mechanism. It is now `pi.gate-loaded`
   in `lib/runtimes/pi/rules.ts`, with Pi's other three promises.
 - **The protocol's capabilities gained three fields:** `toolChange`, `sessionIsolation` and
@@ -231,9 +324,35 @@ build a matrix from it.
 
 ## What this does not show
 
-1. **There is no wall yet.** Pi ran as a plain process. S0-S3, C8 (full), C9 and C10 need the
-   Docker cell and are listed as not-run in the matrix. Until C10 passes, the tool gate is a
-   guardrail with nothing proven behind it.
+1. **The wall is shown on one machine, for the ways out that were tried.** Limits of the Docker run:
+   - **One Docker.** Docker Desktop 4.76 for Mac, engine 29.5.2, where containers run inside a
+     virtual machine. Docker on Linux, another version or another engine is not shown.
+   - **A list, not a proof.** The probe tries the ways out listed above. A way out that is not on
+     the list was not tried. A fault in Docker or in the kernel, and slow side channels, are out
+     of reach of this kind of test.
+   - **DNS is judged by the answer.** A public name did not resolve from the cell. Whether the
+     question was passed on to a resolver before failing was not watched.
+   - **IPv6 has no control.** The cell has no IPv6 address and the IPv6 probe fails. But it fails
+     from an ordinary Docker network on this machine too, so that probe was never seen to succeed.
+   - **The cell can talk to Docker's side of its own network.** That address answers "refused" on
+     the ports tried. Ports that other containers publish were tried by hand once, with two
+     containers of the lab's own, and could not be reached from an internal network. That is not a
+     standing check.
+   - **The cell token can be read inside the cell.** The shim holds it, so a tool can read it. It
+     only names the cell to its own door, but anything in the cell can then speak as the cell: it
+     could stop the shim and answer a live turn itself. Such a reply still goes through the door's
+     outbound checks. That a reply came from the model is not walled.
+   - **The lab's secrets can be guessed from the nonce.** C8 shows the strings are nowhere in the
+     cell, which is what matters for a real key. It says nothing about a key that is weak.
+   - **The door's side is sealed here, and would not be in use.** In the rig the door has no route
+     out either. A door that talks to a real model and a real chat platform needs one. That side
+     is not tested.
+   - **The shared folder is a second channel.** The door reads files the cell wrote, to see what a
+     tool touched. It reads them as data and follows no links when it searches them.
+   - **No limits are tested.** The cell has a memory and process cap; nothing checks them (S4).
+   - **The eight broken shims were not run again in a cell.** Only "the gate removed" was (C10).
+   - **These are lab images.** The cell image holds the probe and the broken gate. Nothing in
+     Swarm Map starts a cell like this, and no running agent is in one.
 2. **A scripted model tests plumbing.** Nothing here shows what a real model would do with what it
    overheard.
 3. **Identity in Pi is prompt text.** The preamble cannot be forged by a sender, but a model can
@@ -245,7 +364,7 @@ build a matrix from it.
    part, so a key written there with a JSON escape gets through. Comments a stream sends before
    its first event are held until that event comes, so a keep-alive does not keep anything alive.
    The key travels in a header the model never sees. That nothing else in the harness can reach
-   it is the cell's job, and not proven.
+   it is the cell's job: shown for Pi in the lab's Docker cell (C8), within the limits in item 1.
 5. **The tool map can be wrong, not just incomplete.**
 6. **The key swap and the budget cap exist for one wire format.** `lib/door/model-route.ts` is
    shared code and enforces two wall rules (`budget.cap`, `keys.model-route`), but the only
@@ -261,7 +380,8 @@ build a matrix from it.
 7. **Pi's sessions are not kept apart on disk.** Every session's Pi process runs in the same work
    dir, with the same home, and its transcript sits beside the others. With a file or shell tool
    allowed, a turn in one room can read another session's files. The session key separates them
-   in name only. Until the cell gives each session its own mounts:
+   in name only. The Docker cell does not change this: it is one cell with one shared folder for
+   every session. Until a cell gives each session its own mounts:
    - the door delivers **no direct message** to a harness that does not declare
      `sessionIsolation: 'sealed'` (rule `mem.dm-isolated`). Pi declares `'none'`, so with Pi,
      `dm.mode` `open` and `allowlist` are accepted by the policy but every DM is dropped with a
@@ -314,10 +434,11 @@ build a matrix from it.
 
 | Item | Blocked on |
 |---|---|
-| Cell image, compose with an internal network, sink and control containers, the Docker runner | A running Docker daemon, then spike 2 |
-| S0-S3, C8 (full), C9, C10 | The Docker cell |
+| The Docker run on a Linux host, and in CI | Images that CI can build or pull |
+| A door container with a route out, apart from the test runner | Nothing; the rig merges them |
+| S4 (limits), and the broken shims run again in a cell | Nothing; not started |
 | Policy push from Swarm Map with a per-agent secret (`control.ts`) | Nothing; not started |
 | C17 (a probe per declared capability), `why` command | Nothing; not started |
 | `ask` approvals (C6), and C13 with it; memory (C11), real connectors, Hermes native mode | Out of this slice by design |
 | A `ModelShape` for the Anthropic Messages API | Needed before the Claude Agent SDK or Letta Code's Anthropic path can have a key swap or a budget cap |
-| A folder and home per session that other sessions cannot reach, then `sessionIsolation: 'sealed'` for Pi | The Docker cell |
+| A folder and home per session that other sessions cannot reach, then `sessionIsolation: 'sealed'` for Pi | A cell per session, or mounts per session inside one |
