@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // POST /api/harnesses/:id/artifacts/sync — adopt / update the base package.
 // Body (optional):
@@ -15,6 +16,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const body = await request.json().catch(() => ({}))
   const dryRun = body?.dryRun === true
   const force = body?.force === true

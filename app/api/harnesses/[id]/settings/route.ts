@@ -43,6 +43,7 @@ import {
   sharedVpnPaths,
   type SharedVpnState,
 } from '@/lib/services/shared-vpn'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -439,6 +440,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 

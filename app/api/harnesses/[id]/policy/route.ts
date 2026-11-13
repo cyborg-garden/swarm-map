@@ -10,6 +10,7 @@ import { GROUPS_VARS as GROUP_VARS } from '@/lib/surfaces/derive'
 // so the harness id must never escape ~/.hermes-* and a chatId must never
 // add a line to the .env.
 import { agentDataDir, isValidHarnessId, sanitizeGroupId } from '@/lib/services/surface-admins'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function invalidHarnessId() {
   return NextResponse.json({ error: 'Invalid harness id' }, { status: 400 })
@@ -141,6 +142,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   if (!isValidHarnessId(id)) return invalidHarnessId()
   const body = await request.json() as {
     action: string

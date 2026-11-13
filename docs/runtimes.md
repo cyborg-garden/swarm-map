@@ -30,15 +30,31 @@ before the tag existed). Any other tag must have a registered adapter. There is 
 
 One exception to "no tag is Hermes": the old Letta integration never stored a tag. The only
 rows it could leave behind have the ids it minted (`h_letta_agent-<uuid>`, `h_letta_server`)
-and no tag. A row with one of those ids and no tag counts as retired. An explicit tag wins,
-so a Hermes agent that happens to be named `letta-server` and is tagged `hermes` is unaffected.
+and no field except `surfaceAdmins`. A row with one of those ids, no tag and no other field
+counts as retired.
+
+A Hermes agent named `letta-server` gets the id `h_letta_server` too. It is not caught by
+that rule: the row Swarm Map stores for it carries Hermes fields (name, compose file, port),
+and every row written from now on is tagged `runtime: 'hermes'`. An explicit tag always wins.
+The one case left is a bare `{ id, surfaceAdmins }` row under that id that an older build
+wrote for a Hermes agent it had no row for: it reads as retired, and "Forget row" on the
+fleet page brings the agent back.
 
 - `adapterForRuntime` throws `UnsupportedRuntimeError` for a retired or unknown tag.
 - The row owns its id while it is stored. If a live container maps to the same id (a
   `hermes-foo` container beside a retired `h_foo` row), it is not shown or driven until the
   row is forgotten. It then appears as a plain Hermes agent with none of the row's settings.
-- Such rows are left out of `GET /api/harnesses` and have no detail page, so no start, stop,
-  restart, duplicate, settings or delete-files call can reach them.
+- Such rows are left out of `GET /api/harnesses` and have no detail page.
+- Every route that changes one agent (`POST`, `PUT`, `PATCH`, `DELETE` under
+  `/api/harnesses/:id/`) answers 409 for such a row before it does anything. That covers the
+  routes that never look the agent up and write `~/.hermes-<name>` straight from the id:
+  surface connect and disconnect, policy, pairing, admins, group invites, settings. The
+  shared check is `refuseUnmanagedRow` (`lib/services/unmanaged-row-guard.ts`). A bare agent
+  slug is refused the same way as the stored id.
+- `SurfaceAdminService` and key discovery skip such rows too: its stored admins are not
+  served as policy, and its name is not resolved to a Hermes data directory.
+- Read routes are not blocked. A `GET` on such an id that reads `~/.hermes-<name>` still
+  answers from that directory if it exists. Nothing is written.
 - `GET /api/harnesses/retired` lists them with the stored tag and a reason. The fleet page
   shows them under "Rows Swarm Map no longer manages".
 - `DELETE /api/harnesses/:id` on such a row forgets the row and nothing else. It does not
@@ -47,6 +63,8 @@ so a Hermes agent that happens to be named `letta-server` and is tagged `hermes`
   nothing.
 
 Tests: `lib/services/__tests__/retired-runtime.test.ts`,
+`app/api/harnesses/__tests__/retired-row-routes.test.ts` (calls every mutating per-agent
+route, found by walking the directory), `lib/services/__tests__/surface-admins.test.ts`,
 `lib/services/__tests__/deploy-route.integration.test.ts`.
 
 ## What was removed: the old Letta integration

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { KeysService } from '../keys'
+import { RETIRED_RUNTIMES } from '../runtime-adapter'
 import { Storage } from '../storage'
 import { AuditService } from '../audit'
 import fs from 'fs'
@@ -130,5 +131,48 @@ describe('bluesky pair detection (env discovery)', () => {
     const found = keys.list(['c']).find((k) => k.provider === 'bluesky')
     expect(found).toBeTruthy()
     expect(found!.identifier).toBeUndefined()
+  })
+})
+
+describe('key discovery skips rows Swarm Map does not manage', () => {
+  let tmpHome: string
+  let prevHome: string | undefined
+  let storage: Storage
+  let keys: KeysService
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-retired-keys-home-'))
+    prevHome = process.env.HOME
+    process.env.HOME = tmpHome
+    storage = new Storage(fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-retired-keys-store-')))
+    keys = new KeysService(storage, new AuditService(storage))
+    for (const name of ['old', 'kept', 'odd']) {
+      fs.mkdirSync(path.join(tmpHome, `.hermes-${name}`))
+      fs.writeFileSync(path.join(tmpHome, `.hermes-${name}`, '.env'), `OPENROUTER_API_KEY=sk-or-v1-${name}-0123456789abcdef\n`)
+    }
+  })
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    fs.rmSync(tmpHome, { recursive: true, force: true })
+  })
+
+  const assigned = () => keys.list().flatMap((k) => k.assignedTo ?? [])
+
+  it('a retired row\'s name is not resolved to ~/.hermes-<name>', () => {
+    storage.write('harnesses.json', [
+      { id: 'h_kept', name: 'kept', runtime: 'hermes' },
+      { id: 'h_old', name: 'old', runtime: Object.keys(RETIRED_RUNTIMES)[0] },
+      { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future' },
+    ])
+    expect(assigned()).toContain('h_kept')
+    expect(assigned()).not.toContain('h_old')
+    expect(assigned()).not.toContain('h_odd')
+  })
+
+  it('control: the same row tagged hermes IS scanned', () => {
+    storage.write('harnesses.json', [{ id: 'h_old', name: 'old', runtime: 'hermes' }])
+    expect(assigned()).toContain('h_old')
   })
 })

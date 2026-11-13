@@ -39,7 +39,15 @@ function repoFiles(): string[] {
   return out
     .split('\0')
     .filter(Boolean)
-    .filter((f) => fs.existsSync(path.join(ROOT, f))) // staged deletions
+    .filter((f) => {
+      // Regular files only. This drops staged deletions, and it drops a
+      // nested git worktree, which `--others` lists as one entry ending in
+      // "/" (`.wt-topic/`). That is another branch's checkout, not this
+      // tree, and vitest.config.ts leaves it out of the run for the same
+      // reason.
+      const stat = fs.lstatSync(path.join(ROOT, f), { throwIfNoEntry: false })
+      return stat?.isFile() === true
+    })
 }
 
 const BINARY = /\.(png|jpe?g|gif|ico|webp|woff2?|ttf|otf|pdf|zip|gz|sqlite|db)$/i
@@ -67,6 +75,35 @@ describe('the guard can see the repo (a guard that scans nothing passes everythi
   it('the scanner really finds a needle that is known to exist', () => {
     // If hits() were broken, every "finds nothing" check below would be green.
     expect(hits(/"name": "swarm-map"/, () => false).some((h) => h.startsWith('package.json:'))).toBe(true)
+  })
+
+  it('a nested git worktree in the checkout is skipped, not read as a file', () => {
+    // `git ls-files --others` reports a nested checkout as ONE entry ending in
+    // "/" (`.wt-topic/`). The main checkout holds many of these. Reading one
+    // as a file throws EISDIR and turns every guard red for the wrong reason.
+    const probe = path.join(ROOT, `.wt-guard-probe-${process.pid}`)
+    fs.mkdirSync(probe)
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: probe })
+      fs.writeFileSync(path.join(probe, 'inside.txt'), '"name": "swarm-map"\n')
+      const raw = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
+        cwd: ROOT,
+        encoding: 'utf-8',
+      }).split('\0')
+      // The probe is set up the way the bug needs it: git lists it as a directory.
+      expect(raw).toContain(`${path.basename(probe)}/`)
+
+      const files = repoFiles()
+      for (const f of files) expect(fs.lstatSync(path.join(ROOT, f)).isFile()).toBe(true)
+      expect(files.some((f) => f.startsWith(path.basename(probe)))).toBe(false)
+      expect(() => hits(/"name": "swarm-map"/, () => false)).not.toThrow()
+      // Still sees the real needle, and nothing from inside the nested checkout.
+      const found = hits(/"name": "swarm-map"/, () => false)
+      expect(found.some((h) => h.startsWith('package.json:'))).toBe(true)
+      expect(found.some((h) => h.startsWith(path.basename(probe)))).toBe(false)
+    } finally {
+      fs.rmSync(probe, { recursive: true, force: true })
+    }
   })
 })
 
@@ -103,6 +140,8 @@ const MAY_SAY_LETTA: Record<string, string> = {
   'lib/services/__tests__/deploy-route.integration.test.ts': 'R5 tests',
   'app/api/setup/deploy/route.ts': 'the R5 refusal message',
   'app/api/harnesses/retired/route.test.ts': 'retired-row fixture',
+  'app/api/harnesses/__tests__/retired-row-routes.test.ts': 'R4: every per-agent write route refuses a retired row, by its real ids',
+  'lib/services/__tests__/surface-admins.test.ts': 'R4: the surface-admins write path refuses a retired row, by its real ids',
   'scripts/sync-readme-zh.mjs': 'translator glossary: product names stay in English',
   'docs/runtimes.md': 'says what was removed and what comes next',
   'README.md': 'points at docs/runtimes.md for the retired runtime',

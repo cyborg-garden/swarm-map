@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { applyTuningToHarness, readHarnessTuning, TUNING_SPEC, type TuningEdits, type TuningValues } from '@/lib/services/tuning-writer'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 /**
  * GET /api/harnesses/:id/tuning
@@ -32,6 +33,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   let body: { values?: TuningEdits; expected?: Partial<TuningValues> }
   try {
     body = await request.json()

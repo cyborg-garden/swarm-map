@@ -31,7 +31,12 @@ import type { ToolsService } from './tools'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
-import { RETIRED_RUNTIMES, UnsupportedRuntimeError, retiredRuntimeOfRow } from './runtime-adapter'
+import {
+  UnsupportedRuntimeError, canonicalHarnessId, markRuntimeDrivable, unmanagedRowNote,
+  unsupportedRowReason, unsupportedRuntimeReason,
+} from './runtime-adapter'
+
+export { unsupportedRowReason, unsupportedRuntimeReason }
 import type { ContainerRuntimeAdapter, RetiredHarnessRow } from './runtime-adapter'
 
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
@@ -900,6 +905,7 @@ const containerAdapters: ContainerRuntimeAdapter[] = [hermesAdapter]
 export function registerContainerAdapter(adapter: ContainerRuntimeAdapter): void {
   if (!containerAdapters.some((a) => a.runtime === adapter.runtime)) {
     containerAdapters.push(adapter)
+    markRuntimeDrivable(adapter.runtime)
   }
 }
 
@@ -908,33 +914,6 @@ export function pickContainerAdapter(
   containerName: string,
 ): ContainerRuntimeAdapter | undefined {
   return containerAdapters.find((a) => a.matches(containerName))
-}
-
-/**
- * Why a stored runtime tag cannot be driven, or null when it can. `undefined`
- * is drivable: rows written before the `runtime` field existed are Hermes.
- * Everything else must have a registered adapter. There is no fallback.
- */
-export function unsupportedRuntimeReason(runtime?: string): 'retired' | 'unknown' | null {
-  if (runtime === undefined) return null
-  if (containerAdapters.some((a) => a.runtime === runtime)) return null
-  return Object.hasOwn(RETIRED_RUNTIMES, runtime) ? 'retired' : 'unknown'
-}
-
-/**
- * Why a stored ROW cannot be driven, or null when it can. This is the check
- * every reader of harnesses.json uses. It is unsupportedRuntimeReason plus one
- * case the tag cannot see: a row with no tag whose id the old integration
- * minted (see retiredRuntimeOfRow). `runtime` is the label to show for it.
- */
-export function unsupportedRowReason(
-  row: { id?: string; runtime?: string } | undefined,
-): { reason: 'retired' | 'unknown'; runtime: string } | null {
-  if (!row) return null
-  const byTag = unsupportedRuntimeReason(row.runtime)
-  if (byTag) return { reason: byTag, runtime: String(row.runtime) }
-  const retired = retiredRuntimeOfRow(row)
-  return retired ? { reason: 'retired', runtime: retired } : null
 }
 
 /**
@@ -1361,13 +1340,20 @@ export class HarnessService {
         name: o.name ?? o.id.replace(/^h_/, '').replace(/_/g, '-'),
         runtime,
         reason,
-        note:
-          reason === 'retired'
-            ? RETIRED_RUNTIMES[runtime]
-            : `Unknown runtime "${runtime}". Swarm Map does not manage this row.`,
+        note: unmanagedRowNote(unsupported),
       })
     }
     return rows
+  }
+
+  /**
+   * The stored row for this id if Swarm Map does not manage it, else null.
+   * Accepts a bare agent slug as well as a stored id. Reads harnesses.json
+   * only: no Docker call, so it is cheap enough to run before every write.
+   */
+  unmanagedRow(idOrSlug: string): RetiredHarnessRow | null {
+    const id = canonicalHarnessId(idOrSlug)
+    return this.listRetired().find((r) => r.id === id) ?? null
   }
 
   updateConfig(id: string, partial: Partial<Harness>): Harness | undefined {
@@ -2141,6 +2127,11 @@ export class HarnessService {
     const overlay: Partial<Harness> = {
       id,
       name: input.name,
+      // Always tagged. A row with no tag is read as Hermes too, with one
+      // exception: an id a retired runtime once minted (retiredRuntimeOfRow).
+      // A Hermes agent can be given a name that derives such an id, and the
+      // tag is what keeps its row a Hermes row.
+      runtime: adapter.runtime,
       tier: input.tier ?? 'individual',
       platform: input.platform ?? 'hermes',
       channel: input.channel ?? `:${port}`,

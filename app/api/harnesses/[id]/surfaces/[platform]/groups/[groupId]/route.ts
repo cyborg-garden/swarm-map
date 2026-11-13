@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 /**
  * GET /api/harnesses/:id/surfaces/:platform/groups/:groupId
@@ -53,6 +54,8 @@ export async function POST(
 ) {
   const { id, platform, groupId } = await params
 
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   let body: { addedByUserId?: unknown }
   try {
     body = (await request.json()) as { addedByUserId?: unknown }

@@ -81,33 +81,116 @@ export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
 /**
  * Ids the old integration minted. It never wrote a `runtime` field to
  * harnesses.json: its harnesses were built in memory. The one way such an id
- * reached the file was the surface-admins write, which stores `{ id,
- * surfaceAdmins }` with no tag. So a leftover row is recognised by its id.
+ * reached the file was the surface-admins write, which stored `{ id,
+ * surfaceAdmins }` and nothing else. So a leftover row is recognised by its
+ * id AND by carrying no other field.
  *
  * The agent form keeps the hyphens of `agent-<uuid>`. An id derived from a
  * Hermes agent name has its hyphens turned into underscores, so the two
- * cannot collide. The server id can equal that of a Hermes agent named
- * `letta-server`, which is why the id only counts on a row with no tag: see
- * retiredRuntimeOfRow.
+ * cannot collide. The server id is also the id of a Hermes agent named
+ * `letta-server`. Two things keep that agent out of this rule: every row
+ * Swarm Map creates for it carries Hermes fields (name, compose file, port)
+ * and, since this change, `runtime: 'hermes'`; and the surface-admins write
+ * tags a new row for that id (see SurfaceAdminService.setAdmins).
  */
 const RETIRED_ID_RUNTIME: ReadonlyArray<[RegExp, string]> = [
   [/^h_letta_agent-/, 'letta'],
   [/^h_letta_server$/, 'letta-server'],
 ]
 
+/** The only fields a row left by the old integration can carry. */
+const LEFTOVER_ROW_FIELDS: ReadonlySet<string> = new Set(['id', 'surfaceAdmins'])
+
 /**
  * The retired runtime a stored row belongs to, or null. A stored tag always
- * wins. Only a row with no tag is judged by its id.
+ * wins. A row with no tag is judged by its id only when it has the leftover
+ * shape: any other field means Hermes code wrote the row.
  */
 export function retiredRuntimeOfRow(row: { id?: string; runtime?: string }): string | null {
   if (row.runtime !== undefined) {
     return Object.hasOwn(RETIRED_RUNTIMES, row.runtime) ? row.runtime : null
   }
   if (!row.id) return null
+  for (const [field, value] of Object.entries(row)) {
+    if (value !== undefined && !LEFTOVER_ROW_FIELDS.has(field)) return null
+  }
+  return retiredRuntimeOfId(row.id)
+}
+
+/** The retired runtime an id alone points at, or null. Says nothing about a stored row. */
+export function retiredRuntimeOfId(id: string): string | null {
   for (const [pattern, runtime] of RETIRED_ID_RUNTIME) {
-    if (pattern.test(row.id)) return runtime
+    if (pattern.test(id)) return runtime
   }
   return null
+}
+
+// Runtime tags that have a registered container adapter. Hermes is built in;
+// HarnessService adds to this when an adapter is registered. It lives here,
+// not beside the adapters, so services that only read harnesses.json
+// (surface admins, keys) can ask the question without loading HarnessService.
+const drivableRuntimes = new Set<string>(['hermes'])
+
+export function markRuntimeDrivable(runtime: string): void {
+  drivableRuntimes.add(runtime)
+}
+
+/**
+ * Why a stored runtime tag cannot be driven, or null when it can. `undefined`
+ * is drivable: rows written before the `runtime` field existed are Hermes.
+ * Everything else must have a registered adapter. There is no fallback.
+ */
+export function unsupportedRuntimeReason(runtime?: string): 'retired' | 'unknown' | null {
+  if (runtime === undefined) return null
+  if (drivableRuntimes.has(runtime)) return null
+  return Object.hasOwn(RETIRED_RUNTIMES, runtime) ? 'retired' : 'unknown'
+}
+
+/**
+ * Why a stored ROW cannot be driven, or null when it can. This is the check
+ * every reader and writer of harnesses.json uses. It is
+ * unsupportedRuntimeReason plus one case the tag cannot see: a row with no
+ * tag whose id the old integration minted (see retiredRuntimeOfRow).
+ * `runtime` is the label to show for it.
+ */
+export function unsupportedRowReason(
+  row: { id?: string; runtime?: string } | undefined,
+): { reason: 'retired' | 'unknown'; runtime: string } | null {
+  if (!row) return null
+  const byTag = unsupportedRuntimeReason(row.runtime)
+  if (byTag) return { reason: byTag, runtime: String(row.runtime) }
+  const retired = retiredRuntimeOfRow(row)
+  return retired ? { reason: 'retired', runtime: retired } : null
+}
+
+/**
+ * The id harnesses.json stores for what a caller passed. Agents call the
+ * policy API with their bare slug ("seraph-doer"); stored ids are
+ * "h_seraph_doer".
+ */
+export function canonicalHarnessId(idOrSlug: string): string {
+  return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
+}
+
+/**
+ * The stored row for this id or bare slug, if Swarm Map does not manage it.
+ * Every writer that turns an id into `~/.hermes-<name>` asks this first.
+ */
+export function findUnmanagedRow<T extends { id?: string; runtime?: string }>(
+  rows: readonly T[],
+  idOrSlug: string,
+): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
+  const id = canonicalHarnessId(idOrSlug)
+  const row = rows.find((r) => r.id === id)
+  const unsupported = unsupportedRowReason(row)
+  return row && unsupported ? { row, ...unsupported } : null
+}
+
+/** One sentence for the UI and for a refused request. */
+export function unmanagedRowNote(u: { reason: 'retired' | 'unknown'; runtime: string }): string {
+  return u.reason === 'retired'
+    ? RETIRED_RUNTIMES[u.runtime]
+    : `Unknown runtime "${u.runtime}". Swarm Map does not manage this row.`
 }
 
 /**

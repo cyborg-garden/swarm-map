@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 export async function GET(
   _request: Request,
@@ -19,6 +20,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

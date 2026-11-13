@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { toHarnessSlug } from '@/lib/services/harness'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const body = await request.json().catch(() => ({}))
   const newName = body.name
 

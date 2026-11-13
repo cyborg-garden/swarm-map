@@ -332,6 +332,82 @@ describe('a stored row with a retired runtime (R4)', () => {
       expect(docker.stop).not.toHaveBeenCalled()
     })
 
+    describe('a real Hermes agent named "letta-server" is not the retired server', () => {
+      const liveServer = () => {
+        mock(docker.listComposeProjects).mockReturnValue([
+          { name: 'letta-server', status: 'running', configFiles: [composeFile] },
+        ])
+        mock(docker.inspectContainers).mockReturnValue([
+          {
+            name: 'hermes-letta-server',
+            service: 'hermes-letta-server',
+            state: 'running',
+            status: 'Up',
+            ports: [{ published: 8660, target: 8000 }],
+            composeFile,
+          },
+        ])
+      }
+
+      it('the row createOverlay wrote before the runtime tag existed (no tag) is a Hermes row', () => {
+        // Field for field what createOverlay stored: an id, Hermes fields, no `runtime`.
+        storage.write('harnesses.json', [
+          {
+            id: SERVER_ID,
+            name: 'letta-server',
+            tier: 'individual',
+            platform: 'hermes',
+            channel: ':8660',
+            apiPort: 8660,
+            models: ['claude-sonnet-4-6'],
+            tools: [],
+            composeFile,
+            serviceName: 'hermes-letta-server',
+          },
+        ])
+        liveServer()
+        expect(service.listRetired()).toEqual([])
+        expect(service.get(SERVER_ID)).toMatchObject({ id: SERVER_ID, runtime: 'hermes', status: 'running' })
+        // It is in every fleet sweep, and it can be driven.
+        expect(service.list().map((h) => h.id)).toContain(SERVER_ID)
+        expect(service.updateConfig(SERVER_ID, { tier: 'team' })?.tier).toBe('team')
+        service.stop(SERVER_ID)
+        expect(docker.stop).toHaveBeenCalledTimes(1)
+      })
+
+      it('createOverlay for that name stores a Hermes-tagged row that list() returns', async () => {
+        storage.write('harnesses.json', [])
+        const overlay = await service.createOverlay({ name: 'letta-server' })
+        expect(overlay).toMatchObject({ id: SERVER_ID, name: 'letta-server', runtime: 'hermes' })
+        const stored = storage.read<Record<string, unknown>[]>('harnesses.json', [])
+        expect(stored.find((r) => r.id === SERVER_ID)?.runtime).toBe('hermes')
+        expect(service.listRetired()).toEqual([])
+        expect(service.list().map((h) => h.id)).toContain(SERVER_ID)
+        expect(service.unmanagedRow(SERVER_ID)).toBeNull()
+      })
+
+      it('every row createOverlay stores carries the runtime tag', async () => {
+        storage.write('harnesses.json', [])
+        await service.createOverlay({ name: 'plain-agent' })
+        const stored = storage.read<Record<string, unknown>[]>('harnesses.json', [])
+        expect(stored.find((r) => r.id === 'h_plain_agent')?.runtime).toBe('hermes')
+      })
+
+      it('control: the same id with ONLY surface admins is still the leftover row', () => {
+        liveServer()
+        expect(service.listRetired().map((r) => r.id)).toContain(SERVER_ID)
+        expect(service.get(SERVER_ID)).toBeUndefined()
+      })
+    })
+
+    it('unmanagedRow() finds a retired row by stored id or by bare slug, and nothing else', () => {
+      expect(service.unmanagedRow(SERVER_ID)).toMatchObject({ id: SERVER_ID, reason: 'retired' })
+      expect(service.unmanagedRow('letta-server')).toMatchObject({ id: SERVER_ID, reason: 'retired' })
+      expect(service.unmanagedRow('h_iris')).toBeNull()
+      expect(service.unmanagedRow('iris')).toBeNull()
+      expect(service.unmanagedRow('h_nobody')).toBeNull()
+    })
+
     it('control: Hermes agents whose names merely start with "letta" are untouched', () => {
       storage.write('harnesses.json', [
         // Untagged, name-derived id: underscores only, so not an old agent id.

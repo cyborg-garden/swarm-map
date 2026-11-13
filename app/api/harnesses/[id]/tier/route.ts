@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import type { HabitatTier } from '@/lib/types'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 const VALID_TIERS: HabitatTier[] = ['individual', 'team', 'org', 'orgpublic', 'public']
 
@@ -10,6 +11,8 @@ export async function PATCH(
 ) {
   const { id } = await params
 
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   let body: { tier?: string }
   try {
     body = await request.json()

@@ -11,12 +11,8 @@ import { SignalPinService } from './signal-pin'
 import { SurfaceAdminService } from './surface-admins'
 import { CascadeLibraryService } from './cascades'
 import { ModelFreshnessService } from './model-freshness'
-import path from 'path'
-import os from 'os'
+import { DATA_DIR } from './data-dir'
 
-const DATA_DIR = process.env.DATA_DIR
-  ? process.env.DATA_DIR.replace('~', os.homedir())
-  : path.join(os.homedir(), '.hermes-swarm-map')
 
 const storage = new Storage(DATA_DIR)
 const docker = new DockerService()

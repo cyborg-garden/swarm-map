@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { isSupportedSurface } from '@/lib/services/surface-admins'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 /**
  * GET /api/harnesses/:id/surfaces/:platform/admins
@@ -44,6 +45,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string; platform: string }> },
 ) {
   const { id, platform } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   let body: { admins?: unknown; actor?: unknown }
   try {
     body = (await request.json()) as { admins?: unknown; actor?: unknown }

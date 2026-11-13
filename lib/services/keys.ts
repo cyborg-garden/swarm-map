@@ -10,6 +10,7 @@ import { assertNoNewline } from '@/lib/env-helpers'
 import { SURFACES } from '@/lib/surfaces/registry'
 import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { readEnvValue } from './discord-thread-gate'
+import { unsupportedRowReason } from './runtime-adapter'
 
 const KEYS_FILE = 'keys.json'
 
@@ -322,8 +323,11 @@ export class KeysService {
   // harness the operator created via the app (persisted in harnesses.json). D2:
   // without the overlay names, UI-created harnesses showed zero keys forever.
   private allHarnessNames(): string[] {
-    const overlays = this.storage.read<Array<{ name?: string }>>('harnesses.json', [])
+    const overlays = this.storage.read<Array<{ id?: string; name?: string; runtime?: string }>>('harnesses.json', [])
     const overlayNames = overlays
+      // A row with a retired or unknown runtime is not a Hermes agent: its
+      // name must not be resolved to ~/.hermes-<name>.
+      .filter((o) => !unsupportedRowReason(o))
       .map((o) => o.name)
       .filter((n): n is string => typeof n === 'string' && n.length > 0)
     return Array.from(new Set([...this.defaultHarnessNames(), ...overlayNames]))

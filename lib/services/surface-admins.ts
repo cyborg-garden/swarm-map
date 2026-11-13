@@ -7,6 +7,7 @@ import type { AuditService } from './audit'
 import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
+import { canonicalHarnessId, findUnmanagedRow, retiredRuntimeOfId, unmanagedRowNote } from './runtime-adapter'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
   GROUPS_VARS as DERIVED_GROUPS_VARS,
@@ -163,12 +164,26 @@ export class SurfaceAdminService {
   // agent-side call silently missed every EXPLICIT admin list and fell back to
   // the allowlist bootstrap. Normalize before matching.
   private canonicalHarnessId(idOrSlug: string): string {
-    return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
+    return canonicalHarnessId(idOrSlug)
+  }
+
+  // Why this id cannot be written through, or null. A stored row with a
+  // retired or unknown runtime is not a Hermes agent, yet its id still maps
+  // to ~/.hermes-<name>, which may belong to a real one. This service reads
+  // and writes harnesses.json and that directory itself, without
+  // HarnessService, so every write below asks here first.
+  private unmanagedReason(harnessId: string, overlays = this.readOverlays()): string | null {
+    const found = findUnmanagedRow(overlays, harnessId)
+    return found ? `${unmanagedRowNote(found)} Nothing can be changed through it.` : null
   }
 
   private explicitAdmins(harnessId: string, platform: string): string[] | undefined {
     const canonical = this.canonicalHarnessId(harnessId)
-    const overlay = this.readOverlays().find((h) => h.id === canonical)
+    const overlays = this.readOverlays()
+    // An unmanaged row's admin list is not policy: a Hermes agent that shares
+    // its name must not be answered from a row that is not its own.
+    if (findUnmanagedRow(overlays, harnessId)) return undefined
+    const overlay = overlays.find((h) => h.id === canonical)
     const list = overlay?.surfaceAdmins?.[platform]
     return Array.isArray(list) ? list : undefined
   }
@@ -248,10 +263,12 @@ export class SurfaceAdminService {
     actor: string,
   ):
     | { ok: true; admins: string[]; dmEnvUpdated?: true; dmEnvWarning?: string }
-    | { ok: false; status: 400 | 403; error: string } {
+    | { ok: false; status: 400 | 403 | 409; error: string } {
     if (!isSupportedSurface(platform)) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
     }
+    const unmanaged = this.unmanagedReason(harnessId)
+    if (unmanaged) return { ok: false, status: 409, error: unmanaged }
     if (!Array.isArray(admins)) {
       return { ok: false, status: 400, error: 'admins must be an array' }
     }
@@ -282,12 +299,23 @@ export class SurfaceAdminService {
     // Persist onto the harness overlay (read-modify-write the raw array — the
     // single persisted shape; HarnessService tolerates partial overlays).
     const overlays = this.readOverlays()
-    const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
+    const canonical = this.canonicalHarnessId(harnessId)
+    const idx = overlays.findIndex((h) => h.id === canonical)
     if (idx !== -1) {
       const existing = overlays[idx].surfaceAdmins ?? {}
       overlays[idx] = { ...overlays[idx], surfaceAdmins: { ...existing, [platform]: cleaned } }
     } else {
-      overlays.push({ id: harnessId, surfaceAdmins: { [platform]: cleaned } })
+      // A new `{ id, surfaceAdmins }` row under an id a retired runtime once
+      // minted would be read back as that runtime's leftover (see
+      // retiredRuntimeOfRow). Ids with a hyphen were only ever minted by the
+      // retired runtime: no row is made for them. The other form is also what
+      // a Hermes agent's name derives, and the actor check above only passes
+      // when that agent's ~/.hermes-<name>/.env exists, so the row is tagged.
+      const retired = retiredRuntimeOfId(canonical)
+      if (retired && canonical.includes('-')) {
+        return { ok: false, status: 409, error: `No agent has the id ${harnessId}: it belongs to a retired runtime.` }
+      }
+      overlays.push({ id: harnessId, ...(retired ? { runtime: 'hermes' as const } : {}), surfaceAdmins: { [platform]: cleaned } })
     }
     this.storage.write(HARNESSES_FILE, overlays)
 
@@ -363,6 +391,7 @@ export class SurfaceAdminService {
   syncFromAllowlist(harnessId: string, platform: string, allowlist: string[]): void {
     if (!isSupportedSurface(platform)) return
     const overlays = this.readOverlays()
+    if (this.unmanagedReason(harnessId, overlays)) return // read-only: not a Hermes agent's row
     const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
     const existing = idx !== -1 ? overlays[idx].surfaceAdmins?.[platform] : undefined
     if (!Array.isArray(existing)) return // no explicit list → bootstrap default already tracks the env
@@ -438,7 +467,7 @@ export class SurfaceAdminService {
   ):
     | { ok: true; approved: true; updated: boolean }
     | { ok: true; approved: false; reason: string }
-    | { ok: false; status: 400; error: string } {
+    | { ok: false; status: 400 | 409; error: string } {
     const varName = GROUP_ALLOWED_VARS[platform]
     if (!varName) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
@@ -446,6 +475,8 @@ export class SurfaceAdminService {
     if (!isValidHarnessId(harnessId)) {
       return { ok: false, status: 400, error: 'Invalid harness id' }
     }
+    const unmanaged = this.unmanagedReason(harnessId)
+    if (unmanaged) return { ok: false, status: 409, error: unmanaged }
     // Structural guard before the value touches the .env (see sanitizeGroupId).
     const group = sanitizeGroupId(groupId)
     if (!group) {
