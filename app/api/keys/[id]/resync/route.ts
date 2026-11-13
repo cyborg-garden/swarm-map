@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { invalidHarnessId } from '@/lib/harness-ref'
 
 // Rewrite an assigned key into its agents' .env, then recreate only the agents
 // whose .env changed (env_file is read at container creation). Repairs a key
@@ -19,6 +20,10 @@ export async function POST(
     const h = (body as { harnesses: unknown }).harnesses
     if (!Array.isArray(h) || !h.every((x) => typeof x === 'string')) {
       return NextResponse.json({ error: 'harnesses must be an array of harness ids' }, { status: 400 })
+    }
+    for (const entry of h) {
+      const invalid = invalidHarnessId(entry)
+      if (invalid) return invalid
     }
     harnesses = h
   }

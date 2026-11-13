@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -28,6 +29,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
   const dataDir = agentDataDir(id)
   const pairingDir = path.join(dataDir, 'platforms', 'pairing')
 
@@ -59,11 +62,17 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json()
   const { platform, userId } = body as { platform: string; userId: string }
 
   if (!platform || !userId) {
     return NextResponse.json({ error: 'Missing platform or userId' }, { status: 400 })
+  }
+  // The platform names a file below, so it must be one of the known surfaces.
+  if (!PLATFORMS.includes(platform)) {
+    return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 })
   }
 
   const dataDir = agentDataDir(id)

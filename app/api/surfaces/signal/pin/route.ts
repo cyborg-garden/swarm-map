@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { getSignalDaemonUrl } from '@/lib/env-helpers'
+import { invalidHarnessId } from '@/lib/harness-ref'
 
 const SIGNAL_API = getSignalDaemonUrl()
 
@@ -15,6 +16,10 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
+
+  // The id is stored as the PIN's assignment, so it must be a well-formed one.
+  const invalid = invalidHarnessId(harnessId)
+  if (invalid) return invalid
 
   if (pin.length < 4) {
     return NextResponse.json(

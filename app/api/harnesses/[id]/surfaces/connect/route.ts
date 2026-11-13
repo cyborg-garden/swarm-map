@@ -11,6 +11,7 @@ import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-
 import { readEnvValue } from '@/lib/services/discord-thread-gate'
 import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, validIdentities } from '@/lib/surfaces/dm-allowlist'
+import { requireHarness } from '@/lib/harness-ref'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -23,6 +24,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json()
   const { platform, config } = body as { platform: string; config: Record<string, string> }
 

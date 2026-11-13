@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { applyModelUpdate } from '@/lib/services/model-update-scheduler'
+import { requireHarness } from '@/lib/harness-ref'
 
 // POST /api/fleet/model-updates/apply { harnessId, from, to, provider? }
 //
@@ -17,6 +18,8 @@ export async function POST(request: Request) {
   if (!harnessId || !from || !to) {
     return NextResponse.json({ error: 'harnessId, from and to are required' }, { status: 400 })
   }
+  const { refusal } = requireHarness(harnessId)
+  if (refusal) return refusal
   if (/[\r\n]/.test(from + to + (provider ?? ''))) {
     return NextResponse.json({ error: 'model ids must not contain newlines' }, { status: 400 })
   }

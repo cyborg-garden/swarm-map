@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { refuseUnknownHarnesses } from '@/lib/harness-ref'
 
 export async function GET() {
   return NextResponse.json(services.keys.list())
@@ -7,6 +8,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json()
+  // Every agent the key is assigned to is resolved before the key is stored
+  // or any .env is written.
+  const refusal = refuseUnknownHarnesses(body.assignedTo)
+  if (refusal) return refusal
   const key = services.keys.add(body)
 
   // Write key to assigned harnesses' .env files, then recreate so the new

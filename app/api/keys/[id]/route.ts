@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { refuseUnknownHarnesses } from '@/lib/harness-ref'
 
 export async function PUT(
   request: Request,
@@ -10,6 +11,11 @@ export async function PUT(
 
   const currentKeys = services.keys.list()
   const currentKey = currentKeys.find((k) => k.id === id)
+
+  // Agents newly named in assignedTo are resolved before anything changes.
+  // Ones the key already holds are kept as stored.
+  const refusal = refuseUnknownHarnesses(body.assignedTo, currentKey?.assignedTo ?? [])
+  if (refusal) return refusal
 
   // If a new value is provided, rotate + update metadata in one operation
   if (body.value) {

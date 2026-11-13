@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { invalidHarnessId } from '@/lib/harness-ref'
 
 // SECURITY: use execFile (argv, no shell) and validate `phone` as E.164 — the
 // same discipline as the sibling register route. A shell-string command with an
@@ -13,6 +14,12 @@ const SIGNAL_CONFIG = '/home/.local/share/signal-cli'
 export async function POST(request: Request) {
   const { phone, code, displayName, pin, harnessId } = await request.json() as {
     phone: string; code: string; displayName?: string; pin?: string; harnessId?: string
+  }
+
+  // The id is stored as the PIN's assignment, so it must be a well-formed one.
+  if (harnessId !== undefined && harnessId !== null && harnessId !== '') {
+    const invalid = invalidHarnessId(harnessId)
+    if (invalid) return invalid
   }
 
   if (!phone || !code) {
