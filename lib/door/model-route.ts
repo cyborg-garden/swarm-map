@@ -223,7 +223,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     }
   }
 
-  /** Redact the key from every string inside a parsed JSON value, in place. True if anything changed. */
+  /** Redact the key from every string and property name inside a parsed JSON value, in place. True if anything changed. */
   function redactDeep(value: unknown): boolean {
     if (value === null || typeof value !== 'object') return false
     let changed = false
@@ -243,38 +243,38 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     return changed
   }
 
-  /** Pass the provider's reply back to the cell, redacted, reporting usage and size as they go by. */
-  async function relay(
-    upstream: Response, res: http.ServerResponse, stream: boolean,
-    seen: { event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void; received(bytes: number): void },
-  ): Promise<void> {
-    // A streamed call is not always answered with a stream: an error comes back as one plain
-    // body. What the provider says it sent decides how the reply is read, not what was asked for.
-    const isStream = stream && upstream.body !== null && /^text\/event-stream\b/i.test(upstream.headers.get('content-type') ?? '')
-    if (!isStream) {
-      const text = await upstream.text()
-      seen.received(Buffer.byteLength(text))
-      // Passed on as it came, unless the key is in it. JSON may write the key with an escape
-      // in it, which a search of the raw text misses, so the parsed strings are searched too.
-      let out = redact(text)
-      try {
-        const json: unknown = JSON.parse(text)
-        seen.event(shape.usage(json), false)
-        if (redactDeep(json)) out = redact(JSON.stringify(json))
-      } catch { /* not JSON: it reports no usage, and was searched as it stands */ }
-      res.writeHead(upstream.status, { 'content-type': redact(upstream.headers.get('content-type') ?? 'application/json') })
-      res.end(out)
-      return
-    }
+  type Seen = { event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void; received(bytes: number): void }
 
-    // A stream. The key could arrive cut in two, one half at the end of one
-    // event's text and the rest at the start of the next, so redacting each
-    // event on its own is not enough. For each run of text the shape points
-    // out, the end of a piece that could be the start of the key is held back
-    // and joined to the next piece before it is checked and sent on.
-    res.writeHead(upstream.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+  /**
+   * A reply that is not a stream of events, as text to send back. Passed on as it came unless
+   * the key is in it. JSON may write the key with an escape in it, which a search of the raw
+   * text misses, so the parsed strings are searched too.
+   */
+  function plainBody(text: string, seen: Seen): string {
+    let json: unknown
+    try { json = JSON.parse(text) } catch { return redact(text) } // not JSON: it reports no usage
+    seen.event(shape.usage(json), false)
+    if (typeof json === 'string') return redact(json) === json ? redact(text) : JSON.stringify(redact(json))
+    return redactDeep(json) ? redact(JSON.stringify(json)) : redact(text)
+  }
+
+  /**
+   * Reads a stream of events piece by piece and writes each one on, redacted.
+   *
+   * The key could arrive cut in two, one half at the end of one event's text and the rest at
+   * the start of the next, so redacting each event on its own is not enough. For each run of
+   * text the shape points out, the end of a piece that could be the start of the key is held
+   * back and joined to the next piece before it is checked and sent on.
+   *
+   * Until the first event with data arrives, nothing is written: a body with no such event
+   * is not a stream, whatever it was labelled, and `end()` hands it back to be read as a
+   * plain body.
+   */
+  function eventReader(out: (text: string) => void, seen: Seen): { feed(text: string): void; end(): string | undefined } {
     const held = new Map<string, string>()
-    const write = (event: string): void => { res.write(redact(event) + '\n\n') }
+    let sawData = false
+    let before = '' // everything read so far, kept only until the first data event
+    const write = (event: string): void => { out(redact(event) + '\n\n') }
     const drain = (): void => {
       for (const [key, text] of held) if (text !== '') write(`data: ${JSON.stringify(shape.textEvent(key, text))}`)
       held.clear()
@@ -306,27 +306,86 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       redactDeep(json)
       write([...lines.filter((line) => !isData(line)), `data: ${JSON.stringify(json)}`].join('\n'))
     }
-    const decoder = new TextDecoder()
     let pending = ''
     let carry = ''
-    const reader = upstream.body.getReader()
-    try {
-      for (let part = await reader.read(); !part.done; part = await reader.read()) {
-        seen.received(part.value.byteLength)
+    const take = (event: string): void => {
+      if (!sawData && event.split('\n').some(isData)) {
+        sawData = true
+        // What came before the first data event (comments, keep-alives) goes out first.
+        const earlier = before.split('\n\n').filter((e) => e !== '')
+        before = ''
+        for (const e of earlier) flush(e)
+      }
+      if (sawData) flush(event)
+      else before += event + '\n\n'
+    }
+    return {
+      feed(text) {
         // SSE lines may end with LF, CRLF or a bare CR. All three are read as LF. A CR at the
         // very end of a piece is kept back: the LF that makes it one line ending may come next.
-        pending = (pending + carry + decoder.decode(part.value, { stream: true }))
+        pending = pending + carry + text
         carry = pending.endsWith('\r') ? '\r' : ''
         pending = pending.slice(0, pending.length - carry.length).replace(/\r\n?/g, '\n')
         const events = pending.split('\n\n')
         pending = events.pop() ?? ''
-        for (const event of events) flush(event)
+        for (const event of events) take(event)
+      },
+      end() {
+        // What is left when the stream ends is its last event, with or without its line endings.
+        if (pending.trim()) take(pending.replace(/\n+$/, ''))
+        pending = ''
+        if (!sawData) return before
+        // Whatever was held back is sent even when the provider drops the stream half way.
+        drain()
+        return undefined
+      },
+    }
+  }
+
+  /** True if the text has a line that starts an event's data. */
+  const looksLikeEvents = (text: string): boolean => /(^|\r\n|\r|\n)data:/.test(text)
+
+  /**
+   * Pass the provider's reply back to the cell, redacted, reporting usage and size as they go by.
+   * How a reply is read is decided by what is in it. Its label only decides whether it is passed
+   * on piece by piece (a stream that was asked for and says it is one) or read whole first.
+   */
+  async function relay(upstream: Response, res: http.ServerResponse, stream: boolean, seen: Seen): Promise<void> {
+    const type = upstream.headers.get('content-type') ?? ''
+    const live = stream && upstream.body !== null && /^text\/event-stream\b/i.test(type)
+    if (!live) {
+      const text = await upstream.text()
+      seen.received(Buffer.byteLength(text))
+      let body: string
+      let isJson = true
+      try { JSON.parse(text) } catch { isJson = false }
+      if (!isJson && looksLikeEvents(text)) {
+        // A stream under another label, or one nobody asked for: still read as a stream.
+        let out = ''
+        const reader = eventReader((piece) => { out += piece }, seen)
+        reader.feed(text)
+        body = out + (reader.end() ?? '')
+      } else {
+        body = plainBody(text, seen)
       }
-      // What is left when the stream ends is its last event, with or without its line endings.
-      if (pending.trim()) flush(pending.replace(/\n+$/, ''))
+      res.writeHead(upstream.status, { 'content-type': redact(type || 'application/json') })
+      res.end(body)
+      return
+    }
+
+    res.writeHead(upstream.status, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    const reader = eventReader((piece) => { res.write(piece) }, seen)
+    const decoder = new TextDecoder()
+    const source = upstream.body!.getReader()
+    try {
+      for (let part = await source.read(); !part.done; part = await source.read()) {
+        seen.received(part.value.byteLength)
+        reader.feed(decoder.decode(part.value, { stream: true }))
+      }
     } finally {
-      // Whatever was held back is sent even when the provider drops the stream half way.
-      drain()
+      // Labelled a stream, but no event with data ever came: it is read as the plain body it is.
+      const notEvents = reader.end()
+      if (notEvents !== undefined && notEvents.trim() !== '') res.write(plainBody(notEvents.replace(/\n+$/, ''), seen))
       res.end()
     }
   }

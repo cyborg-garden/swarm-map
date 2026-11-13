@@ -214,8 +214,9 @@ build a matrix from it.
   written as `data:` with no space, or with lines ending in CRLF or a bare CR, are now parsed, and
   a usage figure no longer stands once any output (text, a tool call, an event the route cannot
   read) follows it without a believable figure of its own. An event's data is read across all its
-  `data:` lines. A reply is read as a stream only when the provider says it is one, so an error
-  body answering a streamed call is read as the plain body it is. The key is searched for in the
+  `data:` lines. A reply is read by what is in it, not by its label: a stream of events is read as
+  one under any content type, and an error body answering a streamed call is read as the plain
+  body it is. The key is searched for in the
   raw text of every reply, in every string and property name of a JSON reply after JSON's escapes
   are undone, and in the content type. A price that is not two plain rates counts as no price.
 - **`mem.dm-isolated` does not mean what the spec's row says.** The spec's rule is "a DM never

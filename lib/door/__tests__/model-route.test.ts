@@ -559,6 +559,49 @@ describe('model route: replies written in ways the route did not expect', () => 
     expect(route!.unmetered).toBe(1)
   })
 
+  // A reply is not always labelled as what it is. Whatever the label, a stream is
+  // read as a stream and a JSON body as a JSON body, so neither loses its checks.
+  describe.each([
+    ['application/json'], ['application/octet-stream'], ['text/event-stream'], ['Text/Event-Stream; charset=utf-8'], ['text/plain'],
+  ])('whatever the label (%s)', (label) => {
+    const half = Math.floor(UPSTREAM.length / 2)
+    const splitStream = ev(content(`the key is ${UPSTREAM.slice(0, half)}`)) + ev(content(`${UPSTREAM.slice(half)} ok`))
+      + ev({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20 } }) + 'data: [DONE]\n\n'
+    const errorBody = `{"error":{"message":"Incorrect API key provided: ${escaped}"}}`
+
+    it.each([['a plain call', false], ['a streamed call', true]])('[U:key-swap] a stream answering %s has a split key redacted, and its usage read', async (_what, stream) => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: splitStream, rawType: label }])
+      const raw = await (await ask(user('CANARY-m', stream ? { stream: true } : {}))).text()
+      expect(rebuilt(raw)).toBe(`the key is ${REDACTED} ok`)
+      expect(raw).not.toContain(UPSTREAM)
+      expect(route!.meter()).toMatchObject({ inTokens: 100, outTokens: 20 })
+    })
+
+    it.each([['a plain call', false], ['a streamed call', true]])('[U:key-swap] a JSON body answering %s has an escaped key redacted', async (_what, stream) => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: errorBody, rawType: label }])
+      const reply = await (await ask(user('CANARY-m', stream ? { stream: true } : {}))).text()
+      expect(JSON.parse(reply).error.message).toBe(`Incorrect API key provided: ${REDACTED}`)
+    })
+  })
+
+  it('[U:key-swap] text held back because it might be the start of the key is still sent when the stream just stops', async () => {
+    const start = UPSTREAM.slice(0, 6)
+    const { raw } = await streamed(ev(content(`ends like a key: ${start}`)))
+    expect(rebuilt(raw)).toBe(`ends like a key: ${start}`)
+  })
+
+  it('[U:key-swap] a reply that is one JSON string has an escaped key redacted', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: `"my key is ${escaped}"`, rawType: 'application/json' }])
+    expect(JSON.parse(await (await ask(user('CANARY-m'))).text())).toBe(`my key is ${REDACTED}`)
+  })
+
+  it('[U:key-swap] a stream that opens with comments is still read as a stream once its events come', async () => {
+    const half = Math.floor(UPSTREAM.length / 2)
+    const { raw } = await streamed(': keep-alive\n\n: keep-alive\n\n' + ev(content(`the key is ${UPSTREAM.slice(0, half)}`)) + ev(content(`${UPSTREAM.slice(half)} ok`)) + 'data: [DONE]\n\n')
+    expect(raw.startsWith(': keep-alive\n\n: keep-alive\n\n')).toBe(true)
+    expect(rebuilt(raw)).toBe(`the key is ${REDACTED} ok`)
+  })
+
   it('[U:key-swap] the key does not come back in the content type either', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: '{}', rawType: `application/json; note=${UPSTREAM}` }])
     const res = await ask(user('CANARY-m'))
