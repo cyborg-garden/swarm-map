@@ -41,6 +41,8 @@ export interface ModelShape {
    * The route still checks the figure could be true before it believes it.
    */
   usage(json: unknown): { inTokens: number; outTokens: number } | undefined
+  /** Does this stream event carry any output at all: text, a tool call, reasoning? A usage figure sent before it does not cover it. */
+  hasOutput(json: unknown): boolean
   /** The running text in one parsed stream event. The route redacts across these. */
   streamText(json: unknown): StreamText[]
   /** A stream event carrying only `text` for run `key`, for text still held back when the stream ends. */
@@ -67,6 +69,14 @@ export const OPENAI_CHAT: ModelShape = {
     // Both counts or nothing: a missing one is not read as zero.
     if (!u || typeof u.prompt_tokens !== 'number' || typeof u.completion_tokens !== 'number') return undefined
     return { inTokens: u.prompt_tokens, outTokens: u.completion_tokens }
+  },
+  hasOutput(json) {
+    const choices = (json as OpenAiChunk | null)?.choices
+    if (!Array.isArray(choices)) return false
+    // Any field of a delta that is not empty counts: content, tool_calls, reasoning, whatever comes next.
+    const empty = (v: unknown): boolean => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
+    return choices.some((choice) => choice !== null && typeof choice === 'object' && choice.delta !== null && typeof choice.delta === 'object'
+      && Object.values(choice.delta).some((value) => !empty(value)))
   },
   streamText(json) {
     const choices = (json as OpenAiChunk | null)?.choices

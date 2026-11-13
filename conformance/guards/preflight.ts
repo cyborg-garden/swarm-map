@@ -21,8 +21,8 @@ export class RefusingToRun extends Error {
 // taught, it lets through. The lab's own environment is listed by hand for
 // that reason, and this guard is the second check on it, not the first.
 const CREDENTIAL_NAME = new RegExp([
-  'TOKEN', 'KEY', 'SECRET', 'PASSW', 'PWD', 'PGPASS', 'CREDENTIAL', 'AUTH', 'COOKIE', 'KUBECONFIG',
-  '(^|_)PAT($|_)', '(^|_)(URL|URI|DSN)$',
+  'TOKEN', 'KEY', 'SECRET', 'PASS', 'PWD', 'CREDENTIAL', 'AUTH', 'BEARER', 'COOKIE', 'WEBHOOK', 'KUBECONFIG', 'NETRC',
+  '(^|_)(PAT|PW|PIN)($|_)', '(^|_)(URL|URI|DSN)($|_)',
 ].join('|'), 'i')
 
 // Shapes of real credentials. Sources are split so this file never contains

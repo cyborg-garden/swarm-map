@@ -348,6 +348,14 @@ describe('model route: a call the provider did not meter', () => {
     expect(route!.unmetered).toBe(1)
   })
 
+  it('[U:budget-unmetered] a usage figure given before a streamed tool call does not cover the call', async () => {
+    const args = { command: 'echo ' + 'z'.repeat(3000) }
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', tool: { name: 'bash', args }, usageFirstOnly: true }])
+    await (await ask(user('CANARY-m', { stream: true }))).text()
+    expect(route!.meter().outTokens).toBeGreaterThanOrEqual(3000)
+    expect(route!.unmetered).toBe(1)
+  })
+
   it('[U:budget-unmetered] a reply that is not JSON is charged the same way', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: 'ignored', rawBody: '<html>gateway says hi</html>' }])
     const res = await ask(user('CANARY-m'))

@@ -39,6 +39,7 @@ describe('F2: no real credential is present', () => {
   it.each([
     'OPENAI_API_KEY_2', 'API_KEY_PROD', 'MYSQL_PWD', 'GH_PAT', 'KUBECONFIG', 'SSH_AUTH_SOCK', 'GOOGLE_APPLICATION_CREDENTIALS',
     'NPM_AUTH', 'PGPASSFILE', 'SESSION_COOKIE', 'DATABASE_URL', 'REDIS_DSN', 'my_token_backup',
+    'SMTP_PASS', 'GPG_PASSPHRASE', 'DISCORD_WEBHOOK', 'NETRC', 'BEARER', 'DB_PW', 'SIGNAL_PIN', 'DATABASE_URL_PROD',
   ])('refuses the name %s, wherever the telling word sits in it', (name) => {
     expect(() => assertNoCredentials({ [name]: 'x' })).toThrow(RefusingToRun)
   })

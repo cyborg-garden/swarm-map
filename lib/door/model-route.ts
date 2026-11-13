@@ -27,7 +27,11 @@
 // - Spend lives in a ledger (spend-ledger.ts), by calendar month, not in this
 //   process. A restart does not reset it and a new month starts from nothing.
 //   A ledger that cannot be written stops the route: no call is forwarded
-//   while the ledger refuses a write, or ever again once it has lost a charge.
+//   while the ledger refuses a write, or again in this process once it has
+//   lost a charge. A restart forgets that, and the lost charge stays lost.
+//
+// What it cannot do: tell a figure that is false but could be true. A provider
+// that reports one token for a long reply is believed.
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { decide } from '../core/decide.ts'
@@ -249,7 +253,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       const reported = shape.usage(json)
       const pieces = shape.streamText(json)
       if (reported) seen.usage(reported)
-      else if (pieces.some((piece) => piece.text !== '')) seen.textAfterUsage()
+      else if (shape.hasOutput(json)) seen.textAfterUsage()
       if (pieces.length === 0) return write(event)
       for (const piece of pieces) {
         const clean = redact((held.get(piece.key) ?? '') + piece.text)
