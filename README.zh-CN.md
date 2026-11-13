@@ -1,5 +1,5 @@
-<!-- 译自 README.md @ 9ff54e3；如有出入，以英文版为准。 -->
-<!-- Translated from README.md @ 9ff54e3. The English README is authoritative. -->
+<!-- 译自 README.md @ fbe08cc；如有出入，以英文版为准。 -->
+<!-- Translated from README.md @ fbe08cc. The English README is authoritative. -->
 
 # Swarm Map
 
@@ -9,11 +9,11 @@
 
 [Cyborg Garden](https://www.cyborg.garden/) 的公共品（commons）开源项目。
 
-**面向异构智能体运行时的多人协作管理与编排平台。** 一个控制台，管理两种形态的智能体：[Hermes](https://github.com/cyborg-garden/hermes-agent-mt) 智能体（每个智能体是一个独立容器），以及 [Letta](https://github.com/letta-ai/letta) 智能体（以记忆为核心，作为数据行运行在同一台共享服务器上）。无论哪种形态，多租户安全、模型级联和平台连接都来自同一个控制平面。
+**面向异构智能体运行时的多人协作管理与编排平台。** 一个控制台，管理一整支 [Hermes](https://github.com/cyborg-garden/hermes-agent-mt) 智能体队伍，每个智能体一个容器。多租户安全、模型级联和平台连接都来自同一个控制平面。
 
 *同类首创：一个点选式图形界面，不仅管理智能体运行时，还管理“谁能在哪里做什么”。解决多租户智能体问题。直面复杂性的全貌，而不迷失其中。共享算力。*
 
-**两种运行时的支持程度还不对等。** Hermes 是成熟路径；Letta 目前只支持只读查看和发送消息。具体哪些已上线、哪些未上线，请看 [Runtimes](docs/runtimes.md)（英文）——我们宁愿你读一张枯燥的对照表，也不愿你部署之后才发现缺口。
+**目前只上线一种运行时。** Hermes 是受支持的路径。之前的 Letta 集成已被移除：它面向 Letta 的自托管服务器，而该服务器已被 Letta 退役。哪些已上线、哪些被移除、哪些在计划中，请看 [Runtimes](docs/runtimes.md)（英文）——我们宁愿你读一页枯燥的说明，也不愿你部署之后才发现缺口。
 
 <img width="1352" height="763" alt="Swarm Map 控制台截图" src="https://github.com/user-attachments/assets/4b94f0d1-d9b8-4a81-8b47-b2dae1940741" />
 *平静的界面，展示跨多种智能体运行时的配置项*
@@ -26,7 +26,7 @@
 
 Swarm Map 就是这个控制平面。一个界面即可部署、配置和管理一整支智能体队伍——每个智能体都有自己的人格、记忆、平台连接和预算。单个智能体能做的一切，现在可以成倍放大，并且多人共用。
 
-当你的智能体*形态*各不相同时，难度还会增加。Hermes 智能体是一个容器，可以启动、停止、重建，并挂接消息平台。Letta 智能体是共享服务器数据库里的一行，采用以记忆为核心的架构——没有自己的容器，也没有东西可以 `docker restart`。Swarm Map 用同一个运行时接口同时建模两者（容器类运行时用 `ContainerRuntimeAdapter`，Letta 用单独的 REST provider），而不是假装一切都是容器。
+当你的智能体并不都运行在同一个 harness 上时，事情还会更难——每个 harness 处理聊天接入、密钥和记忆的方式都各不相同。如今 Swarm Map 通过一个运行时接口（`ContainerRuntimeAdapter`）驱动 Hermes。以 Swarm Map 不认识的运行时存储的智能体行，永远不会被当作 Hermes 处理。
 
 ## 大家用它做什么
 
@@ -50,30 +50,26 @@ Swarm Map 就是这个控制平面。一个界面即可部署、配置和管理�
 
 💰 **预算约束** —— 为每个 API 密钥设置月度花费上限。超出预算时智能体会自行限流。
 
-🧩 **两种运行时，一个接口** —— Hermes（每个智能体一个容器）和 Letta（以记忆为核心的智能体，作为数据行运行在共享服务器上）出现在同一个队伍视图中。功能对等只是部分实现，详见 [Runtimes](docs/runtimes.md)；上面六项描述的是 Hermes 路径。
+🧩 **一个运行时接口** —— Hermes（每个智能体一个容器）是受支持的运行时。更多 harness 计划在同一套规则下接入；最新状态见 [Runtimes](docs/runtimes.md)。
 
 ---
 
 ## 运行时
 
-Swarm Map 管理两种智能体运行时。它们**并不**对等，文档有意如实说明这一点。
+Swarm Map 目前只驱动一种智能体运行时。
 
-| | **Hermes** | **Letta** |
-|---|---|---|
-| 智能体是 | 一个容器 | 共享服务器上的一行 |
-| 通过向导部署 | 支持 | 支持（拉起共享服务器并创建智能体） |
-| 启动 / 停止 / 重启 / 重建 | 支持 | 不适用——没有容器可控制（*服务器*本身是容器，具备这些操作） |
-| 读取智能体状态 | 支持 | 支持——队伍列表、核心记忆块、模型标识 |
-| 从界面发送消息 | 支持 | 支持 |
-| 编辑记忆、重新配置、删除智能体 | 支持 | **未上线**——Swarm Map 中的 Letta REST 接口只有只读和发送消息 |
-| 消息平台（Signal / Telegram / Mattermost / Discord） | 支持，直连 | 只能通过 Hermes 前端把群组对话代理给该智能体 |
-| Git 备份的记忆文件（memfs） | 不适用 | **未启用**——我们从不请求 `git_enabled`，所以智能体沿用服务器默认值（`false`） |
-| 群组审批 + 审计 | 支持 | 通过 Hermes 前端访问时继承 |
-| 预算约束 | 支持 | **不覆盖经代理的 Letta 轮次**——见下文 |
+| | **Hermes** |
+|---|---|
+| 智能体是 | 一个容器 |
+| 通过向导部署 | 支持 |
+| 启动 / 停止 / 重启 / 重建 | 支持 |
+| 消息平台（Signal / Telegram / Mattermost / Discord） | 支持，直连 |
+| 群组审批 + 审计 | 支持 |
+| 预算约束 | 支持 |
 
-**关于预算，直说。** 群组审批和审计记录可以通过 Hermes 前端完整继承，因为它们在轮次运行之前就进行拦截。预算**不会**继承——任何路径都不会。Swarm Map 的月度花费检查会汇总每个智能体 `state.db` 中 `sessions` 表的 `input_tokens` / `output_tokens`，而 Letta 桥接从不写入这两列：它只记录 `last_prompt_tokens`（上下文大小）。因此经代理的 Letta 花费不会被计入，软上限永远不会被触及。不要把 Letta 智能体部署在 Hermes 前端之后，并指望前端的预算上限能约束它。
+旧的 Letta 集成（Letta 已退役的自托管服务器的客户端，以及一个代理到该服务器的 Hermes 前端）已被移除。标记为已退役或未知运行时的已存储行会单独列出，永远不会被当作 Hermes 处理，只能被遗忘。
 
-完整细节，包括支撑上述结论的路由清单：[docs/runtimes.md](docs/runtimes.md)。
+哪些已上线、哪些被移除、哪些在计划中：[docs/runtimes.md](docs/runtimes.md)。
 
 ---
 
@@ -87,7 +83,7 @@ pnpm seed         # 首次运行：写入设置和分层配置
 pnpm dev          # http://localhost:3000
 ```
 
-首次启动时，设置向导会自动检测你的 Hermes compose 目录。指向你的智能体目录即可开始。如果在向导中选择 Letta 运行时，它会拉起共享的 Letta 服务器并在其上创建智能体。
+首次启动时，设置向导会自动检测你的 Hermes compose 目录。指向你的智能体目录即可开始。
 
 **第一次来？** 阅读 [Getting Started 指南](docs/getting-started.md)（英文）获取完整步骤。
 
@@ -95,15 +91,13 @@ pnpm dev          # http://localhost:3000
 
 - **Node.js 18+**
 - 本地运行的 **Docker**——Docker Desktop 或 OrbStack，用于容器管理（Swarm Map 调用你 PATH 中的 `docker` CLI）
-- Hermes 运行时：需要 **Hermes Agent** 实例——Swarm Map 部署的是多租户分支 [cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt)，它是 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的一个分支
-- Letta 运行时：需要一台 **Letta 服务器**——向导会通过 `docker/letta-compose.yml` 为你拉起
+- **Hermes Agent** 实例——Swarm Map 部署的是多租户分支 [cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt)，它是 [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) 的一个分支
 
 ---
 
 ## 功能
 
 - **自动发现** —— 自动检测 Hermes 智能体容器和 compose 文件
-- **Letta 队伍视图** —— 列出已配置 Letta 服务器上的智能体，读取其核心记忆，发送消息（其余为只读）
 - **按智能体配置** —— 编辑环境变量、SOUL.md 人格设定、平台接入
 - **模型级联** —— 跨服务商（Anthropic、OpenAI、Bedrock 等）的有序回退链
 - **接入面管理** —— 将智能体连接到 Telegram、Signal、Mattermost
@@ -198,7 +192,7 @@ curl http://localhost:3000/api/harnesses/h_myagent/logs?lines=50
 ## 文档（英文）
 
 - [Getting Started](docs/getting-started.md) —— 5 分钟部署你的第一个智能体
-- [Runtimes](docs/runtimes.md) —— Hermes 与 Letta：哪些已上线、哪些没有，以及依据
+- [Runtimes](docs/runtimes.md) —— 哪些已上线、哪些被移除、哪些在计划中
 - [Migrating Existing Agents](docs/migrating.md) —— 现有 Hermes 用户的升级路径
 - [Platform Setup](docs/platforms.md) —— Signal、Telegram、Mattermost、Google Workspace 指南
 - [Image vs HSM Boundary](docs/architecture/image-vs-hsm-boundary.md) —— 哪些属于 Docker 镜像，哪些属于 HSM 脚手架
