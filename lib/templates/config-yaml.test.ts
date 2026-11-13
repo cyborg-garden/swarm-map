@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { generateDefaultConfig } from './config-yaml'
+import { MODEL_CATALOG } from '../model-catalog'
 
 describe('generateDefaultConfig', () => {
   const baseParams = { provider: 'anthropic', primaryModel: 'claude-sonnet-4-5' }
@@ -252,6 +253,28 @@ describe('generateDefaultConfig', () => {
     const line = result.split('\n').find((l) => l.trim().startsWith('summary_model:')) ?? ''
     expect(line).toContain('anthropic/')
     expect(line).toContain('claude')
+  })
+
+  it('never picks a retired catalog row as the compression summary_model, whatever the catalog order', () => {
+    const summaryLine = (provider: string) =>
+      generateDefaultConfig({ provider, primaryModel: 'some-primary' })
+        .split('\n').find((l) => l.trim().startsWith('summary_model:')) ?? ''
+    // As shipped: no provider's new-agent config names a retired id.
+    for (const [provider, rows] of Object.entries(MODEL_CATALOG)) {
+      for (const row of rows.filter((r) => r.retired)) {
+        expect(summaryLine(provider), `${provider}/${row.id}`).not.toContain(`"${provider}/${row.id}"`)
+      }
+    }
+    // And not by luck of ordering: with the retired rows listed first, the
+    // live fallback row is still the one chosen.
+    const original = MODEL_CATALOG.anthropic
+    MODEL_CATALOG.anthropic = [...original.filter((r) => r.retired), ...original.filter((r) => !r.retired)]
+    try {
+      expect(MODEL_CATALOG.anthropic[0].retired).toBe(true)
+      expect(summaryLine('anthropic')).toContain('"anthropic/claude-haiku-4-5-20251001"')
+    } finally {
+      MODEL_CATALOG.anthropic = original
+    }
   })
 
   it('derives a local compression summary_model matching the declared custom provider', () => {

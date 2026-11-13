@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
+import type { Harness } from '@/lib/types'
 
-function discover(id: string) {
-  const harness = services.harness.get(id)
-  if (!harness) return null
-
+function discover(harness: Harness) {
   const discovered = services.tools.discoverForHarness(harness.name)
 
   // Resolve discovered IDs to full tool objects for richer response
@@ -32,10 +31,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const result = discover(id)
-  if (!result) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
+  const result = discover(harness)
 
   return NextResponse.json({
     discovered: result.resolvedTools,
@@ -57,12 +55,9 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const result = discover(id)
-  if (!result) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
-
-  const { harness, discovered, resolvedTools } = result
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
+  const { discovered, resolvedTools } = discover(harness)
   let synced = false
   if (harness.tools.length === 0 && discovered.length > 0) {
     services.harness.updateConfig(id, { tools: discovered })

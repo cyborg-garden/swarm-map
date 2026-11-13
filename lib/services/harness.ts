@@ -31,7 +31,13 @@ import type { ToolsService } from './tools'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
-import type { ContainerRuntimeAdapter } from './runtime-adapter'
+import {
+  UnsupportedRuntimeError, markRuntimeDrivable, unmanagedRowNote,
+  unsupportedRowReason, unsupportedRuntimeReason,
+} from './runtime-adapter'
+
+export { unsupportedRowReason, unsupportedRuntimeReason }
+import type { ContainerRuntimeAdapter, RetiredHarnessRow } from './runtime-adapter'
 
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
@@ -892,14 +898,14 @@ export const hermesAdapter: ContainerRuntimeAdapter = {
 }
 
 // Registry of container adapters. Hermes is the only member;
-// claude-code-proxy/custom slot in here later (design §1b). Letta is NOT here —
-// it's an AgentResourceProvider (REST), not a container adapter.
+// claude-code-proxy/custom slot in here later (design §1b).
 const containerAdapters: ContainerRuntimeAdapter[] = [hermesAdapter]
 
 /** Register a container adapter (future runtimes; exported for tests). */
 export function registerContainerAdapter(adapter: ContainerRuntimeAdapter): void {
   if (!containerAdapters.some((a) => a.runtime === adapter.runtime)) {
     containerAdapters.push(adapter)
+    markRuntimeDrivable(adapter.runtime)
   }
 }
 
@@ -911,13 +917,16 @@ export function pickContainerAdapter(
 }
 
 /**
- * Pick the adapter for a harness's *persisted* runtime. Falls back to Hermes
- * for undefined/unknown runtimes — the historical default for overlay rows
- * that predate the `runtime` field. Letta rows never reach the container
- * paths that call this (they have no container to operate on).
+ * Pick the adapter for a harness's *persisted* runtime. `undefined` means
+ * Hermes (rows that predate the field), and so does null. A retired or
+ * unknown tag THROWS: there is no default, so a row of another runtime is
+ * never started, stopped or deleted as if it were `hermes-<name>`.
  */
 export function adapterForRuntime(runtime?: Harness['runtime']): ContainerRuntimeAdapter {
-  return containerAdapters.find((a) => a.runtime === runtime) ?? hermesAdapter
+  if (runtime == null) return hermesAdapter
+  const adapter = containerAdapters.find((a) => a.runtime === runtime)
+  if (adapter) return adapter
+  throw new UnsupportedRuntimeError(runtime, unsupportedRuntimeReason(runtime) ?? 'unknown')
 }
 
 // Resolve a harness's data dir from its NAME, honoring the personal special-case
@@ -1125,6 +1134,15 @@ export class HarnessService {
       // (pre-seam overlays) keep Hermes semantics, the historical default.
       const adapter = pickContainerAdapter(containerName)
       if (!adapter && !overlays[id]) continue
+      // A stored row with a retired or unknown runtime owns its id. No
+      // container is projected under that id while the row exists, whether
+      // the overlay is the only thing claiming the container or an adapter
+      // claims it by name too (a live `hermes-foo` beside a retired `h_foo`).
+      // Projecting it would merge the retired row's tier, mounts and env onto
+      // a Hermes agent and put the id in both list() and listRetired(). The
+      // row is reported by listRetired(); once it is forgotten, the container
+      // shows up here as a plain agent with none of the row's fields.
+      if (unsupportedRowReason(overlays[id])) continue
       const effAdapter = adapter ?? adapterForRuntime(overlays[id]?.runtime)
 
       const dataDir = effAdapter.dataDir(live.serviceName, containerName)
@@ -1236,7 +1254,7 @@ export class HarnessService {
       // (else a Docker-down dashboard shows a phantom "running").
       return this.storage
         .read<Partial<Harness>[]>(HARNESSES_FILE, [])
-        .filter((o) => o.id)
+        .filter((o) => o.id && !unsupportedRowReason(o))
         .map((o) => this.normalizeStored(o, 'stopped'))
     }
 
@@ -1246,6 +1264,7 @@ export class HarnessService {
     const overlays = this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])
     for (const overlay of overlays) {
       if (!overlay.id || discoveredIds.has(overlay.id)) continue
+      if (unsupportedRowReason(overlay)) continue
       harnesses.push(this.normalizeStored(overlay, 'stopped'))
     }
 
@@ -1303,10 +1322,47 @@ export class HarnessService {
     return this.list().find((h) => h.id === id)
   }
 
+  /**
+   * Stored rows whose runtime tag is retired or unknown. They are deliberately
+   * absent from list()/get(), and discover() projects no container under
+   * their id, so no route can reach a container verb through them. The only
+   * operation that works on one is remove(), which forgets the row and
+   * touches nothing else.
+   */
+  listRetired(): RetiredHarnessRow[] {
+    const rows: RetiredHarnessRow[] = []
+    for (const o of this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])) {
+      const unsupported = unsupportedRowReason(o)
+      if (!o.id || !unsupported) continue
+      const { reason, runtime } = unsupported
+      rows.push({
+        id: o.id,
+        name: o.name ?? o.id.replace(/^h_/, '').replace(/_/g, '-'),
+        runtime,
+        reason,
+        note: unmanagedRowNote(unsupported),
+      })
+    }
+    return rows
+  }
+
+  // Whether a stored agent already has this name: the same slug, or the id
+  // built from it. Every flow that makes a new agent from a name (create,
+  // import, deploy) asks this before it writes anything.
+  nameTaken(name: string): boolean {
+    const slug = toHarnessSlug(name)
+    const id = 'h_' + slug.replace(/-/g, '_')
+    return this.storage
+      .read<Partial<Harness>[]>(HARNESSES_FILE, [])
+      .some((h) => h.id === id || h.name === slug)
+  }
+
   updateConfig(id: string, partial: Partial<Harness>): Harness | undefined {
     // Load existing overlays, merge, persist
     const overlays = this.storage.read<Harness[]>(HARNESSES_FILE, [])
     const index = overlays.findIndex((h) => h.id === id)
+    // A retired or unknown-runtime row is read-only.
+    if (index !== -1 && unsupportedRowReason(overlays[index])) return undefined
     if (index !== -1) {
       overlays[index] = { ...overlays[index], ...partial }
     } else {
@@ -1685,6 +1741,8 @@ export class HarnessService {
     const overlays = this.storage.read<Partial<Harness>[]>('harnesses.json', [])
     const source = overlays.find((h) => h.id === sourceId)
     if (!source) return undefined
+    // Never clone a retired or unknown-runtime row into a Hermes agent.
+    if (unsupportedRowReason(source)) return undefined
 
     const newId = 'h_' + newName.replace(/-/g, '_').replace(/\s+/g, '_')
 
@@ -1923,6 +1981,23 @@ export class HarnessService {
 
     const overlay = overlays[index]
     const name = overlay.name ?? id.replace(/^h_/, '').replace(/_/g, '-')
+
+    // A retired or unknown-runtime row: forget the row and nothing else. Its
+    // name must never be resolved to `hermes-<name>` or `~/.hermes-<name>`,
+    // which may belong to a real agent or to nothing Swarm Map created.
+    const unsupported = unsupportedRowReason(overlay)
+    if (unsupported) {
+      overlays.splice(index, 1)
+      this.storage.write(HARNESSES_FILE, overlays)
+      this.audit.append({
+        who: 'admin',
+        what: 'unregister',
+        target: name,
+        meta: { runtime: unsupported.runtime, reason: unsupported.reason },
+      })
+      return { removed: true, stopped: false, filesDeleted: false, volumeRemoved: false }
+    }
+
     let stopped = false
     let filesDeleted = false
     let volumeRemoved = false
@@ -2029,8 +2104,7 @@ export class HarnessService {
     // Agent data directory (where .env, config.yaml, SOUL.md live)
     const agentDir = path.join(os.homedir(), `.hermes-${input.name}`)
 
-    // createOverlay provisions Hermes agents only — the Letta path branches at
-    // the deploy route (design §3c) and never reaches container provisioning.
+    // createOverlay provisions Hermes agents only.
     const adapter = hermesAdapter
 
     // Scaffold agent data directory if it doesn't exist
@@ -2096,8 +2170,12 @@ export class HarnessService {
       throw new Error(`Not a Hermes data directory: missing .env and config.yaml`)
     }
 
-    // 2. Determine destination
+    // 2. Determine destination. A name a stored agent already has is refused
+    //    here, before the copy and the .env patch below.
     const slug = toHarnessSlug(name)
+    if (this.nameTaken(slug)) {
+      throw new Error(`Harness "${slug}" already exists`)
+    }
     const destDir = slug === 'personal'
       ? path.join(os.homedir(), '.hermes')
       : path.join(os.homedir(), `.hermes-${slug}`)

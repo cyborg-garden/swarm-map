@@ -357,26 +357,11 @@ describe('DockerService', () => {
     })
   })
 
-  describe('start() — project + --env-file (Letta server bring-up)', () => {
-    it('inserts --env-file as a top-level compose option before the subcommand', () => {
-      docker.start('/repo/docker/letta-compose.yml', 'letta', 'letta', '/data/letta/.env')
-      const argv = mockExecFileSync.mock.calls[0][1] as string[]
-      // Order matters: `docker compose -p letta --env-file X -f Y up -d letta`.
-      // --env-file must precede `up`, and -f must precede the service.
-      const envIdx = argv.indexOf('--env-file')
-      const upIdx = argv.indexOf('up')
-      expect(argv[0]).toBe('compose')
-      expect(argv.slice(0, envIdx)).toContain('letta') // -p letta present before --env-file
-      expect(envIdx).toBeGreaterThan(-1)
-      expect(argv[envIdx + 1]).toBe('/data/letta/.env')
-      expect(envIdx).toBeLessThan(upIdx)
-      expect(argv.slice(-3)).toEqual(['up', '-d', 'letta'])
-    })
-
-    it('omits --env-file entirely when none is passed', () => {
+  describe('start()', () => {
+    it('runs exactly `compose -f <file> up -d <service>`: no project, no env file', () => {
       docker.start('/c.yml', 'svc')
       const argv = mockExecFileSync.mock.calls[0][1] as string[]
-      expect(argv).not.toContain('--env-file')
+      expect(argv).toEqual(['compose', '-f', '/c.yml', 'up', '-d', 'svc'])
     })
   })
 

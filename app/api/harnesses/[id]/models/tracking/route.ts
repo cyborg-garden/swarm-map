@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { readCascade, cascadeChain, guessDataDir } from '@/lib/services/harness'
+import { requireHarness } from '@/lib/harness-ref'
 
 // PUT /api/harnesses/[id]/models/tracking
 //   { "provider/model": true | false, ... }
@@ -22,10 +23,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json().catch(() => null)
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     return NextResponse.json({ error: 'Body must be an object of "provider/model": boolean' }, { status: 400 })

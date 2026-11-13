@@ -4,6 +4,7 @@ import os from 'os'
 import type { Settings, Model, Person, Surface, ModelAutoUpdateSettings } from '@/lib/types'
 import type { Storage } from './storage'
 import { assertNoNewline } from '@/lib/env-helpers'
+import { isCatalogRetired } from '@/lib/model-catalog'
 
 /**
  * Validate a settings patch against an explicit allowlist before it is merged
@@ -237,13 +238,16 @@ export class ConfigService {
     return this.updateSettings({ modelAutoUpdate: merged }).modelAutoUpdate ?? merged
   }
 
+  // models.json is seeded once, so an older install can still hold a row for
+  // a model that has since been retired. Hide those from the list (nobody
+  // should pick them) but leave the file alone.
   listModels(): Model[] {
-    return this.storage.read<Model[]>(MODELS_FILE, [])
+    return this.storage.read<Model[]>(MODELS_FILE, []).filter((m) => !isCatalogRetired(m.vendor, m.id))
   }
 
   updateModel(id: string, partial: Partial<Model>): Model | undefined {
-    const models = this.listModels()
-    const index = models.findIndex((m) => m.id === id)
+    const models = this.storage.read<Model[]>(MODELS_FILE, [])
+    const index = models.findIndex((m) => m.id === id && !isCatalogRetired(m.vendor, m.id))
     if (index === -1) return undefined
     models[index] = { ...models[index], ...partial }
     this.storage.write(MODELS_FILE, models)

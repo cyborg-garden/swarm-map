@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('@/lib/services', () => ({
-  services: { harness: { syncArtifacts: vi.fn() }, keys: { list: vi.fn(), setAssignment: vi.fn() } },
+  services: { harness: { get: vi.fn((id: string) => ({ id })), syncArtifacts: vi.fn() }, keys: { list: vi.fn(), setAssignment: vi.fn() } },
 }))
 
 import { POST } from './route'

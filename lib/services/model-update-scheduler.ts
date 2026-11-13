@@ -5,7 +5,7 @@
  * instrumentation.ts, HMR-guarded on globalThis, MODEL_UPDATE_INTERVAL_MS
  * overrides the settings interval.
  *
- * checkModelUpdates() walks every non-Letta harness's model CASCADE — the
+ * checkModelUpdates() walks every harness's model CASCADE — the
  * primary from model: first (role 'primary'), then each fallback_providers
  * row (role 'fallback'), the way the runtime tries them; see readCascade —
  * fetches each provider's live list once (cached, fail-soft), and writes a
@@ -385,7 +385,7 @@ function performSubstitutions(
 }
 
 function eligibleHarnesses(deps: SchedulerDeps): Harness[] {
-  return deps.harness.list().filter((h) => h.runtime !== 'letta' && h.runtime !== 'letta-server')
+  return deps.harness.list()
 }
 
 /**
@@ -537,7 +537,6 @@ export async function applyModelUpdate(
   const deps = depsIn ?? (await defaultDeps())
   const h = deps.harness.get(input.harnessId)
   if (!h) return { ok: false, status: 404, error: 'Harness not found' }
-  if (h.runtime === 'letta' || h.runtime === 'letta-server') return { ok: false, status: 400, error: 'Not a container harness' }
   const cascade = readCascade(deps.dataDirFor(h))
   const chain = cascadeChain(cascade)
   const matches = chain.filter((fp) => fp.model === input.from && (!input.provider || fp.provider.trim().toLowerCase() === input.provider.trim().toLowerCase()))

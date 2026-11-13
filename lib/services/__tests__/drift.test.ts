@@ -426,18 +426,6 @@ describe('driftTargets', () => {
     )
   })
 
-  it('skips Letta rows — they are Postgres records, not containers', () => {
-    const targets = driftTargets({
-      harnesses: [
-        harness({ id: 'h_letta_a', name: 'letta-a', runtime: 'letta' }),
-        harness({ id: 'h_letta_srv', name: 'letta-srv', runtime: 'letta-server' }),
-      ],
-      composeBaseDir,
-    })
-    expect(targets.map((t) => t.name)).not.toContain('letta-a')
-    expect(targets.map((t) => t.name)).not.toContain('letta-srv')
-  })
-
   it('keeps a registry-only agent with no compose dir', () => {
     const targets = driftTargets({
       harnesses: [harness({ id: 'h_ghost', name: 'ghost', serviceName: 'hermes-ghost', status: 'stopped' })],

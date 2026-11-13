@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import { MODEL_CATALOG, ENV_TO_PROVIDER } from '@/lib/model-catalog'
-import { services } from '@/lib/services'
 import { guessDataDir } from '@/lib/services/harness'
 import path from 'path'
+import { requireHarness } from '@/lib/harness-ref'
 
 function detectProviders(envPath: string): string[] {
   try {
@@ -30,10 +30,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   const containerName = harness.serviceName
     ? harness.name === 'personal'
@@ -61,6 +59,8 @@ export async function GET(
   for (const provider of providers) {
     const models = MODEL_CATALOG[provider] ?? []
     for (const model of models) {
+      // Retired rows are in the catalog for display only — never offered.
+      if (model.retired) continue
       const entry: (typeof suggested)[number] = {
         provider,
         model: model.id,

@@ -20,7 +20,7 @@ import {
 } from '@/lib/services/base-package'
 import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 import { defaultKeyPath } from '@/lib/services/github-credential-check'
-import { deployLettaAgent, serverKeyVarForModel, LETTA_DEFAULT_PORT } from '@/lib/services/letta-deploy-templates'
+import { RETIRED_RUNTIMES } from '@/lib/services/runtime-adapter'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -40,9 +40,6 @@ export async function POST(request: Request) {
   // with its .env (which holds the resolved API key). Only set after we create
   // the dir, so we never delete a pre-existing agent on failure.
   let createdAgentDir: string | undefined
-  // Linked-pair deploy state — hoisted so the catch can clean up a brain
-  // agent orphaned by a door-phase failure (see catch below).
-  let lettaBrainResult: { brainAgentId: string; brainHarnessId: string; baseUrl: string } | undefined
   // Research keys assigned from the key store before the container starts —
   // rolled back (registry only; the agent dir is deleted) if the deploy fails.
   let assignedKeys: KeyAssignmentResult[] = []
@@ -62,10 +59,20 @@ export async function POST(request: Request) {
       slackEnabled, slackBotToken, slackAppToken, signalEnabled, signalPhone,
       githubToken, braveKey, notionKey, existingKeyId, saveKeyToRegistry } = body
     const bundledOllama = body.bundledOllama === true
-    // Mutable: the Letta branch defaults these from `lettaModel` so the door's
-    // .env / config.yaml generation below stays valid without wizard changes.
-    let provider: string = body.provider
-    let primaryModel: string = body.primaryModel
+    const provider: string = body.provider
+    const primaryModel: string = body.primaryModel
+
+    // This route deploys Hermes agents only. A retired or unknown runtime is
+    // refused here, before any side effect. It must never default to Hermes:
+    // the caller asked for something else and would get an agent they did not
+    // ask for.
+    if (body.runtime !== undefined && body.runtime !== 'hermes') {
+      const requested = String(body.runtime)
+      const error = Object.hasOwn(RETIRED_RUNTIMES, requested)
+        ? `Runtime "${requested}" is retired: the old self-hosted Letta server path and the Hermes-to-Letta bridge were removed. Nothing was created. Deploy with runtime "hermes".`
+        : `Unknown runtime "${requested}". Nothing was created. This endpoint deploys runtime "hermes".`
+      return NextResponse.json({ ok: false, error }, { status: 400 })
+    }
 
     // Optional use-case template (e.g. Matilde) — installs gated git artifacts +
     // seeds its SOUL. Resolved from the server-side registry; unknown id → 400.
@@ -99,15 +106,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, error: 'A public surface cannot have GitHub or Google credentials.' }, { status: 400 })
     }
 
-    // Letta deploys carry a single `lettaModel` handle instead of provider +
-    // primaryModel; the model is validated inside deployLettaAgent below.
-    if (!name || (body.runtime !== 'letta' && (!provider || !primaryModel))) {
+    if (!name || !provider || !primaryModel) {
       return NextResponse.json({ ok: false, error: 'name, provider, and primaryModel are required' }, { status: 400 })
     }
 
     const slug = toHarnessSlug(name)
     if (!slug) {
       return NextResponse.json({ ok: false, error: 'Invalid name — could not slugify' }, { status: 400 })
+    }
+    // A name a stored agent already has is refused here, before anything is
+    // written. (The data-dir check further down covers a directory with no
+    // stored agent.)
+    if (services.harness.nameTaken(slug)) {
+      return NextResponse.json(
+        { ok: false, error: `Agent "${slug}" already exists. Pick a different name, or manage the existing agent from the dashboard.` },
+        { status: 409 },
+      )
     }
 
     // Agents on a broker host hold no GitHub token, and a new agent has no marker for
@@ -117,8 +131,8 @@ export async function POST(request: Request) {
     }
 
     // ── Google MCP preflight ───────────────────────────────────────────────
-    // Validated HERE, before any side effect, per the same rule the Letta
-    // branch below states: return before a single door byte is written. An
+    // Validated HERE, before any side effect: return before a single byte of
+    // the agent dir is written. An
     // earlier revision of this check sat after mkdirSync + the .env write, so
     // rejecting a deploy left a half-created agent dir containing the resolved
     // plaintext LLM key AND permanently 409'd every retry of that name.
@@ -192,60 +206,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: false, error: `Selected key "${existingKeyId}" not found in the registry.` }, { status: 400 })
       }
       llmKey = resolved
-    }
-
-    // ── Letta runtime branch (design §3c + B2 linked pair) ─────────────────
-    // Brain-first: bring the shared Letta server up once and create the BRAIN
-    // agent over REST. Any brain failure returns unchanged, before a single
-    // door byte is written (no dir/compose/overlay to clean up). On success we
-    // FALL THROUGH into the Hermes block below, which deploys a gateway "door"
-    // container whose .env carries the B1-contract LETTA_BRAIN_* vars — the
-    // gateway detects them and forwards each turn to the brain. The pasted
-    // `llmKey` is a SERVER-WIDE provider key here, not a per-agent secret.
-    let lettaBrain: { url: string; agentId: string; apiKey?: string } | undefined
-    if (body.runtime === 'letta') {
-      const lettaSettings = services.config.getSettings()
-      const swarmMapDataDir = lettaSettings.dataDir
-        ? expandPath(lettaSettings.dataDir)
-        : path.join(os.homedir(), '.hermes-swarm-map')
-      const result = await deployLettaAgent({
-        docker: services.docker,
-        letta: services.letta,
-        slug,
-        model: body.lettaModel || primaryModel,
-        persona,
-        serverKey: llmKey,
-        swarmMapDataDir,
-      })
-      if (result.status < 200 || result.status >= 300) {
-        return NextResponse.json(result.body, { status: result.status })
-      }
-      const brainAgentId = String(result.body.agentId)
-      const brainBaseUrl = String(result.body.baseUrl)
-      // The door runs in a container; the brain server publishes on the host —
-      // so the door reaches it via host.docker.internal, on whatever port the
-      // server actually published (derived from its baseUrl so a non-default
-      // C1 instance is honored; falls back to the default constant).
-      let brainPort = String(LETTA_DEFAULT_PORT)
-      try {
-        brainPort = new URL(brainBaseUrl).port || brainPort
-      } catch {
-        // malformed baseUrl — keep the default
-      }
-      lettaBrain = { url: `http://host.docker.internal:${brainPort}`, agentId: brainAgentId }
-      lettaBrainResult = {
-        brainAgentId,
-        brainHarnessId: String(result.body.harnessId),
-        baseUrl: brainBaseUrl,
-      }
-      // Default the Hermes-side config from the Letta model handle so the
-      // door's .env / config.yaml generation stays valid (the wizard sends no
-      // provider/primaryModel for Letta deploys). serverKeyVarForModel knows
-      // which providers the server maps; anything else falls back to anthropic.
-      if (!provider) {
-        provider = serverKeyVarForModel(body.lettaModel) === 'OPENAI_API_KEY' ? 'openai' : 'anthropic'
-      }
-      if (!primaryModel) primaryModel = body.lettaModel
     }
 
     // Check Docker is available
@@ -361,7 +321,6 @@ export async function POST(request: Request) {
         : undefined,
       notionKey,
       browserEnabled: body.browserEnabled === true,
-      lettaBrain,
     })
     fs.writeFileSync(path.join(agentDataDir, '.env'), envContent, { mode: 0o600 })
 
@@ -549,15 +508,13 @@ If this is your very first startup ever, introduce yourself briefly in your home
     // container starts (env_file is read at creation). setAssignment with the
     // full list keeps keys.json and .env in step. A pasted Brave key wins.
     // The harness id is deterministic (createOverlay: h_<slug, - → _>).
-    if (body.runtime !== 'letta') {
-      const predictedHarnessId = 'h_' + slug.replace(/-/g, '_')
-      try {
-        assignedKeys = assignBasePackageKeys(services.keys, predictedHarnessId, basePackage, {
-          skipProviders: braveKey ? ['brave'] : [],
-        })
-      } catch (e) {
-        console.error('[deploy] base-package key assignment failed (continuing without):', e)
-      }
+    const predictedHarnessId = 'h_' + slug.replace(/-/g, '_')
+    try {
+      assignedKeys = assignBasePackageKeys(services.keys, predictedHarnessId, basePackage, {
+        skipProviders: braveKey ? ['brave'] : [],
+      })
+    } catch (e) {
+      console.error('[deploy] base-package key assignment failed (continuing without):', e)
     }
 
     // Generate standalone compose
@@ -625,11 +582,6 @@ If this is your very first startup ever, introduce yourself briefly in your home
 
     return NextResponse.json({
       ok: true,
-      // Letta linked pair: door harness identity + brain identity (additive —
-      // the wizard already branches on data.runtime === 'letta'). `agentId`
-      // mirrors brainAgentId for compatibility with the wizard's pre-pair
-      // success panel, which renders data.agentId.
-      ...(lettaBrainResult ? { runtime: 'letta', agentId: lettaBrainResult.brainAgentId, ...lettaBrainResult } : {}),
       harnessId: overlay.id,
       port,
       healthy,
@@ -643,16 +595,6 @@ If this is your very first startup ever, introduce yourself briefly in your home
   } catch (err) {
     if (createdAgentDir) fs.rmSync(createdAgentDir, { recursive: true, force: true })
     rollbackKeys()
-    // Linked-pair deploy: the brain agent was created before the door phase
-    // threw. Delete it (best-effort) so the orphaned name doesn't 409-block
-    // a retry of the same deploy.
-    if (lettaBrainResult) {
-      try {
-        await services.letta.deleteAgent(lettaBrainResult.brainAgentId)
-      } catch (cleanupErr) {
-        console.error('[deploy] failed to clean up orphaned Letta brain agent:', cleanupErr)
-      }
-    }
     return NextResponse.json(
       { ok: false, error: err instanceof Error ? err.message : 'Unknown error' },
       { status: 500 }

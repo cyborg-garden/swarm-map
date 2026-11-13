@@ -10,6 +10,8 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
+const SRC = { id: 'h_src', name: 'src' }
+
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   duplicateOverlay: vi.fn(),
@@ -38,7 +40,8 @@ function makeRequest(name: unknown): Request {
 describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    h.get.mockReturnValue(undefined)
+    // The source agent is listed; no other id is.
+    h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : undefined))
     h.duplicateOverlay.mockResolvedValue({ id: 'h_new', name: 'new' })
   })
 
@@ -46,7 +49,7 @@ describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
     // "mare" exists; the service would create "Mare" as slug "mare" and its
     // collision guard returns undefined → without a slug-aware pre-check the
     // user gets a misleading 404 "Source harness not found".
-    h.get.mockImplementation((id: string) => (id === 'h_mare' ? { id: 'h_mare', name: 'mare' } : undefined))
+    h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : id === 'h_mare' ? { id: 'h_mare', name: 'mare' } : undefined))
     const res = await POST(makeRequest('Mare'), makeParams('h_src'))
     expect(res.status).toBe(409)
     expect(h.get).toHaveBeenCalledWith('h_mare')
@@ -54,7 +57,7 @@ describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
   })
 
   it('pre-checks multi-word names by their slugged id', async () => {
-    h.get.mockImplementation((id: string) => (id === 'h_my_agent' ? { id: 'h_my_agent' } : undefined))
+    h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : id === 'h_my_agent' ? { id: 'h_my_agent' } : undefined))
     const res = await POST(makeRequest('My Agent'), makeParams('h_src'))
     expect(res.status).toBe(409)
     expect(h.duplicateOverlay).not.toHaveBeenCalled()
@@ -72,9 +75,15 @@ describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
     expect(h.duplicateOverlay).toHaveBeenCalledWith('h_src', 'fresh-name')
   })
 
-  it('returns 404 when the source harness is missing', async () => {
-    h.duplicateOverlay.mockResolvedValue(undefined)
+  it('returns 404 when the source harness is missing, without calling the service', async () => {
     const res = await POST(makeRequest('fresh-name'), makeParams('h_missing'))
+    expect(res.status).toBe(404)
+    expect(h.duplicateOverlay).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the service finds no stored source row', async () => {
+    h.duplicateOverlay.mockResolvedValue(undefined)
+    const res = await POST(makeRequest('fresh-name'), makeParams('h_src'))
     expect(res.status).toBe(404)
   })
 

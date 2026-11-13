@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import type { HabitatTier } from '@/lib/types'
+import { requireHarness } from '@/lib/harness-ref'
 
 const VALID_TIERS: HabitatTier[] = ['individual', 'team', 'org', 'orgpublic', 'public']
 
@@ -9,6 +10,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   let body: { tier?: string }
   try {

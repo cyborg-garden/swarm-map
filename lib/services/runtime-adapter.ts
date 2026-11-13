@@ -1,8 +1,6 @@
 /**
  * ContainerRuntimeAdapter — the container-runtime seam.
  *
- * Design: memory/specs/2026-07-18-letta-wizard-fork-design.md §1b.
- *
  * HSM's discovery/detail code currently hardcodes Hermes assumptions inline
  * (the `hermes-`/`seraph-` name gate, `~/.hermes*` data dir, the SOUL/model
  * readers). This interface factors those out so `HarnessService.discover()`
@@ -15,10 +13,9 @@
  * `defaultImageRepo`). The Hermes implementation delegates to the same module
  * functions the call sites used inline, so extraction is behavior-preserving.
  *
- * NOTE: Letta agents do NOT go through this adapter. They are not containers;
- * they are enumerated from the Letta server over REST by the separate
- * AgentResourceProvider (lib/services/letta-agent-provider.ts). This interface
- * is exclusively the *container* seam.
+ * This interface is exclusively the *container* seam. A runtime with no
+ * registered adapter is never driven: see RETIRED_RUNTIMES and
+ * UnsupportedRuntimeError below.
  */
 
 import type { Harness } from '@/lib/types'
@@ -69,4 +66,84 @@ export interface ContainerRuntimeAdapter {
 
   /** Registry repo the CD path resolves `:latest` against when no pin exists. */
   defaultImageRepo: string
+}
+
+/**
+ * Runtimes Swarm Map once tagged rows with and no longer drives. A stored row
+ * carrying one of these is kept, labelled, and never handed to an adapter.
+ * The value is the one-line reason shown to the operator.
+ */
+export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
+  letta: 'Retired runtime: the old self-hosted Letta server path was removed. Swarm Map no longer manages this row.',
+  'letta-server': 'Retired runtime: the old self-hosted Letta server path was removed. Swarm Map no longer manages this row.',
+}
+
+// Runtime tags that have a registered container adapter. Hermes is built in;
+// HarnessService adds to this when an adapter is registered. It lives here,
+// not beside the adapters, so the question can be asked without loading
+// HarnessService.
+const drivableRuntimes = new Set<string>(['hermes'])
+
+export function markRuntimeDrivable(runtime: string): void {
+  drivableRuntimes.add(runtime)
+}
+
+/**
+ * Why a stored runtime tag cannot be driven, or null when it can. A row with
+ * no tag is Hermes (rows written before the `runtime` field existed), and so
+ * is one whose tag is null. Any other tag must have a registered adapter.
+ * There is no fallback, and nothing but the tag is looked at.
+ */
+export function unsupportedRuntimeReason(runtime?: string | null): 'retired' | 'unknown' | null {
+  if (runtime == null) return null
+  if (drivableRuntimes.has(runtime)) return null
+  return Object.hasOwn(RETIRED_RUNTIMES, runtime) ? 'retired' : 'unknown'
+}
+
+/**
+ * Why a stored ROW cannot be driven, or null when it can: its tag, and only
+ * its tag. `runtime` is the label to show for it.
+ */
+export function unsupportedRowReason(
+  row: { runtime?: string | null } | undefined,
+): { reason: 'retired' | 'unknown'; runtime: string } | null {
+  const reason = unsupportedRuntimeReason(row?.runtime)
+  return reason ? { reason, runtime: String(row?.runtime) } : null
+}
+
+/** One sentence for the UI and for a refused request. */
+export function unmanagedRowNote(u: { reason: 'retired' | 'unknown'; runtime: string }): string {
+  return u.reason === 'retired'
+    ? RETIRED_RUNTIMES[u.runtime]
+    : `Unknown runtime "${u.runtime}". Swarm Map does not manage this row.`
+}
+
+/**
+ * Thrown instead of quietly treating a row as Hermes. `reason` is 'retired'
+ * for a tag in RETIRED_RUNTIMES and 'unknown' for anything else that has no
+ * registered adapter.
+ */
+export class UnsupportedRuntimeError extends Error {
+  constructor(
+    readonly runtime: string,
+    readonly reason: 'retired' | 'unknown',
+  ) {
+    super(
+      reason === 'retired'
+        ? `Runtime "${runtime}" is retired. Swarm Map no longer manages it and will not treat it as Hermes.`
+        : `Unknown runtime "${runtime}": no adapter is registered for it, and Swarm Map will not treat it as Hermes.`,
+    )
+    this.name = 'UnsupportedRuntimeError'
+  }
+}
+
+/** A stored row Swarm Map keeps but does not manage. See HarnessService.listRetired(). */
+export interface RetiredHarnessRow {
+  id: string
+  name: string
+  /** The tag as stored. */
+  runtime: string
+  reason: 'retired' | 'unknown'
+  /** One plain sentence for the UI. */
+  note: string
 }

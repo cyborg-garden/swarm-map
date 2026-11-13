@@ -378,6 +378,15 @@ function buildPlan(opts) {
 
     const id = harnessIdForAgent(agent)
     const entry = byId.get(id)
+
+    // A stored row with any runtime but Hermes is not a Hermes agent, and
+    // this script records Hermes compose mounts. An absent or null tag is
+    // Hermes (rows older than the field). Skipped whole: nothing is planned
+    // for it and its row is written back untouched.
+    if (entry && entry.runtime != null && entry.runtime !== 'hermes') {
+      plan.warnings.push(`${agent}: the stored row has runtime "${entry.runtime}", which is not Hermes — skipped, nothing recorded`)
+      continue
+    }
     const record = { agent, id, composePath, hasOverlay: !!entry, existing: [], additions: [], skipped: [], notes: [] }
 
     // Which service is the agent? Prefer the overlay's recorded serviceName,

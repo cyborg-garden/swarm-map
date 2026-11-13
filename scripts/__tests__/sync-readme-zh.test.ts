@@ -125,7 +125,9 @@ describe('validate', () => {
     expect(problems).toContain(`domain-like token not in the English or current translation: ${token}`)
   })
   it('backstop allows filenames and hosts the sources already carry', () => {
-    const known = '见 `README.md`、`state.db`、Next.js 和 github.com。'
+    // Each of these is in the snapshot README pair; `SOUL.md` is the agent's
+    // persona file, which the README names wherever it describes an agent.
+    const known = '见 `README.md`、`SOUL.md`、Next.js 和 github.com。'
     expect(check(BODY.replace('## 许可证', `## 许可证\n\n${known}\n`))).toEqual([])
   })
   it("main's real README pair passes the whole validation, backstop included", () => {
