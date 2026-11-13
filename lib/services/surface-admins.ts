@@ -501,6 +501,8 @@ export class SurfaceAdminService {
    *   the group is appended to the allowlist.
    * - A '*' allowlist or an already-listed group approves without a write
    *   (updated: false — no container recreate needed).
+   * - 404 when `harnessId` names no agent: it resolves to nothing (see
+   *   resolve), or it has no stored row and HarnessService does not list it.
    *
    * `groupId` is structurally validated before it touches the .env (same
    * injection guard rationale as isValidIdentity — a comma/newline in the value
@@ -553,6 +555,14 @@ export class SurfaceAdminService {
         approved: false,
         reason: 'group invite policy is approved-only and the inviting user is not an admin',
       }
+    }
+
+    // An id with no stored row must be an agent the app itself lists (a
+    // discovered container), the same rule setAdmins applies. Asked only once
+    // the invite has passed the policy above, because the lookup runs Docker
+    // discovery and this route is called without the operator cookie.
+    if (!target.row && !this.harnesses?.get(target.id)) {
+      return { ok: false, status: 404, error: UNKNOWN_AGENT }
     }
 
     const raw = env[varName]
