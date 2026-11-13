@@ -633,7 +633,7 @@ Letta Code. Order after the slice: Hermes importer + renderer + N1-N4 (turns eac
 into evidence), then C6 and C11, then one real connector, then the Letta Code shim.
 
 **Letta in parallel.** Deleting the old Letta server path and the Hermes-to-Letta bridge is
-independent and can start now (inventory in `map-runtime-seam.md` section 9). The Letta Code shim
+independent and can start now. The Letta Code shim
 starts once PR 3 has frozen the protocol. There is no elizaOS code to remove.
 
 ## 9. What changes for existing code
@@ -673,8 +673,6 @@ Nothing in the first slice touches a Hermes agent.
 2. First real surface for the door after the slice: Discord (where the fleet and most rules are) or
    Signal (the shared daemon exists and is easy to fake). Spec leans Discord.
 3. Is a private test server with test bots acceptable for real-platform tests? It means real posts.
-4. Permission to check whether any live agent `.env` carries `LETTA_BRAIN_*` before the old Letta
-   path is deleted. Nobody has looked.
 
 ## 12. Not verified
 
