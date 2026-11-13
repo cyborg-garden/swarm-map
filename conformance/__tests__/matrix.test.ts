@@ -1,6 +1,10 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { buildMatrix } from '../matrix.ts'
+import { RULES } from '../../lib/core/rules/catalogue.ts'
+import { buildMatrix, KNOWN_CHECK_IDS, ruleProof, type Matrix } from '../matrix.ts'
+import { CHECKS } from '../suites/checks.ts'
 
 const meta = { harness: 'pi', version: '1.5.2', harnessBuild: 'real' as const, substrate: 'process' as const, date: '2026-01-01' }
 const result = (id: string, pass: boolean) => ({ id, title: `title of ${id}`, pass, detail: pass ? 'ok' : 'broke' })
@@ -67,5 +71,65 @@ describe('conformance matrix', () => {
       { shim: 'leaks-env', mustFail: ['C8p'], failed: [], suiteCaughtIt: false },
     ])
     expect(m.suiteTrusted).toBe(false)
+  })
+
+  // A rule is claimed for a harness only on what that harness's own run showed.
+  describe('rule by harness', () => {
+    const rules = [
+      { id: 'r.shared', checks: [] },
+      { id: 'r.one', checks: ['C1'] },
+      { id: 'r.two', checks: ['C1', 'C4'] },
+      { id: 'r.later', checks: ['C1', 'C13'] },
+    ]
+    const proofOf = (results: ReturnType<typeof result>[]) =>
+      Object.fromEntries(buildMatrix(meta, results, {}, quiet, rules).rules.map((r) => [r.rule, r]))
+
+    it('[U:rule-proof] a rule is proven for a harness only when every check it names passed in that run', () => {
+      const p = proofOf([result('C1', true), result('C4', true)])
+      expect(p['r.one']).toEqual({ rule: 'r.one', status: 'pass', checks: [{ id: 'C1', status: 'pass' }] })
+      expect(p['r.two'].status).toBe('pass')
+    })
+
+    it('[U:rule-proof] one failed check fails the rule', () => {
+      const p = proofOf([result('C1', true), result('C4', false)])
+      expect(p['r.two']).toEqual({ rule: 'r.two', status: 'fail', checks: [{ id: 'C1', status: 'pass' }, { id: 'C4', status: 'fail' }] })
+      expect(p['r.one'].status).toBe('pass')
+    })
+
+    it('[U:rule-proof] a check that did not run leaves the rule unproven, never passed', () => {
+      expect(proofOf([result('C1', true)])['r.two'].status).toBe('not-run')
+      // C13 is not run for any harness yet, so a rule that leans on it is unproven even with C1 green.
+      expect(proofOf([result('C1', true)])['r.later']).toEqual({
+        rule: 'r.later', status: 'not-run', checks: [{ id: 'C1', status: 'pass' }, { id: 'C13', status: 'not-run' }],
+      })
+      expect(proofOf([])['r.one'].status).toBe('not-run')
+    })
+
+    it('[U:rule-proof] a rule that needs nothing from the harness says so, and is not counted as a harness pass', () => {
+      expect(proofOf([])['r.shared']).toEqual({ rule: 'r.shared', status: 'shared', checks: [] })
+    })
+
+    it('[U:rule-proof] a rule that names a check nobody knows is refused, not quietly unproven', () => {
+      expect(() => ruleProof([{ id: 'r.typo', checks: ['C99'] }], [])).toThrow(/r\.typo names C99/)
+    })
+
+    it('[U:rule-proof] every check the suite runs, and every one it lists as not run, is a known id', () => {
+      expect(KNOWN_CHECK_IDS).toEqual(expect.arrayContaining([...CHECKS.map((c) => c.id), 'C6', 'C7', 'C13', 'C16']))
+      expect(new Set(KNOWN_CHECK_IDS).size).toBe(KNOWN_CHECK_IDS.length)
+    })
+
+    it('[U:rule-proof] the committed matrix carries a line for every rule in the catalogue, from that run', () => {
+      const file = path.resolve(import.meta.dirname, '..', 'matrix', 'pi-1.5.2.process.json')
+      const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
+      // Rebuilt from the rows that run recorded: the committed lines must be exactly what the rows imply.
+      expect(committed.rules).toEqual(ruleProof(RULES, committed.rows))
+      const status = Object.fromEntries(committed.rules.map((r) => [r.rule, r.status]))
+      expect(Object.keys(status).sort()).toEqual(RULES.map((r) => r.id).sort())
+      expect(status['tools.no-verdict']).toBe('pass')
+      expect(status['ctl.applied']).toBe('pass')
+      expect(status['priv.no-forged-identity']).toBe('not-run') // waits on C13
+      expect(status['tools.unknown']).toBe('not-run') // waits on C7
+      expect(status['adm.users']).toBe('shared')
+    })
   })
 })

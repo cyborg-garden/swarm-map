@@ -4,6 +4,7 @@
 //
 // This file names no harness. Rows that depend on the harness come from its
 // declared capabilities, or from the rows its adapter hands in.
+import { RULES } from '../lib/core/rules/catalogue.ts'
 import type { Capabilities } from '../lib/door/protocol.ts'
 import type { CheckResult } from './suites/checks.ts'
 import { CHECKS } from './suites/checks.ts'
@@ -24,10 +25,25 @@ export interface MatrixHarness { caps: Pick<Capabilities, 'ownsChat'>; rows: Mat
 export interface MatrixRow { id: string; title: string; status: 'pass' | 'fail' | 'not-run' | 'n/a'; reason?: string }
 export interface MustFailInput { mustFail: string[]; failed: string[] }
 
+/** What this run showed about one catalogue rule, for this harness and version. */
+export interface RuleProof {
+  rule: string
+  /**
+   * pass: every shim check the rule names passed in this run.
+   * fail: one of them failed.
+   * not-run: one of them did not run, so the rule is not claimed for this harness.
+   * shared: the rule names no shim check. It needs nothing from the harness, and its proof is the shared tests.
+   */
+  status: 'pass' | 'fail' | 'not-run' | 'shared'
+  checks: { id: string; status: MatrixRow['status'] }[]
+}
+
 export interface Matrix extends MatrixMeta {
   model: 'scripted'
   caveats: string[]
   rows: MatrixRow[]
+  /** One line per catalogue rule: is it proven with this harness in the loop? Built from `rows`, never by hand. */
+  rules: RuleProof[]
   mustFail: { shim: string; mustFail: string[]; failed: string[]; suiteCaughtIt: boolean }[]
   /** False if any broken shim passed a check it was meant to fail. */
   suiteTrusted: boolean
@@ -59,6 +75,28 @@ const PER_HARNESS: { id: string; title: string }[] = [
   { id: 'C16', title: 'a harness that owns chat runs with its channels off' },
 ]
 
+/** Every check id a rule may name: the ones the suite runs, and the ones it lists as not run yet. */
+export const KNOWN_CHECK_IDS: string[] = [...CHECKS.map((c) => c.id), ...NOT_RUN.map((r) => r.id), ...PER_HARNESS.map((r) => r.id)]
+
+/**
+ * Rule by harness: for each rule, what the rows of one run say about the shim
+ * checks it names. A rule is proven for a harness only by that harness's run.
+ */
+export function ruleProof(rules: { id: string; checks: string[] }[], rows: MatrixRow[]): RuleProof[] {
+  return rules.map((rule) => {
+    const checks = rule.checks.map((id) => {
+      if (!KNOWN_CHECK_IDS.includes(id)) throw new Error(`rule ${rule.id} names ${id}, which is not a shim check`)
+      return { id, status: rows.find((row) => row.id === id)?.status ?? 'not-run' }
+    })
+    const status: RuleProof['status'] =
+      checks.length === 0 ? 'shared'
+        : checks.some((c) => c.status === 'fail') ? 'fail'
+          : checks.every((c) => c.status === 'pass' || c.status === 'n/a') ? 'pass'
+            : 'not-run'
+    return { rule: rule.id, status, checks }
+  })
+}
+
 function perHarnessRows(harness: MatrixHarness): MatrixRow[] {
   return PER_HARNESS.map(({ id, title }) => {
     const given = harness.rows.find((r) => r.id === id)
@@ -72,7 +110,10 @@ function perHarnessRows(harness: MatrixHarness): MatrixRow[] {
   })
 }
 
-export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: Record<string, MustFailInput>, harness: MatrixHarness): Matrix {
+export function buildMatrix(
+  meta: MatrixMeta, results: CheckResult[], mustFail: Record<string, MustFailInput>, harness: MatrixHarness,
+  rules: { id: string; checks: string[] }[] = RULES,
+): Matrix {
   if (meta.harnessBuild === 'fake') {
     throw new Error('a matrix is evidence about a real harness; refusing to build one from the fake harness')
   }
@@ -87,6 +128,7 @@ export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: 
   const broken = Object.entries(mustFail).map(([shim, m]) => ({
     shim, mustFail: m.mustFail, failed: m.failed, suiteCaughtIt: m.mustFail.every((id) => m.failed.includes(id)),
   }))
+  const rows = [...ran, ...extra, ...[...NOT_RUN, ...perHarnessRows(harness)].filter((row) => !results.some((r) => r.id === row.id))]
   return {
     ...meta,
     model: 'scripted',
@@ -97,7 +139,8 @@ export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: 
         : 'The harness ran in a Docker cell.',
       'A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell.',
     ],
-    rows: [...ran, ...extra, ...[...NOT_RUN, ...perHarnessRows(harness)].filter((row) => !results.some((r) => r.id === row.id))],
+    rows,
+    rules: ruleProof(rules, rows),
     mustFail: broken,
     suiteTrusted: broken.every((b) => b.suiteCaughtIt),
   }

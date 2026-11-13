@@ -161,6 +161,253 @@
       "reason": "this harness owns no chat"
     }
   ],
+  "rules": [
+    {
+      "rule": "ctl.valid",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "ctl.applied",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C15",
+          "status": "pass"
+        },
+        {
+          "id": "C15t",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "ctl.receipts",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "ctl.brain-token",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.surface",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.users",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.rooms",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.rooms.ignore",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.anyone-in-room",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "adm.empty-is-closed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.closed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.allowlist",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "dm.open",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.mention",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.threads",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.free-rooms",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "addr.observe",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "bots.mode",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "bots.inline-mention",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "bots.no-self",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "priv.admins",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "priv.no-forged-identity",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "C13",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "tools.lists",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C4",
+          "status": "pass"
+        },
+        {
+          "id": "C4a",
+          "status": "pass"
+        },
+        {
+          "id": "C4+",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.posture",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C4",
+          "status": "pass"
+        },
+        {
+          "id": "C4a",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.unknown",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "C7",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "budget.cap",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C12",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "keys.model-route",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C8p",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "turn.one-reply",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C1",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "turn.known",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "turn.no-harness",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "tools.no-verdict",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C5",
+          "status": "pass"
+        },
+        {
+          "id": "C5v",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "mem.dm-isolated",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "san.in",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "san.out",
+      "status": "shared",
+      "checks": []
+    }
+  ],
   "mustFail": [
     {
       "shim": "ignores-verdicts",
