@@ -5,6 +5,8 @@ import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 // GET  /api/harnesses/:id/image  → version status (current / pinned / latest / updateAvailable)
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   try {
     return NextResponse.json(await services.harness.imageStatus(id))
   } catch (err) {

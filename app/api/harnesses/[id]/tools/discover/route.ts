@@ -33,6 +33,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const result = discover(id)
   if (!result) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

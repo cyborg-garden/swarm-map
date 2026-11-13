@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import path from 'path'
 import { services } from '@/lib/services'
 import { guessDataDir, tailLogFile } from '@/lib/services/harness'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // Map the `?source=` query param to the file written inside the agent
 // container under /opt/data/logs (host bind-mount <dataDir>/logs). The
@@ -27,6 +28,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const url = new URL(_request.url)
   const lines = parseInt(url.searchParams.get('lines') ?? '200', 10)
   const source = parseSource(url.searchParams.get('source'))

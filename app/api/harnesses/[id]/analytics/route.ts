@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { clampDays } from '@/lib/services/analytics'
+import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // GET /api/harnesses/:id/analytics?days=30 — daily cost/tokens/sessions/tool
 // calls for one harness, from its state.db (live or ≤5-min snapshot).
@@ -10,6 +11,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const days = clampDays(new URL(request.url).searchParams.get('days'))
 
   try {

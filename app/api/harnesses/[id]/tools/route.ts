@@ -7,6 +7,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const unmanaged = refuseUnmanagedRow(id)
+  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

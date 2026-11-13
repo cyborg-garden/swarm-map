@@ -68,6 +68,8 @@ function snapshot(): Record<string, string> {
 }
 
 const A = '123456789012345678'
+// An admin id that exists ONLY in the unmanaged rows, never in an agent's .env.
+const ROW_ADMIN = '999999999999999999'
 const ENV = [
   'API_SERVER_KEY=k',
   'OPENROUTER_API_KEY=sk-or-test',
@@ -87,10 +89,10 @@ const LEFTOVER_AGENT = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
 // The server id gets no directory: a leftover-shaped row for it beside a real
 // ~/.hermes-letta-server is that Hermes agent's row (see retiredRuntimeOfRow).
 const CASES: Array<{ id: string; row: Record<string, unknown>; dir: string | null }> = [
-  { id: 'h_old', row: { id: 'h_old', name: 'old', runtime: 'letta', surfaceAdmins: { discord: [A] } }, dir: '.hermes-old' },
-  { id: 'h_odd', row: { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future' }, dir: '.hermes-odd' },
-  { id: 'h_letta_server', row: { id: 'h_letta_server', surfaceAdmins: { discord: [A] } }, dir: null },
-  { id: LEFTOVER_AGENT, row: { id: LEFTOVER_AGENT, surfaceAdmins: { discord: [A] } }, dir: '.hermes-' + LEFTOVER_AGENT.replace(/^h_/, '').replace(/_/g, '-') },
+  { id: 'h_old', row: { id: 'h_old', name: 'old', runtime: 'letta', surfaceAdmins: { discord: [ROW_ADMIN] } }, dir: '.hermes-old' },
+  { id: 'h_odd', row: { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future', surfaceAdmins: { discord: [ROW_ADMIN] } }, dir: '.hermes-odd' },
+  { id: 'h_letta_server', row: { id: 'h_letta_server', surfaceAdmins: { discord: [ROW_ADMIN] } }, dir: null },
+  { id: LEFTOVER_AGENT, row: { id: LEFTOVER_AGENT, surfaceAdmins: { discord: [ROW_ADMIN] } }, dir: '.hermes-' + LEFTOVER_AGENT.replace(/^h_/, '').replace(/_/g, '-') },
 ]
 
 function seed(rows: Array<Record<string, unknown>>) {
@@ -131,10 +133,11 @@ const BODY = {
   name: 'copy',
 }
 
-function call(handler: Handler, method: string, file: string, id: string, platform = 'discord'): Promise<Response> {
+function call(handler: Handler, method: string, file: string, id: string, platform = 'discord', query = ''): Promise<Response> {
   const rel = path.relative(ROUTES_DIR, path.dirname(file))
-  const url = `http://localhost:3000/api/harnesses/${id}/${rel}?deleteFiles=true&platform=discord&userId=${A}`
-  const init: RequestInit = { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(BODY) }
+  const url = `http://localhost:3000/api/harnesses/${id}/${rel}?deleteFiles=true&platform=discord&userId=${A}&chatId=-1001${query}`
+  const init: RequestInit =
+    method === 'GET' ? { method } : { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(BODY) }
   return handler(new Request(url, init), {
     params: Promise.resolve({ id, platform, groupId: '-1002', userId: A }),
   })
@@ -142,6 +145,18 @@ function call(handler: Handler, method: string, file: string, id: string, platfo
 
 const files = routeFiles(ROUTES_DIR)
 const handlers: Array<{ label: string; file: string; method: string; handler: Handler }> = []
+const readers: typeof handlers = []
+
+// The four endpoints a running agent calls about ITSELF, by its bare slug:
+// "is this group allowed", "is this user my admin". They answer from the
+// agent's own .env and never from the unmanaged row. Every other GET is a
+// dashboard read of one agent and is refused like a write.
+const SELF_READS = [
+  'GET policy/route.ts',
+  'GET surfaces/[platform]/admins/route.ts',
+  'GET surfaces/[platform]/admins/[userId]/route.ts',
+  'GET surfaces/[platform]/groups/[groupId]/route.ts',
+]
 
 beforeAll(async () => {
   vi.spyOn(os, 'homedir').mockReturnValue(scratch.home)
@@ -151,6 +166,9 @@ beforeAll(async () => {
       if (typeof mod[method] === 'function') {
         handlers.push({ label: `${method} ${path.relative(ROUTES_DIR, file)}`, file, method, handler: mod[method] as Handler })
       }
+    }
+    if (typeof mod.GET === 'function') {
+      readers.push({ label: `GET ${path.relative(ROUTES_DIR, file)}`, file, method: 'GET', handler: mod.GET as Handler })
     }
   }
 })
@@ -175,6 +193,14 @@ describe('the sweep can see the routes (a sweep over nothing passes everything)'
       'POST start/route.ts',
       'DELETE route.ts',
     ]) {
+      expect(labels, must).toContain(must)
+    }
+  })
+
+  it('finds the per-agent GET routes, including every self-read', () => {
+    const labels = readers.map((h) => h.label)
+    expect(labels.length).toBeGreaterThanOrEqual(19)
+    for (const must of [...SELF_READS, 'GET settings/route.ts', 'GET pairing/route.ts', 'GET usage/route.ts', 'GET route.ts']) {
       expect(labels, must).toContain(must)
     }
   })
@@ -204,6 +230,51 @@ describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row }) =
     expect(wrong).toEqual([])
   })
 
+  it('every per-agent GET is refused too, and none of them writes', async () => {
+    const wrong: string[] = []
+    for (const h of readers) {
+      if (SELF_READS.includes(h.label)) continue
+      const before = snapshot()
+      let status: number | string
+      try {
+        status = (await call(h.handler, 'GET', h.file, id)).status
+      } catch (err) {
+        status = `threw ${err instanceof Error ? err.message : String(err)}`
+      }
+      const after = snapshot()
+      const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((f) => before[f] !== after[f])
+      // GET /api/harnesses/:id is the lookup itself: the row is not an agent, so 404.
+      const want = h.label === 'GET route.ts' ? 404 : 409
+      if (status !== want || changed.length) {
+        wrong.push(`${h.label}: status ${status}, wanted ${want}${changed.length ? `, changed ${changed.join(', ')}` : ''}`)
+      }
+    }
+    expect(wrong).toEqual([])
+  })
+
+  it('the self-reads answer without serving the row and without writing', async () => {
+    for (const h of readers.filter((r) => SELF_READS.includes(r.label))) {
+      const before = snapshot()
+      const res = await call(h.handler, 'GET', h.file, id)
+      const text = await res.text()
+      expect(text, h.label).not.toContain(ROW_ADMIN)
+      expect(res.status, h.label).toBeLessThan(500)
+      expect(snapshot(), h.label).toEqual(before)
+    }
+  })
+
+  it('an agent\'s own budget check is answered, not thrown', async () => {
+    // GET policy?action=budget-check reads the asking agent's own usage. The
+    // usage readers refuse an unmanaged id by default (they throw), so this
+    // one call has to say it is a self-read.
+    const h = readers.find((r) => r.label === 'GET policy/route.ts')!
+    const before = snapshot()
+    const res = await call(h.handler, 'GET', h.file, id, 'discord', '&action=budget-check')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ exceeded: false })
+    expect(snapshot()).toEqual(before)
+  })
+
   it('the bare agent slug (what an agent container sends) is refused the same way', async () => {
     const slug = id.replace(/^h_/, '').replace(/_/g, '-')
     // Only ids a slug maps back to. The old agent ids keep a hyphen and have no slug form.
@@ -224,6 +295,21 @@ describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row }) =
     expect(changed.filter((f) => !f.startsWith('data' + path.sep))).toEqual([])
     const rows = JSON.parse(fs.readFileSync(path.join(scratch.data, 'harnesses.json'), 'utf-8')) as Array<{ id: string }>
     expect(rows.map((r) => r.id)).toEqual(['h_iris'])
+  })
+})
+
+describe('control: the same GETs on a Hermes row are answered', () => {
+  // Proves the GET sweep can fail, and that a self-read CAN serve a row's admins.
+  beforeEach(() => seed([{ id: 'h_old', name: 'old', runtime: 'hermes', surfaceAdmins: { discord: [ROW_ADMIN] } }]))
+
+  it.each(['GET settings/route.ts', 'GET pairing/route.ts', 'GET usage/route.ts'])('%s is not 409', async (label) => {
+    const h = readers.find((x) => x.label === label)!
+    expect((await call(h.handler, 'GET', h.file, 'h_old')).status).not.toBe(409)
+  })
+
+  it('GET admins serves the stored admins of a Hermes row', async () => {
+    const h = readers.find((x) => x.label === 'GET surfaces/[platform]/admins/route.ts')!
+    expect(await (await call(h.handler, 'GET', h.file, 'h_old')).text()).toContain(ROW_ADMIN)
   })
 })
 
