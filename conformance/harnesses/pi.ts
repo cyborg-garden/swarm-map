@@ -20,7 +20,7 @@ export function fakePiCommand(): string[] {
   return [process.execPath, path.resolve(HERE, '..', 'rig', 'fake-pi.ts')]
 }
 
-const OTHERS = ['C1', 'C2', 'C3', 'C4', 'C4a', 'C4+', 'C5', 'C5v', 'C8p', 'C9p', 'C12', 'C15', 'C15t']
+const OTHERS = ['C1', 'C2', 'C3', 'C4', 'C4a', 'C4p', 'C4+', 'C5', 'C5v', 'C8p', 'C9p', 'C12', 'C15', 'C15t']
 const allBut = (...red: string[]): string[] => OTHERS.filter((id) => !red.includes(id))
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
@@ -87,7 +87,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       'ignores-verdicts': {
         what: 'A gate that announces itself, then lets every tool run without asking',
         // C15t is red too: the added tool runs, but nobody was asked, so there is no receipt for it.
-        red: ['C4', 'C5', 'C5v', 'C15t'], green: allBut('C4', 'C5', 'C5v', 'C15t'),
+        red: ['C4', 'C4p', 'C5', 'C5v', 'C15t'], green: allBut('C4', 'C4p', 'C5', 'C5v', 'C15t'),
       },
       'leaks-env': {
         what: 'The real model key planted in Pi\'s environment',

@@ -102,8 +102,10 @@ export const RULES: Rule[] = [
 
   { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied.',
     klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/not-allowed'], checks: ['C4', 'C4a', 'C4+'] },
+  // C4p shows the guardrail: the gate says no to a public agent. The wall behind it is C10
+  // (the gate removed, in a sealed cell), so the rule is claimed for no harness until C10 runs.
   { id: 'tools.posture', statement: 'Public agents lose shell, file, code-exec and chat-admin tools.',
-    klass: 'security', kind: 'guardrail', reads: ['posture'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'U:tools-posture'], checks: ['C4', 'C4a'] },
+    klass: 'security', kind: 'guardrail', reads: ['posture'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'U:tools-posture'], checks: ['C4p', 'C10'] },
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'], checks: ['C7'] },
 

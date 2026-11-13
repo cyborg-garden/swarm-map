@@ -129,6 +129,12 @@ describe('conformance matrix', () => {
       expect(status['ctl.applied']).toBe('pass')
       expect(status['priv.no-forged-identity']).toBe('not-run') // waits on C13
       expect(status['tools.unknown']).toBe('not-run') // waits on C7
+      // The wall behind the posture rule is C10 (the gate removed, in a sealed cell). Until that
+      // has run, the rule is not claimed for any harness, however many guardrail checks pass.
+      expect(status['tools.posture']).toBe('not-run')
+      expect(committed.rules.find((r) => r.rule === 'tools.posture')?.checks).toEqual([
+        { id: 'C4p', status: 'pass' }, { id: 'C10', status: 'not-run' },
+      ])
       expect(status['adm.users']).toBe('shared')
     })
   })

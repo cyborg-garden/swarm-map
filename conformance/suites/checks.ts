@@ -125,6 +125,26 @@ export const CHECKS: Check[] = [
     },
   },
   {
+    id: 'C4p', title: 'a shell tool on the allow list does not run once the agent is public',
+    lab: { policy: { 'tools.allow': ['shell'] } },
+    async run(lab) {
+      const p: Outcome = []
+      // The turn starts on a team agent with shell allowed, so the harness is offered the tool.
+      // The agent is made public while the model is thinking. The allow list still names shell,
+      // so only the posture rule can say no.
+      const goPublic = (): void => lab.door.setPolicy(lab.policy({ version: 2, posture: 'public' }))
+      const { canary, file } = touchScript(lab, 'c4p', goPublic)
+      ask(lab, `run ${canary}`)
+      await lab.door.idle()
+      want(p, lab.model.heard(canary), 'the turn never reached the model')
+      want(p, lab.door.policy().posture === 'public', 'the agent never became public, so nothing was checked')
+      want(p, !existsSync(file), 'a public agent ran a shell tool')
+      const tool = toolReceipts(lab)[0]
+      want(p, tool?.verdict === 'deny' && tool.rule === 'tools.posture', 'no deny receipt from the posture rule')
+      return p
+    },
+  },
+  {
     id: 'C4+', title: 'positive control: an allowed tool does run',
     lab: { policy: { 'tools.allow': ['shell'] } },
     async run(lab) {

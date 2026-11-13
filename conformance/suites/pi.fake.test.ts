@@ -56,6 +56,14 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(c9p.detail).toBe('no tripwire was armed inside the harness process, so nothing was checked')
   }, 30_000)
 
+  it('[U:must-fail] a gate that lets everything run is caught by the posture check, for the posture rule', async () => {
+    const [good] = await runChecks({ harness, shim: 'good' }, ['C4p'])
+    expect(good.detail).toBe('ok')
+    const [broken] = await runChecks({ harness, shim: 'ignores-verdicts' }, ['C4p'])
+    expect(broken.pass).toBe(false)
+    expect(broken.detail).toContain('a public agent ran a shell tool')
+  }, 30_000)
+
   it('[U:must-fail] with no gate, the shim sends the harness nothing: no turn reaches the model and no tool runs', async () => {
     for (const shim of ['gate-missing', 'gate-silent']) {
       const [c1, c4plus] = await runChecks({ harness, shim }, ['C1', 'C4+'])

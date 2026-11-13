@@ -37,6 +37,11 @@
       "status": "pass"
     },
     {
+      "id": "C4p",
+      "title": "a shell tool on the allow list does not run once the agent is public",
+      "status": "pass"
+    },
+    {
       "id": "C4+",
       "title": "positive control: an allowed tool does run",
       "status": "pass"
@@ -311,15 +316,15 @@
     },
     {
       "rule": "tools.posture",
-      "status": "pass",
+      "status": "not-run",
       "checks": [
         {
-          "id": "C4",
+          "id": "C4p",
           "status": "pass"
         },
         {
-          "id": "C4a",
-          "status": "pass"
+          "id": "C10",
+          "status": "not-run"
         }
       ]
     },
@@ -413,12 +418,14 @@
       "shim": "ignores-verdicts",
       "mustFail": [
         "C4",
+        "C4p",
         "C5",
         "C5v",
         "C15t"
       ],
       "failed": [
         "C4",
+        "C4p",
         "C5",
         "C5v",
         "C15t"
@@ -456,6 +463,7 @@
         "C2",
         "C4",
         "C4a",
+        "C4p",
         "C4+",
         "C5",
         "C5v",
@@ -478,6 +486,7 @@
         "C2",
         "C4",
         "C4a",
+        "C4p",
         "C4+",
         "C5",
         "C5v",
@@ -496,6 +505,7 @@
         "C2",
         "C4",
         "C4a",
+        "C4p",
         "C4+",
         "C5",
         "C5v",
@@ -510,6 +520,7 @@
         "C2",
         "C4",
         "C4a",
+        "C4p",
         "C4+",
         "C5",
         "C5v",
@@ -543,6 +554,7 @@
         "C3",
         "C4",
         "C4a",
+        "C4p",
         "C4+",
         "C5",
         "C5v",
