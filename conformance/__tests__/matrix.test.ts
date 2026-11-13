@@ -21,7 +21,7 @@ describe('conformance matrix', () => {
   it('[U:matrix] a check that did not run never shows as pass', () => {
     const m = buildMatrix(meta, [result('C1', true)], {}, quiet)
     const notRun = m.rows.filter((r) => r.status === 'not-run').map((r) => r.id)
-    expect(notRun).toEqual(expect.arrayContaining(['S0', 'S1', 'S2', 'S3', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C13', 'C14', 'C17']))
+    expect(notRun).toEqual(expect.arrayContaining(['S0', 'S1', 'S2', 'S3', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12b', 'C13', 'C14', 'C17']))
     for (const row of m.rows.filter((r) => r.status === 'not-run' || r.status === 'n/a')) expect(row.reason, row.id).toBeTruthy()
     expect(m.rows.find((r) => r.id === 'C16')?.status).toBe('n/a')
     // A known check that was expected to run but has no result is not-run, never pass.

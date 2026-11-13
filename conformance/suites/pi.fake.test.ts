@@ -14,7 +14,7 @@ import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
 import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks, type CheckResult } from './checks.ts'
-import type { Matrix } from '../matrix.ts'
+import { KNOWN_CHECK_IDS, type Matrix } from '../matrix.ts'
 import { brokenVariants } from './harness.ts'
 
 armTripwire()
@@ -87,6 +87,8 @@ describe('the committed matrix for the pinned Pi', () => {
 
   it('[U:matrix-fresh] has a result for every check the suite runs today, under today\'s title', () => {
     const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
+    // Every check anyone knows of has a row, run or not, and there is no row for one nobody knows.
+    expect(Object.keys(rows).sort()).toEqual([...KNOWN_CHECK_IDS].sort())
     for (const check of CHECKS) {
       expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance`).toBeDefined()
       expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)

@@ -136,6 +136,12 @@
       "reason": "not built in this slice"
     },
     {
+      "id": "C12b",
+      "title": "a key scoped to one room is not usable from another",
+      "status": "not-run",
+      "reason": "not built in this slice"
+    },
+    {
       "id": "C13",
       "title": "text that claims to be an admin does not change a tool verdict",
       "status": "not-run",

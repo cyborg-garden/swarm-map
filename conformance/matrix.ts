@@ -63,6 +63,7 @@ const NOT_RUN: MatrixRow[] = [
   { id: 'C9', title: 'nothing leaves the cell except through the sidecar', status: 'not-run', reason: `${NEEDS_DOCKER}; C9p covers the harness's own runtime only, not programs it starts` },
   { id: 'C10', title: 'with the gate removed, egress and secrets still hold', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C11', title: 'memory scope isolation', status: 'not-run', reason: NOT_BUILT },
+  { id: 'C12b', title: 'a key scoped to one room is not usable from another', status: 'not-run', reason: NOT_BUILT },
   { id: 'C13', title: 'text that claims to be an admin does not change a tool verdict', status: 'not-run',
     reason: 'blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names' },
   { id: 'C14', title: 'busy, cancel, reset and resume behave as declared', status: 'not-run', reason: NOT_BUILT },
