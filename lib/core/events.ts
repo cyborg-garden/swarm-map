@@ -54,6 +54,7 @@ export type Event =
 export interface Facts {
   rolesOf?: Record<string, string[]>
   paired?: string[]
+  /** Needed for a model event under a budget: with a cap set and no figure here, the call is refused. */
   spentUsdThisMonth?: number
   botTurnsInARow?: number
   turnLive?: boolean

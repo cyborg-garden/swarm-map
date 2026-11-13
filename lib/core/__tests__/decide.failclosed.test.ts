@@ -64,3 +64,37 @@ describe('decide() fails closed on a value it does not recognise', () => {
     expect(d.why).toContain('posture')
   })
 })
+
+// The cap compares spend with a limit. A caller that has no spend figure to
+// give (it forgot the fact, or its ledger handed back something that is not an
+// amount) must not be read as "nothing spent": that would lift the cap.
+describe('decide() fails closed when a cap is set and spend is not known', () => {
+  const call: Event = { kind: 'model', provider: 'p', model: 'm' }
+  const refuse = team({ budget: { monthlyUsd: 5, onExceed: 'refuse' } })
+  const warn = team({ budget: { monthlyUsd: 5, onExceed: 'warn' } })
+
+  it('positive controls: a known figure is compared with the cap', () => {
+    expect(decide(refuse, call, { spentUsdThisMonth: 0 })).toMatchObject({ verdict: 'allow', rule: 'budget.cap' })
+    expect(decide(refuse, call, { spentUsdThisMonth: 4.99 })).toMatchObject({ verdict: 'allow', rule: 'budget.cap' })
+    expect(decide(refuse, call, { spentUsdThisMonth: 5 })).toMatchObject({ verdict: 'deny', rule: 'budget.cap', why: 'The monthly budget is spent.' })
+  })
+
+  it.each([
+    ['no figure at all', {}],
+    ['undefined', { spentUsdThisMonth: undefined }],
+    ['not a number', { spentUsdThisMonth: Number.NaN }],
+    ['a number in a string', { spentUsdThisMonth: '0' as unknown as number }],
+    ['null', { spentUsdThisMonth: null as unknown as number }],
+    ['a negative amount', { spentUsdThisMonth: -1 }],
+    ['minus infinity', { spentUsdThisMonth: Number.NEGATIVE_INFINITY }],
+  ])('[U:fail-closed] under a refusing cap, spend that is %s is a no', (_what, facts) => {
+    expect(decide(refuse, call, facts)).toMatchObject({
+      verdict: 'deny', rule: 'budget.cap', why: 'Spend this month is not known, so the cap cannot be checked.',
+    })
+  })
+
+  it('[U:fail-closed] a cap set to warn only still lets the call through, and no cap needs no figure', () => {
+    expect(decide(warn, call, {})).toMatchObject({ verdict: 'allow', rule: 'budget.cap' })
+    expect(decide(team(), call, {})).toMatchObject({ verdict: 'allow', rule: 'budget.cap', why: 'No budget is set.' })
+  })
+})

@@ -145,12 +145,18 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
 
 function decideModel(policy: PolicyRecord, facts: Facts): Partial_ {
   const budget = policy.budget
-  const spent = facts.spentUsdThisMonth ?? 0
+  const spent = facts.spentUsdThisMonth
   const end = (verdict: 'allow' | 'deny', why: string): Partial_ => ({
     verdict, rule: 'budget.cap', why, privilege: 'guest',
     trace: [{ rule: 'budget.cap', outcome: verdict === 'allow' ? 'pass' : 'fail' }],
   })
   if (!budget) return end('allow', 'No budget is set.')
+  // No figure, or one that is not an amount of money, is not read as "nothing spent".
+  if (typeof spent !== 'number' || !Number.isFinite(spent) || spent < 0) {
+    return budget.onExceed === 'warn'
+      ? end('allow', 'Spend this month is not known, and the cap is set to warn only.')
+      : end('deny', 'Spend this month is not known, so the cap cannot be checked.')
+  }
   if (spent < budget.monthlyUsd) return end('allow', 'Spend is under the monthly cap.')
   if (budget.onExceed === 'warn') return end('allow', 'Spend is over the monthly cap, and the cap is set to warn only.')
   return end('deny', 'The monthly budget is spent.')
