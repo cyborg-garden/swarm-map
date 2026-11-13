@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // GET /api/harnesses/:id/base-package/drift — REPORT ONLY.
 // Compares the agent's data dir against the base package (version, core
@@ -12,8 +11,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   try {
     return NextResponse.json(services.harness.basePackageDrift(id, services.keys))
   } catch (err) {

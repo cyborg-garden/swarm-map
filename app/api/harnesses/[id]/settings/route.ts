@@ -43,8 +43,12 @@ import {
   sharedVpnPaths,
   type SharedVpnState,
 } from '@/lib/services/shared-vpn'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
-import { agentHome } from '@/lib/services/agent-home'
+
+function agentDataDir(harnessId: string): string {
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  if (name === 'personal') return path.join(os.homedir(), '.hermes')
+  return path.join(os.homedir(), `.hermes-${name}`)
+}
 
 // Value written to DISCORD_ALLOWED_CHANNELS to mean "no channel is approved".
 // The Discord adapter treats an EMPTY allowlist as "no channel gate at all"
@@ -236,9 +240,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
-  const dataDir = agentHome(id)
+  const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
   if (!fs.existsSync(envPath)) {
@@ -437,9 +439,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
-  const dataDir = agentHome(id)
+  const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
   if (!fs.existsSync(envPath)) {

@@ -1,11 +1,13 @@
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import type { ResolvedIdentity } from './signal'
-import { agentHome } from '@/lib/services/agent-home'
 
 function getTelegramToken(harnessId: string): string | null {
-  // Throws for an id whose stored row Swarm Map does not manage.
-  const dataDir = agentHome(harnessId)
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  const dataDir = name === 'personal'
+    ? path.join(os.homedir(), '.hermes')
+    : path.join(os.homedir(), `.hermes-${name}`)
   const envPath = path.join(dataDir, '.env')
 
   try {

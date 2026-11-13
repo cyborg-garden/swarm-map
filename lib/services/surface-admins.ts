@@ -1,13 +1,12 @@
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import type { Harness } from '@/lib/types'
 import type { Storage } from './storage'
 import type { AuditService } from './audit'
 import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
-import { canonicalHarnessId, findUnmanagedRow, isValidHarnessId, retiredRuntimeOfId, unmanagedRowNote } from './runtime-adapter'
-import { agentHome, agentHomeForSelfRead, type StoredRow } from './agent-home'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
   GROUPS_VARS as DERIVED_GROUPS_VARS,
@@ -34,8 +33,17 @@ export function isSupportedSurface(platform: string): boolean {
   return isSurfaceSlug(platform)
 }
 
-// The id rule lives beside the id-to-directory mapping (runtime-adapter).
-export { isValidHarnessId }
+// Harness ids reach these paths straight from URL segments, some on routes
+// agents call without the operator cookie. Real ids are `h_<name>` (e.g.
+// h_personal, h_cyborg_public), bare agent slugs (`seraph-doer`, sent by the
+// policy plugin), or Letta ids (`h_letta_agent-<uuid>`). All are ASCII
+// letters, digits, '_' and '-'. Anything else ('/', '.', '%', whitespace) is
+// rejected so an id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
+const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+export function isValidHarnessId(raw: unknown): raw is string {
+  return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
+}
 
 // Structural guard for a group/chat id before it is written into an agent
 // .env: no whitespace/control chars (line injection), no comma (list
@@ -49,22 +57,14 @@ export function sanitizeGroupId(raw: unknown): string | null {
   return group
 }
 
-// An agent's data dir from its harness id, for READING what that agent's own
-// .env says about itself (its allowlists, its approved groups). This is the
-// self-read lane: the callers answer a running Hermes agent that asks by its
-// own slug, so the stored row is not consulted. Never write through this:
-// use writableAgentDataDir. Throws on an id that fails isValidHarnessId.
+// Resolve an agent's data dir from its harness id — same convention the settings
+// and policy routes use (hermes-personal lives at ~/.hermes, others at
+// ~/.hermes-<name>). Throws on an id that fails isValidHarnessId.
 export function agentDataDir(harnessId: string): string {
   if (!isValidHarnessId(harnessId)) throw new Error('Invalid harness id')
-  return agentHomeForSelfRead(harnessId)
-}
-
-// The same directory, for WRITING. Throws UnsupportedRuntimeError when the
-// stored row for this id is one Swarm Map does not manage: that row is not a
-// Hermes agent, and the directory its id maps to may be a real one's.
-export function writableAgentDataDir(harnessId: string, rows?: readonly StoredRow[]): string {
-  if (!isValidHarnessId(harnessId)) throw new Error('Invalid harness id')
-  return agentHome(harnessId, rows)
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  if (name === 'personal') return path.join(os.homedir(), '.hermes')
+  return path.join(os.homedir(), `.hermes-${name}`)
 }
 
 // Validate a native identity key before it enters the store. This is auth
@@ -163,26 +163,12 @@ export class SurfaceAdminService {
   // agent-side call silently missed every EXPLICIT admin list and fell back to
   // the allowlist bootstrap. Normalize before matching.
   private canonicalHarnessId(idOrSlug: string): string {
-    return canonicalHarnessId(idOrSlug)
-  }
-
-  // Why this id cannot be written through, or null. A stored row with a
-  // retired or unknown runtime is not a Hermes agent, yet its id still maps
-  // to ~/.hermes-<name>, which may belong to a real one. This service reads
-  // and writes harnesses.json and that directory itself, without
-  // HarnessService, so every write below asks here first.
-  private unmanagedReason(harnessId: string, overlays = this.readOverlays()): string | null {
-    const found = findUnmanagedRow(overlays, harnessId)
-    return found ? `${unmanagedRowNote(found)} Nothing can be changed through it.` : null
+    return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
   }
 
   private explicitAdmins(harnessId: string, platform: string): string[] | undefined {
     const canonical = this.canonicalHarnessId(harnessId)
-    const overlays = this.readOverlays()
-    // An unmanaged row's admin list is not policy: a Hermes agent that shares
-    // its name must not be answered from a row that is not its own.
-    if (findUnmanagedRow(overlays, harnessId)) return undefined
-    const overlay = overlays.find((h) => h.id === canonical)
+    const overlay = this.readOverlays().find((h) => h.id === canonical)
     const list = overlay?.surfaceAdmins?.[platform]
     return Array.isArray(list) ? list : undefined
   }
@@ -262,12 +248,10 @@ export class SurfaceAdminService {
     actor: string,
   ):
     | { ok: true; admins: string[]; dmEnvUpdated?: true; dmEnvWarning?: string }
-    | { ok: false; status: 400 | 403 | 409; error: string } {
+    | { ok: false; status: 400 | 403; error: string } {
     if (!isSupportedSurface(platform)) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
     }
-    const unmanaged = this.unmanagedReason(harnessId)
-    if (unmanaged) return { ok: false, status: 409, error: unmanaged }
     if (!Array.isArray(admins)) {
       return { ok: false, status: 400, error: 'admins must be an array' }
     }
@@ -298,23 +282,12 @@ export class SurfaceAdminService {
     // Persist onto the harness overlay (read-modify-write the raw array — the
     // single persisted shape; HarnessService tolerates partial overlays).
     const overlays = this.readOverlays()
-    const canonical = this.canonicalHarnessId(harnessId)
-    const idx = overlays.findIndex((h) => h.id === canonical)
+    const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
     if (idx !== -1) {
       const existing = overlays[idx].surfaceAdmins ?? {}
       overlays[idx] = { ...overlays[idx], surfaceAdmins: { ...existing, [platform]: cleaned } }
     } else {
-      // A new `{ id, surfaceAdmins }` row under an id a retired runtime once
-      // minted would be read back as that runtime's leftover (see
-      // retiredRuntimeOfRow). Ids with a hyphen were only ever minted by the
-      // retired runtime: no row is made for them. The other form is also what
-      // a Hermes agent's name derives, and the actor check above only passes
-      // when that agent's ~/.hermes-<name>/.env exists, so the row is tagged.
-      const retired = retiredRuntimeOfId(canonical)
-      if (retired && canonical.includes('-')) {
-        return { ok: false, status: 409, error: `No agent has the id ${harnessId}: it belongs to a retired runtime.` }
-      }
-      overlays.push({ id: harnessId, ...(retired ? { runtime: 'hermes' as const } : {}), surfaceAdmins: { [platform]: cleaned } })
+      overlays.push({ id: harnessId, surfaceAdmins: { [platform]: cleaned } })
     }
     this.storage.write(HARNESSES_FILE, overlays)
 
@@ -338,7 +311,7 @@ export class SurfaceAdminService {
     let envPath: string
     let env: string
     try {
-      envPath = path.join(writableAgentDataDir(harnessId, this.readOverlays()), '.env')
+      envPath = path.join(agentDataDir(harnessId), '.env')
       env = fs.readFileSync(envPath, 'utf-8')
     } catch {
       return {} // no .env means no surface to update
@@ -390,7 +363,6 @@ export class SurfaceAdminService {
   syncFromAllowlist(harnessId: string, platform: string, allowlist: string[]): void {
     if (!isSupportedSurface(platform)) return
     const overlays = this.readOverlays()
-    if (this.unmanagedReason(harnessId, overlays)) return // read-only: not a Hermes agent's row
     const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
     const existing = idx !== -1 ? overlays[idx].surfaceAdmins?.[platform] : undefined
     if (!Array.isArray(existing)) return // no explicit list → bootstrap default already tracks the env
@@ -466,7 +438,7 @@ export class SurfaceAdminService {
   ):
     | { ok: true; approved: true; updated: boolean }
     | { ok: true; approved: false; reason: string }
-    | { ok: false; status: 400 | 409; error: string } {
+    | { ok: false; status: 400; error: string } {
     const varName = GROUP_ALLOWED_VARS[platform]
     if (!varName) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
@@ -474,8 +446,6 @@ export class SurfaceAdminService {
     if (!isValidHarnessId(harnessId)) {
       return { ok: false, status: 400, error: 'Invalid harness id' }
     }
-    const unmanaged = this.unmanagedReason(harnessId)
-    if (unmanaged) return { ok: false, status: 409, error: unmanaged }
     // Structural guard before the value touches the .env (see sanitizeGroupId).
     const group = sanitizeGroupId(groupId)
     if (!group) {
@@ -486,7 +456,7 @@ export class SurfaceAdminService {
       return { ok: false, status: 400, error: 'addedByUserId is required (max 128 chars)' }
     }
 
-    const envPath = path.join(writableAgentDataDir(harnessId, this.readOverlays()), '.env')
+    const envPath = path.join(agentDataDir(harnessId), '.env')
     if (!fs.existsSync(envPath)) {
       return { ok: false, status: 400, error: 'Agent .env not found' }
     }

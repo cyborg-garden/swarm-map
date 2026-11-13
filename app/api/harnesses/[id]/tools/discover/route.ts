@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function discover(id: string) {
   const harness = services.harness.get(id)
@@ -33,8 +32,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const result = discover(id)
   if (!result) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
@@ -60,8 +57,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const result = discover(id)
   if (!result) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

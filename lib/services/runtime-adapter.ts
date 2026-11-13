@@ -19,7 +19,6 @@
  */
 
 import type { Harness } from '@/lib/types'
-import { diskIo, reach, reachesSame, resolveAgentHome, type HomeIo } from './home-resolver'
 import type { ComposeOptions } from './harness-compose'
 
 export interface ContainerRuntimeAdapter {
@@ -79,77 +78,10 @@ export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
   'letta-server': 'Retired runtime: the old self-hosted Letta server path was removed. Swarm Map no longer manages this row.',
 }
 
-/**
- * Ids the old integration minted. It never wrote a `runtime` field to
- * harnesses.json: its harnesses were built in memory. The one way such an id
- * reached the file was the surface-admins write, which stored `{ id,
- * surfaceAdmins }` and nothing else. So a leftover row is recognised by its
- * id AND by carrying no other field.
- *
- * The agent form keeps the hyphens of `agent-<uuid>`. An id derived from a
- * Hermes agent name has its hyphens turned into underscores, so the two
- * cannot collide.
- *
- * The server id CAN collide: it is also the id of a Hermes agent named
- * `letta-server`. Rows Swarm Map creates for that agent carry Hermes fields
- * and, since this change, `runtime: 'hermes'`. But an agent Swarm Map only
- * discovered has no row until its surface admins are set, and that write
- * stored `{ id, surfaceAdmins }`: the leftover shape exactly. The row alone
- * cannot settle it, so the disk does. A Hermes agent has a home at
- * `~/.hermes-<name>`. The old server never had one (its files lived under
- * Swarm Map's own data dir). A leftover-shaped row whose id maps to an
- * existing Hermes home is that agent's row.
- */
-const RETIRED_ID_RUNTIME: ReadonlyArray<[RegExp, string]> = [
-  [/^h_letta_agent-/, 'letta'],
-  [/^h_letta_server$/, 'letta-server'],
-]
-
-/** The only fields a row left by the old integration can carry. */
-const LEFTOVER_ROW_FIELDS: ReadonlySet<string> = new Set(['id', 'surfaceAdmins'])
-
-/** Is there a Hermes home on disk for this agent name? */
-function hermesHomeExists(name: string): boolean {
-  return resolveAgentHome(name)?.exists === true
-}
-
-/**
- * The retired runtime a stored row belongs to, or null. A stored tag always
- * wins. A row with no tag is judged by its id only when it has the leftover
- * shape: any other field means Hermes code wrote the row. And an id that a
- * Hermes agent name also derives is not retired while that agent's home
- * exists (see RETIRED_ID_RUNTIME).
- */
-export function retiredRuntimeOfRow(
-  row: { id?: string; runtime?: string | null },
-  hasHermesHome: (name: string) => boolean = hermesHomeExists,
-): string | null {
-  if (row.runtime != null) {
-    return Object.hasOwn(RETIRED_RUNTIMES, row.runtime) ? row.runtime : null
-  }
-  if (!row.id) return null
-  for (const [field, value] of Object.entries(row)) {
-    if (value != null && !LEFTOVER_ROW_FIELDS.has(field)) return null
-  }
-  const retired = retiredRuntimeOfId(row.id)
-  if (!retired) return null
-  const name = harnessNameOfId(row.id)
-  if (canonicalHarnessId(name) === row.id && hasHermesHome(name)) return null
-  return retired
-}
-
-/** The retired runtime an id alone points at, or null. Says nothing about a stored row. */
-export function retiredRuntimeOfId(id: string): string | null {
-  for (const [pattern, runtime] of RETIRED_ID_RUNTIME) {
-    if (pattern.test(id)) return runtime
-  }
-  return null
-}
-
 // Runtime tags that have a registered container adapter. Hermes is built in;
 // HarnessService adds to this when an adapter is registered. It lives here,
-// not beside the adapters, so services that only read harnesses.json
-// (surface admins, keys) can ask the question without loading HarnessService.
+// not beside the adapters, so the request gate (proxy.ts) can ask the
+// question without loading HarnessService.
 const drivableRuntimes = new Set<string>(['hermes'])
 
 export function markRuntimeDrivable(runtime: string): void {
@@ -157,32 +89,26 @@ export function markRuntimeDrivable(runtime: string): void {
 }
 
 /**
- * Why a stored runtime tag cannot be driven, or null when it can. `undefined`
- * is drivable: rows written before the `runtime` field existed are Hermes.
- * Everything else must have a registered adapter. There is no fallback.
+ * Why a stored runtime tag cannot be driven, or null when it can. A row with
+ * no tag is Hermes (rows written before the `runtime` field existed), and so
+ * is one whose tag is null. Any other tag must have a registered adapter.
+ * There is no fallback, and nothing but the tag is looked at.
  */
 export function unsupportedRuntimeReason(runtime?: string | null): 'retired' | 'unknown' | null {
-  // null is what a hand edit leaves; it is read like a missing tag.
   if (runtime == null) return null
   if (drivableRuntimes.has(runtime)) return null
   return Object.hasOwn(RETIRED_RUNTIMES, runtime) ? 'retired' : 'unknown'
 }
 
 /**
- * Why a stored ROW cannot be driven, or null when it can. This is the check
- * every reader and writer of harnesses.json uses. It is
- * unsupportedRuntimeReason plus one case the tag cannot see: a row with no
- * tag whose id the old integration minted (see retiredRuntimeOfRow).
- * `runtime` is the label to show for it.
+ * Why a stored ROW cannot be driven, or null when it can: its tag, and only
+ * its tag. `runtime` is the label to show for it.
  */
 export function unsupportedRowReason(
-  row: { id?: string; runtime?: string | null } | undefined,
+  row: { runtime?: string | null } | undefined,
 ): { reason: 'retired' | 'unknown'; runtime: string } | null {
-  if (!row) return null
-  const byTag = unsupportedRuntimeReason(row.runtime)
-  if (byTag) return { reason: byTag, runtime: String(row.runtime) }
-  const retired = retiredRuntimeOfRow(row)
-  return retired ? { reason: 'retired', runtime: retired } : null
+  const reason = unsupportedRuntimeReason(row?.runtime)
+  return reason ? { reason, runtime: String(row?.runtime) } : null
 }
 
 /**
@@ -194,53 +120,19 @@ export function canonicalHarnessId(idOrSlug: string): string {
   return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
 }
 
-/** The agent name an id stands for: `h_seraph_doer` is "seraph-doer". A bare slug comes back unchanged. */
-export function harnessNameOfId(idOrSlug: string): string {
-  return idOrSlug.replace(/^h_/, '').replace(/_/g, '-')
-}
-
 /**
- * Harness ids reach the id-to-directory mapping straight from URL segments,
- * some on routes agents call without the operator cookie. Real ids are
- * `h_<name>` (h_personal, h_cyborg_public) or bare agent slugs
- * (`seraph-doer`, sent by the policy plugin). All are ASCII letters, digits,
- * '_' and '-'. Anything else ('/', '.', '%', whitespace) is rejected so an
- * id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
- */
-const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
-
-export function isValidHarnessId(raw: unknown): raw is string {
-  return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
-}
-
-/**
- * The stored row for this id or bare slug, if Swarm Map does not manage it.
- * agentHome() (./agent-home) asks this before it hands out a directory.
- *
- * A row is found by the directory its id means, not by its spelling: the
- * question is whether what the caller wrote and what the row's id says
- * touch the same directory on this disk (see ./home-resolver, `reach`). One
- * unmanaged row is enough when several qualify. A harnesses.json that is not
- * a list holds no rows.
+ * The stored row with this id (or bare slug), if its runtime tag is one Swarm
+ * Map does not know. The request gate in proxy.ts asks this for every write.
  */
 export function findUnmanagedRow<T extends { id?: string; runtime?: string | null }>(
   rows: readonly T[],
   idOrSlug: string,
-  io: HomeIo = diskIo,
 ): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
   if (!Array.isArray(rows)) return null
-  let asked: ReturnType<typeof reach> | undefined
-  for (const row of rows) {
-    if (typeof row?.id !== 'string') continue
-    const unsupported = unsupportedRowReason(row)
-    if (!unsupported) continue
-    // Only now is the disk read: a fleet with no such row never pays for it.
-    if (asked === undefined) asked = reach(idOrSlug, io)
-    const rowReach = reach(row.id, io)
-    const same = asked && rowReach ? reachesSame(asked, rowReach) : row.id === idOrSlug
-    if (same) return { row, ...unsupported }
-  }
-  return null
+  const id = canonicalHarnessId(idOrSlug)
+  const row = rows.find((r) => r?.id === id)
+  const unsupported = unsupportedRowReason(row)
+  return row && unsupported ? { row, ...unsupported } : null
 }
 
 /** One sentence for the UI and for a refused request. */

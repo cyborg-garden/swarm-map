@@ -25,88 +25,27 @@ runtimes. Hermes is its only member.
 
 ## A runtime Swarm Map does not know is never Hermes
 
-Every stored agent row carries a `runtime` tag. A row with no tag is Hermes (rows written
-before the tag existed). Any other tag must have a registered adapter. There is no fallback.
+A stored agent row can carry a `runtime` tag. A row with no tag is Hermes, as it always
+was. A row whose tag has no registered adapter is kept and shown, but is read-only. Only
+the tag decides: nothing is inferred from an id, a name or what is on disk.
 
-One exception to "no tag is Hermes": the old Letta integration never stored a tag. The only
-rows it could leave behind have the ids it minted (`h_letta_agent-<uuid>`, `h_letta_server`)
-and no field except `surfaceAdmins`. A row with one of those ids, no tag and no other field
-counts as retired.
-
-A Hermes agent named `letta-server` gets the id `h_letta_server` too. Three things keep it
-out of that rule. The row Swarm Map stores for it carries Hermes fields (name, compose file,
-port). Every row made by create, deploy or import from now on is tagged `runtime: 'hermes'`,
-and an explicit tag always wins. And for the bare `{ id, surfaceAdmins }` row an older build wrote for a Hermes
-agent it had only discovered, the disk decides: a Hermes agent has a home at
-`~/.hermes-letta-server`, and the old server never had one. If that directory exists, the
-row is the Hermes agent's. The agent ids (`h_letta_agent-<uuid>`) keep a hyphen that no
-Hermes name derives, so they are retired whatever is on disk.
-
-- `adapterForRuntime` throws `UnsupportedRuntimeError` for a retired or unknown tag.
-- The row owns its id while it is stored. If a live container maps to the same id (a
-  `hermes-foo` container beside a retired `h_foo` row), it is not shown or driven until the
-  row is forgotten. It then appears as a plain Hermes agent with none of the row's settings.
-- Such rows are left out of `GET /api/harnesses` and have no detail page.
-- Every route under `/api/harnesses/:id/` answers 409 for such a row before it does
-  anything, reads included. That covers the routes that never look the agent up and go
-  straight from the id to `~/.hermes-<name>`: surface connect and disconnect, policy,
-  pairing, admins, group invites, settings. The shared check is `refuseUnmanagedRow`
-  (`lib/services/unmanaged-row-guard.ts`). A bare agent slug is refused the same way as the
-  stored id. `GET /api/harnesses/:id` itself answers 404.
-- Four reads are the exception, because a running agent calls them about itself by its own
-  slug: `GET .../policy`, `GET .../surfaces/:platform/admins`, `.../admins/:userId` and
-  `.../groups/:groupId`. They answer from that agent's own `.env`, never from the row's
-  stored fields, and write nothing.
-- What a running agent sees. The policy plugin shipped here
-  (`infra/templates/plugins/swarm_map_policy`) makes two reads: "is this user my admin",
-  on every message, and "is this group allowed". Both are among the four reads above and
-  are never refused. The agent runtime's copy of the plugin adds one write, an invite
-  approval sent once when the agent is added to a group. That one gets the 409 if an
-  unmanaged row is stored under the agent's own id, and the plugin reads any answer but
-  200 as "not approved", with no retry. A Hermes agent with a Hermes row, or with no row,
-  never gets this 409; `retired-row-routes.test.ts` sweeps every route for each row shape
-  to hold that.
-- The path `~/.hermes-<name>` is built in one file, `lib/services/data-dir.ts`. Code that
-  was handed an id or a name (a URL, a request body, `keys.json`, a list of names) reaches
-  it through `agentHome()` / `agentHomeIfManaged()` in `lib/services/agent-home.ts`, which
-  refuse such a row. Key assignment, key discovery, tool and memory discovery, the surface
-  list, usage, the integrity log scan and the username resolvers all go that way. So a
-  retired id in a request body is skipped: nothing is read from or written to the directory
-  it maps to, and a new assignment to it is not recorded. An assignment already in
-  `keys.json` from before the row was retired stays listed, but is never written again.
-  Code that got the name from `HarnessService.list()` or `get()` uses the unchecked helper;
-  `lib/__tests__/agent-home-guards.test.ts` names the files that may.
-- What an id means is decided by the disk, not by comparing strings
-  (`lib/services/home-resolver.ts`). An agent home is an entry `.hermes-<name>` of the home
-  directory that is a directory once symlinks are followed, and it is identified by the
-  directory it really is. It has one id: `h_` plus its name with `-` turned into `_`. A
-  spelling reaches a home when the path it spells is that same directory on this disk, so
-  `h_foo_bar`, `foo-bar` and `h_foo-bar` always meet, and `FOO-BAR` meets them only where
-  the disk folds case. One directory never answers to two ids: a symlink beside its target
-  is not a second agent. A row is "such a row" for a request when the two touch the same
-  directory. A name must be one a container can have (ASCII letters, digits, `_`, `.`,
-  `-`) before it becomes a path; the routes agents call are stricter and allow no `.`.
-- A new agent cannot take a name such a row still holds. Deploy answers 409 and create and
-  import fail, each before its first write. Duplicate onto such a name is refused as any
-  taken name is. Forget the row first.
-- `GET /api/harnesses/retired` lists them with the stored tag and a reason. The fleet page
-  shows them under "Rows Swarm Map no longer manages".
-- `DELETE /api/harnesses/:id` on such a row forgets the row and nothing else. It does not
-  touch a container, a data directory or a volume, even with `deleteFiles=true`.
+- Such a row is left out of `GET /api/harnesses` and has no detail page.
+  `GET /api/harnesses/retired` lists it with the stored tag and a reason, and the fleet
+  page shows it under "Rows Swarm Map no longer manages" with one action, "Forget row".
+- Every write or lifecycle request for its id (any `POST`, `PUT`, `PATCH` or `DELETE` under
+  `/api/harnesses/:id/`) is answered 409. That is done in one place, the request gate in
+  `proxy.ts`, which every `/api` request passes through before it reaches a route.
+- `DELETE /api/harnesses/:id` is the exception. It forgets the row and nothing else: no
+  container, data directory or volume is touched, even with `deleteFiles=true`.
+- Inside the server, `adapterForRuntime` throws `UnsupportedRuntimeError` for such a tag,
+  so the schedulers and sweeps never drive the row either.
 - `POST /api/setup/deploy` with any `runtime` other than `hermes` returns 400 and creates
   nothing.
 
-Tests: `lib/services/__tests__/retired-runtime.test.ts`,
-`app/api/harnesses/__tests__/retired-row-routes.test.ts` (calls every per-agent route,
-reads and writes, found by walking the directory),
-`lib/services/__tests__/surface-admins.test.ts`,
-`lib/services/__tests__/keys-discovery.test.ts`,
-`lib/services/__tests__/unmanaged-row-readers.test.ts`,
-`lib/services/__tests__/deploy-route.integration.test.ts`, and
-`lib/__tests__/agent-home-guards.test.ts`, which reads the source and fails when a second
-copy of the id-to-directory mapping appears, and
-`lib/services/__tests__/home-resolver.property.test.ts`, which generates names, symlinks
-and mounts on a model disk and checks the rules above hold for all of them.
+Tests: `app/api/harnesses/__tests__/unknown-runtime-routes.test.ts` (walks the route
+directory and sends a request for every per-agent write route through the gate),
+`lib/services/__tests__/retired-runtime.test.ts`,
+`lib/services/__tests__/deploy-route.integration.test.ts`.
 
 ## What was removed: the old Letta integration
 
@@ -147,7 +86,7 @@ The design and the step-by-step plan are published with that work, not here.
 Order: Pi first, then Letta Code, each driven the same way. Hermes stays as it is.
 
 One known limit is stated up front: Letta Code keeps memory per agent and always on, so it
-cannot keep memory apart per room. That will be measured and shown, not hidden.
+cannot keep memory apart per room. The plan measures that and shows it. It does not hide it.
 
 ## Related
 

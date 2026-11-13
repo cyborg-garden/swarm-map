@@ -1,7 +1,8 @@
+import path from 'path'
+import os from 'os'
 import Database from 'better-sqlite3'
 import { lookupPricing, computeCost, type PricingEntry } from '@/lib/pricing'
 import { resolveStateDbPath } from './db-path'
-import { agentHome } from './agent-home'
 
 export type SessionUsage = {
   sessionId: string
@@ -60,6 +61,12 @@ type AggRow = {
   session_count: number
 }
 
+function agentDataDir(harnessId: string): string {
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  if (name === 'personal') return path.join(os.homedir(), '.hermes')
+  return path.join(os.homedir(), `.hermes-${name}`)
+}
+
 function startOfDayUnix(): number {
   const now = new Date()
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -96,13 +103,6 @@ function computeSessionCost(
 }
 
 /**
- * How a harness id becomes the agent's home. The default, agentHome(),
- * refuses an id whose stored row Swarm Map does not manage (it throws). A
- * caller that has already settled that question passes its own.
- */
-type HomeOf = (harnessId: string) => string
-
-/**
  * Resolve the readable state.db path for a harness, or a sentinel:
  *   - string  → open this (live DB for unmigrated, snapshot for migrated)
  *   - 'none'  → fresh harness, no DB — legitimately zero usage
@@ -112,9 +112,8 @@ type HomeOf = (harnessId: string) => string
  */
 function readableStateDb(
   harnessId: string,
-  home: HomeOf,
 ): { kind: 'none' } | { kind: 'pending' } | { kind: 'live' | 'snapshot'; path: string } {
-  const r = resolveStateDbPath(home(harnessId))
+  const r = resolveStateDbPath(agentDataDir(harnessId))
   if (r.kind === 'none') return { kind: 'none' }
   if (r.kind === 'migrated-pending') return { kind: 'pending' }
   return { kind: r.kind, path: r.path }
@@ -139,8 +138,8 @@ function onReadError(kind: 'live' | 'snapshot'): number | null {
  * Used by HarnessService.list() to populate costToday cheaply.
  * Migrated harnesses read the snapshot export: at most ~5 min stale.
  */
-export function getCostToday(harnessId: string, home: HomeOf = agentHome): number | null {
-  const resolved = readableStateDb(harnessId, home)
+export function getCostToday(harnessId: string): number | null {
+  const resolved = readableStateDb(harnessId)
   if (resolved.kind === 'none') return 0
   if (resolved.kind === 'pending') return null
 
@@ -185,8 +184,8 @@ export function getCostToday(harnessId: string, home: HomeOf = agentHome): numbe
  * month-scale budgets that lag is noise, and strictly better than the
  * pre-PR2 failure mode (dangling symlink → costMonth=0 → enforcement OFF).
  */
-export function getCostMonth(harnessId: string, home: HomeOf = agentHome): number | null {
-  const resolved = readableStateDb(harnessId, home)
+export function getCostMonth(harnessId: string): number | null {
+  const resolved = readableStateDb(harnessId)
   if (resolved.kind === 'none') return 0
   if (resolved.kind === 'pending') return null
 
@@ -228,8 +227,8 @@ export function getCostMonth(harnessId: string, home: HomeOf = agentHome): numbe
  * migrated but no snapshot has been exported yet (count unknown — not zero).
  * Used by HarnessService.list() to populate invocations cheaply.
  */
-export function getInvocationsToday(harnessId: string, home: HomeOf = agentHome): number | null {
-  const resolved = readableStateDb(harnessId, home)
+export function getInvocationsToday(harnessId: string): number | null {
+  const resolved = readableStateDb(harnessId)
   if (resolved.kind === 'none') return 0
   if (resolved.kind === 'pending') return null
 
@@ -257,8 +256,8 @@ export function getInvocationsToday(harnessId: string, home: HomeOf = agentHome)
  * Null when there is no DB, or when the harness is migrated with no snapshot
  * exported yet. Migrated harnesses read the snapshot export (≤ ~5 min stale).
  */
-export function getUsageSummary(harnessId: string, home: HomeOf = agentHome): UsageSummary | null {
-  const resolved = readableStateDb(harnessId, home)
+export function getUsageSummary(harnessId: string): UsageSummary | null {
+  const resolved = readableStateDb(harnessId)
   if (resolved.kind === 'none' || resolved.kind === 'pending') return null
 
   try {

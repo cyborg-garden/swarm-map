@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 /**
  * Refresh an agent's git credentials.
@@ -18,8 +17,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   try {
     const result = services.harness.refreshGitCredentials(id)
     return NextResponse.json(result)

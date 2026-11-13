@@ -4,7 +4,6 @@ import { MODEL_CATALOG, ENV_TO_PROVIDER } from '@/lib/model-catalog'
 import { services } from '@/lib/services'
 import { guessDataDir } from '@/lib/services/harness'
 import path from 'path'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function detectProviders(envPath: string): string[] {
   try {
@@ -31,8 +30,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

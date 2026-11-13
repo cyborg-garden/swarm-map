@@ -44,7 +44,7 @@ export function RetiredRows() {
         <h3 className="text-sm font-semibold">Rows Swarm Map no longer manages</h3>
         <p className="text-xs text-muted-foreground">
           These were stored under a runtime that is retired or unknown. Nothing can be started, stopped or
-          changed through them, and no new agent can take one of these names until its row is forgotten.
+          changed through them.
         </p>
       </div>
       <ul className="space-y-2">

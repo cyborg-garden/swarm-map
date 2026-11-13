@@ -5,7 +5,6 @@ import { readModelConfig, readModelProvider, readFallbackProviders, readCascade,
 // cascade library and the model-update scheduler). Every body shape goes
 // through it — validate → render → splice → write → overlay.
 import { applyCascadeToHarness, type CascadeWriteInput } from '@/lib/services/cascade-writer'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 function dataDirFor(harness: { name: string; serviceName?: string }): string {
   const containerName = harness.serviceName
@@ -34,8 +33,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
@@ -120,8 +117,6 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

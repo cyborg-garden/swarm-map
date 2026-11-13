@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { applyChatUpdatesToHarness, readHarnessChatUpdates } from '@/lib/services/chat-updates'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 /**
  * GET /api/harnesses/:id/chat-updates
@@ -15,8 +14,6 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const r = readHarnessChatUpdates(id)
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status })
   return NextResponse.json({ level: r.level, overridden: r.overridden })
@@ -33,8 +30,6 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   let body: { level?: unknown }
   try {
     body = await request.json()

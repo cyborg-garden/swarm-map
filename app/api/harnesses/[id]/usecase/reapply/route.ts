@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // POST /api/harnesses/:id/usecase/reapply
 // Body: { templateId: string }
@@ -13,8 +12,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const body = await request.json().catch(() => ({}))
   const templateId = typeof body?.templateId === 'string' ? body.templateId.trim() : ''
   if (!templateId) {

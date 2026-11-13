@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import { services } from '@/lib/services'
 import { setPlatformEnabled } from '@/lib/config-yaml-helpers'
 import { PLATFORM_ENV_KEYS as DERIVED_PLATFORM_ENV_KEYS } from '@/lib/surfaces/derive'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
-import { agentHome } from '@/lib/services/agent-home'
+
+function agentDataDir(harnessId: string): string {
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  if (name === 'personal') return path.join(os.homedir(), '.hermes')
+  return path.join(os.homedir(), `.hermes-${name}`)
+}
 
 // The strip-on-disconnect set is derived from the surface registry
 // (lib/surfaces): credentials + every admission var, and NEVER a behavioral
@@ -22,8 +27,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const body = await request.json()
   const { platform } = body as { platform: string }
 
@@ -36,7 +39,7 @@ export async function POST(
     return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 })
   }
 
-  const dataDir = agentHome(id)
+  const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
   if (!fs.existsSync(envPath)) {

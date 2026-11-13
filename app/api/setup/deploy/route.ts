@@ -20,9 +20,7 @@ import {
 } from '@/lib/services/base-package'
 import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 import { defaultKeyPath } from '@/lib/services/github-credential-check'
-import { RETIRED_RUNTIMES, unmanagedRowNote } from '@/lib/services/runtime-adapter'
-import { storedUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
-import { newAgentHomeForName } from '@/lib/services/data-dir'
+import { RETIRED_RUNTIMES } from '@/lib/services/runtime-adapter'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -115,18 +113,6 @@ export async function POST(request: Request) {
     const slug = toHarnessSlug(name)
     if (!slug) {
       return NextResponse.json({ ok: false, error: 'Invalid name — could not slugify' }, { status: 400 })
-    }
-
-    // A row Swarm Map keeps but does not manage (retired or unknown runtime)
-    // still holds this name's id. Deploying onto it would start
-    // `hermes-<name>` and then fail to store a row, leaving a running agent
-    // hidden behind the old one. Refused here, before any side effect.
-    const heldBy = storedUnmanagedRow(slug)
-    if (heldBy) {
-      return NextResponse.json(
-        { ok: false, error: `The name "${slug}" is held by a row Swarm Map does not manage. ${unmanagedRowNote(heldBy)} Nothing was created. Forget the row on the fleet page to free the name.` },
-        { status: 409 },
-      )
     }
 
     // Agents on a broker host hold no GitHub token, and a new agent has no marker for
@@ -277,7 +263,7 @@ export async function POST(request: Request) {
         .filter((p): p is number => typeof p === 'number'),
     })
 
-    const agentDataDir = newAgentHomeForName(slug)
+    const agentDataDir = path.join(os.homedir(), `.hermes-${slug}`)
 
     // Guard against clobbering an existing agent. Deploy is a CREATE-new flow and
     // every write below (.env with API keys, config.yaml, SOUL.md, BOOT.md) is

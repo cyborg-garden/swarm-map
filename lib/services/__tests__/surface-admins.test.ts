@@ -3,9 +3,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import {
-  SurfaceAdminService, isValidIdentity, isSupportedSurface, isValidHarnessId, sanitizeGroupId, agentDataDir, writableAgentDataDir,
+  SurfaceAdminService, isValidIdentity, isSupportedSurface, isValidHarnessId, sanitizeGroupId, agentDataDir,
 } from '../surface-admins'
-import { UnsupportedRuntimeError } from '../runtime-adapter'
 import { Storage } from '../storage'
 
 // Each test gets an isolated fake $HOME (for agent .env files) and an isolated
@@ -410,150 +409,12 @@ describe('SurfaceAdminService.isGroupAllowed', () => {
   })
 })
 
-// A row Swarm Map keeps but does not manage (retired or unknown runtime) is
-// read-only here too. This service writes harnesses.json and ~/.hermes-<name>
-// directly, without HarnessService, so it has to make the check itself.
-describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', () => {
-  const A = '123456789012345678'
-  const B = '223456789012345678'
-  const LEFTOVER_AGENT = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
-  const ROWS = [
-    { id: 'h_letta_server', surfaceAdmins: { discord: [A], telegram: ['111'] } },
-    { id: LEFTOVER_AGENT, surfaceAdmins: { discord: [A] } },
-    { id: 'h_old', name: 'old', runtime: 'letta', surfaceAdmins: { discord: [A], telegram: ['111'] } },
-    { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future', surfaceAdmins: { discord: [A], telegram: ['111'] } },
-  ]
-  const ENV = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\nTELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-1001\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n`
-  // The Hermes data dir each id would resolve to if the row were treated as
-  // Hermes. The server id has none here: with a Hermes home on disk its row
-  // is a Hermes agent's (see the last two cases).
-  const DIRS: Record<string, string> = {
-    [LEFTOVER_AGENT]: LEFTOVER_AGENT.replace(/^h_/, '').replace(/_/g, '-'),
-    h_old: 'old',
-    h_odd: 'odd',
-  }
-  const stored = () => fs.readFileSync(path.join(dataDir, 'harnesses.json'), 'utf-8')
-  const envOf = (id: string) => fs.readFileSync(path.join(home, `.hermes-${DIRS[id]}`, '.env'), 'utf-8')
-  const SERVER_HOME = () => path.join(home, '.hermes-letta-server')
-  /** The agent files this id maps to are as they were: unchanged, or still absent. */
-  const expectFilesUntouched = (id: string) => {
-    if (DIRS[id]) expect(envOf(id)).toBe(ENV)
-    else expect(fs.existsSync(SERVER_HOME())).toBe(false)
-  }
-
-  beforeEach(() => {
-    storage.write('harnesses.json', ROWS)
-    for (const id of Object.keys(DIRS)) writeAgentEnv(DIRS[id], ENV)
-  })
-
-  it.each(ROWS.map((r) => r.id))('setAdmins(%s) is refused with 409 and writes nothing', (id) => {
-    const before = stored()
-    const res = svc.setAdmins(id, 'discord', [A, B], A)
-    expect(res).toMatchObject({ ok: false, status: 409 })
-    expect(stored()).toBe(before)
-    expectFilesUntouched(id)
-    expect(audit.append).not.toHaveBeenCalled()
-  })
-
-  it('setAdmins by bare slug reaches the same refusal', () => {
-    const before = stored()
-    expect(svc.setAdmins('old', 'discord', [A, B], A)).toMatchObject({ ok: false, status: 409 })
-    expect(stored()).toBe(before)
-  })
-
-  it.each(ROWS.filter((r) => r.surfaceAdmins.telegram).map((r) => r.id))(
-    'syncFromAllowlist(%s) writes nothing',
-    (id) => {
-      const before = stored()
-      svc.syncFromAllowlist(id, 'telegram', ['111', '222'])
-      expect(stored()).toBe(before)
-      expect(audit.append).not.toHaveBeenCalled()
-    },
-  )
-
-  it.each(ROWS.map((r) => r.id))('approveGroupInvite(%s) is refused with 409 and leaves the .env alone', (id) => {
-    const res = svc.approveGroupInvite(id, 'telegram', '-1002', '111')
-    expect(res).toMatchObject({ ok: false, status: 409 })
-    expectFilesUntouched(id)
-  })
-
-  it('the row\'s stored admins are not served as policy for a Hermes agent of the same name', () => {
-    // A live hermes-old beside the retired h_old row asks with its bare slug.
-    // It gets its own .env bootstrap list, never the retired row's fields.
-    storage.write('harnesses.json', [{ id: 'h_old', name: 'old', runtime: 'letta', surfaceAdmins: { discord: [B] } }])
-    expect(svc.listAdmins('old', 'discord')).toMatchObject({ source: 'allowlist', admins: [A] })
-    expect(svc.isAdmin('old', 'discord', B)).toBe(false)
-  })
-
-  it('an old-integration agent id with no stored row cannot get one', () => {
-    storage.write('harnesses.json', [])
-    const res = svc.setAdmins(LEFTOVER_AGENT, 'discord', [A, B], A)
-    expect(res).toMatchObject({ ok: false, status: 409 })
-    expect(storage.read('harnesses.json', [])).toEqual([])
-    expect(envOf(LEFTOVER_AGENT)).toBe(ENV)
-  })
-
-  it('a Hermes agent named letta-server with no stored row gets a row tagged hermes, not a leftover', () => {
-    // The id h_letta_server is also the one the old server used. An untagged
-    // `{ id, surfaceAdmins }` row for it is exactly the leftover shape, so the
-    // row this write creates must carry the tag.
-    storage.write('harnesses.json', [])
-    writeAgentEnv('letta-server', ENV)
-    const res = svc.setAdmins('h_letta_server', 'discord', [A, B], A)
-    expect(res.ok).toBe(true)
-    const rows = storage.read<Array<Record<string, unknown>>>('harnesses.json', [])
-    expect(rows).toEqual([{ id: 'h_letta_server', runtime: 'hermes', surfaceAdmins: { discord: [A, B] } }])
-    // And it stays writable.
-    expect(svc.setAdmins('h_letta_server', 'discord', [A], A).ok).toBe(true)
-  })
-
-  it('a Hermes agent named letta-server whose row is only { id, surfaceAdmins } keeps a writable row', () => {
-    // The row this service wrote for a discovered agent before rows were
-    // tagged. It has the leftover shape, and the agent's home on disk is
-    // what marks it as Hermes.
-    storage.write('harnesses.json', [{ id: 'h_letta_server', surfaceAdmins: { discord: [A], telegram: ['111'] } }])
-    writeAgentEnv('letta-server', ENV)
-    expect(svc.listAdmins('letta-server', 'discord')).toMatchObject({ source: 'explicit', admins: [A] })
-    expect(svc.setAdmins('h_letta_server', 'discord', [A, B], A)).toMatchObject({ ok: true, admins: [A, B] })
-    expect(svc.approveGroupInvite('h_letta_server', 'telegram', '-1002', '111')).toMatchObject({ ok: true, approved: true })
-    expect(fs.readFileSync(path.join(SERVER_HOME(), '.env'), 'utf-8')).toContain('-1002')
-  })
-
-  it('the write mapping itself refuses, whatever its caller checked; the self-read mapping does not', () => {
-    for (const id of ['h_old', 'old', 'h_odd', LEFTOVER_AGENT]) {
-      expect(() => writableAgentDataDir(id, ROWS), id).toThrow(UnsupportedRuntimeError)
-    }
-    expect(writableAgentDataDir('h_iris', ROWS)).toBe(path.join(home, '.hermes-iris'))
-    expect(agentDataDir('h_old')).toBe(path.join(home, '.hermes-old'))
-    expect(() => writableAgentDataDir('x/../y', ROWS)).toThrow(/invalid harness id/i)
-  })
-
-  it('control: the same calls on a Hermes row DO write', () => {
-    // Proves the "writes nothing" checks above can fail.
-    storage.write('harnesses.json', [{ id: 'h_old', name: 'old', runtime: 'hermes', surfaceAdmins: { discord: [A], telegram: ['111'] } }])
-    expect(svc.setAdmins('h_old', 'discord', [A, B], A)).toMatchObject({ ok: true, admins: [A, B] })
-    expect(envOf('h_old')).not.toBe(ENV)
-    svc.syncFromAllowlist('h_old', 'telegram', ['111', '222'])
-    const rows = storage.read<Array<{ surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(rows[0].surfaceAdmins?.telegram).toEqual(['111', '222'])
-    expect(svc.approveGroupInvite('h_old', 'telegram', '-1002', '111')).toMatchObject({ ok: true, approved: true, updated: true })
-    expect(envOf('h_old')).toContain('-1002')
-  })
-
-  it('control: an ordinary new row is written as before, with no tag', () => {
-    storage.write('harnesses.json', [])
-    writeAgentEnv('fresh', ENV)
-    expect(svc.setAdmins('h_fresh', 'discord', [A, B], A).ok).toBe(true)
-    expect(storage.read('harnesses.json', [])).toEqual([{ id: 'h_fresh', surfaceAdmins: { discord: [A, B] } }])
-  })
-})
-
 // Ids that exist on the Mini (ls ~/.hermes-* + docker ps, 2026-10-22), the
-// bare slug the policy plugin sends, and ids carrying a hyphen and a UUID.
+// bare slug the policy plugin sends, and a Letta id from deploy-route tests.
 const REAL_IDS = [
   'h_personal', 'h_cyborg', 'h_cyborg_public', 'h_evil_duck', 'h_garden_admin',
-  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_ext_server',
-  'h_ext_agent-xyz', 'h_ext_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
+  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_letta_server',
+  'h_letta_agent-xyz', 'h_letta_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
 ]
 const TRAVERSAL_IDS = [
   'x/../.hermes-cryptids', '../.hermes-cryptids', '..', '.', '', 'h_a/b', 'h_a\\b',

@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { CascadeLibraryError } from '@/lib/services/cascades'
 import { guessDataDir, readCascade, cascadeChain } from '@/lib/services/harness'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // POST /api/harnesses/:id/cascade/save-as { name, overwrite? }
 //
@@ -18,8 +17,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const harness = services.harness.get(id)
   if (!harness) {
     return NextResponse.json({ error: 'Harness not found' }, { status: 404 })

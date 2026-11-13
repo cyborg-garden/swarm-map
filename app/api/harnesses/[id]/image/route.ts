@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 // GET  /api/harnesses/:id/image  → version status (current / pinned / latest / updateAvailable)
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   try {
     return NextResponse.json(await services.harness.imageStatus(id))
   } catch (err) {
@@ -18,8 +15,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 // PUT /api/harnesses/:id/image  { imageRef }  → pin + recreate
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const body = await request.json().catch(() => ({}))
   const ref = typeof body?.imageRef === 'string' ? body.imageRef.trim() : ''
   if (!ref) return NextResponse.json({ error: 'imageRef is required' }, { status: 400 })

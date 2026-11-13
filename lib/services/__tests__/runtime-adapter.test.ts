@@ -6,7 +6,7 @@ import {
   pickContainerAdapter,
   registerContainerAdapter,
 } from '../harness'
-import { retiredRuntimeOfRow, unsupportedRowReason } from '../runtime-adapter'
+import { findUnmanagedRow, unsupportedRowReason } from '../runtime-adapter'
 import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
@@ -39,11 +39,38 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
     expect(adapterForRuntime(undefined)).toBe(hermesAdapter)
   })
 
-  // Was: "falls back to hermes for runtimes with no container adapter (letta)".
-  // That fallback is the bug: a leftover row of another runtime became Hermes.
-  // Full coverage lives in retired-runtime.test.ts.
+  // There is no default adapter. Full coverage lives in retired-runtime.test.ts.
   it('does NOT fall back to hermes for a runtime with no container adapter', () => {
     expect(() => adapterForRuntime('letta' as never)).toThrow(/retired/i)
+  })
+
+  it('reads a null tag (a hand edit) as a missing one', () => {
+    expect(adapterForRuntime(null as never)).toBe(hermesAdapter)
+    expect(unsupportedRowReason({ runtime: null })).toBeNull()
+  })
+
+  it('only the tag decides whether a row is managed', () => {
+    const rows = [
+      { id: 'h_a', runtime: 'letta' },
+      { id: 'h_b', runtime: 'pi-from-the-future' },
+      { id: 'h_c', runtime: 'hermes' },
+      { id: 'h_d' },
+      { id: 'h_letta_server', surfaceAdmins: {} },
+    ]
+    expect(findUnmanagedRow(rows, 'h_a')).toMatchObject({ reason: 'retired', runtime: 'letta' })
+    expect(findUnmanagedRow(rows, 'a')).toMatchObject({ reason: 'retired' })
+    expect(findUnmanagedRow(rows, 'h_b')).toMatchObject({ reason: 'unknown', runtime: 'pi-from-the-future' })
+    for (const id of ['h_c', 'h_d', 'h_letta_server', 'letta-server', 'h_nobody', 'h_A']) {
+      expect(findUnmanagedRow(rows, id), id).toBeNull()
+    }
+    expect(findUnmanagedRow({ not: 'a list' } as unknown as [], 'h_a')).toBeNull()
+  })
+
+  it('a newly registered runtime stops being unknown', () => {
+    const tag = 'test-runtime-registered-here'
+    expect(unsupportedRowReason({ runtime: tag })).toMatchObject({ reason: 'unknown' })
+    registerContainerAdapter({ ...hermesAdapter, runtime: tag as never, matches: () => false })
+    expect(unsupportedRowReason({ runtime: tag })).toBeNull()
   })
 
   // Registration mutates the module-global registry, so this block runs LAST
@@ -74,56 +101,5 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
     expect(pickContainerAdapter('custom-agent')).toBe(customAdapter)
     // hermes selection is unaffected
     expect(adapterForRuntime('hermes')).toBe(hermesAdapter)
-  })
-})
-
-describe('retiredRuntimeOfRow: the id is only evidence when nothing better exists', () => {
-  const noHome = () => false
-  const home = () => true
-  const AGENT = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
-
-  it('a stored tag always wins, whatever the id or the disk say', () => {
-    expect(retiredRuntimeOfRow({ id: 'h_iris', runtime: 'letta' }, home)).toBe('letta')
-    expect(retiredRuntimeOfRow({ id: 'h_letta_server', runtime: 'hermes' }, noHome)).toBeNull()
-  })
-
-  it('an untagged row with any Hermes field is not retired', () => {
-    expect(retiredRuntimeOfRow({ id: 'h_letta_server', name: 'letta-server' } as { id: string }, noHome)).toBeNull()
-  })
-
-  it('the leftover shape under the server id is retired only when no Hermes home exists for that name', () => {
-    const row = { id: 'h_letta_server', surfaceAdmins: { discord: ['1'] } } as { id: string }
-    const asked: string[] = []
-    expect(retiredRuntimeOfRow(row, (n) => (asked.push(n), false))).toBe('letta-server')
-    expect(asked).toEqual(['letta-server'])
-    expect(retiredRuntimeOfRow(row, home)).toBeNull()
-  })
-
-  it('the old agent id is retired with or without a directory: no Hermes name derives it', () => {
-    expect(retiredRuntimeOfRow({ id: AGENT }, home)).toBe('letta')
-    expect(retiredRuntimeOfRow({ id: AGENT }, noHome)).toBe('letta')
-  })
-
-  it('other ids are never retired by id', () => {
-    expect(retiredRuntimeOfRow({ id: 'h_letta_fan' }, noHome)).toBeNull()
-    // The two patterns are exact: a longer id, or the agent form without
-    // its hyphen (what a Hermes agent named letta-agent-smith derives).
-    expect(retiredRuntimeOfRow({ id: 'h_letta_server_two' }, noHome)).toBeNull()
-    expect(retiredRuntimeOfRow({ id: 'h_letta_agent_smith' }, noHome)).toBeNull()
-    expect(retiredRuntimeOfRow({ id: 'h_letta_agent' }, noHome)).toBeNull()
-  })
-
-  it('a null runtime (a hand edit) is read like a missing one', () => {
-    expect(retiredRuntimeOfRow({ id: 'h_iris', runtime: null as unknown as undefined }, noHome)).toBeNull()
-    expect(unsupportedRowReason({ id: 'h_iris', runtime: null as unknown as undefined })).toBeNull()
-  })
-})
-
-describe('registering an adapter makes its runtime drivable', () => {
-  it('rows of a newly registered runtime stop being "unknown"', () => {
-    const tag = 'test-runtime-registered-here'
-    expect(unsupportedRowReason({ id: 'h_x', runtime: tag })).toMatchObject({ reason: 'unknown' })
-    registerContainerAdapter({ ...hermesAdapter, runtime: tag as never, matches: () => false })
-    expect(unsupportedRowReason({ id: 'h_x', runtime: tag })).toBeNull()
   })
 })

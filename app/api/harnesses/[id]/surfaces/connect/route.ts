@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import { buildConnectEnvVars, mergeEnvVars, ensurePolicyDefaults, getSignalDaemonUrl } from '@/lib/env-helpers'
 import { setPlatformEnabled } from '@/lib/config-yaml-helpers'
 import { services } from '@/lib/services'
@@ -10,16 +11,18 @@ import { applyAllowedBotRolesSetting } from '@/lib/services/discord-allowed-bot-
 import { readEnvValue } from '@/lib/services/discord-thread-gate'
 import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, validIdentities } from '@/lib/surfaces/dm-allowlist'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
-import { agentHome } from '@/lib/services/agent-home'
+
+function agentDataDir(harnessId: string): string {
+  const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
+  if (name === 'personal') return path.join(os.homedir(), '.hermes')
+  return path.join(os.homedir(), `.hermes-${name}`)
+}
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const body = await request.json()
   const { platform, config } = body as { platform: string; config: Record<string, string> }
 
@@ -99,7 +102,7 @@ export async function POST(
     }
   }
 
-  const dataDir = agentHome(id)
+  const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
   if (!fs.existsSync(envPath)) {

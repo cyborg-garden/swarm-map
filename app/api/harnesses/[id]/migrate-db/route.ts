@@ -28,7 +28,6 @@ import { services } from '@/lib/services'
 import { agentDataDirForName } from '@/lib/services/harness'
 import { addStateMigrationToCompose, stateVolumeName } from '@/lib/services/harness-compose'
 import { isStateDbMigrated } from '@/lib/services/db-path'
-import { refuseUnmanagedRow } from '@/lib/services/unmanaged-row-guard'
 
 type Step = { step: string; ok: boolean; detail?: string }
 
@@ -63,8 +62,6 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
-  const unmanaged = refuseUnmanagedRow(id)
-  if (unmanaged) return unmanaged
   const steps: Step[] = []
   const fail = (status: number, error: string) =>
     NextResponse.json({ ok: false, error, steps }, { status })
