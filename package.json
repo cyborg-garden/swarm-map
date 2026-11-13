@@ -45,7 +45,7 @@
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.6",
-    "pm2": "^6.0.8"
+    "pm2": "^7.1.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
