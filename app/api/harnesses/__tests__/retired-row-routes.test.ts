@@ -70,7 +70,7 @@ function snapshot(): Record<string, string> {
 const A = '123456789012345678'
 const ENV = [
   'API_SERVER_KEY=k',
-  'OPENROUTER_API_KEY=sk-or-v1-0123456789abcdef',
+  'OPENROUTER_API_KEY=sk-or-test',
   'DISCORD_BOT_TOKEN=t',
   `DISCORD_ALLOWED_USERS=${A}`,
   `DISCORD_DM_ALLOWED_USERS=${A}`,
