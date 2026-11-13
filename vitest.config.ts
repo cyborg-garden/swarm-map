@@ -14,7 +14,9 @@ export default defineConfig({
     // own (33 of them as of 2026-08-06, none from this tree) — which makes
     // every run dishonest and trains everyone to ignore red. Excluded, not
     // deleted: these are live worktrees someone is working in.
-    exclude: [...configDefaults.exclude, '**/.wt-*/**'],
+    // `*.real.test.ts` needs a real harness installed, which CI does not have.
+    // It runs through `npm run conformance` (vitest.conformance.config.ts).
+    exclude: [...configDefaults.exclude, '**/.wt-*/**', 'conformance/suites/*.real.test.ts'],
   },
   resolve: {
     alias: {
