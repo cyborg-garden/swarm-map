@@ -14,10 +14,24 @@
 // shell. Its `bash` tool understands two commands only, `touch <path>` and
 // `env > <path>`, which is all the conformance checks need. `npm run
 // conformance` runs the same checks against the real Pi.
+//
+// Like the real Pi, it is started by the lab with a tripwire loaded first
+// (guards/child-tripwire.ts), so a model call that is not to this machine is
+// stopped and recorded here, in the process that would have made it.
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+// The lab tells Pi to stay offline with three variables. The real Pi obeys
+// them; this one cannot go online anyway, so it refuses to start without them.
+// A shim that stops setting them turns every check against the fake red.
+for (const [name, value] of [['PI_OFFLINE', '1'], ['PI_TELEMETRY', '0'], ['PI_SKIP_VERSION_CHECK', '1']]) {
+  if (process.env[name] !== value) {
+    process.stderr.write(`fake pi: refusing to start: ${name} is not ${value}\n`)
+    process.exit(1)
+  }
+}
 
 const argv = process.argv.slice(2)
 const flag = (name: string): string | undefined => {

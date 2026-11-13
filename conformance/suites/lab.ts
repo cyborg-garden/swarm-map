@@ -57,6 +57,8 @@ export interface Lab {
   canary(name: string): string
   /** A path a tool run by the harness can touch, and the lab can see. */
   file(name: string): string
+  /** What the tripwire inside the harness process saw. Read it before close(): the log goes with the lab. */
+  tripwire(): { armed: number; attempts: string[] }
   /** Add a scripted reply. */
   script(entry: ScriptEntry): void
   policy(patch?: Record<string, unknown>): PolicyRecord
@@ -132,6 +134,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, policy,
       canary: (name) => `CANARY-${name}-${nonce}`,
       file: (name) => o.harness.workFile(cell, name),
+      tripwire: () => o.harness.tripwire(cell),
       script: (entry) => { script.push(entry) },
       close: closeAll,
     }

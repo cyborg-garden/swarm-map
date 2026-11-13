@@ -39,8 +39,11 @@ export interface PiShimOptions {
   gateTimeoutMs?: number
   /** How long a fresh Pi has for its gate to announce itself before its turn is refused. */
   gateReadyMs?: number
-  /** Test-only: extra env for Pi. The broken-shim suite uses it to plant a leak. */
-  unsafeExtraEnv?: Record<string, string>
+  /**
+   * Rig-only: extra env for Pi. The lab uses it to arm a tripwire inside Pi, and the
+   * broken-shim suite to plant a leak. It cannot change the offline flags below.
+   */
+  rigEnv?: Record<string, string>
 }
 
 export interface PiShim { close(): void }
@@ -57,17 +60,21 @@ export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: s
   ]
 }
 
-/** Pi's whole environment, listed by hand. Nothing is inherited from the shim's own env. */
-export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'gateTimeoutMs' | 'unsafeExtraEnv'>): Record<string, string> {
+/**
+ * Pi's whole environment, listed by hand. Nothing is inherited from the shim's own env.
+ * The three offline flags are the only thing that keeps a real Pi from the network at
+ * start-up (fetching, telemetry, the version check), so they come last and win.
+ */
+export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'gateTimeoutMs' | 'rigEnv'>): Record<string, string> {
   return {
     PATH: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
     HOME: o.homeDir,
     PI_CODING_AGENT_DIR: o.agentDir,
+    SWARM_GATE_TIMEOUT_MS: String(o.gateTimeoutMs ?? 30_000),
+    ...o.rigEnv,
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',
     PI_SKIP_VERSION_CHECK: '1',
-    SWARM_GATE_TIMEOUT_MS: String(o.gateTimeoutMs ?? 30_000),
-    ...o.unsafeExtraEnv,
   }
 }
 

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { OPENAI_CHAT } from '../../lib/door/model-shapes.ts'
 import { PI_CAPS } from '../../lib/runtimes/pi/caps.ts'
 import { piEnv, startPiShim, type PiShimOptions } from '../../lib/runtimes/pi/shim.ts'
+import { childTripwireEnv, readChildTripwire } from '../guards/child-tripwire.ts'
 import { assertNoCredentials } from '../guards/preflight.ts'
 import type { Cell, HarnessUnderTest } from '../suites/harness.ts'
 
@@ -19,7 +20,7 @@ export function fakePiCommand(): string[] {
   return [process.execPath, path.resolve(HERE, '..', 'rig', 'fake-pi.ts')]
 }
 
-const OTHERS = ['C1', 'C2', 'C3', 'C4', 'C4a', 'C4+', 'C5', 'C5v', 'C8p', 'C12', 'C15', 'C15t']
+const OTHERS = ['C1', 'C2', 'C3', 'C4', 'C4a', 'C4+', 'C5', 'C5v', 'C8p', 'C9p', 'C12', 'C15', 'C15t']
 const allBut = (...red: string[]): string[] => OTHERS.filter((id) => !red.includes(id))
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
@@ -38,11 +39,15 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
     agent: path.join(cell.dir, 'agent'), sessions: path.join(cell.dir, 'sessions'),
     work: path.join(cell.dir, 'work'), home: path.join(cell.dir, 'home'),
   })
+  const tripwireLog = (cell: Cell): string => path.join(cell.dir, 'tripwire.log')
   const options = (cell: Cell, variant: string): PiShimOptions => {
     const d = dirs(cell)
+    // Pi runs on Node, so Node is told to load the tripwire first in every Pi this lab starts.
+    const watched = childTripwireEnv(tripwireLog(cell))
     const base: PiShimOptions = {
       ...cell.link, piCommand, agentDir: d.agent, sessionsDir: d.sessions, workDir: d.work, homeDir: d.home,
       gate: { path: GATE }, verdictTimeoutMs: cell.verdictTimeoutMs, gateTimeoutMs: cell.vetoTimeoutMs, gateReadyMs: 10_000,
+      rigEnv: watched,
     }
     switch (variant) {
       case 'good': return base
@@ -50,8 +55,9 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       case 'gate-missing': return { ...base, gate: { path: path.join(cell.dir, 'no-such-gate.ts') } }
       // Short wait: every turn in this variant is refused only once the wait runs out.
       case 'gate-silent': return { ...base, gate: { path: path.join(BROKEN, 'gate-silent.ts') }, gateReadyMs: 700 }
-      case 'leaks-env': return { ...base, unsafeExtraEnv: { SWARMLAB_LEAK: cell.upstreamKey } }
-      case 'inherits-env': return { ...base, unsafeExtraEnv: hostEnvSafeToHandOver(piEnv(base)) }
+      case 'leaks-env': return { ...base, rigEnv: { ...watched, SWARMLAB_LEAK: cell.upstreamKey } }
+      case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(piEnv(base)), ...watched } }
+      case 'dials-out': return { ...base, gate: { path: path.join(BROKEN, 'gate-dials-out.ts') } }
       default: throw new Error(`the Pi harness has no shim variant '${variant}'`)
     }
   }
@@ -66,6 +72,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
     },
     workFile: (cell, name) => path.join(dirs(cell).work, name),
     cellEnv: (cell, variant) => piEnv(options(cell, variant)),
+    tripwire: (cell) => readChildTripwire(tripwireLog(cell)),
     async start(cell, variant) {
       const d = dirs(cell)
       for (const dir of Object.values(d)) mkdirSync(dir, { recursive: true })
@@ -99,6 +106,12 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       'gate-silent': {
         what: 'Pi loads a gate that never announces itself and blocks nothing',
         red: ['C1', 'C4+'], green: ['C3'],
+      },
+      // Every check that starts Pi goes red, not only C9p: an attempt to leave the
+      // machine fails whichever check it happened in. C3 starts no Pi, so it stays green.
+      'dials-out': {
+        what: 'A working gate that also tries to connect to an address outside this machine when Pi starts',
+        red: allBut('C3'), green: ['C3'],
       },
     },
     rows: [

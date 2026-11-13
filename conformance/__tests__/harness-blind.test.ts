@@ -37,7 +37,7 @@ describe('the shared shim suite names no harness', () => {
   it('[U:harness-blind] a second harness can be put through the checks by writing an adapter and nothing else', () => {
     // The adapter is plain data plus two functions; the suite asks it for everything it needs.
     const pi = piHarness(fakePiCommand(), 'fake')
-    expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'workFile'])
+    expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
     const ids = CHECKS.map((c) => c.id)
     for (const v of Object.values(brokenVariants(pi))) for (const id of [...v.red, ...v.green]) expect(ids).toContain(id)
   })

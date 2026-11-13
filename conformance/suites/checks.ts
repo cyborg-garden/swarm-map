@@ -4,6 +4,7 @@
 //   answered  the fake connector got a post, stamped by the scripted model
 //   toolRan   a canary file was touched
 //   secret    a planted secret showed up where it must not
+//   escaped   the tripwire inside the harness process stopped a call that was not to this machine
 // plus the door's own receipts. A check returns pass or fail with a reason;
 // it never throws for a failed expectation, so the must-fail suite can see
 // exactly which checks a broken shim turns red.
@@ -197,6 +198,23 @@ export const CHECKS: Check[] = [
     },
   },
   {
+    // Process level, and only as far as the harness's own runtime: a program the harness
+    // starts (a shell tool running curl) is not seen. The sealed cell (C9) is the full check.
+    id: 'C9p', title: 'the harness process reached for nothing outside this machine (process level, its own runtime only)',
+    lab: { policy: { 'tools.allow': ['shell'] } },
+    async run(lab) {
+      const p: Outcome = []
+      // One whole turn with a tool call, so the harness has started, called the model and run something.
+      const { canary, file } = touchScript(lab, 'c9p')
+      ask(lab, `run ${canary}`)
+      await lab.door.idle()
+      want(p, lab.model.heard(canary) && existsSync(file), 'the turn did not run to the end, so nothing was checked')
+      want(p, lab.tripwire().armed > 0, 'no tripwire was armed inside the harness process, so nothing was checked')
+      // Whether it tried to leave is checked for every check, in runChecks().
+      return p
+    },
+  },
+  {
     id: 'C12', title: 'usage is counted, and the turn after the budget is spent is refused',
     lab: { policy: { budget: { monthlyUsd: 2, onExceed: 'refuse' } } },
     async run(lab) {
@@ -276,6 +294,9 @@ export async function runChecks(base: LabOptions, ids?: string[]): Promise<Check
     try {
       lab = await startLab({ ...base, ...check.lab, policy: { ...base.policy, ...check.lab?.policy } })
       problems = await check.run(lab)
+      // Whatever the check was about: a harness that tried to leave this machine during it has failed it.
+      const escapes = lab.tripwire().attempts
+      if (escapes.length > 0) problems.push(`the harness tried to reach outside this machine: ${[...new Set(escapes)].join(', ')}`)
     } catch (err) {
       problems = [`check threw: ${(err as Error).message}`]
     } finally {

@@ -50,6 +50,12 @@ export interface HarnessUnderTest {
   workFile(cell: Cell, name: string): string
   /** The exact environment the harness process will get, for the F2 preflight. */
   cellEnv(cell: Cell, variant: string): Record<string, string>
+  /**
+   * What the tripwire inside the harness process saw: how many processes armed it, and every
+   * attempt it stopped to reach something that is not this machine. Zero armed means the
+   * harness ran unwatched, and the check that reads this fails rather than pass on no evidence.
+   */
+  tripwire(cell: Cell): { armed: number; attempts: string[] }
   /** Start the shim. `variant` is 'good' or a key of `broken`. */
   start(cell: Cell, variant: string): Promise<{ close(): void }>
   /** Shims of this harness that are broken on purpose. 'chatty' is shared and not listed here. */

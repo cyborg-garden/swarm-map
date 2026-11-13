@@ -32,7 +32,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
-      ['chatty', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env'])
+      ['chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)

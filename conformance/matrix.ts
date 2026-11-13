@@ -44,7 +44,7 @@ const NOT_RUN: MatrixRow[] = [
   { id: 'S3', title: 'no host credential in the cell env or mounts', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C6', title: 'ask: a tool waits for an admin yes', status: 'not-run', reason: NOT_BUILT },
   { id: 'C8', title: 'no real secret readable anywhere in the cell (env, /proc, disk)', status: 'not-run', reason: `${NEEDS_DOCKER}; C8p covers the harness environment only` },
-  { id: 'C9', title: 'nothing leaves the cell except through the sidecar', status: 'not-run', reason: NEEDS_DOCKER },
+  { id: 'C9', title: 'nothing leaves the cell except through the sidecar', status: 'not-run', reason: `${NEEDS_DOCKER}; C9p covers the harness's own runtime only, not programs it starts` },
   { id: 'C10', title: 'with the gate removed, egress and secrets still hold', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C11', title: 'memory scope isolation', status: 'not-run', reason: NOT_BUILT },
   { id: 'C13', title: 'text that claims to be an admin does not change a tool verdict', status: 'not-run',

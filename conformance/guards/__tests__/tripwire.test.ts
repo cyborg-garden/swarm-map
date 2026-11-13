@@ -3,7 +3,9 @@
 // F6 negative control: the tripwire must stop and record anything that tries
 // to leave the machine. If this test cannot make it trip, no other test may
 // lean on it.
+import dgram from 'node:dgram'
 import dns from 'node:dns'
+import * as dnsNamed from 'node:dns'
 import net from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, clearTripwire, tripwireAttempts, TripwireError } from '../tripwire.ts'
@@ -47,5 +49,42 @@ describe('F6 tripwire', () => {
     await new Promise((resolve) => server.close(resolve))
     expect(got).toBe('ok')
     expect(tripwireAttempts()).toEqual([])
+  })
+
+  it('stops a UDP send or connect to a non-loopback address and records it', () => {
+    const socket = dgram.createSocket('udp4')
+    try {
+      expect(() => socket.send('x', 9, '192.0.2.1')).toThrow(TripwireError)
+      expect(() => socket.send(Buffer.from('xyz'), 0, 1, 9, '192.0.2.1')).toThrow(TripwireError)
+      expect(() => socket.connect(9, '192.0.2.1')).toThrow(TripwireError)
+      expect(tripwireAttempts()).toEqual(['udp.send 192.0.2.1:9', 'udp.send 192.0.2.1:9', 'udp.connect 192.0.2.1:9'])
+    } finally {
+      socket.close()
+    }
+  })
+
+  it('lets a UDP send to loopback through', async () => {
+    const socket = dgram.createSocket('udp4')
+    await new Promise<void>((resolve, reject) => socket.send('x', 9, '127.0.0.1', (err) => (err ? reject(err) : resolve())))
+    socket.close()
+    expect(tripwireAttempts()).toEqual([])
+  })
+
+  it('stops every other way of asking DNS about a real name', async () => {
+    expect(() => dns.resolve4('example.com', () => {})).toThrow(TripwireError)
+    expect(() => dns.resolve('example.com', 'MX', () => {})).toThrow(TripwireError)
+    expect(() => new dns.Resolver().resolve4('example.com', () => {})).toThrow(TripwireError)
+    await expect(dns.promises.lookup('example.com')).rejects.toThrow(TripwireError)
+    await expect(dns.promises.resolve4('example.com')).rejects.toThrow(TripwireError)
+    await expect(new dns.promises.Resolver().resolveTxt('example.com')).rejects.toThrow(TripwireError)
+    expect(tripwireAttempts()).toEqual([
+      'dns.resolve4 example.com', 'dns.resolve example.com', 'dns.Resolver.resolve4 example.com',
+      'dns.promises.lookup example.com', 'dns.promises.resolve4 example.com', 'dns.promises.Resolver.resolveTxt example.com',
+    ])
+  })
+
+  it('code that imported a DNS function by name gets the guarded one too', () => {
+    expect(() => dnsNamed.lookup('example.com', () => {})).toThrow(TripwireError)
+    expect(() => dnsNamed.resolve4('example.com', () => {})).toThrow(TripwireError)
   })
 })

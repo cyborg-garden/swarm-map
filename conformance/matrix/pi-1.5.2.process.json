@@ -57,6 +57,11 @@
       "status": "pass"
     },
     {
+      "id": "C9p",
+      "title": "the harness process reached for nothing outside this machine (process level, its own runtime only)",
+      "status": "pass"
+    },
+    {
       "id": "C12",
       "title": "usage is counted, and the turn after the budget is spent is refused",
       "status": "pass"
@@ -111,7 +116,7 @@
       "id": "C9",
       "title": "nothing leaves the cell except through the sidecar",
       "status": "not-run",
-      "reason": "needs the Docker cell, which is not built yet"
+      "reason": "needs the Docker cell, which is not built yet; C9p covers the harness's own runtime only, not programs it starts"
     },
     {
       "id": "C10",
@@ -208,6 +213,7 @@
         "C5",
         "C5v",
         "C8p",
+        "C9p",
         "C12",
         "C15",
         "C15t"
@@ -229,6 +235,39 @@
         "C5",
         "C5v",
         "C8p",
+        "C9p",
+        "C12",
+        "C15",
+        "C15t"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "dials-out",
+      "mustFail": [
+        "C1",
+        "C2",
+        "C4",
+        "C4a",
+        "C4+",
+        "C5",
+        "C5v",
+        "C8p",
+        "C9p",
+        "C12",
+        "C15",
+        "C15t"
+      ],
+      "failed": [
+        "C1",
+        "C2",
+        "C4",
+        "C4a",
+        "C4+",
+        "C5",
+        "C5v",
+        "C8p",
+        "C9p",
         "C12",
         "C15",
         "C15t"
@@ -251,6 +290,7 @@
         "C5",
         "C5v",
         "C8p",
+        "C9p",
         "C12",
         "C15",
         "C15t"
