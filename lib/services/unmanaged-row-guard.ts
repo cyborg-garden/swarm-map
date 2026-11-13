@@ -22,8 +22,7 @@ import { findUnmanagedRow, unmanagedRowNote } from './runtime-adapter'
  * per-agent route and fails if one of them skips this.
  */
 export function refuseUnmanagedRow(idOrSlug: string): NextResponse | null {
-  const rows = new Storage(DATA_DIR).read<Partial<Harness>[]>('harnesses.json', [])
-  const found = findUnmanagedRow(Array.isArray(rows) ? rows : [], idOrSlug)
+  const found = storedUnmanagedRow(idOrSlug)
   if (!found) return null
   return NextResponse.json(
     {
@@ -33,4 +32,10 @@ export function refuseUnmanagedRow(idOrSlug: string): NextResponse | null {
     },
     { status: 409 },
   )
+}
+
+/** The row harnesses.json holds for this id or agent name, if Swarm Map does not manage it. */
+export function storedUnmanagedRow(idOrSlug: string) {
+  const rows = new Storage(DATA_DIR).read<Partial<Harness>[]>('harnesses.json', [])
+  return findUnmanagedRow(Array.isArray(rows) ? rows : [], idOrSlug)
 }

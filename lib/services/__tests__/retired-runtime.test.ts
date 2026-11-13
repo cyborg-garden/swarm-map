@@ -262,7 +262,7 @@ describe('a stored row with a retired runtime (R4)', () => {
     const AGENT_ID = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
     const SERVER_ID = 'h_letta_server'
     let agentDecoy: string
-    let serverDecoy: string
+    let serverHome: string
 
     beforeEach(() => {
       // Exactly what SurfaceAdminsService wrote for an id it had no row for:
@@ -272,14 +272,21 @@ describe('a stored row with a retired runtime (R4)', () => {
         { id: AGENT_ID, surfaceAdmins: { discord: ['1'] } },
         { id: SERVER_ID, surfaceAdmins: { discord: ['1'] } },
       ])
-      // What remove(id, true) would resolve these to if they were Hermes.
+      // What remove(id, true) would resolve the agent id to if it were Hermes.
       agentDecoy = path.join(tmpDir, '.hermes-' + AGENT_ID.replace(/^h_/, '').replace(/_/g, '-'))
-      serverDecoy = path.join(tmpDir, '.hermes-letta-server')
-      for (const d of [agentDecoy, serverDecoy]) {
-        fs.mkdirSync(d)
-        fs.writeFileSync(path.join(d, 'SOUL.md'), 'not yours to delete')
-      }
+      fs.mkdirSync(agentDecoy)
+      fs.writeFileSync(path.join(agentDecoy, 'SOUL.md'), 'not yours to delete')
+      // The server id has no such directory here. The old server kept its
+      // files under Swarm Map's own data dir, never in a Hermes home. When
+      // ~/.hermes-letta-server DOES exist the row is a Hermes agent's: see
+      // "a Hermes home exists for the server id" below.
+      serverHome = path.join(tmpDir, '.hermes-letta-server')
     })
+
+    const makeServerHome = () => {
+      fs.mkdirSync(serverHome)
+      fs.writeFileSync(path.join(serverHome, 'SOUL.md'), 'a real Hermes agent')
+    }
 
     it('is not in list() or get(), on the stored path and on the merge path', () => {
       expect(service.list().map((h) => h.id)).toEqual(['h_iris'])
@@ -309,24 +316,25 @@ describe('a stored row with a retired runtime (R4)', () => {
     })
 
     it.each([
-      ['agent', () => AGENT_ID, () => agentDecoy],
-      ['server', () => SERVER_ID, () => serverDecoy],
-    ])('remove(%s row, deleteFiles) only forgets the row', (_label, id, decoy) => {
+      ['agent', () => AGENT_ID],
+      ['server', () => SERVER_ID],
+    ])('remove(%s row, deleteFiles) only forgets the row', (_label, id) => {
       const result = service.remove(id(), true)
       expect(result).toEqual({ removed: true, stopped: false, filesDeleted: false, volumeRemoved: false })
       expect(docker.down).not.toHaveBeenCalled()
       expect(docker.removeVolume).not.toHaveBeenCalled()
-      expect(fs.existsSync(path.join(decoy(), 'SOUL.md'))).toBe(true)
+      expect(fs.existsSync(path.join(agentDecoy, 'SOUL.md'))).toBe(true)
       expect(service.listRetired().map((r) => r.id)).not.toContain(id())
     })
 
-    it('a live hermes-letta-server container is not projected while the untagged row is stored', () => {
+    it('a container named hermes-letta-server with NO Hermes home is not projected while the row is stored', () => {
       mock(docker.listComposeProjects).mockReturnValue([
         { name: 'x', status: 'running', configFiles: [composeFile] },
       ])
       mock(docker.inspectContainers).mockReturnValue([
         { name: 'hermes-letta-server', service: 'hermes-letta-server', state: 'running', status: 'Up', ports: [], composeFile },
       ])
+      expect(fs.existsSync(serverHome)).toBe(false)
       expect(service.list().map((h) => h.id)).not.toContain(SERVER_ID)
       expect(() => service.stop(SERVER_ID)).toThrow()
       expect(docker.stop).not.toHaveBeenCalled()
@@ -393,10 +401,47 @@ describe('a stored row with a retired runtime (R4)', () => {
         expect(stored.find((r) => r.id === 'h_plain_agent')?.runtime).toBe('hermes')
       })
 
-      it('control: the same id with ONLY surface admins is still the leftover row', () => {
-        liveServer()
-        expect(service.listRetired().map((r) => r.id)).toContain(SERVER_ID)
-        expect(service.get(SERVER_ID)).toBeUndefined()
+      // The shape the audit found. An agent Swarm Map only discovered (a
+      // hand-written compose file, or the wizard before it stored rows) has
+      // no row until someone sets its surface admins, and that write stored
+      // `{ id, surfaceAdmins }`: field for field the leftover shape. What
+      // tells the two apart is on disk: a Hermes agent has ~/.hermes-<name>,
+      // and the old server never did.
+      describe('a Hermes home exists for the server id, and the row is only { id, surfaceAdmins }', () => {
+        beforeEach(() => {
+          storage.write('harnesses.json', [{ id: SERVER_ID, surfaceAdmins: { discord: ['1'] } }])
+          makeServerHome()
+          liveServer()
+        })
+
+        it('is a Hermes row: listed, in get(), not in listRetired()', () => {
+          expect(service.listRetired()).toEqual([])
+          expect(service.unmanagedRow(SERVER_ID)).toBeNull()
+          // list() is what every fleet sweep walks (thread gate, integrity,
+          // snapshots, drift, model updates).
+          expect(service.list().map((h) => h.id)).toContain(SERVER_ID)
+          expect(service.get(SERVER_ID)).toMatchObject({ id: SERVER_ID, name: 'letta-server', status: 'running' })
+        })
+
+        it('can be driven and re-configured', () => {
+          service.stop(SERVER_ID)
+          expect(docker.stop).toHaveBeenCalledTimes(1)
+          expect(service.updateConfig(SERVER_ID, { tier: 'team' })?.tier).toBe('team')
+        })
+
+        it('control: take the Hermes home away and the same row is the leftover again', () => {
+          fs.rmSync(serverHome, { recursive: true })
+          expect(service.listRetired().map((r) => r.id)).toContain(SERVER_ID)
+          expect(service.get(SERVER_ID)).toBeUndefined()
+          expect(() => service.stop(SERVER_ID)).toThrow()
+        })
+      })
+
+      it('the old agent id is retired even when a directory sits where a Hermes home would', () => {
+        // `h_letta_agent-<uuid>` keeps a hyphen, so no Hermes name derives it.
+        storage.write('harnesses.json', [{ id: AGENT_ID, surfaceAdmins: { discord: ['1'] } }])
+        expect(fs.existsSync(agentDecoy)).toBe(true)
+        expect(service.listRetired().map((r) => r.id)).toEqual([AGENT_ID])
       })
     })
 
@@ -444,6 +489,57 @@ describe('a stored row with a retired runtime (R4)', () => {
     expect(docker.start).not.toHaveBeenCalled()
     expect(docker.stop).not.toHaveBeenCalled()
     expect(docker.restart).not.toHaveBeenCalled()
+  })
+
+  describe('a new agent cannot take a name the row still holds', () => {
+    // Its id is taken. Making the agent anyway would leave it running, or its
+    // files on disk, behind a row that hides it.
+    const snapshotHome = () => fs.readdirSync(tmpDir).sort()
+
+    it('createOverlay refuses before it writes anything', async () => {
+      const before = snapshotHome()
+      await expect(service.createOverlay({ name: 'srv' })).rejects.toThrow(/forget the row/i)
+      expect(snapshotHome()).toEqual(before)
+      expect(fs.existsSync(path.join(tmpDir, 'compose', 'srv'))).toBe(false)
+    })
+
+    it('importFromDir refuses before it copies anything', async () => {
+      const source = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-import-src-'))
+      fs.writeFileSync(path.join(source, '.env'), 'X=1\n')
+      fs.writeFileSync(path.join(source, 'config.yaml'), 'model:\n  default: x\n')
+      const before = snapshotHome()
+      try {
+        await expect(service.importFromDir(source, 'srv')).rejects.toThrow(/forget the row/i)
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+      }
+      expect(snapshotHome()).toEqual(before)
+      expect(fs.existsSync(path.join(tmpDir, '.hermes-srv'))).toBe(false)
+    })
+
+    it('importing under the old server id is refused too, so the copy cannot turn the leftover into a Hermes row', async () => {
+      storage.write('harnesses.json', [{ id: 'h_letta_server', surfaceAdmins: { discord: ['1'] } }])
+      const source = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-import-src-'))
+      fs.writeFileSync(path.join(source, '.env'), 'X=1\n')
+      try {
+        await expect(service.importFromDir(source, 'letta-server')).rejects.toThrow(/forget the row/i)
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+      }
+      expect(fs.existsSync(path.join(tmpDir, '.hermes-letta-server'))).toBe(false)
+      expect(service.listRetired().map((r) => r.id)).toEqual(['h_letta_server'])
+    })
+
+    it('control: a free name imports', async () => {
+      const source = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-import-src-'))
+      fs.writeFileSync(path.join(source, '.env'), 'X=1\n')
+      try {
+        await service.importFromDir(source, 'fresh')
+      } finally {
+        fs.rmSync(source, { recursive: true, force: true })
+      }
+      expect(fs.existsSync(path.join(tmpDir, '.hermes-fresh', '.env'))).toBe(true)
+    })
   })
 
   it('duplicate refuses and writes nothing', async () => {

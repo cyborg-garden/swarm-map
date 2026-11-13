@@ -6,6 +6,7 @@ import {
   pickContainerAdapter,
   registerContainerAdapter,
 } from '../harness'
+import { retiredRuntimeOfRow } from '../runtime-adapter'
 import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
@@ -73,5 +74,37 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
     expect(pickContainerAdapter('custom-agent')).toBe(customAdapter)
     // hermes selection is unaffected
     expect(adapterForRuntime('hermes')).toBe(hermesAdapter)
+  })
+})
+
+describe('retiredRuntimeOfRow: the id is only evidence when nothing better exists', () => {
+  const noHome = () => false
+  const home = () => true
+  const AGENT = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
+
+  it('a stored tag always wins, whatever the id or the disk say', () => {
+    expect(retiredRuntimeOfRow({ id: 'h_iris', runtime: 'letta' }, home)).toBe('letta')
+    expect(retiredRuntimeOfRow({ id: 'h_letta_server', runtime: 'hermes' }, noHome)).toBeNull()
+  })
+
+  it('an untagged row with any Hermes field is not retired', () => {
+    expect(retiredRuntimeOfRow({ id: 'h_letta_server', name: 'letta-server' } as { id: string }, noHome)).toBeNull()
+  })
+
+  it('the leftover shape under the server id is retired only when no Hermes home exists for that name', () => {
+    const row = { id: 'h_letta_server', surfaceAdmins: { discord: ['1'] } } as { id: string }
+    const asked: string[] = []
+    expect(retiredRuntimeOfRow(row, (n) => (asked.push(n), false))).toBe('letta-server')
+    expect(asked).toEqual(['letta-server'])
+    expect(retiredRuntimeOfRow(row, home)).toBeNull()
+  })
+
+  it('the old agent id is retired with or without a directory: no Hermes name derives it', () => {
+    expect(retiredRuntimeOfRow({ id: AGENT }, home)).toBe('letta')
+    expect(retiredRuntimeOfRow({ id: AGENT }, noHome)).toBe('letta')
+  })
+
+  it('other ids are never retired by id', () => {
+    expect(retiredRuntimeOfRow({ id: 'h_letta_fan' }, noHome)).toBeNull()
   })
 })

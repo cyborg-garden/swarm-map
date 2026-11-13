@@ -18,7 +18,9 @@
  * UnsupportedRuntimeError below.
  */
 
+import fs from 'fs'
 import type { Harness } from '@/lib/types'
+import { agentHomeForName } from './data-dir'
 import type { ComposeOptions } from './harness-compose'
 
 export interface ContainerRuntimeAdapter {
@@ -87,11 +89,17 @@ export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
  *
  * The agent form keeps the hyphens of `agent-<uuid>`. An id derived from a
  * Hermes agent name has its hyphens turned into underscores, so the two
- * cannot collide. The server id is also the id of a Hermes agent named
- * `letta-server`. Two things keep that agent out of this rule: every row
- * Swarm Map creates for it carries Hermes fields (name, compose file, port)
- * and, since this change, `runtime: 'hermes'`; and the surface-admins write
- * tags a new row for that id (see SurfaceAdminService.setAdmins).
+ * cannot collide.
+ *
+ * The server id CAN collide: it is also the id of a Hermes agent named
+ * `letta-server`. Rows Swarm Map creates for that agent carry Hermes fields
+ * and, since this change, `runtime: 'hermes'`. But an agent Swarm Map only
+ * discovered has no row until its surface admins are set, and that write
+ * stored `{ id, surfaceAdmins }`: the leftover shape exactly. The row alone
+ * cannot settle it, so the disk does. A Hermes agent has a home at
+ * `~/.hermes-<name>`. The old server never had one (its files lived under
+ * Swarm Map's own data dir). A leftover-shaped row whose id maps to an
+ * existing Hermes home is that agent's row.
  */
 const RETIRED_ID_RUNTIME: ReadonlyArray<[RegExp, string]> = [
   [/^h_letta_agent-/, 'letta'],
@@ -101,12 +109,22 @@ const RETIRED_ID_RUNTIME: ReadonlyArray<[RegExp, string]> = [
 /** The only fields a row left by the old integration can carry. */
 const LEFTOVER_ROW_FIELDS: ReadonlySet<string> = new Set(['id', 'surfaceAdmins'])
 
+/** Is there a Hermes home on disk for this agent name? */
+function hermesHomeExists(name: string): boolean {
+  return fs.existsSync(agentHomeForName(name))
+}
+
 /**
  * The retired runtime a stored row belongs to, or null. A stored tag always
  * wins. A row with no tag is judged by its id only when it has the leftover
- * shape: any other field means Hermes code wrote the row.
+ * shape: any other field means Hermes code wrote the row. And an id that a
+ * Hermes agent name also derives is not retired while that agent's home
+ * exists (see RETIRED_ID_RUNTIME).
  */
-export function retiredRuntimeOfRow(row: { id?: string; runtime?: string }): string | null {
+export function retiredRuntimeOfRow(
+  row: { id?: string; runtime?: string },
+  hasHermesHome: (name: string) => boolean = hermesHomeExists,
+): string | null {
   if (row.runtime !== undefined) {
     return Object.hasOwn(RETIRED_RUNTIMES, row.runtime) ? row.runtime : null
   }
@@ -114,7 +132,11 @@ export function retiredRuntimeOfRow(row: { id?: string; runtime?: string }): str
   for (const [field, value] of Object.entries(row)) {
     if (value !== undefined && !LEFTOVER_ROW_FIELDS.has(field)) return null
   }
-  return retiredRuntimeOfId(row.id)
+  const retired = retiredRuntimeOfId(row.id)
+  if (!retired) return null
+  const name = harnessNameOfId(row.id)
+  if (canonicalHarnessId(name) === row.id && hasHermesHome(name)) return null
+  return retired
 }
 
 /** The retired runtime an id alone points at, or null. Says nothing about a stored row. */
@@ -170,6 +192,11 @@ export function unsupportedRowReason(
  */
 export function canonicalHarnessId(idOrSlug: string): string {
   return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
+}
+
+/** The agent name an id stands for: `h_seraph_doer` is "seraph-doer". A bare name is returned as is. */
+export function harnessNameOfId(idOrSlug: string): string {
+  return idOrSlug.startsWith('h_') ? idOrSlug.slice(2).replace(/_/g, '-') : idOrSlug
 }
 
 /**

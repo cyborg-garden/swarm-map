@@ -84,10 +84,12 @@ const CONFIG = 'model:\n  default: x\nplatforms:\n  discord:\n    enabled: true\
 
 // The rows under test, and the Hermes data dir each id resolves to.
 const LEFTOVER_AGENT = 'h_letta_agent-0f1e2d3c-4b5a-6978-8695-a4b3c2d1e0f9'
-const CASES: Array<{ id: string; row: Record<string, unknown>; dir: string }> = [
+// The server id gets no directory: a leftover-shaped row for it beside a real
+// ~/.hermes-letta-server is that Hermes agent's row (see retiredRuntimeOfRow).
+const CASES: Array<{ id: string; row: Record<string, unknown>; dir: string | null }> = [
   { id: 'h_old', row: { id: 'h_old', name: 'old', runtime: 'letta', surfaceAdmins: { discord: [A] } }, dir: '.hermes-old' },
   { id: 'h_odd', row: { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future' }, dir: '.hermes-odd' },
-  { id: 'h_letta_server', row: { id: 'h_letta_server', surfaceAdmins: { discord: [A] } }, dir: '.hermes-letta-server' },
+  { id: 'h_letta_server', row: { id: 'h_letta_server', surfaceAdmins: { discord: [A] } }, dir: null },
   { id: LEFTOVER_AGENT, row: { id: LEFTOVER_AGENT, surfaceAdmins: { discord: [A] } }, dir: '.hermes-' + LEFTOVER_AGENT.replace(/^h_/, '').replace(/_/g, '-') },
 ]
 
@@ -98,6 +100,7 @@ function seed(rows: Array<Record<string, unknown>>) {
   }
   fs.writeFileSync(path.join(scratch.data, 'harnesses.json'), JSON.stringify(rows))
   for (const c of CASES) {
+    if (!c.dir) continue
     const dir = path.join(scratch.home, c.dir)
     fs.mkdirSync(path.join(dir, 'platforms', 'pairing'), { recursive: true })
     fs.writeFileSync(path.join(dir, '.env'), ENV)

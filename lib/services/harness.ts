@@ -1356,6 +1356,19 @@ export class HarnessService {
     return this.listRetired().find((r) => r.id === id) ?? null
   }
 
+  /**
+   * Throws when a row Swarm Map does not manage still holds this name's id.
+   * Every path that makes a new agent calls it before its first write: an
+   * agent made under a held name would run, or leave files, behind a row
+   * that hides it.
+   */
+  private assertNameNotHeld(name: string): void {
+    const held = this.unmanagedRow(name)
+    if (held) {
+      throw new Error(`The name "${name}" is held by a row Swarm Map does not manage. ${held.note} Forget the row to free the name.`)
+    }
+  }
+
   updateConfig(id: string, partial: Partial<Harness>): Harness | undefined {
     // Load existing overlays, merge, persist
     const overlays = this.storage.read<Harness[]>(HARNESSES_FILE, [])
@@ -2078,6 +2091,7 @@ export class HarnessService {
     if (!input.name) {
       throw new Error('Harness name must contain at least one letter or digit')
     }
+    this.assertNameNotHeld(input.name)
     const overlays = this.storage.read<Partial<Harness>[]>('harnesses.json', [])
 
     // Check for duplicate name
@@ -2176,6 +2190,7 @@ export class HarnessService {
 
     // 2. Determine destination
     const slug = toHarnessSlug(name)
+    this.assertNameNotHeld(slug)
     const destDir = slug === 'personal'
       ? path.join(os.homedir(), '.hermes')
       : path.join(os.homedir(), `.hermes-${slug}`)

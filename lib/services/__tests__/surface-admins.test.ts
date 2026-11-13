@@ -423,15 +423,22 @@ describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', ()
     { id: 'h_odd', name: 'odd', runtime: 'pi-from-the-future', surfaceAdmins: { discord: [A], telegram: ['111'] } },
   ]
   const ENV = `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${A}\nDISCORD_DM_ALLOWED_USERS=${A}\nTELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-1001\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n`
-  // The Hermes data dir each id would resolve to if the row were treated as Hermes.
+  // The Hermes data dir each id would resolve to if the row were treated as
+  // Hermes. The server id has none here: with a Hermes home on disk its row
+  // is a Hermes agent's (see the last two cases).
   const DIRS: Record<string, string> = {
-    h_letta_server: 'letta-server',
     [LEFTOVER_AGENT]: LEFTOVER_AGENT.replace(/^h_/, '').replace(/_/g, '-'),
     h_old: 'old',
     h_odd: 'odd',
   }
   const stored = () => fs.readFileSync(path.join(dataDir, 'harnesses.json'), 'utf-8')
   const envOf = (id: string) => fs.readFileSync(path.join(home, `.hermes-${DIRS[id]}`, '.env'), 'utf-8')
+  const SERVER_HOME = () => path.join(home, '.hermes-letta-server')
+  /** The agent files this id maps to are as they were: unchanged, or still absent. */
+  const expectFilesUntouched = (id: string) => {
+    if (DIRS[id]) expect(envOf(id)).toBe(ENV)
+    else expect(fs.existsSync(SERVER_HOME())).toBe(false)
+  }
 
   beforeEach(() => {
     storage.write('harnesses.json', ROWS)
@@ -443,7 +450,7 @@ describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', ()
     const res = svc.setAdmins(id, 'discord', [A, B], A)
     expect(res).toMatchObject({ ok: false, status: 409 })
     expect(stored()).toBe(before)
-    expect(envOf(id)).toBe(ENV)
+    expectFilesUntouched(id)
     expect(audit.append).not.toHaveBeenCalled()
   })
 
@@ -466,7 +473,7 @@ describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', ()
   it.each(ROWS.map((r) => r.id))('approveGroupInvite(%s) is refused with 409 and leaves the .env alone', (id) => {
     const res = svc.approveGroupInvite(id, 'telegram', '-1002', '111')
     expect(res).toMatchObject({ ok: false, status: 409 })
-    expect(envOf(id)).toBe(ENV)
+    expectFilesUntouched(id)
   })
 
   it('the row\'s stored admins are not served as policy for a Hermes agent of the same name', () => {
@@ -490,12 +497,25 @@ describe('SurfaceAdminService leaves retired and unknown-runtime rows alone', ()
     // `{ id, surfaceAdmins }` row for it is exactly the leftover shape, so the
     // row this write creates must carry the tag.
     storage.write('harnesses.json', [])
+    writeAgentEnv('letta-server', ENV)
     const res = svc.setAdmins('h_letta_server', 'discord', [A, B], A)
     expect(res.ok).toBe(true)
     const rows = storage.read<Array<Record<string, unknown>>>('harnesses.json', [])
     expect(rows).toEqual([{ id: 'h_letta_server', runtime: 'hermes', surfaceAdmins: { discord: [A, B] } }])
     // And it stays writable.
     expect(svc.setAdmins('h_letta_server', 'discord', [A], A).ok).toBe(true)
+  })
+
+  it('a Hermes agent named letta-server whose row is only { id, surfaceAdmins } keeps a writable row', () => {
+    // The row this service wrote for a discovered agent before rows were
+    // tagged. It has the leftover shape, and the agent's home on disk is
+    // what marks it as Hermes.
+    storage.write('harnesses.json', [{ id: 'h_letta_server', surfaceAdmins: { discord: [A], telegram: ['111'] } }])
+    writeAgentEnv('letta-server', ENV)
+    expect(svc.listAdmins('letta-server', 'discord')).toMatchObject({ source: 'explicit', admins: [A] })
+    expect(svc.setAdmins('h_letta_server', 'discord', [A, B], A)).toMatchObject({ ok: true, admins: [A, B] })
+    expect(svc.approveGroupInvite('h_letta_server', 'telegram', '-1002', '111')).toMatchObject({ ok: true, approved: true })
+    expect(fs.readFileSync(path.join(SERVER_HOME(), '.env'), 'utf-8')).toContain('-1002')
   })
 
   it('control: the same calls on a Hermes row DO write', () => {

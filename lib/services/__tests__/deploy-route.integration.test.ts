@@ -11,6 +11,19 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 
+// Where the route's "is this name held by a row Swarm Map does not manage"
+// check reads harnesses.json. lib/services/data-dir reads DATA_DIR at import.
+const store = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeFs = require('fs') as typeof import('fs')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodePath = require('path') as typeof import('path')
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const dir = nodeFs.mkdtempSync(nodePath.join((require('os') as typeof import('os')).tmpdir(), 'deploy-store-'))
+  process.env.DATA_DIR = dir
+  return { dir, rows: nodePath.join(dir, 'harnesses.json') }
+})
+
 const h = vi.hoisted(() => ({
   tmpHome: '',
   tmpData: '',
@@ -84,6 +97,7 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     tmpl.get.mockReset()
     tmpl.install.mockReset()
     tmpl.install.mockResolvedValue([])
+    fs.rmSync(store.rows, { force: true })
   })
 
   afterEach(() => {
@@ -388,6 +402,27 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(res.status).toBe(400)
     expect(data.error).toMatch(/unknown runtime/i)
     await expectNothingCreated()
+  })
+
+  // A name whose id a retired or unknown-runtime row still holds. Deploying
+  // onto it would start `hermes-<name>` and then fail to store a row, leaving
+  // a running agent hidden behind the old row.
+  it.each([
+    ['a retired tag', { id: 'h_scout', name: 'scout', runtime: 'letta' }, 'scout'],
+    ['an unknown tag', { id: 'h_scout', name: 'scout', runtime: 'pi-from-the-future' }, 'scout'],
+    ['the old server id', { id: 'h_letta_server', surfaceAdmins: { discord: ['1'] } }, 'letta-server'],
+  ])('a name held by a row with %s: 409, creates nothing', async (_label, row, name) => {
+    const { execFileSync, execSync } = await import('child_process')
+    vi.mocked(execFileSync).mockClear()
+    vi.mocked(execSync).mockClear()
+    fs.writeFileSync(store.rows, JSON.stringify([row]))
+    const res = await deploy({ name, provider: 'anthropic', primaryModel: 'claude-opus-4-6', existingKeyId: 'k_known' })
+    const data = await res.json()
+    expect(res.status).toBe(409)
+    expect(data.ok).toBe(false)
+    expect(data.error).toMatch(/forget the row/i)
+    await expectNothingCreated()
+    expect(JSON.parse(fs.readFileSync(store.rows, 'utf-8'))).toEqual([row])
   })
 
   it('control: the same body with runtime "hermes" deploys', async () => {
