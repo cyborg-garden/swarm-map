@@ -4,11 +4,10 @@
  * changed through ANY per-agent route.
  *
  * HarnessService keeps such a row out of list()/get(), which covers the routes
- * that look the agent up first. Many routes never do: they turn the id in the
- * URL straight into `~/.hermes-<name>` and write there. For a retired `h_old`
- * row that is the data directory of a Hermes agent called "old" (or of
- * nothing Swarm Map made), so those routes were editing a Hermes agent's
- * .env and config.yaml through a row that is not Hermes.
+ * that look the agent up first. Other routes work from the id in the URL,
+ * which maps to `~/.hermes-<name>`. For a retired `h_old` row that is the
+ * data directory of a Hermes agent called "old" (or of nothing Swarm Map
+ * made). The rule: no route reads or writes there through such a row.
  *
  * This test does not list the routes by hand. It walks
  * app/api/harnesses/[id]/ and calls every exported POST, PUT, PATCH and
@@ -278,9 +277,13 @@ describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row, dir
   })
 
   it('other spellings of the same id are refused the same way', async () => {
-    // Each of these builds the same directory as the stored id.
+    // Each of these builds the same directory as the stored id. The
+    // upper-case ones do so only where the disk folds case.
     const name = id.replace(/^h_/, '').replace(/_/g, '-')
-    const spellings = [`h_${name}`, name.toUpperCase(), `h_${name.toUpperCase()}`, name.replace(/-/g, '_')]
+    fs.mkdirSync(path.join(scratch.home, 'CaseProbe'), { recursive: true })
+    const folds = fs.existsSync(path.join(scratch.home, 'caseprobe'))
+    fs.rmSync(path.join(scratch.home, 'CaseProbe'), { recursive: true })
+    const spellings = [`h_${name}`, name.replace(/-/g, '_'), ...(folds ? [name.toUpperCase(), `h_${name.toUpperCase()}`] : [])]
     const write = handlers.find((h) => h.label === 'POST surfaces/disconnect/route.ts')!
     const read = readers.find((h) => h.label === 'GET settings/route.ts')!
     for (const spelling of spellings) {
@@ -349,13 +352,24 @@ describe('a Hermes agent is never refused as unmanaged', () => {
   ]
 
   const refusedAsUnmanaged = async (h: (typeof handlers)[number], id: string): Promise<boolean> => {
+    // The refusal has two shapes. The route guard answers 409 with a reason.
+    // Below the guard, agentHome() throws UnsupportedRuntimeError, which a
+    // route either lets out or turns into an error body carrying its
+    // message. Both count: a Hermes agent must see neither.
+    const REFUSAL_TEXT = /is retired\. Swarm Map no longer manages it|Unknown runtime "[^"]*": no adapter is registered/
     let res: Response
     try {
       res = await call(h.handler, h.method, h.file, id)
-    } catch {
-      return false // a route failing for its own reasons is not this refusal
+    } catch (err) {
+      // Any other throw is the route failing for its own reasons.
+      return err instanceof Error && (err.name === 'UnsupportedRuntimeError' || REFUSAL_TEXT.test(err.message))
     }
-    const body = (await res.json().catch(() => null)) as { reason?: string } | null
+    const text = await res.text().catch(() => '')
+    if (REFUSAL_TEXT.test(text)) return true
+    let body: { reason?: string } | null = null
+    try {
+      body = JSON.parse(text)
+    } catch {}
     return res.status === 409 && (body?.reason === 'retired' || body?.reason === 'unknown')
   }
 
@@ -381,6 +395,23 @@ describe('a Hermes agent is never refused as unmanaged', () => {
       if (await refusedAsUnmanaged(h, 'h_ghost')) refused.push(h.label)
     }
     expect(refused).toEqual([])
+  })
+
+  it('control: a refusal thrown below the route guard is reported too', async () => {
+    // What the sweep must catch if the mapping ever refuses a Hermes agent
+    // while the guard lets it through. Here the guard is the one switched
+    // off, so the mapping's own refusal is all that is left to see.
+    seed([{ id: 'h_old', name: 'old', runtime: 'letta' }])
+    const guard = await import('@/lib/services/unmanaged-row-guard')
+    const spy = vi.spyOn(guard, 'refuseUnmanagedRow').mockReturnValue(null)
+    try {
+      const usage = readers.find((x) => x.label === 'GET usage/route.ts')!
+      expect(await refusedAsUnmanaged(usage, 'h_old')).toBe(true)
+      const settings = handlers.find((x) => x.label === 'PUT settings/route.ts')!
+      expect(await refusedAsUnmanaged(settings, 'h_old')).toBe(true)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('control: the same sweep does report a row that IS unmanaged', async () => {

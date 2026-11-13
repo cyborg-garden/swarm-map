@@ -57,14 +57,15 @@ Hermes name derives, so they are retired whatever is on disk.
   slug: `GET .../policy`, `GET .../surfaces/:platform/admins`, `.../admins/:userId` and
   `.../groups/:groupId`. They answer from that agent's own `.env`, never from the row's
   stored fields, and write nothing.
-- What a running agent sees. The policy plugin (`infra/templates/plugins/swarm_map_policy`,
-  and its copy in the agent runtime) makes three calls. The two checks it makes on every
-  message, "is this group allowed" and "is this user my admin", are among the four reads
-  above and are never refused. The third, the invite approval it sends once when it is
-  added to a group, gets the 409 if an unmanaged row is stored under the agent's own id. The
-  plugin reads any answer but 200 as "not approved", once, with no retry: the agent leaves
-  that group. A Hermes agent with a Hermes row, or with no row, never gets this 409;
-  `retired-row-routes.test.ts` sweeps every route for each row shape to hold that.
+- What a running agent sees. The policy plugin shipped here
+  (`infra/templates/plugins/swarm_map_policy`) makes two reads: "is this user my admin",
+  on every message, and "is this group allowed". Both are among the four reads above and
+  are never refused. The agent runtime's copy of the plugin adds one write, an invite
+  approval sent once when the agent is added to a group. That one gets the 409 if an
+  unmanaged row is stored under the agent's own id, and the plugin reads any answer but
+  200 as "not approved", with no retry. A Hermes agent with a Hermes row, or with no row,
+  never gets this 409; `retired-row-routes.test.ts` sweeps every route for each row shape
+  to hold that.
 - The path `~/.hermes-<name>` is built in one file, `lib/services/data-dir.ts`. Code that
   was handed an id or a name (a URL, a request body, `keys.json`, a list of names) reaches
   it through `agentHome()` / `agentHomeIfManaged()` in `lib/services/agent-home.ts`, which
@@ -75,8 +76,10 @@ Hermes name derives, so they are retired whatever is on disk.
   `keys.json` from before the row was retired stays listed, but is never written again.
   Code that got the name from `HarnessService.list()` or `get()` uses the unchecked helper;
   `lib/__tests__/agent-home-guards.test.ts` names the files that may.
-- The row is matched on what the id means, not how it is spelled: `h_foo_bar`, `foo-bar`,
-  `h_foo-bar` and `FOO-BAR` all find the row `h_foo_bar`. A name must be one a
+- The row is matched on what the id means, not how it is spelled. Two spellings are the
+  same agent when they build the same directory: `h_foo_bar`, `foo-bar` and `h_foo-bar`
+  always, `FOO-BAR` only where the disk folds case (macOS by default). On a disk that keeps
+  case, an agent `Old` beside a retired `h_old` is a different agent and is left alone. A name must be one a
   container can have (ASCII letters, digits, `_`, `.`, `-`) before it becomes a
   path; the routes agents call are stricter and allow no `.`.
 - A new agent cannot take a name such a row still holds. Deploy answers 409 and create and

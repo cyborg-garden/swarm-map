@@ -1,6 +1,7 @@
 import { Storage } from './storage'
-import { DATA_DIR, agentHomeForName } from './data-dir'
-import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId } from './runtime-adapter'
+import fs from 'fs'
+import { DATA_DIR, agentHomeForName, existingAgentHomeNames } from './data-dir'
+import { UnsupportedRuntimeError, canonicalHarnessId, findUnmanagedRow, harnessNameOfId } from './runtime-adapter'
 
 /**
  * From an id or an agent name to its Hermes home (`~/.hermes-<name>`).
@@ -33,11 +34,29 @@ export function storedHarnessRows(): StoredRow[] {
  * harnesses.json as the caller already holds it; left out, it is read.
  */
 export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedHarnessRows()): string {
-  const name = harnessNameOfId(idOrSlug)
+  const name = nameOfId(idOrSlug)
   if (!isAgentName(name)) throw new Error('Invalid harness id')
   const unmanaged = findUnmanagedRow(rows, idOrSlug)
   if (unmanaged) throw new UnsupportedRuntimeError(unmanaged.runtime, unmanaged.reason)
   return agentHomeForName(name)
+}
+
+/**
+ * The agent name an id came from. Making an id turns '-' into '_', which
+ * cannot be undone when the name had a '_' of its own: a container made by
+ * hand as `hermes-_x` gets `h__x`, the same id `hermes--x` would. Turning
+ * every '_' back into '-' is right for every agent Swarm Map makes, so that
+ * form wins whenever its home exists, and when nothing exists yet. Only when
+ * it does not exist is the disk asked: if exactly one home has a name that
+ * makes this id, that is the agent. Two candidates are not guessed between.
+ */
+function nameOfId(idOrSlug: string): string {
+  const hyphened = harnessNameOfId(idOrSlug)
+  if (!idOrSlug.startsWith('h_') || !idOrSlug.slice(2).includes('_')) return hyphened
+  if (!isAgentName(hyphened) || fs.existsSync(agentHomeForName(hyphened))) return hyphened
+  const id = canonicalHarnessId(hyphened)
+  const candidates = existingAgentHomeNames().filter((n) => isAgentName(n) && canonicalHarnessId(n) === id)
+  return candidates.length === 1 ? candidates[0] : hyphened
 }
 
 /**
@@ -66,7 +85,7 @@ function isAgentName(name: string): boolean {
  * `~/.hermes-<that name>`. Null too for anything that is not an agent name.
  */
 export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] = storedHarnessRows()): string | null {
-  const name = idOrName.startsWith('h_') ? harnessNameOfId(idOrName) : idOrName
+  const name = idOrName.startsWith('h_') ? nameOfId(idOrName) : idOrName
   if (!isAgentName(name)) return null
   return findUnmanagedRow(rows, idOrName) ? null : agentHomeForName(name)
 }
@@ -80,7 +99,7 @@ export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] 
  * lists the files that may use this.
  */
 export function agentHomeForSelfRead(idOrSlug: string): string {
-  const name = harnessNameOfId(idOrSlug)
+  const name = nameOfId(idOrSlug)
   if (!isAgentName(name)) throw new Error('Invalid harness id')
   return agentHomeForName(name)
 }

@@ -7,9 +7,8 @@ import { findUnmanagedRow, unmanagedRowNote } from './runtime-adapter'
  *
  * A stored row with a retired or unknown runtime is not a Hermes agent, but
  * its id still maps to a Hermes path: `h_foo` becomes `~/.hermes-foo` and
- * `hermes-foo`. Many routes derive that path from the URL without ever
- * looking the agent up, so HarnessService hiding the row does not stop them.
- * This does: it answers 409 before the route reads its body.
+ * `hermes-foo`. Routes work from the id in the URL, so each one asks here
+ * first: this answers 409 before the route reads its body.
  *
  * It reads harnesses.json and nothing else (no Docker call), so it is cheap
  * enough for the routes agents call. Three kinds of route do not call it:

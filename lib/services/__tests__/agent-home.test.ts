@@ -10,8 +10,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { agentHome, agentHomeIfManaged, agentHomeForSelfRead, storedHarnessRows } from '../agent-home'
-import { DATA_DIR, agentHomeForName } from '../data-dir'
-import { RETIRED_RUNTIMES, UnsupportedRuntimeError } from '../runtime-adapter'
+import { DATA_DIR, agentHomeForName, homeFoldsCase } from '../data-dir'
+import { RETIRED_RUNTIMES, UnsupportedRuntimeError, findUnmanagedRow } from '../runtime-adapter'
 
 let home: string
 
@@ -75,10 +75,9 @@ describe('agentHome', () => {
     expect(agentHomeIfManaged(id, ROWS)).toBeNull()
   })
 
-  // The row is matched on what the id MEANS, not on how it is spelled. Every
-  // spelling below builds the same directory as `h_seraph_doer` (the last
-  // two on a case-insensitive disk), so every one must hit the same row.
-  it.each(['h_seraph_doer', 'seraph-doer', 'seraph_doer', 'h_seraph-doer', 'SERAPH-DOER', 'h_SERAPH_DOER', 'Seraph_Doer'])(
+  // The row is matched on what the id MEANS, not on how it is spelled:
+  // two spellings are the same agent when they build the same directory.
+  it.each(['h_seraph_doer', 'seraph-doer', 'seraph_doer', 'h_seraph-doer'])(
     'an unmanaged row is found under the spelling %s',
     (spelling) => {
       const rows = [{ id: 'h_seraph_doer', name: 'seraph-doer', runtime: RETIRED_TAG }]
@@ -86,6 +85,97 @@ describe('agentHome', () => {
       expect(agentHomeIfManaged(spelling, rows)).toBeNull()
     },
   )
+
+  // Case is the disk's call. Where the home directory folds case (macOS by
+  // default), ~/.hermes-Old IS ~/.hermes-old, so an agent "Old" beside a
+  // retired `h_old` shares its directory and is refused with it. Where it
+  // does not (Linux), they are two agents and "Old" must be left alone.
+  describe('names that differ only by case', () => {
+    const rows = [{ id: 'h_old', name: 'old', runtime: RETIRED_TAG }]
+    const CASED = ['h_Old', 'Old', 'OLD', 'h_OLD']
+
+    it.each(CASED)('%s is a different agent on a disk that keeps case', (spelling) => {
+      expect(findUnmanagedRow(rows, spelling, false)).toBeNull()
+      expect(findUnmanagedRow(rows, 'h_old', false)).not.toBeNull()
+    })
+
+    it.each(CASED)('%s is the same directory on a disk that folds case', (spelling) => {
+      expect(findUnmanagedRow(rows, spelling, true)).toMatchObject({ reason: 'retired' })
+    })
+
+    it('homeFoldsCase() reports what this disk really does', () => {
+      fs.mkdirSync(path.join(home, 'CaseProbe'))
+      const reallyFolds = fs.existsSync(path.join(home, 'caseprobe'))
+      expect(homeFoldsCase()).toBe(reallyFolds)
+    })
+
+    // The same question with the disk's answer supplied, so both answers
+    // are exercised on every machine.
+    it.each([
+      ['the other spelling is the same directory', { ino: 7, dev: 1 }, { ino: 7, dev: 1 }, true],
+      ['the other spelling is another directory', { ino: 7, dev: 1 }, { ino: 8, dev: 1 }, false],
+      ['the same inode number on another device', { ino: 7, dev: 1 }, { ino: 7, dev: 2 }, false],
+    ])('homeFoldsCase(): %s', (_label, a, b, want) => {
+      const real = home
+      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike) => (String(p) === real ? a : b)) as never)
+      expect(homeFoldsCase()).toBe(want)
+    })
+
+    it('homeFoldsCase(): the other spelling is not there at all', () => {
+      const real = home
+      vi.spyOn(fs, 'statSync').mockImplementation(((p: fs.PathLike) => {
+        if (String(p) === real) return { ino: 7, dev: 1 }
+        throw new Error('ENOENT')
+      }) as never)
+      expect(homeFoldsCase()).toBe(false)
+    })
+
+    it('agentHome follows the disk: refused exactly when the two names are one directory', () => {
+      fs.mkdirSync(path.join(home, '.hermes-old'))
+      const sameDirectory = fs.existsSync(path.join(home, '.hermes-Old'))
+      for (const spelling of CASED) {
+        if (sameDirectory) {
+          expect(() => agentHome(spelling, rows), spelling).toThrow(UnsupportedRuntimeError)
+          expect(agentHomeIfManaged(spelling, rows), spelling).toBeNull()
+        } else {
+          expect(agentHome(spelling, rows), spelling).toBe(path.join(home, '.hermes-' + spelling.replace(/^h_/, '')))
+          expect(agentHomeIfManaged(spelling, rows), spelling).not.toBeNull()
+        }
+      }
+    })
+  })
+
+  // An id is made from a name by turning '-' into '_', which cannot be undone
+  // when the name had a '_' of its own: `hermes-_x` and `hermes--x` both get
+  // `h__x`. The home that exists on disk says which name the id came from.
+  describe('an id whose name held an underscore', () => {
+    it('maps to the home that exists', () => {
+      fs.mkdirSync(path.join(home, '.hermes-_x'))
+      fs.mkdirSync(path.join(home, '.hermes-foo_bar'))
+      expect(agentHome('h__x', [])).toBe(path.join(home, '.hermes-_x'))
+      expect(agentHomeForSelfRead('h__x')).toBe(path.join(home, '.hermes-_x'))
+      expect(agentHomeIfManaged('h__x', [])).toBe(path.join(home, '.hermes-_x'))
+      expect(agentHome('h_foo_bar', [])).toBe(path.join(home, '.hermes-foo_bar'))
+    })
+
+    it('prefers the hyphen form when that home exists, and when nothing exists', () => {
+      expect(agentHome('h_foo_bar', [])).toBe(path.join(home, '.hermes-foo-bar'))
+      fs.mkdirSync(path.join(home, '.hermes-foo_bar'))
+      fs.mkdirSync(path.join(home, '.hermes-foo-bar'))
+      expect(agentHome('h_foo_bar', [])).toBe(path.join(home, '.hermes-foo-bar'))
+    })
+
+    it('does not guess between two candidates', () => {
+      fs.mkdirSync(path.join(home, '.hermes-a_b_c'))
+      fs.mkdirSync(path.join(home, '.hermes-a-b_c'))
+      expect(agentHome('h_a_b_c', [])).toBe(path.join(home, '.hermes-a-b-c'))
+    })
+
+    it('still refuses when the row for that id is unmanaged', () => {
+      fs.mkdirSync(path.join(home, '.hermes-_x'))
+      expect(() => agentHome('h__x', [{ id: 'h__x', runtime: RETIRED_TAG }])).toThrow(UnsupportedRuntimeError)
+    })
+  })
 
   it('one unmanaged row is enough when two rows share an id, whatever their order', () => {
     const hermes = { id: 'h_twin', name: 'twin', runtime: 'hermes' }

@@ -32,16 +32,13 @@ import { generateStandaloneCompose, setComposeImage, readComposeImage, readCompo
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import {
-  UnsupportedRuntimeError, canonicalHarnessId, harnessNameOfId, markRuntimeDrivable, unmanagedRowNote,
+  UnsupportedRuntimeError, canonicalHarnessId, markRuntimeDrivable, unmanagedRowNote,
   unsupportedRowReason, unsupportedRuntimeReason,
 } from './runtime-adapter'
 
 export { unsupportedRowReason, unsupportedRuntimeReason }
 import type { ContainerRuntimeAdapter, RetiredHarnessRow } from './runtime-adapter'
 import { agentHomeForName, newAgentHomeForName, personalAgentHome } from './data-dir'
-
-/** The home of an id HarnessService has already found to be a Hermes agent's. */
-const managedHomeOfId = (id: string): string => agentHomeForName(harnessNameOfId(id))
 
 const DEFAULT_IMAGE_REPO = 'cyborg-garden/hermes-agent-mt'
 import { hsmBaseUrl } from './hsm-url'
@@ -918,12 +915,13 @@ export function pickContainerAdapter(
 
 /**
  * Pick the adapter for a harness's *persisted* runtime. `undefined` means
- * Hermes (rows that predate the field). A retired or unknown tag THROWS: it
- * used to fall back to Hermes, which would let a leftover row of another
- * runtime be started, stopped or deleted as if it were `hermes-<name>`.
+ * Hermes (rows that predate the field). A retired or unknown tag THROWS:
+ * there is no default, so a row of another runtime is never started,
+ * stopped or deleted as if it were `hermes-<name>`.
  */
 export function adapterForRuntime(runtime?: Harness['runtime']): ContainerRuntimeAdapter {
-  if (runtime === undefined) return hermesAdapter
+  // null is what a hand edit leaves; it is read like a missing tag.
+  if (runtime == null) return hermesAdapter
   const adapter = containerAdapters.find((a) => a.runtime === runtime)
   if (adapter) return adapter
   throw new UnsupportedRuntimeError(runtime, unsupportedRuntimeReason(runtime) ?? 'unknown')
@@ -1172,10 +1170,12 @@ export class HarnessService {
         platform: overlay.platform ?? 'hermes',
         channel: overlay.channel ?? (port ? `:${port}` : ''),
         models: overlay.models?.length ? overlay.models : effAdapter.readModels(dataDir),
-        // This id's row was checked above (unsupportedRowReason), so the
-        // usage readers need not read harnesses.json again per agent.
-        costToday: getCostToday(id, managedHomeOfId),
-        invocations: getInvocationsToday(id, managedHomeOfId),
+        // This id's row was checked above (unsupportedRowReason), and its
+        // home is already known from the container. The usage readers are
+        // handed that directory: an id cannot be turned back into a name
+        // that held an underscore, and they need not re-read harnesses.json.
+        costToday: getCostToday(id, () => dataDir),
+        invocations: getInvocationsToday(id, () => dataDir),
         tools: overlay.tools?.length ? overlay.tools : (this.autoDiscoverTools(name) ?? []),
         ...(overlay.health ? { health: overlay.health } : {}),
         ...(overlay.cacheState ? { cacheState: overlay.cacheState } : {}),

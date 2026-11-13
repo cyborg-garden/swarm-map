@@ -6,8 +6,7 @@
  * agentHomeForName() in lib/services/data-dir.ts, and code that starts from
  * an id it was handed (a URL, a request body, a stored key assignment) must
  * reach it through agentHome(), which refuses a row Swarm Map does not
- * manage. Before this there were a dozen private copies of the mapping, and
- * each one treated a retired row's id as a Hermes agent.
+ * manage. One copy of the mapping means one place to hold that rule.
  *
  * These checks read the source. They keep a new private copy, or a new
  * unchecked caller, from landing unnoticed.

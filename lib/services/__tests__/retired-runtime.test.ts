@@ -2,11 +2,10 @@
 /**
  * R4 — a stored row tagged with a retired or unknown runtime is never Hermes.
  *
- * `adapterForRuntime` used to fall back to the Hermes adapter for any runtime
- * it did not know. That was harmless while `'letta'` rows were filtered out by
- * hand in a dozen places. Once the old Letta path is deleted, the same
- * fallback would turn a leftover `runtime: 'letta'` row into a Hermes agent:
- * start/stop/delete would act on `hermes-<name>` and `~/.hermes-<name>`.
+ * `adapterForRuntime` resolves a tag to its registered adapter and throws
+ * for any other. There is no default. With the old Letta path deleted, a
+ * leftover `runtime: 'letta'` row must stay what it is: start, stop and
+ * delete must never act on `hermes-<name>` or `~/.hermes-<name>` for it.
  *
  * The rule under test: such a row is kept out of list()/get() entirely (so no
  * route can reach a container verb through it), is reported by listRetired()

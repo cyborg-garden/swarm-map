@@ -20,7 +20,7 @@
 
 import fs from 'fs'
 import type { Harness } from '@/lib/types'
-import { agentHomeForName } from './data-dir'
+import { agentHomeForName, homeFoldsCase } from './data-dir'
 import type { ComposeOptions } from './harness-compose'
 
 export interface ContainerRuntimeAdapter {
@@ -215,13 +215,15 @@ export function isValidHarnessId(raw: unknown): raw is string {
 }
 
 /**
- * What an id or slug MEANS, for comparing two spellings: the agent name,
- * lower-cased. `h_seraph_doer`, `seraph-doer`, `h_seraph-doer` and
- * `SERAPH-DOER` all build the same directory (the last on a
- * case-insensitive disk), so they must all find the same stored row.
+ * What an id or slug MEANS, for comparing two spellings: the agent name.
+ * Two spellings are the same agent when they build the same directory.
+ * `h_seraph_doer`, `seraph-doer` and `h_seraph-doer` always do. `SERAPH-DOER`
+ * does only where the disk folds case (`foldCase`); on a disk that keeps
+ * case it is another agent, and must not be refused for this one's row.
  */
-function harnessKey(idOrSlug: string): string {
-  return harnessNameOfId(idOrSlug).toLowerCase()
+function harnessKey(idOrSlug: string, foldCase: boolean): string {
+  const name = harnessNameOfId(idOrSlug)
+  return foldCase ? name.toLowerCase() : name
 }
 
 /**
@@ -229,16 +231,18 @@ function harnessKey(idOrSlug: string): string {
  * agentHome() (./agent-home), the one place an id becomes `~/.hermes-<name>`,
  * asks this first. Rows are matched by harnessKey, not by the exact string,
  * and one unmanaged row is enough when several share an id. A harnesses.json
- * that is not a list holds no rows.
+ * that is not a list holds no rows. `foldCase` is whether the disk under the
+ * home directory folds case; left out, the disk is asked.
  */
 export function findUnmanagedRow<T extends { id?: string; runtime?: string | null }>(
   rows: readonly T[],
   idOrSlug: string,
+  foldCase: boolean = homeFoldsCase(),
 ): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
   if (!Array.isArray(rows)) return null
-  const key = harnessKey(idOrSlug)
+  const key = harnessKey(idOrSlug, foldCase)
   for (const row of rows) {
-    if (typeof row?.id !== 'string' || harnessKey(row.id) !== key) continue
+    if (typeof row?.id !== 'string' || harnessKey(row.id, foldCase) !== key) continue
     const unsupported = unsupportedRowReason(row)
     if (unsupported) return { row, ...unsupported }
   }
