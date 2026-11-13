@@ -120,7 +120,6 @@ describe('decide() properties', () => {
       'egress.hosts': [{ host: 'example.com' }],
       'egress.blockPrivateRanges': false,
       'memory.threadsPoolIntoParent': false,
-      'memory.dmIsolated': false,
       'memory.team.dm': 'read',
       'memory.team.group': 'read-write',
       'memory.team.public': 'read',

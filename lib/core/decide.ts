@@ -3,6 +3,7 @@
 // call this same function. Spec section 4.3.
 import type { Decision, Event, Facts, InboundEvent, Principal, RoomRef, Verdict } from './events.ts'
 import { assertRendered, UnrenderedError } from './policy/deferred.ts'
+import { shapeErrors } from './policy/shape.ts'
 import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy, ToolClass } from './policy/types.ts'
 import { sessionKeyFor } from './session-key.ts'
 
@@ -133,7 +134,7 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     return { verdict, rule, why, privilege, trace }
   }
   if (policy.posture === 'public') {
-    if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', `'${e.toolName}' is not a classified tool, and this agent is public.`)
+    if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', 'This tool is not classified, and this agent is public.')
     if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', `Public agents do not get ${e.toolClass} tools.`)
     trace.push({ rule: 'tools.posture', outcome: 'pass' })
   }
@@ -180,14 +181,35 @@ const UNBUILT_EVENTS: Partial<Record<Event['kind'], string>> = {
   egress: 'sub.g1',
 }
 
+/** The answer under a record that is not valid: nothing is heard, posted, run or spent. */
+function refuseAll(event: Event, problem: string): Partial_ | undefined {
+  const verdict: Verdict | undefined =
+    event.kind === 'inbound' || event.kind === 'outbound' ? 'drop'
+      : event.kind === 'tool' || event.kind === 'model' ? 'deny'
+        : undefined
+  if (!verdict) return undefined
+  return {
+    verdict, rule: 'ctl.valid', why: `The policy record is not valid (${problem}), so nothing is allowed.`,
+    privilege: 'guest', trace: [{ rule: 'ctl.valid', outcome: 'fail' }],
+  }
+}
+
 /**
  * Decide what happens to one event under one policy.
+ * A record with a value outside its declared set gets a plain no for every
+ * event (rule `ctl.valid`): each comparison below is against a known name, so
+ * an unknown one would otherwise read as the permissive case.
  * Throws UnrenderedError (fail closed) when the policy or the event asks for
  * something this slice does not enforce yet.
  */
 export function decide(policy: PolicyRecord, event: Event, facts: Facts): Decision {
+  const done = (d: Partial_): Decision => ({ ...d, policyHash: typeof policy?.hash === 'string' ? policy.hash : '' })
   assertRendered(policy)
-  const done = (d: Partial_): Decision => ({ ...d, policyHash: policy.hash })
+  const problems = shapeErrors(policy)
+  if (problems.length > 0) {
+    const refused = refuseAll(event, problems[0])
+    if (refused) return done(refused)
+  }
   switch (event.kind) {
     case 'inbound': return done(decideInbound(policy, event, facts))
     case 'tool': return done(decideTool(policy, event, facts))

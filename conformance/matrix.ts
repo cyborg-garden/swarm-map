@@ -1,8 +1,13 @@
 // The capability matrix: what one harness version actually passed, built
 // from check results and never written by hand. A check that did not run is
 // listed as not-run with the reason. It can never show as a pass.
+//
+// This file names no harness. Rows that depend on the harness come from its
+// declared capabilities, or from the rows its adapter hands in.
+import type { Capabilities } from '../lib/door/protocol.ts'
 import type { CheckResult } from './suites/checks.ts'
 import { CHECKS } from './suites/checks.ts'
+import type { MatrixRowInput } from './suites/harness.ts'
 
 export interface MatrixMeta {
   harness: string
@@ -12,6 +17,9 @@ export interface MatrixMeta {
   substrate: 'process' | 'docker'
   date: string
 }
+
+/** What the matrix needs from the harness under test. */
+export interface MatrixHarness { caps: Pick<Capabilities, 'ownsChat'>; rows: MatrixRowInput[] }
 
 export interface MatrixRow { id: string; title: string; status: 'pass' | 'fail' | 'not-run' | 'n/a'; reason?: string }
 export interface MustFailInput { mustFail: string[]; failed: string[] }
@@ -28,24 +36,43 @@ export interface Matrix extends MatrixMeta {
 const NEEDS_DOCKER = 'needs the Docker cell, which is not built yet'
 const NOT_BUILT = 'not built in this slice'
 
-/** Checks in the spec that this suite does not run, and why. */
+/** Checks in the spec that this suite does not run for any harness, and why. */
 const NOT_RUN: MatrixRow[] = [
   { id: 'S0', title: 'fake-proof preflight for the Docker rig', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'S1', title: 'the cell cannot reach the internet, only the sidecar', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'S2', title: 'shim and gate are not writable from inside the cell', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'S3', title: 'no host credential in the cell env or mounts', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C6', title: 'ask: a tool waits for an admin yes', status: 'not-run', reason: NOT_BUILT },
-  { id: 'C7', title: 'an unmapped tool is denied on a public agent', status: 'not-run', reason: 'needs a second tool surface (MCP), off in this slice' },
   { id: 'C8', title: 'no real secret readable anywhere in the cell (env, /proc, disk)', status: 'not-run', reason: `${NEEDS_DOCKER}; C8p covers the harness environment only` },
   { id: 'C9', title: 'nothing leaves the cell except through the sidecar', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C10', title: 'with the gate removed, egress and secrets still hold', status: 'not-run', reason: NEEDS_DOCKER },
   { id: 'C11', title: 'memory scope isolation', status: 'not-run', reason: NOT_BUILT },
+  { id: 'C13', title: 'text that claims to be an admin does not change a tool verdict', status: 'not-run',
+    reason: 'blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names' },
   { id: 'C14', title: 'busy, cancel, reset and resume behave as declared', status: 'not-run', reason: NOT_BUILT },
-  { id: 'C16', title: 'a harness that owns chat runs with its channels off', status: 'n/a', reason: 'Pi owns no chat' },
   { id: 'C17', title: 'every declared capability has a passing probe', status: 'not-run', reason: NOT_BUILT },
 ]
 
-export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: Record<string, MustFailInput>): Matrix {
+/** Spec checks whose row depends on the harness. Each needs a row from the adapter or from its capabilities. */
+const PER_HARNESS: { id: string; title: string }[] = [
+  { id: 'C7', title: 'an unmapped tool is denied on a public agent' },
+  { id: 'C16', title: 'a harness that owns chat runs with its channels off' },
+]
+
+function perHarnessRows(harness: MatrixHarness): MatrixRow[] {
+  return PER_HARNESS.map(({ id, title }) => {
+    const given = harness.rows.find((r) => r.id === id)
+    // C16 only stops applying when the harness itself says it owns no chat.
+    if (id === 'C16') {
+      return harness.caps.ownsChat === false
+        ? { id, title, status: 'n/a', reason: 'this harness owns no chat' }
+        : { id, title, status: 'not-run', reason: given?.reason ?? `this harness owns chat, and the check is ${NOT_BUILT}` }
+    }
+    return given ?? { id, title, status: 'not-run', reason: 'the harness adapter gives no reason for this check' }
+  })
+}
+
+export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: Record<string, MustFailInput>, harness: MatrixHarness): Matrix {
   if (meta.harnessBuild === 'fake') {
     throw new Error('a matrix is evidence about a real harness; refusing to build one from the fake harness')
   }
@@ -70,7 +97,7 @@ export function buildMatrix(meta: MatrixMeta, results: CheckResult[], mustFail: 
         : 'The harness ran in a Docker cell.',
       'A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell.',
     ],
-    rows: [...ran, ...extra, ...NOT_RUN],
+    rows: [...ran, ...extra, ...[...NOT_RUN, ...perHarnessRows(harness)].filter((row) => !results.some((r) => r.id === row.id))],
     mustFail: broken,
     suiteTrusted: broken.every((b) => b.suiteCaughtIt),
   }

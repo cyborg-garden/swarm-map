@@ -15,6 +15,12 @@ export interface ScriptEntry {
   /** Ask for this tool first; answer with `text` once a tool result comes back. */
   tool?: { name: string; args: unknown }
   text: string
+  /** Leave the run's stamp off the reply, for a test that needs the text to end exactly where it says. */
+  noStamp?: boolean
+  /** Streamed only: never send the event that says the reply is finished. */
+  noFinish?: boolean
+  /** Called when the entry is about to play, before anything is sent back. */
+  before?: () => void
 }
 
 export interface ScriptedModel {
@@ -29,7 +35,12 @@ export interface ScriptedModel {
 
 const USAGE = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 }
 
-export function startScriptedModel(opts: { nonce: string; script: ScriptEntry[]; host?: string; port?: number }): Promise<ScriptedModel> {
+export function startScriptedModel(opts: {
+  nonce: string; script: ScriptEntry[]; host?: string; port?: number
+  /** Characters per streamed text event. Default 12, which is shorter than the upstream key. */
+  streamChunk?: number
+}): Promise<ScriptedModel> {
+  const pieceOf = new RegExp(`[\\s\\S]{1,${opts.streamChunk ?? 12}}`, 'g')
   const stamp = `FAKE-MODEL-${opts.nonce}`
   const requests: ScriptedModel['requests'] = []
   const state = { refused: 0 }
@@ -58,7 +69,8 @@ export function startScriptedModel(opts: { nonce: string; script: ScriptEntry[];
       const entry = opts.script.find((e) => raw.includes(e.match))
       const toolPending = entry?.tool && !(body.messages ?? []).some((m) => m.role === 'tool')
       const base = { id: `chatcmpl-${randomUUID()}`, created: Math.floor(Date.now() / 1000), model: body.model ?? 'scripted' }
-      const text = `${entry?.text ?? 'ok'} ${stamp}`
+      const text = entry?.noStamp ? entry.text : `${entry?.text ?? 'ok'} ${stamp}`
+      entry?.before?.()
       const toolCall = toolPending
         ? { id: `call_${randomUUID().slice(0, 8)}`, type: 'function', function: { name: entry!.tool!.name, arguments: JSON.stringify(entry!.tool!.args) } }
         : undefined
@@ -76,8 +88,8 @@ export function startScriptedModel(opts: { nonce: string; script: ScriptEntry[];
         ({ ...base, object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason }] })
       send(chunk({ role: 'assistant', content: '' }))
       if (toolCall) send(chunk({ tool_calls: [{ index: 0, ...toolCall }] }))
-      else for (const piece of text.match(/[\s\S]{1,12}/g) ?? []) send(chunk({ content: piece }))
-      send(chunk({}, finish))
+      else for (const piece of text.match(pieceOf) ?? []) send(chunk({ content: piece }))
+      if (!entry?.noFinish) send(chunk({}, finish))
       if (body.stream_options?.include_usage) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: USAGE })
       send('[DONE]')
       res.end()

@@ -1,6 +1,11 @@
 // Receipts: one line per decision the door made. They hold ids and sizes,
 // never message text, so they can be kept and shown without leaking a
 // conversation. They are the "why didn't it answer?" view. Spec 4.10.
+//
+// "Never message text" covers the harness too. Nothing a shim sends is copied
+// into a receipt as it came: not a tool name (only a name from the map it
+// declared at hello, else 'unmapped'), not a turn id the door did not issue,
+// not an error message.
 import { appendFileSync } from 'node:fs'
 import type { Decision, Event } from '../core/events.ts'
 import type { SurfaceId } from '../core/policy/types.ts'

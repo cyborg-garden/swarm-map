@@ -14,8 +14,11 @@ import type { PolicyRecord } from '../../core/policy/types.ts'
 import type { SurfaceConnector } from '../connector.ts'
 import { createFakeConnector } from '../connectors/fake.ts'
 import { createDoor } from '../door.ts'
+import type { Capabilities, Envelope } from '../protocol.ts'
 import { createReceiptLog, explain } from '../receipts.ts'
 import { createSanitizer, type Sanitizer } from '../sanitizer.ts'
+import { connectShim, type ShimClient } from '../shim-client.ts'
+import { ECHO_CAPS } from '../testing/echo-shim.ts'
 import { startRig, type Rig } from '../testing/rig.ts'
 
 armTripwire()
@@ -30,6 +33,20 @@ afterEach(async () => {
   rig = undefined
   expect(tripwireAttempts()).toEqual([])
 })
+
+/** A hand-driven shim with its own capabilities, on a rig started with `noShim`. */
+async function bareShim(r: Rig, brainToken: string, caps: Partial<Capabilities>): Promise<{ client: ShimClient; heard: Envelope[] }> {
+  const client = await connectShim({ host: '127.0.0.1', port: r.door.brainPort, token: brainToken, caps: { ...ECHO_CAPS, ...caps } })
+  const heard: Envelope[] = []
+  client.onMessage((msg) => {
+    if (msg.t !== 'turn') return
+    heard.push(msg.env)
+    client.send({ t: 'reply', turnId: msg.env.turnId, text: 'ok', attachments: [] })
+    client.send({ t: 'settled', turnId: msg.env.turnId })
+  })
+  await r.door.shimConnected()
+  return { client, heard }
+}
 
 // A secret-shaped string, minted here so none is ever committed.
 const fakeSecret = (): string => 'ghp_' + 'q7W3'.repeat(9)
@@ -205,6 +222,41 @@ describe('door: session keys', () => {
     })
     // The reply to a thread goes back to the thread, not the parent room.
     expect(rig.fake.ledger.map((p) => p.room).sort()).toEqual(['dm:u-alice', 'r-lounge', 't-7'])
+  })
+})
+
+describe('door: a DM needs a harness that keeps sessions apart', () => {
+  const dmOpen = () => team({ [F + 'dm']: { mode: 'open', users: [] } })
+
+  it('[P:dm-isolated] a harness whose sessions share files is never given a DM, and the receipt says why', async () => {
+    const brainToken = 'cell-test-token'
+    for (const caps of [{ sessionIsolation: 'none' as const }, { sessionIsolation: undefined as never }]) {
+      rig = await startRig(dmOpen(), { noShim: true, door: { brainToken } })
+      const shim = await bareShim(rig, brainToken, caps)
+      const dm = rig.fake.say({ room: 'dm:u-alice', sender: 'u-alice', isDm: true, text: 'private thing' })
+      rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'room thing' })
+      await rig.door.idle()
+      expect(shim.heard.map((e) => e.text)).toEqual(['room thing'])
+      expect(rig.fake.ledger.map((p) => p.room)).toEqual(['r-lounge'])
+      expect(explain(rig.receipts.all(), dm)).toEqual([
+        'inbound  deliver  dm.open  Direct messages are open to anyone.',
+        'inbound  drop  mem.dm-isolated  This harness keeps every session in one place on disk, so a direct message is not delivered to it.',
+      ])
+      shim.client.close()
+      await rig.close()
+    }
+    rig = undefined
+  })
+
+  it('[P:dm-isolated] positive control: a harness that keeps sessions apart is given the DM', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(dmOpen(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, { sessionIsolation: 'sealed' })
+    rig.fake.say({ room: 'dm:u-alice', sender: 'u-alice', isDm: true, text: 'private thing' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:dm:u-alice'])
+    expect(rig.fake.ledger.map((p) => p.room)).toEqual(['dm:u-alice'])
+    shim.client.close()
   })
 })
 
@@ -408,6 +460,60 @@ describe('door: receipts and heartbeat', () => {
       'inbound:drop', 'inbound:observe', 'inbound:deliver', 'tool:allow', 'outbound:allow',
     ])
     for (const r of all) expect(Number.isNaN(Date.parse(r.ts))).toBe(false)
+  })
+
+  it('[P:receipts] a tool name the harness made up is never copied into a receipt', async () => {
+    // The tool name in a tool_request is whatever the shim sends. It could be
+    // conversation text or a secret read in the cell.
+    for (const posture of ['team', 'public']) {
+      rig = await startRig(team({ posture, 'tools.allow': ['network'] }))
+      const smuggled = 'CANARY-smuggled-in-a-tool-name'
+      rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `!tool ${smuggled} and !tool fetch` })
+      await rig.door.idle()
+      expect(rig.shim.verdicts.map((v) => v.allow)).toEqual([false, true])
+      const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
+      expect(tools.map((r) => r.note)).toEqual(['tool=unmapped', 'tool=fetch'])
+      expect(JSON.stringify(rig.receipts.all())).not.toContain(smuggled)
+      // The reason sent back to the shim does not echo it either.
+      expect(rig.shim.verdicts.map((v) => v.reason ?? '').join(' ')).not.toContain(smuggled)
+      await rig.close()
+    }
+    rig = undefined
+  })
+
+  it('[P:receipts] a turn id the harness made up is never copied into a receipt', async () => {
+    rig = await startRig(team({ 'tools.allow': ['shell'] }))
+    const smuggled = 'CANARY smuggled, with spaces'
+    rig.shim.client.send({ t: 'reply', turnId: smuggled, text: 'x', attachments: [] })
+    rig.shim.client.send({ t: 'settled', turnId: smuggled })
+    expect(await rig.shim.client.requestTool(smuggled, 'bash', {})).toMatchObject({ allow: false })
+    await expect.poll(() => rig!.receipts.all().filter((r) => r.rule === 'turn.known').length).toBe(3)
+    expect(JSON.stringify(rig.receipts.all())).not.toContain('CANARY')
+  })
+
+  it('[P:receipts] a harness whose tool map holds free text is refused at hello', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { noShim: true, door: { brainToken } })
+    const hello = (caps: Partial<Capabilities>) =>
+      connectShim({ host: '127.0.0.1', port: rig!.door.brainPort, token: brainToken, caps: { ...ECHO_CAPS, ...caps } })
+    const refused = [
+      await hello({ toolMap: { 'CANARY smuggled, with spaces': 'shell' } }),
+      await hello({ toolMap: { ['x'.repeat(200)]: 'shell' } }),
+      await hello({ toolMap: { bash: 'CANARY not a class' as never } }),
+      await hello({ toolMap: 'CANARY' as never }),
+      await hello({ version: 'CANARY free text\nin a version' }),
+      await hello({ harness: 'CANARY' as never }),
+    ]
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    expect(rig.door.heartbeat().caps).toBeUndefined()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'anyone?' })
+    await rig.door.idle()
+    expect(rig.receipts.all().at(-1)?.rule).toBe('turn.no-harness')
+    for (const c of refused) c.close()
+    // Positive control: the same hello with an honest map is accepted.
+    const ok = await bareShim(rig, brainToken, {})
+    expect(rig.door.heartbeat().caps?.harness).toBe('echo')
+    ok.client.close()
   })
 
   it('[P:receipts] "why didn\'t it answer?" reads straight off the receipts', async () => {

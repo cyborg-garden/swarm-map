@@ -2,6 +2,14 @@
 // and for each session keeps one `pi --mode rpc` process. It translates
 // turns into prompts and Pi's events back into `reply` and `settled`. It
 // decides nothing, holds no chat token, and gives Pi no real key.
+//
+// Two things Pi cannot do, and what the shim does about each:
+// - Pi's tools are fixed by `--tools` when its process starts. The sidecar
+//   sends a tool list with every turn, and it can change. When it does, the
+//   shim stops that session's Pi and starts it again with the new list, and
+//   `--continue` so the conversation carries on. (`toolChange: 'restart'`.)
+// - Pi must never run without the gate. There is no switch to start it
+//   without one, and no turn is sent until the gate has announced itself.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -24,25 +32,28 @@ export interface PiShimOptions {
   sessionsDir: string
   workDir: string
   homeDir: string
-  /** The gate extension. 'NONE-FOR-TESTS' starts Pi with no gate, to test the wall behind it. */
-  gate: { path: string } | 'NONE-FOR-TESTS'
+  /** The gate extension Pi loads. Always required: Pi is never started without one. */
+  gate: { path: string }
   model?: string
   verdictTimeoutMs?: number
   gateTimeoutMs?: number
+  /** How long a fresh Pi has for its gate to announce itself before its turn is refused. */
+  gateReadyMs?: number
   /** Test-only: extra env for Pi. The broken-shim suite uses it to plant a leak. */
   unsafeExtraEnv?: Record<string, string>
 }
 
 export interface PiShim { close(): void }
 
-export function piArgs(o: { sessionDir: string; tools: string[]; gate: PiShimOptions['gate']; model: string }): string[] {
+export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: string }; model: string; resume?: boolean }): string[] {
   return [
     '--mode', 'rpc',
     '--session-dir', o.sessionDir,
+    ...(o.resume ? ['--continue'] : []),
     '--provider', 'swarm', '--model', o.model,
     ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-builtin-tools']),
     '--no-context-files', '--no-skills', '--no-mcp', '--no-extensions', '--no-prompt-templates',
-    ...(o.gate === 'NONE-FOR-TESTS' ? [] : ['-e', o.gate.path]),
+    '-e', o.gate.path,
   ]
 }
 
@@ -60,18 +71,24 @@ export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'gateTimeo
   }
 }
 
-interface Session { rpc: PiRpc; turnId?: string; queue: Promise<void> }
+/** One running Pi, and the tool list it was started with. */
+interface Live { rpc: PiRpc; tools: string; turnId?: string }
+/** One session: its turns run one at a time, on whichever Pi is live for it. */
+interface Slot { queue: Promise<void>; live?: Live }
+
+const toolsKey = (tools: string[]): string => [...new Set(tools)].sort().join(',')
 
 export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
   const client: ShimClient = await connectShim({
     host: opts.host, port: opts.port, token: opts.token, caps: PI_CAPS, verdictTimeoutMs: opts.verdictTimeoutMs,
   })
-  const sessions = new Map<string, Session>()
+  const slots = new Map<string, Slot>()
 
-  const open = (env: Envelope): Session => {
+  const open = (slot: Slot, env: Envelope, resume: boolean): Live => {
     const sessionDir = path.join(opts.sessionsDir, createHash('sha256').update(env.sessionKey).digest('hex').slice(0, 16))
     mkdirSync(sessionDir, { recursive: true })
-    const args = piArgs({ sessionDir, tools: env.tools, gate: opts.gate, model: opts.model ?? 'scripted' })
+    const tools = toolsKey(env.tools)
+    const args = piArgs({ sessionDir, tools: tools === '' ? [] : tools.split(','), gate: opts.gate, model: opts.model ?? 'scripted', resume })
     const child = spawn(opts.piCommand[0], [...opts.piCommand.slice(1), ...args], {
       cwd: opts.workDir, env: piEnv(opts) as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'ignore'],
     })
@@ -81,55 +98,68 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
       onExit: (cb) => { child.on('exit', cb); child.on('error', () => cb(null)) },
       kill: () => { child.kill() },
     }
-    const session: Session = {
-      queue: Promise.resolve(),
+    const live: Live = {
+      tools,
       rpc: createPiRpc(proc, {
+        gateReadyMs: opts.gateReadyMs,
         // Pi asks through the gate; the sidecar answers. No live turn means no.
         onGate: async (call) => {
-          if (!session.turnId) return false
-          return (await client.requestTool(session.turnId, call.tool, call.input)).allow
+          if (!live.turnId) return false
+          return (await client.requestTool(live.turnId, call.tool, call.input)).allow
         },
       }),
     }
-    child.on('exit', () => { if (sessions.get(env.sessionKey) === session) sessions.delete(env.sessionKey) })
-    sessions.set(env.sessionKey, session)
-    return session
+    child.on('exit', () => { if (slot.live === live) slot.live = undefined })
+    return live
   }
 
-  const runTurn = async (session: Session, env: Envelope): Promise<void> => {
-    session.turnId = env.turnId
+  const runTurn = async (slot: Slot, env: Envelope): Promise<void> => {
+    // The tool list is per turn. Pi's is per process, so a changed list means a new process.
+    let resume = false
+    if (slot.live && slot.live.tools !== toolsKey(env.tools)) {
+      slot.live.rpc.close()
+      slot.live = undefined
+      resume = true
+    }
+    const live = slot.live ?? (slot.live = open(slot, env, resume))
+    live.turnId = env.turnId
     try {
-      const result = await session.rpc.prompt(renderPrompt(env))
+      const result = await live.rpc.prompt(renderPrompt(env))
       if (!result.aborted && result.text !== '') {
         client.send({ t: 'reply', turnId: env.turnId, text: result.text, attachments: [] })
       }
       client.send({ t: 'settled', turnId: env.turnId })
     } catch (err) {
       client.send({ t: 'error', turnId: env.turnId, message: (err as Error).message })
-      session.rpc.close()
-      sessions.delete(env.sessionKey)
+      live.rpc.close()
+      if (slot.live === live) slot.live = undefined
     } finally {
-      session.turnId = undefined
+      live.turnId = undefined
     }
+  }
+
+  const closeAll = (): void => {
+    for (const slot of slots.values()) slot.live?.rpc.close()
+    slots.clear()
   }
 
   client.onMessage((msg) => {
     if (msg.t === 'turn') {
-      const session = sessions.get(msg.env.sessionKey) ?? open(msg.env)
-      session.queue = session.queue.then(() => runTurn(session, msg.env))
+      let slot = slots.get(msg.env.sessionKey)
+      if (!slot) slots.set(msg.env.sessionKey, slot = { queue: Promise.resolve() })
+      const s = slot
+      s.queue = s.queue.then(() => runTurn(s, msg.env))
     } else if (msg.t === 'reset') {
-      sessions.get(msg.sessionKey)?.rpc.close()
-      sessions.delete(msg.sessionKey)
+      slots.get(msg.sessionKey)?.live?.rpc.close()
+      slots.delete(msg.sessionKey)
     } else if (msg.t === 'shutdown') {
-      for (const s of sessions.values()) s.rpc.close()
-      sessions.clear()
+      closeAll()
     }
   })
 
   return {
     close() {
-      for (const s of sessions.values()) s.rpc.close()
-      sessions.clear()
+      closeAll()
       client.close()
     },
   }

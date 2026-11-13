@@ -7,11 +7,16 @@
 // - The in-cell gate asks "may I run this tool?" through Pi's extension UI
 //   channel: a `select` whose title starts with GATE_PREFIX. Only the exact
 //   answer `allow` lets the tool run.
+// - The gate says it is loaded with a `notify` whose message is GATE_READY.
+//   Until that arrives no prompt is written to Pi at all. If it does not
+//   arrive in time, every prompt is refused for the life of this process:
+//   a Pi with no gate would run every tool it was started with, unasked.
 import { randomUUID } from 'node:crypto'
 import type { Readable, Writable } from 'node:stream'
 import { createLineDecoder, encodeLine } from '../../door/framing.ts'
 
 export const GATE_PREFIX = 'swarm-gate:v1:'
+export const GATE_READY = 'swarm-gate:v1:ready'
 
 export interface PiProcess {
   stdin: Writable
@@ -37,14 +42,27 @@ interface PiRecord {
   success?: boolean
   error?: string
   aborted?: boolean
-  message?: { role?: string; stopReason?: string; content?: { type?: string; text?: string }[] }
+  /** An object on `message_end`; plain text on a `notify`. */
+  message?: string | { role?: string; stopReason?: string; content?: { type?: string; text?: string }[] }
 }
 
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor'])
 
-export function createPiRpc(proc: PiProcess, opts: { onGate: (call: GateCall) => Promise<boolean> }): PiRpc {
+export interface PiRpcOptions {
+  onGate: (call: GateCall) => Promise<boolean>
+  /** How long the gate has, from process start, to announce itself. Default 15 seconds. */
+  gateReadyMs?: number
+}
+
+export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
   let current: { id: string; text: string; resolve: (r: PiTurnResult) => void; reject: (e: Error) => void } | undefined
   const send = (record: unknown): void => { proc.stdin.write(encodeLine(record)) }
+
+  // Settles once: true when the gate announced itself in time, false otherwise.
+  let gateSettled: (loaded: boolean) => void = () => {}
+  const gateLoaded = new Promise<boolean>((resolve) => { gateSettled = resolve })
+  const gateTimer = setTimeout(() => gateSettled(false), opts.gateReadyMs ?? 15_000)
+  gateTimer.unref?.()
 
   const gate = async (id: string, title: string): Promise<void> => {
     let allow = false
@@ -61,7 +79,8 @@ export function createPiRpc(proc: PiProcess, opts: { onGate: (call: GateCall) =>
     const r = raw as PiRecord
     switch (r.type) {
       case 'extension_ui_request':
-        if (!r.id || !DIALOGS.has(r.method ?? '')) return // notices need no answer
+        if (r.method === 'notify' && r.message === GATE_READY) { clearTimeout(gateTimer); gateSettled(true); return }
+        if (!r.id || !DIALOGS.has(r.method ?? '')) return // other notices need no answer
         if (r.method === 'select' && r.title?.startsWith(GATE_PREFIX)) void gate(r.id, r.title)
         else send({ type: 'extension_ui_response', id: r.id, cancelled: true }) // nobody is here to answer a dialog
         return
@@ -73,8 +92,9 @@ export function createPiRpc(proc: PiProcess, opts: { onGate: (call: GateCall) =>
         }
         return
       case 'message_end': {
-        if (!current || r.message?.role !== 'assistant' || r.message.stopReason === 'toolUse') return
-        const text = (r.message.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('')
+        const m = typeof r.message === 'object' ? r.message : undefined
+        if (!current || m?.role !== 'assistant' || m.stopReason === 'toolUse') return
+        const text = (m.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('')
         if (text !== '') current.text = text
         return
       }
@@ -90,6 +110,8 @@ export function createPiRpc(proc: PiProcess, opts: { onGate: (call: GateCall) =>
   })
   proc.stdout.on('data', (chunk: Buffer) => decoder.push(chunk))
   proc.onExit((code) => {
+    clearTimeout(gateTimer)
+    gateSettled(false) // no effect if it already announced
     if (!current) return
     const turn = current
     current = undefined
@@ -101,10 +123,16 @@ export function createPiRpc(proc: PiProcess, opts: { onGate: (call: GateCall) =>
       if (current) return Promise.reject(new Error('pi is busy with another turn'))
       return new Promise<PiTurnResult>((resolve, reject) => {
         const id = randomUUID()
-        current = { id, text: '', resolve, reject }
-        send({ id, type: 'prompt', message })
+        const turn = { id, text: '', resolve, reject }
+        current = turn
+        void gateLoaded.then((loaded) => {
+          if (current !== turn) return // Pi exited while we waited; the turn was already rejected
+          if (loaded) return send({ id, type: 'prompt', message })
+          current = undefined
+          reject(new Error('the tool gate did not announce itself, so Pi is sent no turn'))
+        })
       })
     },
-    close: () => proc.kill(),
+    close: () => { clearTimeout(gateTimer); proc.kill() },
   }
 }

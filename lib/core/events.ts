@@ -44,6 +44,7 @@ export type Event =
   | { kind: 'outbound'; surface: SurfaceId; room: RoomRef; turnId?: string; text: string }
   | { kind: 'invite'; surface: SurfaceId; room: RoomRef; inviter: Principal }
   | { kind: 'tool'; surface?: SurfaceId; room: RoomRef; actor: Principal; toolClass: ToolClass
+      /** For the caller's own records. decide() never puts it in `why`: it can be harness-supplied text. */
       toolName: string; argsDigest: string }
   | { kind: 'memory'; op: 'read' | 'write'; scope: MemoryScope; room: RoomRef }
   | { kind: 'model'; provider: string; model: string }

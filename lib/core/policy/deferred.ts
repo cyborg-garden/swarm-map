@@ -37,7 +37,6 @@ export const DEFERRED_FIELDS: DeferredField[] = [
   { path: 'egress.hosts', rule: 'sub.g1', atRest: empty },
   { path: 'egress.blockPrivateRanges', rule: 'sub.g1', atRest: is(true) },
   { path: 'memory.threadsPoolIntoParent', rule: 'mem.scope', atRest: is(true) },
-  { path: 'memory.dmIsolated', rule: 'mem.dm-isolated', atRest: is(true) },
   { path: 'memory.team.dm', rule: 'mem.team-read-only', atRest: is('none') },
   { path: 'memory.team.group', rule: 'mem.team-read-only', atRest: is('none') },
   { path: 'memory.team.public', rule: 'mem.team-read-only', atRest: is('none') },
@@ -49,7 +48,7 @@ export const DEFERRED_FIELDS: DeferredField[] = [
 ]
 
 /** Committed count. May only go down. */
-export const DEFERRED_COUNT_CEILING = 24
+export const DEFERRED_COUNT_CEILING = 23
 
 export class UnrenderedError extends Error {
   readonly path: string

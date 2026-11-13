@@ -2,10 +2,13 @@
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createLineDecoder } from '../../../door/framing.ts'
-import { createPiRpc, type PiProcess } from '../rpc.ts'
+import { createPiRpc, GATE_READY, type PiProcess } from '../rpc.ts'
 
-/** A stand-in for the Pi child process: the test plays Pi's side by hand. */
-function fakeProcess() {
+/**
+ * A stand-in for the Pi child process: the test plays Pi's side by hand.
+ * By default it announces the gate at once, as Pi does when the gate loads.
+ */
+function fakeProcess(o: { gate?: 'announced' | 'silent' } = {}) {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const sent: Record<string, unknown>[] = []
@@ -14,7 +17,9 @@ function fakeProcess() {
   let exit: (code: number | null) => void = () => {}
   const proc: PiProcess = { stdin, stdout, onExit: (cb) => { exit = cb }, kill: () => exit(null) }
   const emit = (record: unknown): void => { stdout.write(JSON.stringify(record) + '\n') }
-  return { proc, sent, emit, exit: (code: number) => exit(code) }
+  const announce = (): void => emit({ type: 'extension_ui_request', id: 'ready', method: 'notify', message: GATE_READY, notifyType: 'info' })
+  if (o.gate !== 'silent') announce()
+  return { proc, sent, emit, announce, exit: (code: number) => exit(code) }
 }
 
 const assistant = (text: string, stopReason = 'stop') =>
@@ -106,6 +111,48 @@ describe('Pi RPC pump', () => {
     ])
     pi.emit({ type: 'agent_settled', aborted: false })
     await turn
+  })
+
+  it('[U:pi-gate-ready] no prompt is sent until the gate has announced itself', async () => {
+    const pi = fakeProcess({ gate: 'silent' })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 500 })
+    const turn = rpc.prompt('hello')
+    await tick()
+    await tick()
+    expect(pi.sent).toEqual([]) // nothing has reached Pi
+    // Other notices, and a notice that only looks like it, do not count.
+    pi.emit({ type: 'extension_ui_request', id: 'n1', method: 'notify', message: 'fyi' })
+    pi.emit({ type: 'extension_ui_request', id: 'n2', method: 'notify', message: `${GATE_READY} not` })
+    pi.emit({ type: 'extension_ui_request', id: 'n3', method: 'setStatus', statusText: GATE_READY })
+    await tick()
+    expect(pi.sent).toEqual([])
+    pi.announce()
+    await tick()
+    expect(pi.sent).toEqual([{ id: expect.any(String), type: 'prompt', message: 'hello' }])
+    pi.emit(assistant('hi'))
+    pi.emit({ type: 'agent_settled', aborted: false })
+    expect(await turn).toEqual({ text: 'hi', aborted: false })
+  })
+
+  it('[U:pi-gate-ready] a Pi whose gate never announces itself is never sent a turn', async () => {
+    const pi = fakeProcess({ gate: 'silent' })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 40 })
+    await expect(rpc.prompt('one')).rejects.toThrow('the tool gate did not announce itself')
+    // It stays refused: a late announcement after the deadline does not open it.
+    pi.announce()
+    await tick()
+    await expect(rpc.prompt('two')).rejects.toThrow('the tool gate did not announce itself')
+    expect(pi.sent).toEqual([])
+  })
+
+  it('[U:pi-gate-ready] a Pi that exits before its gate announced rejects the turn and is sent nothing', async () => {
+    const pi = fakeProcess({ gate: 'silent' })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 5000 })
+    const turn = rpc.prompt('one')
+    await tick()
+    pi.exit(1)
+    await expect(turn).rejects.toThrow('pi exited (1) before the turn settled')
+    expect(pi.sent).toEqual([])
   })
 
   it('[U:pi-rpc] a refused prompt, or Pi exiting mid-turn, rejects the turn', async () => {

@@ -22,6 +22,9 @@ export const ECHO_CAPS: Capabilities = {
   resume: false,
   usage: 'route-only',
   streaming: false,
+  toolChange: 'live',
+  sessionIsolation: 'sealed', // it keeps nothing on disk
+  modelShape: 'none',
 }
 
 export type EchoMode =

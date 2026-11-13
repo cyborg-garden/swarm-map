@@ -136,6 +136,16 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'turn.no-harness', why: 'No harness is connected, so the message was not delivered.' })
       return
     }
+    // A DM must not land where a room's turn can read it back. The session key
+    // keeps them apart in name only; on disk that is the harness's job, and a
+    // harness that does not declare it is not given the message.
+    if (e.isDm && policy.memory.dmIsolated && shim.caps.sessionIsolation !== 'sealed') {
+      receipt(about(e, 'inbound'), {
+        verdict: 'drop', rule: 'mem.dm-isolated',
+        why: 'This harness keeps every session in one place on disk, so a direct message is not delivered to it.',
+      })
+      return
+    }
 
     const caps = shim.caps
     const turnId = randomUUID()
@@ -188,14 +198,15 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   }
 
   function fromShim(link: ShimLink, caps: Capabilities, msg: FromShim): void {
-    const unknown = (turnId: string | undefined, what: string): void => {
-      receipt({ kind: 'outbound', ...(turnId ? { turnId } : {}) },
+    // A turn id the door did not issue is harness-supplied text. It is never written down.
+    const unknown = (what: string): void => {
+      receipt({ kind: 'outbound' },
         { verdict: 'drop', rule: 'turn.known', why: `The harness sent ${what} for a turn that is not live.` })
     }
     switch (msg.t) {
       case 'reply': {
         const turn = turns.get(msg.turnId)
-        if (!turn) return unknown(msg.turnId, 'a reply')
+        if (!turn) return unknown('a reply')
         if (turn.reply !== undefined) {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'turn.one-reply', why: 'The harness sent a second reply for one turn.' })
           return
@@ -205,7 +216,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       }
       case 'settled': {
         const turn = turns.get(msg.turnId)
-        if (!turn) return unknown(msg.turnId, 'settled')
+        if (!turn) return unknown('settled')
         if (msg.usage) opts.onUsage?.(turn.turnId, msg.usage)
         clearTimeout(turn.timer)
         turns.delete(turn.turnId) // no reply can join this turn from here on
@@ -218,18 +229,23 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       case 'tool_request': {
         const turn = turns.get(msg.turnId)
         if (!turn) {
-          receipt({ kind: 'tool', turnId: msg.turnId }, { verdict: 'deny', rule: 'turn.known', why: 'A tool was requested for a turn that is not live.' })
+          receipt({ kind: 'tool' }, { verdict: 'deny', rule: 'turn.known', why: 'A tool was requested for a turn that is not live.' })
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow: false, reason: 'unknown turn' })
           return
         }
         const e = turn.event
+        // The tool name is whatever the shim sent. Only a name from the map it
+        // declared at hello (checked there to be a plain name) is used or
+        // written down; anything else is the fixed code 'unmapped'.
+        const mapped = typeof msg.tool === 'string' && Object.hasOwn(caps.toolMap, msg.tool)
+        const toolName = mapped ? msg.tool : 'unmapped'
         void factsFor(turn.connector, e).then((facts) => {
           const d = decide(policy, {
             kind: 'tool', surface: e.surface, room: e.room, actor: e.sender,
-            toolClass: caps.toolMap[msg.tool] ?? 'unknown', toolName: msg.tool, argsDigest: '',
+            toolClass: mapped ? caps.toolMap[msg.tool] : 'unknown', toolName, argsDigest: '',
           }, facts)
           if (opts.silentVerdicts) return
-          receipt(about(e, 'tool', turn.turnId), d, `tool=${msg.tool}`)
+          receipt(about(e, 'tool', turn.turnId), d, `tool=${toolName}`)
           link.send({ t: 'tool_verdict', callId: msg.callId, allow: d.verdict === 'allow', ...(d.verdict === 'allow' ? {} : { reason: d.why }) })
         })
         return

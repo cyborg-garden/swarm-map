@@ -32,4 +32,9 @@ export const PI_CAPS: Capabilities = {
   resume: false,
   usage: 'route-only',
   streaming: false,
+  toolChange: 'restart', // Pi's tools are fixed by --tools at process start
+  // Every session's Pi process shares one work dir, one home and one sessions
+  // dir. Nothing outside Pi keeps them apart until the Docker cell exists.
+  sessionIsolation: 'none',
+  modelShape: 'openai-chat',
 }

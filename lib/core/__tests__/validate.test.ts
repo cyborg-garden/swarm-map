@@ -42,3 +42,59 @@ describe('validatePolicy', () => {
     expect(policyHash({ ...p, version: p.version + 1 })).not.toBe(p.hash)
   })
 })
+
+// Every value the record's type declares as a closed set. A value outside the
+// set must stop the record at save time: decide() compares against the names
+// it knows, so a typo would otherwise read as the permissive case.
+const F = 'surfaces.fake.'
+const BAD_VALUES: [string, Record<string, unknown>][] = [
+  ['posture', { posture: 'Public' }],
+  ['mode', { mode: 'Door' }],
+  [`${F}rooms.0.mode`, { [F + 'rooms']: [{ match: { room: 'r-general' }, mode: 'Mention' }] }],
+  [`${F}rooms.0.mode`, { [F + 'rooms']: [{ match: { room: 'r-general' }, mode: 'Ignore' }] }],
+  [`${F}rooms.0.match`, { [F + 'rooms']: [{ match: { channel: 'r-general' }, mode: 'free' }] }],
+  [`${F}bots.mode`, { [F + 'bots.mode']: 'off' }],
+  [`${F}dm.mode`, { [F + 'dm.mode']: 'Closed' }],
+  [`${F}invites.mode`, { [F + 'invites.mode']: 'nobody' }],
+  [`${F}enabled`, { [F + 'enabled']: 'false' }],
+  [`${F}anyoneInAllowedRoom`, { [F + 'anyoneInAllowedRoom']: 'no' }],
+  [`${F}observeUnmentioned`, { [F + 'observeUnmentioned']: 0 }],
+  [`${F}threadsRequireMention`, { [F + 'threadsRequireMention']: 'yes' }],
+  [`${F}bots.inlineMentionOnly`, { [F + 'bots.inlineMentionOnly']: 'true' }],
+  [`${F}users.0.kind`, { [F + 'users']: [{ kind: 'group', id: 'g-1' }] }],
+  [`${F}admins.0.id`, { [F + 'admins']: [{ kind: 'user' }] }],
+  [`${F}dm.users`, { [F + 'dm.users']: 'u-alice' }],
+  ['surfaces.irc', { 'surfaces.irc': { enabled: true } }],
+  ['tools.allow.0', { 'tools.allow': ['Shell'] }],
+  ['tools.deny.0', { 'tools.deny': ['everything'] }],
+  ['tools.deny', { 'tools.deny': 'shell' }],
+  ['tools.browserGuard', { 'tools.browserGuard': 'on' }],
+  ['budget.onExceed', { budget: { monthlyUsd: 5, onExceed: 'Warn' } }],
+  ['budget.monthlyUsd', { budget: { monthlyUsd: '5', onExceed: 'refuse' } }],
+  ['egress.default', { 'egress.default': 'allow' }],
+  ['memory.dmIsolated', { 'memory.dmIsolated': false }],
+  ['memory.team.group', { 'memory.team.group': 'write' }],
+  ['session.groupShared', { 'session.groupShared': 'true' }],
+]
+
+describe('validatePolicy: closed sets', () => {
+  it.each(BAD_VALUES)('[U:validate] refuses a value outside the declared set at %s', (where, patch) => {
+    const errors = validatePolicy(withHash(applyPatch(team(), patch)), { testing: true })
+    expect(errors.filter((e) => e.startsWith(`${where}:`)), errors.join('; ')).toHaveLength(1)
+  })
+
+  it('[U:validate] accepts an mcp tool class and every declared value', () => {
+    const ok = withHash(applyPatch(team(), {
+      posture: 'private', 'tools.allow': ['mcp:notion', 'unknown', 'chat_post'],
+      [F + 'rooms']: [{ match: { category: 'c-1' }, mode: 'ignore' }, { match: { room: 'r-1' }, mode: 'free' }],
+      [F + 'bots.mode']: 'all', [F + 'dm.mode']: 'allowlist', budget: { monthlyUsd: 0, onExceed: 'warn' },
+    }))
+    expect(validatePolicy(ok, { testing: true })).toEqual([])
+  })
+
+  it('[U:validate] does not throw on a record that is not even the right shape', () => {
+    for (const junk of [null, 7, 'policy', [], {}, { surfaces: null, tools: 3 }]) {
+      expect(validatePolicy(junk as never).length).toBeGreaterThan(0)
+    }
+  })
+})

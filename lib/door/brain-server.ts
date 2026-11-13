@@ -3,7 +3,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import net from 'node:net'
 import { createLineDecoder, encodeLine } from './framing.ts'
-import { PROTOCOL_VERSION, type Capabilities, type FromShim, type ToShim } from './protocol.ts'
+import { capsProblem, PROTOCOL_VERSION, type Capabilities, type FromShim, type ToShim } from './protocol.ts'
 
 export interface ShimLink {
   send(msg: ToShim): void
@@ -60,6 +60,8 @@ export function createBrainServer(opts: BrainServerOptions): Promise<BrainServer
         if ((msg.protocol as number) !== PROTOCOL_VERSION) return refuse(`unsupported protocol ${msg.protocol}`)
         if (typeof msg.token !== 'string' || !sameToken(msg.token, opts.token)) return refuse('wrong token')
         if (current) return refuse('a shim is already connected')
+        const problem = capsProblem(msg.caps)
+        if (problem) return refuse(`bad capabilities: ${problem}`)
         greeted = true
         current = socket
         clearTimeout(helloTimer)

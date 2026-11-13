@@ -22,11 +22,14 @@ const S = 'surfaces.*'
 
 export const RULES: Rule[] = [
   { id: 'ctl.valid', statement: 'A record that fails validation is never applied.',
-    klass: 'security', kind: 'control-plane', reads: ['schema', 'agentId', 'version', 'hash'], enforcer: 'control-plane', tests: ['U:validate', 'P:fake-only'] },
+    klass: 'security', kind: 'control-plane', reads: ['schema', 'agentId', 'version', 'hash'], enforcer: 'control-plane', tests: ['U:validate', 'U:fail-closed', 'P:fake-only'] },
 
-  { id: 'ctl.applied', statement: 'Swarm Map can tell which version of the policy is live, and a change applies with no restart.',
-    klass: 'security', kind: 'control-plane', reads: ['hash', 'version'], enforcer: 'door', tests: ['P:heartbeat-hash'] },
-  { id: 'ctl.receipts', statement: 'Every decision leaves a receipt, and a receipt never holds message text.',
+  // "No restart" means the agent and its door. A harness whose tools are fixed
+  // when its process starts has that one session's process restarted by its
+  // shim when the tool list changes (Capabilities.toolChange).
+  { id: 'ctl.applied', statement: 'Swarm Map can tell which version of the policy is live, and a change applies from the next message on, tools included, without restarting the agent.',
+    klass: 'security', kind: 'control-plane', reads: ['hash', 'version'], enforcer: 'door', tests: ['P:heartbeat-hash', 'U:pi-shim'] },
+  { id: 'ctl.receipts', statement: 'Every decision leaves a receipt, and a receipt never holds message text or anything else the harness wrote.',
     klass: 'security', kind: 'control-plane', reads: ['agentId'], enforcer: 'door', tests: ['P:receipts'] },
   { id: 'ctl.brain-token', statement: 'A harness that does not present the token for its cell is refused.',
     klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:hello-token'] },
@@ -79,11 +82,14 @@ export const RULES: Rule[] = [
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'] },
 
-  { id: 'budget.cap', statement: 'Monthly spend is capped.',
-    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter'] },
+  // Both model-route rules hold only for a harness whose model wire format has
+  // a ModelShape (lib/door/model-shapes.ts). One exists: OpenAI chat-completions.
+  // A harness that speaks the Anthropic Messages API has neither rule yet.
+  { id: 'budget.cap', statement: 'Monthly spend is capped, for a harness that talks to its model in the OpenAI chat format.',
+    klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:model-shape'] },
 
-  { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key.',
-    klass: 'security', kind: 'wall', reads: [], enforcer: 'model-route', tests: ['U:key-swap'] },
+  { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key. This holds for a harness that talks to its model in the OpenAI chat format.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'model-route', tests: ['U:key-swap', 'U:model-shape'] },
 
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.enabled`], enforcer: 'door', tests: ['D:out.still-allowed/dm-closed', 'D:out.still-allowed/room-removed', 'D:out.still-allowed/turn-dead'] },
@@ -95,7 +101,12 @@ export const RULES: Rule[] = [
   { id: 'turn.no-harness', statement: 'A message is not delivered while no harness is connected, and the receipt says so.',
     klass: 'behaviour', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:no-harness'] },
   { id: 'tools.no-verdict', statement: 'A tool with no verdict in time does not run.',
-    klass: 'security', kind: 'guardrail', reads: [], enforcer: 'gate', tests: ['P:no-verdict-is-no', 'P:tool-verdict'] },
+    klass: 'security', kind: 'guardrail', reads: [], enforcer: 'gate', tests: ['P:no-verdict-is-no', 'P:tool-verdict', 'U:pi-gate'] },
+  { id: 'tools.gate-loaded', statement: 'A harness whose tool gate has not said it is loaded is sent no turn.',
+    klass: 'security', kind: 'guardrail', reads: [], enforcer: 'gate', tests: ['U:pi-gate-ready', 'U:must-fail'] },
+
+  { id: 'mem.dm-isolated', statement: 'A direct message is only delivered to a harness that keeps each session\'s files apart.',
+    klass: 'security', kind: 'wall', reads: ['memory.dmIsolated'], enforcer: 'door', tests: ['P:dm-isolated'] },
 
   { id: 'san.in', statement: 'Pasted secrets are scrubbed before the harness sees them.',
     klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:scrub-in'] },
