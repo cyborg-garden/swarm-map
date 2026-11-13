@@ -1,7 +1,6 @@
 // @vitest-environment node
 /**
- * Removal guards for the old Letta integration (plan: docs/plans/
- * 2026-11-13-letta-code-migration.md, section 3a).
+ * Removal guards for the old Letta integration.
  *
  * Two things were deleted: the Hermes-to-Letta bridge, and the client for the
  * retired self-hosted Letta server. These checks keep them deleted. They read
@@ -19,7 +18,9 @@ import path from 'path'
 const ROOT = path.resolve(__dirname, '../..')
 const SELF = 'lib/__tests__/retired-letta-guards.test.ts'
 
-// The migration's own plan and spec describe what was removed, by name.
+// The migration's plan and spec describe what was removed, by name. They are
+// published with the follow-up work, not with this removal, so these two
+// paths do not exist yet. They are listed so that change needs no edit here.
 const MIGRATION_DOCS = [
   'docs/plans/2026-11-13-letta-code-migration.md',
   'docs/specs/2026-11-13-harness-agnostic-primitives.md',

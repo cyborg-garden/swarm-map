@@ -133,13 +133,12 @@ trusted process (a "sidecar") beside each agent. The sidecar owns chat in, chat 
 traffic and tool verdicts. The harness runs in a cell with no chat token and no real key.
 A new harness then needs one small shim, not a re-implementation of every rule.
 
-- Spec: [Harness-agnostic primitives](specs/2026-11-13-harness-agnostic-primitives.md)
-- Letta Code plan: [Letta Code migration](plans/2026-11-13-letta-code-migration.md)
+The design and the step-by-step plan are published with that work, not here.
 
 Order: Pi first, then Letta Code, each driven the same way. Hermes stays as it is.
 
 One known limit is stated up front: Letta Code keeps memory per agent and always on, so it
-cannot keep memory apart per room. The plan measures that and shows it. It does not hide it.
+cannot keep memory apart per room. That will be measured and shown, not hidden.
 
 ## Related
 
