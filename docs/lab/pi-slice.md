@@ -95,7 +95,7 @@ red, on the fake Pi and on real Pi.
 | `gate-silent` | Pi loads a gate that never announces itself and blocks nothing | C1, C4+ (same) |
 | `dials-out` | A working gate that also tries to connect to an address outside this machine when Pi starts | Every check that starts Pi |
 | `unwatched` | Pi started with no tripwire loaded inside it | C9p, and nothing else |
-| `chatty` | Answers without the model, twice, and for turns nobody opened | every check that needs a model answer |
+| `chatty` | Answers without the model, twice, and for turns nobody opened | C1, C3 |
 
 ### Which rules this proves for Pi
 
@@ -197,7 +197,7 @@ build a matrix from it.
 - **The fake Pi loads the real gate file.** It used to carry its own copy of the gate's logic, so
   the gate itself was never run in CI.
 - **The model route takes its wire format as a part** (`ModelShape`). Only one exists.
-- **The budget cap had five ways round it, now closed.** A reply with no usage was counted as
+- **The budget cap had five ways round it. Each is closed; what is left is under "What this does not show".** A reply with no usage was counted as
   free; it is now charged at one token per byte, with a receipt marked `unmetered`. So is a reply
   whose usage cannot be true: zeros, a missing count, a negative count, anything that is not a
   whole number. Calls sent at once all passed the same check; under a refusing cap they now go one
@@ -209,9 +209,10 @@ build a matrix from it.
   by its room kind as well as its flag. And an inbound scrub that fails drops the message; it used
   to deliver it unscrubbed.
 - **The model route stops when spend cannot be recorded.** It checks the ledger can be written
-  before it forwards a call, and a charge lost after a call stops every later one. Stream events
-  written as `data:` with no space are now parsed, and a usage figure sent before the text no
-  longer covers the text after it.
+  before it forwards a call, and a charge lost after a call stops every later one until the route
+  is restarted. Stream events
+  written as `data:` with no space are now parsed, and a usage figure no longer stands once any
+  output (text, a tool call) follows it.
 - **`mem.dm-isolated` does not mean what the spec's row says.** The spec's rule is "a DM never
   shares scope with a group", proven by C11. Memory scopes are not built, so the rule here is
   narrower and blunter: no DM is delivered to a harness that does not keep sessions apart.
@@ -234,7 +235,8 @@ build a matrix from it.
 4. **The key is redacted from streamed reply text even when it is split across events**, by
    holding back any ending that could be the start of the key. That covers the text of the reply
    only. Streamed tool-call arguments and any other field are still checked one event at a time.
-   The real protection is that the key is in a header the model never sees.
+   The key travels in a header the model never sees. That nothing else in the harness can reach
+   it is the cell's job, and not proven.
 5. **The tool map can be wrong, not just incomplete.**
 6. **The key swap and the budget cap exist for one wire format.** `lib/door/model-route.ts` is
    shared code and enforces two wall rules (`budget.cap`, `keys.model-route`), but the only
@@ -262,11 +264,21 @@ build a matrix from it.
    resting value is refused outright. One resting value is not harmless: the bot loop limit rests
    at 4 and nothing counts turns, so with bots allowed, two bots can answer each other without end.
    A bot is admitted by the bots rules alone and is not checked against the user list. One model
-   call can overshoot the cap, because the cap is checked before a call, not during it. C12b (a key
+   call can overshoot the cap, because the cap is checked before a call, not during it. A usage
+   figure that is false but could be true (one token for a long reply) is believed. A charge the
+   ledger loses stops the route, but a restart forgets that and the charge stays lost. C12b (a key
    scoped to one room) is listed as not-run.
-9. **A changed tool list costs a restart of that session's Pi.** The conversation is carried over
+9. **Not every line of every check has a broken shim behind it.** The eight broken shims prove the
+   suite can go red for the gate, the environment, the tripwire and a harness that answers on its
+   own. No broken shim isolates C2, C4a, C12 or C15, or the one-reply line of C1, the timing line
+   of C5v, or the key-swap lines of C8p: those lines could be deleted with the must-fail runs
+   still passing. The door's half of each is covered by its own tests (`P:observe`, the budget
+   tests, `P:heartbeat-hash`, `P:one-reply`, `U:key-swap`); the harness's half is shown by the
+   check passing, not by a shim that fails it. Also not pinned by any test: the working folder Pi
+   is started in.
+10. **A changed tool list costs a restart of that session's Pi.** The conversation is carried over
    with `--continue`. Anything Pi held only in memory is gone.
-10. **Mutation checks were run by hand, not committed.** Every rule in `decide()` (36 mutations) and
+11. **Mutation checks were run by hand, not committed.** Every rule in `decide()` (36 mutations) and
    the main paths of the door, framing, sanitizer and model route (37 more) were broken on purpose
    once, and each turned a named test red. After the audit, eleven more were run the same way: the
    gate allowing everything, allowing on a timeout and allowing on an error; Pi inheriting the
@@ -281,7 +293,12 @@ build a matrix from it.
    closed by the `unwatched` shim. It then added about forty more against its own fixes: usage
    figures that cannot be true, unknown spend, a ledger that cannot be written, the four door
    refusals, the credential and work-dir guards, the posture check and the brain token. Each
-   turned a named test red, bar two that changed nothing the code does.
+   turned a named test red, bar two that changed nothing the code does. A separate pass of 223
+   mutations across the whole slice found 57 hand mutations and 45 deleted check lines that no
+   test noticed. The ones that mattered now have tests (a wrong token of the right length, each
+   redaction pattern, Pi's flags, its HOME and PATH, a folder per session, a broken shim caught
+   only in part). The check lines in item 9 are still open, and so are smaller ones in policy
+   validation, the RPC pump and the shim client.
 
 ## Still to build
 
