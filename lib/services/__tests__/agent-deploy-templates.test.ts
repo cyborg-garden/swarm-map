@@ -171,7 +171,7 @@ describe('generateEnvContent', () => {
     expect(env).not.toContain('NOTION_TOKEN')
   })
 
-  // R3: the Hermes-to-Letta bridge is gone. No input may produce its env vars,
+  // The Hermes-to-Letta bridge is gone. No input may produce its env vars,
   // including a caller that still passes the old `lettaBrain` argument.
   it('never emits a LETTA_BRAIN_* line, even when handed the old lettaBrain argument', () => {
     const stale = {

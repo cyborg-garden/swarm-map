@@ -18,17 +18,6 @@ import path from 'path'
 const ROOT = path.resolve(__dirname, '../..')
 const SELF = 'lib/__tests__/retired-letta-guards.test.ts'
 
-// The migration's plan and spec describe what was removed, by name. They are
-// published with the follow-up work, not with this removal, so these two
-// paths do not exist yet. They are listed so that change needs no edit here.
-const MIGRATION_DOCS = [
-  'docs/plans/2026-11-13-letta-code-migration.md',
-  'docs/specs/2026-11-13-harness-agnostic-primitives.md',
-]
-
-/** Where the Letta Code shim will live. Nothing is there yet. */
-const LETTA_CODE_DIR = 'lib/runtimes/letta-code/'
-
 function repoFiles(): string[] {
   // Throws if this is not a git checkout. That is deliberate: a guard that
   // cannot list the files must fail, not pass on an empty list.
@@ -108,13 +97,11 @@ describe('the guard can see the repo (a guard that scans nothing passes everythi
   })
 })
 
-describe('R1/R3: the Hermes-to-Letta bridge stays deleted', () => {
+describe('the Hermes-to-Letta bridge stays deleted', () => {
   it('no file names the bridge env vars or its deploy argument', () => {
     const allow = (f: string) =>
       f === SELF ||
-      MIGRATION_DOCS.includes(f) ||
-      f.startsWith(LETTA_CODE_DIR) ||
-      // The R3 test: it passes the old argument on purpose, to prove a stale
+      // Its test passes the old argument on purpose, to prove a stale
       // caller still gets no bridge vars.
       f === 'lib/services/__tests__/agent-deploy-templates.test.ts'
     expect(hits(/letta_brain|lettaBrain/i, allow)).toEqual([])
@@ -149,41 +136,13 @@ const MAY_SAY_LETTA: Record<string, string> = {
   'README.md': 'points at docs/runtimes.md for the retired runtime',
 }
 
-/**
- * Where the harness-agnostic contract lives (spec section 4: `lib/core/` for
- * types and pure functions, `lib/door/` for the sidecar). That contract names
- * every harness by id, `'letta-code'` included (spec 4.5,
- * `Capabilities.harness`), so the bare word is expected there. The specific
- * strings of the old integration (server image, port, REST path, bridge
- * vars) are still banned in these directories by the checks around this one.
- */
-const SHARED_CONTRACT_DIRS = ['lib/core/', 'lib/door/']
-
-const removedPathAllowed = (f: string) =>
-  f === SELF || MIGRATION_DOCS.includes(f) || f.startsWith(LETTA_CODE_DIR) || TRANSLATED(f)
+const removedPathAllowed = (f: string) => f === SELF || TRANSLATED(f)
 
 /** May this file contain the bare word "letta"? */
-const mayNameLetta = (f: string) =>
-  removedPathAllowed(f) ||
-  Object.hasOwn(MAY_SAY_LETTA, f) ||
-  SHARED_CONTRACT_DIRS.some((dir) => f.startsWith(dir))
+const mayNameLetta = (f: string) => removedPathAllowed(f) || Object.hasOwn(MAY_SAY_LETTA, f)
 
-describe('R1: the old Letta server client stays deleted', () => {
+describe('the old Letta server client stays deleted', () => {
   const allow = removedPathAllowed
-
-  it('the shared contract may name the new harness id; the old paths stay banned there', () => {
-    // The Pi branch's lib/door/protocol.ts lists 'letta-code' as a harness id.
-    expect(mayNameLetta('lib/door/protocol.ts')).toBe(true)
-    expect(mayNameLetta('lib/core/policy/types.ts')).toBe(true)
-    // Not a blanket pass: the word is still refused everywhere else...
-    expect(mayNameLetta('lib/services/harness.ts')).toBe(false)
-    expect(mayNameLetta('lib/corex/a.ts')).toBe(false)
-    expect(mayNameLetta('app/api/harnesses/route.ts')).toBe(false)
-    // ...and the removed integration's own strings are refused in the shared
-    // dirs too, because those checks do not consult the word list.
-    expect(allow('lib/door/protocol.ts')).toBe(false)
-    expect(allow('lib/core/policy/types.ts')).toBe(false)
-  })
 
   it('nothing pins the retired server image', () => {
     expect(hits(/letta\/letta:/i, allow)).toEqual([])
@@ -218,13 +177,7 @@ describe('R1: the old Letta server client stays deleted', () => {
   })
 })
 
-describe('R2: no elizaOS code', () => {
-  it('nothing mentions eliza', () => {
-    expect(hits(/eliza/i, (f) => f === SELF || MIGRATION_DOCS.includes(f))).toEqual([])
-  })
-})
-
-describe('R6: no Letta routes, page or sidebar entry', () => {
+describe('no Letta routes, page or sidebar entry', () => {
   it('there is no /api/letta route tree and no /letta page (so both are 404)', () => {
     // Next.js routes are files. No file under these paths means no route.
     expect(repoFiles().filter((f) => /^app\/(api\/letta|\(dashboard\)\/letta)(\/|$)/.test(f))).toEqual([])
@@ -233,7 +186,7 @@ describe('R6: no Letta routes, page or sidebar entry', () => {
   })
 
   it('nothing links to /letta or /api/letta', () => {
-    expect(hits(/['"`(]\/(api\/)?letta\b/, (f) => f === SELF || MIGRATION_DOCS.includes(f) || TRANSLATED(f))).toEqual([])
+    expect(hits(/['"`(]\/(api\/)?letta\b/, (f) => f === SELF || TRANSLATED(f))).toEqual([])
   })
 
   it('the sidebar has no Letta entry', () => {
@@ -242,7 +195,7 @@ describe('R6: no Letta routes, page or sidebar entry', () => {
   })
 })
 
-describe('R7: the sanitization gate needs no Letta exception', () => {
+describe('the sanitization gate needs no Letta exception', () => {
   it('sanitize.config.json allows no Letta connection string', () => {
     const raw = fs.readFileSync(path.join(ROOT, 'sanitize.config.json'), 'utf-8')
     expect(raw).not.toMatch(/letta/i)

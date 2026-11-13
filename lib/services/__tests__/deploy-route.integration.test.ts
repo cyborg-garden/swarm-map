@@ -341,7 +341,7 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     expect(tmpl.install).not.toHaveBeenCalled()
   })
 
-  // ── R5: only Hermes can be deployed. The Hermes-to-Letta bridge is gone ───
+  // ── Only Hermes can be deployed. The Hermes-to-Letta bridge is gone ───
   // A request for a retired or unknown runtime is refused before any side
   // effect: no agent dir, no compose, no overlay row, no Docker call, no key
   // written, nothing under <dataDir>/letta.

@@ -54,7 +54,7 @@ describe('adapterForRuntime no longer falls back to Hermes', () => {
   })
 })
 
-describe('a stored row with a retired runtime (R4)', () => {
+describe('a stored row with a retired runtime', () => {
   let tmpDir: string
   let storage: Storage
   let docker: DockerService

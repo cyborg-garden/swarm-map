@@ -32,9 +32,9 @@ the tag decides: nothing is inferred from an id, a name or what is on disk.
 - Such a row is left out of `GET /api/harnesses` and has no detail page.
   `GET /api/harnesses/retired` lists it with the stored tag and a reason, and the fleet
   page shows it under "Rows Swarm Map no longer manages" with one action, "Forget row".
-- Every write or lifecycle request for its id (any `POST`, `PUT`, `PATCH` or `DELETE` under
-  `/api/harnesses/:id/`) is answered 409. That is done in one place, the request gate in
-  `proxy.ts`, which every `/api` request passes through before it reaches a route.
+- A `POST`, `PUT`, `PATCH` or `DELETE` to a route under `/api/harnesses/<id>/` is answered
+  409 when `<id>` is the stored id of such a row (or the bare slug of that id). The check
+  is made in one place, the request gate in `proxy.ts`.
 - `DELETE /api/harnesses/:id` is the exception. It forgets the row and nothing else: no
   container, data directory or volume is touched, even with `deleteFiles=true`.
 - Inside the server, `adapterForRuntime` throws `UnsupportedRuntimeError` for such a tag,

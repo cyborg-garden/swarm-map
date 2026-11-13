@@ -165,7 +165,7 @@ export class UnsupportedRuntimeError extends Error {
 export interface RetiredHarnessRow {
   id: string
   name: string
-  /** The tag as stored. For a row with no tag, the retired runtime its id marks. */
+  /** The tag as stored. */
   runtime: string
   reason: 'retired' | 'unknown'
   /** One plain sentence for the UI. */
