@@ -3,7 +3,10 @@
 // image so a tool run by the harness can run it, and so the rig can run it
 // there from outside.
 //
-//   node probe.ts nonce=<nonce> sink=<ip> hostip=<ip> hostport=<port> [out=<file>]
+//   node probe.ts nonce=<nonce> sink=<ip> hostport=<port> hostip=<ip> public=<ip> resolver=<ip> resolver6=<ip> [out=<file>]
+//
+// The addresses come from the rig (see ProbeTargets in compose.ts). One that
+// is missing is reported as `not-tried`, which fails the check that reads it.
 //
 // It prints one line of JSON, or writes it to `out`. Every network answer is
 // either `open` (a connection was made, a name was resolved) or the reason it
@@ -21,6 +24,7 @@ import type { ProbeReport } from './report.ts'
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const i = a.indexOf('='); return [a.slice(0, i), a.slice(i + 1)] }))
 const nonce = args.nonce ?? ''
 const WAIT = 2500
+const NOT_TRIED = Promise.resolve('not-tried')
 
 function connect(host: string, port: number, hello?: string): Promise<string> {
   return new Promise((resolve) => {
@@ -132,21 +136,21 @@ async function main(): Promise<void> {
   const hostPort = Number(args.hostport) || 80
   const netChecks: Record<string, Promise<string>> = {
     'the sink, by name': connect('sink', SINK_PORT, `GET /probe-by-name-${nonce} HTTP/1.0\r\n\r\n`),
-    'a public address': connect('1.1.1.1', 443),
-    'a public address over IPv6': connect('2606:4700:4700::1111', 443),
+    'a public address': args.public ? connect(args.public, 443) : NOT_TRIED,
+    'a public address over IPv6': args.resolver6 ? connect(args.resolver6, 443) : NOT_TRIED,
     'a public name, asked of DNS': resolve4('example.com'),
     'the name of this machine as Docker gives it': lookup('host.docker.internal'),
     'a listener on this machine, by name': connect('host.docker.internal', hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`),
     'a listener on this machine, by the gateway name': connect('gateway.docker.internal', hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`),
     'the cloud metadata address': connect('169.254.169.254', 80),
-    'a public resolver, asked directly over UDP': askResolver('1.1.1.1', 'example.com'),
+    'a public resolver, asked directly over UDP': args.resolver ? askResolver(args.resolver, 'example.com') : NOT_TRIED,
+    'a listener on this machine, by address': args.hostip ? connect(args.hostip, hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`) : NOT_TRIED,
+    'the sink, by address': args.sink ? connect(args.sink, SINK_PORT, `GET /probe-by-address-${nonce} HTTP/1.0\r\n\r\n`) : NOT_TRIED,
   }
-  if (args.hostip) netChecks['a listener on this machine, by address'] = connect(args.hostip, hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`)
   for (const gateway of gateways()) {
     // Where a Docker engine would answer if it were ever put on the network, and this machine's listener again.
     for (const port of [2375, 2376, hostPort]) netChecks[`port ${port === hostPort ? 'of this machine\'s listener' : port} on Docker's side of the network (${gateway})`] = connect(gateway, port)
   }
-  if (args.sink) netChecks['the sink, by address'] = connect(args.sink, SINK_PORT, `GET /probe-by-address-${nonce} HTTP/1.0\r\n\r\n`)
   const netAnswers: Record<string, string> = {}
   for (const [what, answer] of Object.entries(netChecks)) netAnswers[what] = await answer
 

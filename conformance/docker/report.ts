@@ -9,7 +9,7 @@ export interface ProbeReport {
   /** Must be open, or the probe had no network at all and its other answers mean nothing. */
   door: string
   doorRoute: string
-  /** Everything here must be closed. `open` means a connection was made or a name was resolved. */
+  /** Everything here must be closed. `open` means a connection was made or a name was resolved; `not-tried` means the probe had no address to try. */
   net: Record<string, string>
   /** A second shim with a wrong token. Must be `refused`. */
   wrongToken: string
@@ -39,7 +39,10 @@ export function netProblems(r: ProbeReport): string[] {
   const p: string[] = []
   if (r.door !== 'open' || r.doorRoute !== 'open') p.push(`the probe could not reach the door (${r.door}, ${r.doorRoute}), so its other answers mean nothing`)
   if (Object.keys(r.net).length < 14) p.push('the probe tried fewer ways out than it should')
-  for (const [what, answer] of Object.entries(r.net)) if (answer === 'open') p.push(`reached ${what}`)
+  for (const [what, answer] of Object.entries(r.net)) {
+    if (answer === 'open') p.push(`reached ${what}`)
+    if (answer === 'not-tried') p.push(`did not try ${what}: the rig was given no address for it`)
+  }
   if (r.wrongToken !== 'refused') p.push(`the door did not hang up on a wrong cell token (${r.wrongToken})`)
   if (r.ipv6.length > 0) p.push('the container has an IPv6 address')
   if (r.dockerSocket) p.push('a Docker socket is in the container')

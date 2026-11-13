@@ -24,10 +24,7 @@ const SLOW = { turnDeadlineMs: 90_000 }
 function probeScript(lab: Lab, name: string, before?: () => void): { canary: string; out: string } {
   const canary = lab.canary(name)
   const out = lab.file(`${name}.probe.json`)
-  const command = [
-    'node', `${SWARM_ROOT}/conformance/docker/probe.ts`, `nonce=${lab.nonce}`,
-    `sink=${process.env.SMLAB_SINK_IP ?? ''}`, `hostip=${process.env.SMLAB_HOST_IP ?? ''}`, `hostport=${process.env.SMLAB_HOST_PORT ?? ''}`, `out=${out}`,
-  ].join(' ')
+  const command = ['node', `${SWARM_ROOT}/conformance/docker/probe.ts`, process.env.SMLAB_PROBE_ARGS ?? '', `out=${out}`].join(' ')
   lab.script({ match: canary, tool: lab.harness.shell.exec(command), text: 'done', before })
   return { canary, out }
 }

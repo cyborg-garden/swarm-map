@@ -45,7 +45,7 @@ let before: ReturnType<typeof labObjects>
 const run = (id: string, variant: RigVariant, gate?: 'real' | 'allows-all'): Promise<CheckResult> => {
   const check = IN_CELL.find((c) => c.id === id)!
   return runInRig(id, check.title, {
-    variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'), hostIp: facts!.hostIp,
+    variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'), targets: facts!.targets,
     verdictTimeoutMs: check.lab?.verdictTimeoutMs, vetoTimeoutMs: check.lab?.vetoTimeoutMs,
   }, host)
 }
@@ -80,7 +80,7 @@ afterAll(async () => {
 
 describe(`real Pi ${PI_VERSION} in a sealed Docker cell`, () => {
   it('S0-S3: the cell, looked at from outside', async () => {
-    const seal = await runSealChecks('good', host, facts!.hostIp, hostCanary)
+    const seal = await runSealChecks('good', host, facts!.targets, hostCanary)
     results.push(...seal)
     for (const r of seal) expect(r.detail, r.id).toBe('ok')
   }, 180_000)
@@ -95,7 +95,7 @@ describe(`real Pi ${PI_VERSION} in a sealed Docker cell`, () => {
 describe('must-fail: a rig broken on purpose turns its named checks red', () => {
   it.each(Object.entries(BROKEN))('%s', async (name, rig) => {
     const got: CheckResult[] = []
-    if (rig.seal) got.push(...await runSealChecks(rig.variant, host, facts!.hostIp, hostCanary))
+    if (rig.seal) got.push(...await runSealChecks(rig.variant, host, facts!.targets, hostCanary))
     for (const id of rig.checks) got.push(await run(id, rig.variant, rig.gate))
     const failed = got.filter((r) => !r.pass).map((r) => r.id)
     mustFail[name] = { mustFail: rig.red, failed }

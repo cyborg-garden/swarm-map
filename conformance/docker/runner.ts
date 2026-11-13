@@ -16,7 +16,7 @@ import path from 'node:path'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
-import { assertSealed, CELL_IMAGE, renderRig, RIG_IMAGE, SWARM_ROOT, type RigOptions, type RigVariant } from './compose.ts'
+import { assertSealed, CELL_IMAGE, probeArgs, renderRig, RIG_IMAGE, SWARM_ROOT, type ProbeTargets, type RigOptions, type RigVariant } from './compose.ts'
 import { mountProblems, netProblems, parseReport, secretProblems, writeProblems, type ProbeReport } from './report.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
@@ -41,7 +41,7 @@ function tryDocker(args: string[], opts: { timeoutMs?: number } = {}): { ok: boo
 }
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; /** Where a container on an ordinary network reaches this machine. Empty if Docker gives no such name. */ hostIp: string }
+export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; targets: ProbeTargets }
 
 /** S0, the part that needs no rig: Docker is local, both images are built, and the cell holds the pinned harness. */
 export function preflight(): DockerFacts {
@@ -57,13 +57,31 @@ export function preflight(): DockerFacts {
   const name = `smlab-${randomBytes(4).toString('hex')}-version`
   const version = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1', CELL_IMAGE, 'pi', '--version'])
   if (version.out.trim() !== PI_VERSION) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
-  // Asked from a container on Docker's default network, which is the one place the name resolves.
-  // The container runs one lookup and is gone; no harness is in it.
-  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', '-e',
-    'require("node:dns").lookup("host.docker.internal",{family:4},(e,a)=>console.log(e?"":a))'])
-  const hostIp = /^\d+\.\d+\.\d+\.\d+$/.test(lookup.out.trim()) ? lookup.out.trim() : ''
   const [server, system, arch] = info.out.trim().split('|')
-  return { endpoint, server, os: system, arch, hostIp }
+  return { endpoint, server, os: system, arch, targets: findTargets() }
+}
+
+/**
+ * The addresses the probe will try, asked from a container on Docker's default
+ * network: the one place this machine's Docker name resolves, and a place with
+ * DNS. The container runs four lookups and is gone; no harness is in it. No
+ * address is written in this repo. One that cannot be found stays empty, and
+ * the checks that need it then fail rather than pass untried.
+ */
+export function findTargets(): ProbeTargets {
+  const script = [
+    'const dns=require("node:dns").promises;',
+    'const one=(p)=>p.then((a)=>a[0]??"",()=>"");',
+    'Promise.all([',
+    'dns.lookup("host.docker.internal",{family:4}).then((r)=>r.address,()=>""),',
+    'one(dns.resolve4("example.com")),one(dns.resolve4("one.one.one.one")),one(dns.resolve6("one.one.one.one"))',
+    ']).then((a)=>console.log(JSON.stringify(a)))',
+  ].join('')
+  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', '-e', script])
+  let found: string[] = []
+  try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '[]') as string[] } catch { /* nothing found */ }
+  const [hostIp = '', publicIp = '', resolverIp = '', resolverIp6 = ''] = found
+  return { hostIp, publicIp, resolverIp, resolverIp6 }
 }
 
 /** Build both images. The only step that uses the network, and never part of a test run. */
@@ -121,7 +139,7 @@ export interface LiveRig {
   doorLine(marker: string, timeoutMs: number): Promise<string | undefined>
 }
 
-export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'hostIp' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
+export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
 
 /** Start one rig, hand it to `body`, and take it down whatever happens. */
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
@@ -229,13 +247,13 @@ export const SEAL_CHECKS = [
 ] as const
 
 /** S0 to S3: start a rig that stays up, and look at its containers from outside. */
-export async function runSealChecks(variant: RigVariant, host: HostListener, hostIp: string, hostCanary: { name: string; value: string }): Promise<CheckResult[]> {
+export async function runSealChecks(variant: RigVariant, host: HostListener, targets: ProbeTargets, hostCanary: { name: string; value: string }): Promise<CheckResult[]> {
   const seen = host.hits.length
-  return withRig({ check: 'hold', variant, hostPort: host.port, hostIp }, async (rig) => {
+  return withRig({ check: 'hold', variant, hostPort: host.port, targets }, async (rig) => {
     const s: Record<string, string[]> = { S0: [], S1: [], S2: [], S3: [] }
     const ready = await rig.doorLine('SMLAB-READY', 60_000)
     const probe = async (service: string): Promise<ProbeReport | undefined> =>
-      parseReport(await rig.exec(service, ['node', `${SWARM_ROOT}/conformance/docker/probe.ts`, `nonce=${rig.nonce}`, `sink=${rig.sinkIp}`, `hostip=${hostIp}`, `hostport=${host.port}`]))
+      parseReport(await rig.exec(service, ['node', `${SWARM_ROOT}/conformance/docker/probe.ts`, ...probeArgs(rig.nonce, rig.sinkIp, host.port, targets)]))
     const cell = ready ? await probe('cell') : undefined
     const door = ready ? await probe('door') : undefined
     await sleep(300) // let this process hear anything that reached its listener

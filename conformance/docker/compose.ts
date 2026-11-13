@@ -48,14 +48,40 @@ export interface RigOptions {
   sinkIp?: string
   /** A listener on this machine's loopback, which a sealed cell must not be able to reach. */
   hostPort?: number
-  /** The address a container on an ordinary Docker network would reach this machine at. */
-  hostIp?: string
+  /** Addresses for the probe to try, found by the runner before any rig starts. */
+  targets?: ProbeTargets
   /** `host-mount` only: a folder on this machine to mount into the cell. The runner hands in the rig's own empty temp dir. */
   hostDir?: string
   verdictTimeoutMs?: number
   vetoTimeoutMs?: number
   /** Negative controls only: more environment for the cell. It goes through the same F2 guard. */
   extraCellEnv?: Record<string, string>
+}
+
+/**
+ * Addresses the probe tries that are not the rig's own. None is written in this
+ * repo: the runner asks for them before a run, from a container on Docker's
+ * default network. One it could not find is left empty, and the probe then
+ * reports that way out as not tried, which fails the check.
+ */
+export interface ProbeTargets {
+  /** Where a container on an ordinary Docker network reaches this machine. */
+  hostIp: string
+  /** A public address that answers on port 443: where `example.com` resolved to. */
+  publicIp: string
+  /** A public DNS resolver, and its IPv6 address. */
+  resolverIp: string
+  resolverIp6: string
+}
+const ADDRESS = /^[0-9a-fA-F.:]*$/
+
+/** The probe's arguments, the same for a probe run from outside and one the harness runs. */
+export function probeArgs(nonce: string, sinkIp: string, hostPort: number | string, t: Partial<ProbeTargets> = {}): string[] {
+  const args = { nonce, sink: sinkIp, hostport: String(hostPort), hostip: t.hostIp ?? '', public: t.publicIp ?? '', resolver: t.resolverIp ?? '', resolver6: t.resolverIp6 ?? '' }
+  for (const [name, value] of Object.entries(args)) {
+    if (!ADDRESS.test(value)) throw new RefusingToRun('F5', `probe argument ${name} is not an address`)
+  }
+  return Object.entries(args).map(([name, value]) => `${name}=${value}`)
 }
 
 export interface Service {
@@ -124,7 +150,9 @@ export function renderRig(o: RigOptions): Rig {
   }
   const door: Service = {
     ...service(RIG_IMAGE, 'rig-main.ts', ['cell'], {
-      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', SMLAB_SINK_IP: o.sinkIp ?? '', SMLAB_HOST_IP: o.hostIp ?? '', SMLAB_HOST_PORT: String(o.hostPort ?? 0),
+      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', 
+      // What the harness will be asked to hand the probe. Addresses and a port, checked above all else to be only that.
+      SMLAB_PROBE_ARGS: probeArgs(o.nonce, o.sinkIp ?? '', o.hostPort ?? 0, o.targets).join(' '),
     }),
     volumes: [`lab:${LAB_DIR}:ro`],
   }

@@ -5,7 +5,7 @@
 // Docker then does what the file says is what the Docker suite is for.
 import { describe, expect, it } from 'vitest'
 import { PROJECT_NAME, RefusingToRun } from '../../guards/preflight.ts'
-import { assertSealed, renderRig, rigEnv, RIG_VARIANTS, type RigOptions } from '../compose.ts'
+import { assertSealed, probeArgs, renderRig, rigEnv, RIG_VARIANTS, type RigOptions } from '../compose.ts'
 
 const nonce = 'deadbeef'
 const base: RigOptions = { nonce, brainToken: `BRAIN-${nonce}-0123456789abcdef`, check: 'C1', variant: 'good', sinkIp: '10.0.0.9', hostPort: 4444 }
@@ -139,6 +139,15 @@ describe('F2 for a rig: what every container is handed', () => {
     expect(() => rig({ extraCellEnv: { OPENAI_API_KEY: 'x' } })).toThrow(/^REFUSING TO RUN: F2 .*OPENAI_API_KEY/)
     // A fake of another run is not this run's fake.
     expect(() => rig({ extraCellEnv: { SWARMLAB_LEAK: 'UPSTREAM-0badf00d' } })).toThrow(RefusingToRun)
+  })
+
+  it('[U:rig-compose] the probe is handed addresses and a port, and nothing that is not one', () => {
+    const targets = { hostIp: '192.0.2.1', publicIp: '192.0.2.2', resolverIp: '192.0.2.3', resolverIp6: '2001:db8::1' }
+    expect(rig({ targets }).file.services.door.environment.SMLAB_PROBE_ARGS)
+      .toBe('nonce=deadbeef sink=10.0.0.9 hostport=4444 hostip=192.0.2.1 public=192.0.2.2 resolver=192.0.2.3 resolver6=2001:db8::1')
+    // The harness runs this as a command line, so nothing else may ride along.
+    expect(() => rig({ targets: { ...targets, publicIp: '192.0.2.2; touch x' } })).toThrow(RefusingToRun)
+    expect(() => probeArgs(nonce, '$(id)', 1)).toThrow(RefusingToRun)
   })
 
   it('[U:rig-compose] refuses a nonce or a cell token that is not shaped like one', () => {
