@@ -100,12 +100,13 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   const state = { refused: 0, unmetered: 0 }
 
   type Usage = { inTokens: number; outTokens: number }
-  // A figure is believed only if it could be true: whole, not negative, and
-  // with some input, since every call sends something. A provider that reports
+  // A figure is believed only if it could be true: whole, and above zero both
+  // ways, since every call sends something and a reply that is charged for
+  // said something. (A reply with nothing in it is charged by size, which is small.) A provider that reports
   // zeros or nonsense has not metered the call, and the call is charged by size.
   const count = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
   const believed = (u: Usage | undefined): Usage | undefined =>
-    u && count(u.inTokens) && count(u.outTokens) && u.inTokens > 0 ? u : undefined
+    u && count(u.inTokens) && count(u.outTokens) && u.inTokens > 0 && u.outTokens > 0 ? u : undefined
   // Once the ledger has failed to take a charge, what it holds is less than what was spent,
   // and the next process would start from that. So the route stops forwarding for good.
   let ledgerFailed = false
@@ -226,11 +227,18 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   function redactDeep(value: unknown): boolean {
     if (value === null || typeof value !== 'object') return false
     let changed = false
-    for (const [name, inner] of Object.entries(value)) {
+    const holder = value as Record<string, unknown>
+    for (const [name, inner] of Object.entries(holder)) {
       if (typeof inner === 'string') {
         const clean = redact(inner)
-        if (clean !== inner) { (value as Record<string, unknown>)[name] = clean; changed = true }
+        if (clean !== inner) { holder[name] = clean; changed = true }
       } else if (redactDeep(inner)) changed = true
+      // A property name is a string too.
+      if (!Array.isArray(value) && redact(name) !== name) {
+        holder[redact(name)] = holder[name]
+        delete holder[name]
+        changed = true
+      }
     }
     return changed
   }
@@ -240,7 +248,10 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     upstream: Response, res: http.ServerResponse, stream: boolean,
     seen: { event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void; received(bytes: number): void },
   ): Promise<void> {
-    if (!stream || !upstream.body) {
+    // A streamed call is not always answered with a stream: an error comes back as one plain
+    // body. What the provider says it sent decides how the reply is read, not what was asked for.
+    const isStream = stream && upstream.body !== null && /^text\/event-stream\b/i.test(upstream.headers.get('content-type') ?? '')
+    if (!isStream) {
       const text = await upstream.text()
       seen.received(Buffer.byteLength(text))
       // Passed on as it came, unless the key is in it. JSON may write the key with an escape

@@ -199,8 +199,8 @@ build a matrix from it.
 - **The model route takes its wire format as a part** (`ModelShape`). Only one exists.
 - **The budget cap had five ways round it. Each is closed; what is left is under "What this does not show".** A reply with no usage was counted as
   free; it is now charged at one token per byte, with a receipt marked `unmetered`. So is a reply
-  whose usage cannot be true: zeros, a missing count, a negative count, anything that is not a
-  whole number. Calls sent at once all passed the same check; under a refusing cap they now go one
+  whose usage cannot be true: a zero either way, a missing count, a negative count, anything that
+  is not a whole number. Calls sent at once all passed the same check; under a refusing cap they now go one
   at a time. Spend was kept in memory; it is now in a ledger by calendar month (UTC), and a route
   has no default for it. And `decide()` read a missing spend figure as zero; under a refusing cap
   it now says no when it is not told what has been spent.
@@ -214,8 +214,10 @@ build a matrix from it.
   written as `data:` with no space, or with lines ending in CRLF or a bare CR, are now parsed, and
   a usage figure no longer stands once any output (text, a tool call, an event the route cannot
   read) follows it without a believable figure of its own. An event's data is read across all its
-  `data:` lines. The key is searched for in every string of a reply after JSON's escapes are
-  undone, and in the content type. A price that is not two plain rates counts as no price.
+  `data:` lines. A reply is read as a stream only when the provider says it is one, so an error
+  body answering a streamed call is read as the plain body it is. The key is searched for in the
+  raw text of every reply, in every string and property name of a JSON reply after JSON's escapes
+  are undone, and in the content type. A price that is not two plain rates counts as no price.
 - **`mem.dm-isolated` does not mean what the spec's row says.** The spec's rule is "a DM never
   shares scope with a group", proven by C11. Memory scopes are not built, so the rule here is
   narrower and blunter: no DM is delivered to a harness that does not keep sessions apart.

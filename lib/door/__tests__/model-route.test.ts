@@ -205,7 +205,7 @@ describe('model route', () => {
       presented: (headers) => (typeof headers['x-toy-key'] === 'string' ? headers['x-toy-key'] : undefined),
       usage: (json) => {
         const u = (json as { usage?: { prompt_tokens?: number } }).usage
-        return u ? { inTokens: 7, outTokens: 0 } : undefined
+        return u ? { inTokens: 7, outTokens: 3 } : undefined
       },
     }
     await start(policy(), undefined, { shape: toy })
@@ -216,7 +216,7 @@ describe('model route', () => {
     expect((await call('/toy', { authorization: `Bearer ${PLACEHOLDER}` })).status).toBe(401)
     expect((await call('/chat/completions', { 'x-toy-key': PLACEHOLDER })).status).toBe(404)
     expect(model!.requests.map((r) => r.authorization)).toEqual([`Bearer ${UPSTREAM}`])
-    expect(route!.meter()).toMatchObject({ requests: 1, inTokens: 7, outTokens: 0 })
+    expect(route!.meter()).toMatchObject({ requests: 1, inTokens: 7, outTokens: 3 })
   })
 
   it('[U:key-swap] a caller without the placeholder is refused and nothing is forwarded', async () => {
@@ -511,6 +511,52 @@ describe('model route: replies written in ways the route did not expect', () => 
     expect(seen).toHaveLength(2)
     expect(seen.join(' ')).not.toContain(UPSTREAM)
     expect(seen.join(' ')).toContain(REDACTED)
+  })
+
+  it.each([['a plain call', false], ['a streamed call', true]])(
+    '[U:key-swap] an error body that quotes the key, escaped, is redacted when it answers %s', async (_what, stream) => {
+      const body = `{"error":{"message":"Incorrect API key provided: ${escaped}"}}`
+      await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: body, rawType: 'application/json' }])
+      const reply = await (await ask(user('CANARY-m', stream ? { stream: true } : {}))).text()
+      expect(JSON.stringify(JSON.parse(reply))).not.toContain(UPSTREAM)
+      expect(JSON.parse(reply).error.message).toBe(`Incorrect API key provided: ${REDACTED}`)
+    })
+
+  it('[U:key-swap] a key used as a property name, escaped, is redacted from a plain reply', async () => {
+    const body = `{"choices":[{"index":0,"message":{"role":"assistant","content":"x","${escaped}":1},"finish_reason":"stop"}]}`
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: body, rawType: 'application/json' }])
+    const reply = await (await ask(user('CANARY-m'))).text()
+    expect(JSON.stringify(JSON.parse(reply))).not.toContain(UPSTREAM)
+    expect(reply).toContain(REDACTED)
+  })
+
+  it.each([['a plain call', false], ['a streamed call', true]])(
+    '[U:key-swap] the key written out in a reply that is not JSON is redacted when it answers %s', async (_what, stream) => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: `<html>bad gateway for ${UPSTREAM}</html>` }])
+      const reply = await (await ask(user('CANARY-m', stream ? { stream: true } : {}))).text()
+      expect(reply).toBe(`<html>bad gateway for ${REDACTED}</html>`)
+    })
+
+  it('[U:key-swap] the key written out in a stream comment, or in an event that is not JSON, is redacted', async () => {
+    const { raw } = await streamed(`: proxied with ${UPSTREAM}\n\n` + `data: not json but ${UPSTREAM}\n\n` + 'data: [DONE]\n\n')
+    expect(raw).not.toContain(UPSTREAM)
+    expect(raw).toContain(`: proxied with ${REDACTED}`)
+    expect(raw).toContain(`data: not json but ${REDACTED}`)
+  })
+
+  it.each([['plain', false], ['streamed', true]])(
+    '[U:budget-unmetered] a %s reply with text in it and "zero output tokens" is not believed', async (_what, stream) => {
+      await start(policy(), [{ match: 'CANARY-m', text: 'y'.repeat(4000), usage: { prompt_tokens: 1, completion_tokens: 0 } }])
+      await (await ask(user('CANARY-m', stream ? { stream: true } : {}))).text()
+      expect(route!.meter().outTokens).toBeGreaterThanOrEqual(4000)
+      expect(route!.unmetered).toBe(1)
+    })
+
+  it('[U:budget-unmetered] output written as a whole message inside a stream event still voids the figure before it', async () => {
+    await streamed(ev({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      + ev({ choices: [{ index: 0, message: { role: 'assistant', content: 'y'.repeat(4000) }, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n')
+    expect(route!.meter().outTokens).toBeGreaterThanOrEqual(4000)
+    expect(route!.unmetered).toBe(1)
   })
 
   it('[U:key-swap] the key does not come back in the content type either', async () => {

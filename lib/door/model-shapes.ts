@@ -75,8 +75,10 @@ export const OPENAI_CHAT: ModelShape = {
     if (!Array.isArray(choices)) return false
     // Any field of a delta that is not empty counts: content, tool_calls, reasoning, whatever comes next.
     const empty = (v: unknown): boolean => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0)
-    return choices.some((choice) => choice !== null && typeof choice === 'object' && choice.delta !== null && typeof choice.delta === 'object'
-      && Object.values(choice.delta).some((value) => !empty(value)))
+    // A whole `message` in a stream event is not how streams are written, but it is output all the same.
+    const full = (part: unknown): boolean => part !== null && typeof part === 'object' && Object.values(part).some((value) => !empty(value))
+    return choices.some((choice) => choice !== null && typeof choice === 'object'
+      && (full(choice.delta) || full((choice as { message?: unknown }).message)))
   },
   streamText(json) {
     const choices = (json as OpenAiChunk | null)?.choices
