@@ -7,8 +7,9 @@
 // this file loaded never gets a prompt, and so never calls a tool ungated.
 //
 // This is a guardrail, not a wall. It runs inside the cell, where the model
-// has a shell. It stops mistakes; the cell's network and the absence of real
-// keys are what stop an attack. Keep it mounted read-only.
+// has a shell. It stops mistakes. What is meant to stop an attack is a cell
+// with no route out and no real key in it, and that cell is not built yet, so
+// nothing behind this gate is proven. Once it exists, mount this read-only.
 //
 // It imports nothing, so it loads in a cell that has only Pi installed. The
 // few Pi types it needs are declared here by hand, from Pi 1.5.2.
