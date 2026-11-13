@@ -13,7 +13,7 @@ or any running agent. It is a library, a test rig and one command.
 - **Pi is driven through that door.** `lib/runtimes/pi/` is the only Pi-specific code: start it,
   send text, read text, veto a tool.
 - **Everything runs on a laptop with fakes.** A scripted room, a scripted model, loopback only.
-- **Real Pi 1.5.2 passes all twelve process-level checks.** The Docker cell (the wall) is not built.
+- **Real Pi 1.5.2 passes all thirteen process-level checks.** The Docker cell (the wall) is not built.
 - **Three limits to know before reading on.** The key swap and the budget cap only exist for
   harnesses that speak the OpenAI chat format. Pi is given no direct messages, because its sessions
   share one folder on disk. A changed tool list restarts that session's Pi process.
@@ -40,15 +40,17 @@ pinned version. It never skips. A complete run rewrites `conformance/matrix/pi-1
 | Part | Where | Tested by |
 |---|---|---|
 | Policy record, hash, validation of every closed set | `lib/core/policy/` (`shape.ts` lists the sets) | `validate.test.ts`, `schema-coverage.test.ts` |
-| Rule catalogue (36 rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule has a test that exists |
-| `decide()` | `lib/core/decide.ts` | 34 scenario pairs, 6 seeded properties, `decide.failclosed.test.ts` |
+| Rule catalogue (35 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
+| Pi's own rules (4) | `lib/runtimes/pi/rules.ts` | `rules.test.ts` |
+| `decide()` | `lib/core/decide.ts` | 38 scenario pairs, 6 seeded properties, `decide.failclosed.test.ts` |
 | Brain protocol, framing, shim client | `lib/door/protocol.ts`, `framing.ts`, `brain-server.ts`, `shim-client.ts` | `framing.test.ts`, `brain-server.test.ts` |
 | The door, fake connector, sanitizer, receipts, observe buffer | `lib/door/` | `door.test.ts` |
 | Model route: key swap, token meter, budget | `lib/door/model-route.ts` | `model-route.test.ts` |
+| Spend ledger, by calendar month | `lib/door/spend-ledger.ts` | `spend-ledger.test.ts`, `model-route.test.ts` `[U:budget-ledger]` |
 | Model wire formats (one: OpenAI chat) | `lib/door/model-shapes.ts` | `model-route.test.ts` `[U:model-shape]` |
 | Pi shim, RPC pump, preamble, tool gate | `lib/runtimes/pi/` | `rpc.test.ts`, `preamble.test.ts`, `gate.test.ts`, shim checks |
 | Scripted model, fake Pi | `conformance/rig/` | `scripted-model.test.ts` |
-| Fake-proof guards | `conformance/guards/` | `tripwire.test.ts`, `preflight.test.ts` |
+| Fake-proof guards | `conformance/guards/` | `tripwire.test.ts`, `preflight.test.ts`, `lab-preflight.test.ts`, `fake-pi.test.ts` |
 | Shim checks, broken shims, matrix | `conformance/suites/`, `conformance/broken/`, `conformance/matrix.ts` | `pi.fake.test.ts`, `pi.real.test.ts`, `matrix.test.ts` |
 | The Pi adapter for the shared checks | `conformance/harnesses/pi.ts` | `harness-blind.test.ts` |
 
@@ -69,6 +71,7 @@ canary file touched, did a planted secret show up.
 | C5 | No verdict means no run (the shim gives up and says no) | pass | pass |
 | C5v | The veto inside the cell says no on its own when nobody answers it | pass | pass |
 | C8p | No real secret is readable from a tool, the harness did not inherit the host environment, and the key swap happened (process level) | pass | pass |
+| C9p | The harness process reached for nothing outside this machine (its own runtime only) | pass | pass |
 | C12 | Usage is counted; the turn after the budget is spent is refused | pass | pass |
 | C15 | A policy change takes effect on the next message with no restart | pass | pass |
 | C15t | The tools a turn may use follow the policy at that turn, in a session that is already running | pass | pass |
@@ -78,7 +81,7 @@ canary file touched, did a planted secret show up.
 yet (approvals are not built), so a real admin gets the same answer as a forged one. The check
 could not fail for the reason it names. It comes back with C6.
 
-Must-fail: the same checks against six deliberately broken shims. Each turned its named checks
+Must-fail: the same checks against seven deliberately broken shims. Each turned its named checks
 red, on the fake Pi and on real Pi.
 
 | Broken shim | What it does wrong | Must turn red |
@@ -88,14 +91,30 @@ red, on the fake Pi and on real Pi.
 | `inherits-env` | Pi started with the shim's own environment passed down | C8p |
 | `gate-missing` | The gate file is not there | C1, C4+ (no turn reaches the model, no tool runs) |
 | `gate-silent` | Pi loads a gate that never announces itself and blocks nothing | C1, C4+ (same) |
+| `dials-out` | A working gate that also tries to connect to an address outside this machine when Pi starts | Every check that starts Pi |
 | `chatty` | Answers without the model, twice, and for turns nobody opened | every check that needs a model answer |
+
+### Which rules this proves for Pi
+
+The catalogue is shared by every harness, so a Pi test cannot be its proof. Each rule has two
+lists. `tests` is proof that holds whatever the harness is: scenarios, door tests, unit tests of
+shared code. `checks` names the shim checks above that a harness must pass for the rule to hold
+with that harness in the loop. The matrix file now ends with one line per rule, built from the run:
+
+| For Pi 1.5.2 | Rules |
+|---|---|
+| Proven by this run (8) | `ctl.applied`, `addr.observe`, `tools.lists`, `tools.posture`, `tools.no-verdict`, `budget.cap`, `keys.model-route`, `turn.one-reply` |
+| Not claimed for Pi yet (2) | `priv.no-forged-identity` (waits on C13), `tools.unknown` (waits on C7) |
+| Need nothing from the harness (25) | Every "who may it hear and answer" rule, receipts, the sanitizer |
+
+A second harness starts with nothing in the first row until its own run puts it there.
 
 ### Putting a second harness through the same checks
 
 The lab, the checks, the matrix and the `chatty` shim name no harness. What differs comes in as
 one object, a `HarnessUnderTest` (`conformance/suites/harness.ts`): its capabilities, its model
-wire format, which native tool call is a shell, how to start its shim, the ways of breaking it
-that the suite must catch, and the spec checks that do not apply to it. Pi's is
+wire format, which native tool call is a shell, how to start its shim, how to read the tripwire inside its process, the ways of
+breaking it that the suite must catch, and the spec checks that do not apply to it. Pi's is
 `conformance/harnesses/pi.ts`. `harness-blind.test.ts` fails if a shared file imports a runtime
 or names a harness again.
 
@@ -104,10 +123,22 @@ or names a harness again.
 | Guard | What it does | Negative control |
 |---|---|---|
 | F1 | `createDoor()` refuses any connector that is not the fake one | A connector with id `discord` must be refused |
-| F2 | The exact environment each shim, broken ones included, is about to hand to Pi is checked for anything credential-shaped | `DISCORD_BOT_TOKEN=x` must be refused |
+| F2 | The exact environment each shim, broken ones included, is about to hand to Pi is checked for anything credential-shaped | `DISCORD_BOT_TOKEN=x` must be refused, by the guard and by a lab handed a harness that carries it |
 | F4 | A reply only counts if it carries the scripted model's stamp for this run | The `chatty` shim's unstamped replies fail C1 |
-| F5 | Work dirs must be under the temp dir and nowhere near an agent's home. The Docker and compose checks exist as functions, with nothing to call them yet | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused |
-| F6 | An in-process tripwire throws on any connect, lookup or fetch that is not loopback | A connect to TEST-NET must throw and be recorded |
+| F5 | Work dirs must be under the temp dir and nowhere near an agent's home. The Docker and compose checks exist as functions, with nothing to call them yet | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start |
+| F6 | A tripwire in the test process throws on any TCP connect, UDP send, DNS lookup or query, or fetch that is not loopback. It sees that process only | A connect to TEST-NET must throw and be recorded |
+| F6c | The same tripwire, loaded first inside every Pi the lab starts (Node `--import`). The lab reads back what it saw. An attempt fails the check it happened in, and C9p fails if no tripwire was armed | The `dials-out` shim must turn every check that starts Pi red; a fake Pi pointed at TEST-NET must be stopped |
+
+**What F6 and F6c do not cover.** A tripwire patches Node. It sees the test process and the Pi
+process, real or fake, and any Node process Pi starts. It does not see a program that is not Node:
+a shell tool running `curl` would not be stopped or recorded. "Nothing left this machine" is
+therefore shown for Pi's own runtime, not for everything Pi can start. That needs the Docker cell
+(C9). Before this change the tripwire covered the test process alone, so that claim was not shown
+for Pi at all.
+
+Three variables keep a real Pi off the network at start-up (`PI_OFFLINE`, `PI_TELEMETRY`,
+`PI_SKIP_VERSION_CHECK`). A test pins them, rig variables cannot override them, and the fake Pi
+refuses to start without them.
 
 The scripted model refuses any caller without this run's upstream key. The fake connector refuses
 any token but this run's. The fake Pi announces itself as fake, and the matrix builder refuses to
@@ -122,7 +153,7 @@ build a matrix from it.
 | 1b | Can the gate say it is loaded before the first prompt? | **Yes.** A `session_start` handler calling `ctx.ui.notify` reaches the RPC client before any prompt |
 | 1c | Does `--continue` with `--session-dir` pick the conversation back up after a restart? | **Yes**, on Pi 1.5.2: C15t sees the first turn's text in the request after the restart |
 | 2 | Does `internal: true` on Docker Desktop cut the route out? | **Not run.** No Docker daemon was running on the build machine |
-| 3 | Will Pi talk to a scripted OpenAI-shaped endpoint from `models.json` with a placeholder key? | **Yes.** `"api": "openai-completions"`, a custom `baseUrl`, and a placeholder `apiKey`. Whether Pi makes any other network call at start was not measured (that needs the sealed cell) |
+| 3 | Will Pi talk to a scripted OpenAI-shaped endpoint from `models.json` with a placeholder key? | **Yes.** `"api": "openai-completions"`, a custom `baseUrl`, and a placeholder `apiKey`. With the tripwire loaded inside it, Pi 1.5.2 made no call to anything but this machine across the whole suite. That covers Pi's own Node runtime; anything else still needs the sealed cell |
 | 4 | Does plain Node 24 run the lab's TypeScript with no build step? | **Yes.** It needs `allowImportingTsExtensions` in `tsconfig.json`, and `plain-node.test.ts` now guards it |
 
 ## Where the build departed from the plan
@@ -156,6 +187,12 @@ build a matrix from it.
 - **The fake Pi loads the real gate file.** It used to carry its own copy of the gate's logic, so
   the gate itself was never run in CI.
 - **The model route takes its wire format as a part** (`ModelShape`). Only one exists.
+- **The budget cap had three ways round it, now closed.** A reply with no usage was counted as
+  free; it is now charged at one token per byte, with a receipt marked `unmetered`. Calls sent at
+  once all passed the same check; under a refusing cap they now go one at a time. Spend was kept
+  in memory; it is now in a ledger by calendar month (UTC), and a route has no default for it.
+- **`tools.gate-loaded` left the shared catalogue.** It was a Pi mechanism. It is now `pi.gate-loaded`
+  in `lib/runtimes/pi/rules.ts`, with Pi's other three promises.
 - **The protocol's capabilities gained three fields:** `toolChange`, `sessionIsolation` and
   `modelShape`. A shim's hello is now refused if its tool map holds anything but plain names.
 
@@ -179,6 +216,11 @@ build a matrix from it.
    and Letta Code's Anthropic path use the Anthropic Messages API (`/v1/messages`, `x-api-key`,
    `input_tokens`/`output_tokens`). Until that shape is written and tested, those harnesses have
    no key swap and no cap. The route refuses such a call; it does not forward it unmetered.
+   Three limits of the cap itself. The one-token-per-byte charge is a deliberate overcount, so
+   an agent on a provider that reports no usage reaches its cap early. Under a refusing cap an
+   agent's model calls wait for each other, so two busy rooms share one queue; a call the provider
+   never answers is given up on after ten minutes. And the ledger file belongs to one route: two
+   routes writing the same file is not supported. The lab itself uses a ledger kept in memory.
 7. **Pi's sessions are not kept apart on disk.** Every session's Pi process runs in the same work
    dir, with the same home, and its transcript sits beside the others. With a file or shell tool
    allowed, a turn in one room can read another session's files. The session key separates them
@@ -197,7 +239,11 @@ build a matrix from it.
    gate allowing everything, allowing on a timeout and allowing on an error; Pi inheriting the
    host environment; the shim not waiting for the gate; no restart on a changed tool list; no
    `--continue`; and four on stream redaction. The gate and environment ones were also run
-   against real Pi. Each turned a named test red.
+   against real Pi. Each turned a named test red. After the second audit, twelve more: the
+   public-posture list cut to shell only; each of the lab's two preflight calls removed; no
+   charge for an unreported call; no queue under a cap; usage summed per stream event; refused
+   calls charged; the ledger never written; no upstream timeout; Pi's offline flags deleted; the
+   tripwire not loaded into Pi; and the lab not reading what the tripwire saw.
 
 ## Still to build
 

@@ -181,6 +181,11 @@ interface Rule {
 
 One file, `lib/core/rules/catalogue.ts`. Section 5 is its content.
 
+As built, the proof is in two fields. `tests` holds only harness-neutral proof (D, P, and unit
+tests of shared code); a test of one harness's shim is refused there. `checks` names the C checks a
+harness must pass, and the result is per harness and version, in that harness's matrix. Rules that
+are about one harness's own mechanism live in `lib/runtimes/<id>/rules.ts`, not in this file.
+
 ### 4.3 `decide()`: one pure function
 
 ```ts
@@ -335,7 +340,7 @@ interface Usage { model: string; inTokens: number; outTokens: number; usd: numbe
 | `model` | Harness is started with the provider base URL pointed at the sidecar. Sidecar adds the real key, counts tokens, refuses over budget | A placeholder string |
 | `broker` | Today's host token broker, reached through the sidecar. Short-lived, narrow tokens. Caller is identified by its link, not a name in the URL | A token that expires |
 | `sidecar-tool` | The tool (GitHub, Notion, Google) runs as an MCP server on the sidecar side | Nothing |
-| `env` | Today's plaintext `.env` line | The real key. Native mode only. Refused on `public` posture |
+| `env` | A line in the agent's `.env` file | The real key. Native mode only. Refused on `public` posture |
 | chat tokens | Door only | Nothing |
 
 `.hsm-no-anthropic` and `.hsm-github-broker` become fields on grants. `forbiddenEnv` for public
@@ -350,8 +355,8 @@ interface Sanitizer {
 }
 ```
 
-Outbound fails closed (a crash means nothing is posted). Inbound fails open, as today's redactor
-does, but a failure writes a receipt. One pattern list, shared with the repo's sanitization gate.
+Outbound fails closed (a crash means nothing is posted). Inbound fails open, but a failure writes
+a receipt. One pattern list, shared with the repo's sanitization gate.
 
 ### 4.8 Memory
 
@@ -417,7 +422,7 @@ interface Heartbeat { agentId: string; policyHash: string; caps: Capabilities; t
 - Receipts hold ids and sizes, not message text. They are the "why didn't it answer?" view.
 - The heartbeat hash differing from the saved record shows as "saved, not applied".
 - Sidecar-to-Swarm-Map calls carry a per-agent secret minted at deploy. Cell-to-sidecar calls are
-  identified by the link and a per-cell token. This closes today's self-reported agent identity.
+  identified by the link and a per-cell token, never by a name the caller gives for itself.
 
 ### 4.11 Native-mode adapter (Hermes only)
 
@@ -437,60 +442,63 @@ interface NativeAdapter {
 
 ## 5. Rule-by-rule enforcement table
 
-"Door mode" is where the rule lives for Pi, Letta Code and Claude. "Hermes native" is where it lives
-on the fleet today (CFG = upstream Hermes reads an env var, FORK = only our fork, PLUG = our Python
-plugin, SM = Swarm Map). "Harness?" = does door mode need anything from the harness.
+"Door mode" is where the rule lives for Pi, Letta Code and Claude. "Harness?" = does door mode need
+anything from the harness.
 
-| Rule id | Says | Door mode enforcer | Kind | Hermes native today | Harness? | Tests |
-|---|---|---|---|---|---|---|
-| `adm.users` | Only listed users or role holders are heard | Door, `decide` inbound; roles from `connector.facts` | Wall | CFG | No | D, C3 |
-| `adm.rooms` | Only listed rooms; Discord category counts | Door | Wall | CFG; category is FORK | No | D, C3 |
-| `adm.rooms.ignore` | Ignored rooms beat every allow | Door | Wall | CFG | No | D |
-| `adm.anyone-in-room` | Anyone in an approved room may speak | Door | Wall | FORK | No | D |
-| `adm.empty-is-closed` | Empty list admits nobody | Record semantics | Wall | SM writes sentinel `0`; meaning is per adapter | No | D (property) |
-| `dm.closed` / `dm.allowlist` / `dm.open` | Who may DM | Door | Wall | FORK (Discord), CFG+FORK (Signal), CFG (Slack) | No | D, C3 |
-| `dm.pairing` | Stranger gets a code, operator approves | Door; store in Swarm Map | Wall | CFG, store in agent dir | No | D, P |
-| `addr.mention` | Rooms need an @mention | Door (`RoomRule.mode`) | Wall | CFG; adapter default false on Signal and Telegram | No | D |
-| `addr.threads` | Threads need a mention too | Door | Wall | CFG, healed fleet-wide | No | D |
-| `addr.free-rooms` | Named rooms need no mention | Door | Wall | CFG | No | D |
-| `addr.observe` | Unmentioned text is kept as context, never answered | Door verdict `observe` + buffer | Wall | FORK x4, upstream for Telegram | No | D, C2 |
-| `bots.mode` | Other bots: none / mentions / all | Door | Wall | CFG | No | D |
-| `bots.inline-mention` | A reply-ping is not a mention | Door | Wall | CFG | No | D |
-| `bots.roles` | Bot sender must hold a role | Door, roles from `facts` | Wall | FORK | No | D |
-| `bots.loop` | At most N alternating bot turns | Door counter | Wall | none today | No | D, P |
-| `bots.no-self` | Never answer itself | Door | Wall | CFG | No | D |
-| `invite.policy` | Who may add the agent to a room | Door on `invite` events, one way | Wall | FORK, four different ways | No | D, P |
-| `priv.admins` | Admin list is separate from admission | Record + `decide` | Wall | SM overlay; Signal and Telegram treat approved as admin | No | D |
-| `priv.approval` | Risky tools wait for an admin's yes in the room | Gate verdict `ask`; door posts the ask and reads the answer | Guardrail, wall behind | FORK | **Yes**: hold the call | C6 |
-| `priv.approver-roles` | Discord role may approve | Door reads live role | Wall for the answer | FORK | Same | D, C6 |
-| `priv.no-forged-identity` | Message text cannot raise privilege | Privilege comes from the door's turn record | Wall | not tested today | No | C13 |
-| `tools.posture` | Public agents lose shell, file, code-exec, chat-admin | Start flags + gate; egress and missing keys behind it | Guardrail, wall behind | CFG, Hermes toolset names | **Yes**: `toolMap`, veto | C4, C5, C10 |
-| `tools.per-room` | Tool set differs by room | Gate, from the turn's room | Guardrail only | CFG (`platform_toolsets`) | **Yes** | C4 |
-| `tools.unknown` | Unclassified tool is denied on public | Gate | Guardrail | none | **Yes**: honest `toolMap` | C7 |
-| `tools.browser-guard` | Public browser: public hosts only, no page JS, no raw CDP | Hosts: egress `blockPrivateRanges`. JS and CDP: gate on args | Wall / guardrail | PLUG, and silently absent if the plugin is not installed | Partly | C9, C4 |
-| `keys.not-in-cell` | No real secret is readable in the cell | Model route, broker, sidecar tools | Wall | not met: plaintext `.env` | `modelBaseUrl` | C8 |
-| `keys.grants-valid` | Public agents may hold no forbidden grant | Save-time validation | Control plane | SM drift report only | No | T0 |
-| `keys.per-room` | A key is live only for some rooms | Sidecar, where sessions are one per process | Wall where supported, else labelled agent-wide | none | Session shape | C12b |
-| `budget.cap` | Monthly spend is capped | Model route meter | Wall | **nobody** (endpoint has no caller) | `modelBaseUrl` | C12 |
-| `san.in` | Pasted secrets are scrubbed before the model | Door | Wall | PLUG, fails open | No | P, C8 |
-| `san.out` | Secrets and tier patterns never get posted | Door outbound | Wall | CFG (Hermes core) for secrets; nothing for tier patterns | No | P |
-| `out.still-allowed` | A reply is dropped if policy changed mid-turn | Door outbound | Wall | none | No | P, C15 |
-| `speak.unprompted` | Unprompted posts pass the same checks | `chat.post` on the sidecar | Wall | n/a (harness holds the token) | No | P |
-| `mem.scope` | Memory is per room; threads pool into the parent | Memory service + `sessionKey` | Wall for sidecar memory | FORK | Native memory off or scoped | C11 |
-| `mem.dm-isolated` | A DM never shares scope with a group | Door picks `sessionKey` | Wall | CFG | Honour session keys | C11 |
-| `mem.team-read-only` | Private rooms read team notes, cannot write them | Memory service | Wall | none | No | D, C11 |
-| `mem.person-scoped` | Person notes are per room | Memory service | Wall | PLUG, unscoped (known hole) | No | C11 |
-| `sess.reset` | Nightly reset at local time | Door sends `reset` | Wall | CFG, with a UTC trap | `reset` works | C14 |
-| `sub.G1`-`sub.G4` | No route out, shim read-only, no host secret, limits | Substrate | Wall | DOCKER, two generators that disagree | No | S1-S4 |
-| `ctl.identity` | An agent cannot ask about, or pose as, another | Per-agent secret; link identity | Wall | not met: self-reported name | No | C9 |
-| `ctl.applied` | The UI knows which policy is live | Heartbeat hash | Control plane | none (render and hope) | No | C15 |
-| `ctl.receipts` | Every decision leaves a receipt | Sidecar | Control plane | refusals logged inside the agent, if at all | No | P |
-| Operator login, audit log, artifact pre-scan, CI sanitization gate, extra env and mount validation | | Unchanged | Control plane | SM | No | existing |
+The working copy of this table has one more column: how each rule is met by the agents running
+today, including where it is not. This repository is public, so that column is left out of this
+copy, along with the list of what such tests would already have caught. Neither is needed to build
+or check the Pi slice. They belong with the native-mode work, and should be published only once
+each gap they name is closed.
 
-Deleted rather than fixed: `HERMES_DM_POLICY`, `HERMES_APPROVAL_ADMIN_ONLY`, `HERMES_MEMORY_SCOPE`,
-`SWARM_MAP_POLICY_URL`, the plugin's never-called `is_group_allowed`, `MATTERMOST_ADMIN_USERS` (no
-reader found), tool tiers and memory scopes presented as permissions, the README's budget claim
-until `budget.cap` passes.
+| Rule id | Says | Door mode enforcer | Kind | Harness? | Tests |
+|---|---|---|---|---|---|
+| `adm.users` | Only listed users or role holders are heard | Door, `decide` inbound; roles from `connector.facts` | Wall | No | D, C3 |
+| `adm.rooms` | Only listed rooms; Discord category counts | Door | Wall | No | D, C3 |
+| `adm.rooms.ignore` | Ignored rooms beat every allow | Door | Wall | No | D |
+| `adm.anyone-in-room` | Anyone in an approved room may speak | Door | Wall | No | D |
+| `adm.empty-is-closed` | Empty list admits nobody | Record semantics | Wall | No | D (property) |
+| `dm.closed` / `dm.allowlist` / `dm.open` | Who may DM | Door | Wall | No | D, C3 |
+| `dm.pairing` | Stranger gets a code, operator approves | Door; store in Swarm Map | Wall | No | D, P |
+| `addr.mention` | Rooms need an @mention | Door (`RoomRule.mode`) | Wall | No | D |
+| `addr.threads` | Threads need a mention too | Door | Wall | No | D |
+| `addr.free-rooms` | Named rooms need no mention | Door | Wall | No | D |
+| `addr.observe` | Unmentioned text is kept as context, never answered | Door verdict `observe` + buffer | Wall | No | D, C2 |
+| `bots.mode` | Other bots: none / mentions / all | Door | Wall | No | D |
+| `bots.inline-mention` | A reply-ping is not a mention | Door | Wall | No | D |
+| `bots.roles` | Bot sender must hold a role | Door, roles from `facts` | Wall | No | D |
+| `bots.loop` | At most N alternating bot turns | Door counter | Wall | No | D, P |
+| `bots.no-self` | Never answer itself | Door | Wall | No | D |
+| `invite.policy` | Who may add the agent to a room | Door on `invite` events, one way | Wall | No | D, P |
+| `priv.admins` | Admin list is separate from admission | Record + `decide` | Wall | No | D |
+| `priv.approval` | Risky tools wait for an admin's yes in the room | Gate verdict `ask`; door posts the ask and reads the answer | Guardrail, wall behind | **Yes**: hold the call | C6 |
+| `priv.approver-roles` | Discord role may approve | Door reads live role | Wall for the answer | Same | D, C6 |
+| `priv.no-forged-identity` | Message text cannot raise privilege | Privilege comes from the door's turn record | Wall | No | C13 |
+| `tools.posture` | Public agents lose shell, file, code-exec, chat-admin | Start flags + gate; egress and missing keys behind it | Guardrail, wall behind | **Yes**: `toolMap`, veto | C4, C5, C10 |
+| `tools.per-room` | Tool set differs by room | Gate, from the turn's room | Guardrail only | **Yes** | C4 |
+| `tools.unknown` | Unclassified tool is denied on public | Gate | Guardrail | **Yes**: honest `toolMap` | C7 |
+| `tools.browser-guard` | Public browser: public hosts only, no page JS, no raw CDP | Hosts: egress `blockPrivateRanges`. JS and CDP: gate on args | Wall / guardrail | Partly | C9, C4 |
+| `keys.not-in-cell` | No real secret is readable in the cell | Model route, broker, sidecar tools | Wall | `modelBaseUrl` | C8 |
+| `keys.grants-valid` | Public agents may hold no forbidden grant | Save-time validation | Control plane | No | T0 |
+| `keys.per-room` | A key is live only for some rooms | Sidecar, where sessions are one per process | Wall where supported, else labelled agent-wide | Session shape | C12b |
+| `budget.cap` | Monthly spend is capped | Model route meter | Wall | `modelBaseUrl` | C12 |
+| `san.in` | Pasted secrets are scrubbed before the model | Door | Wall | No | P, C8 |
+| `san.out` | Secrets and tier patterns never get posted | Door outbound | Wall | No | P |
+| `out.still-allowed` | A reply is dropped if policy changed mid-turn | Door outbound | Wall | No | P, C15 |
+| `speak.unprompted` | Unprompted posts pass the same checks | `chat.post` on the sidecar | Wall | No | P |
+| `mem.scope` | Memory is per room; threads pool into the parent | Memory service + `sessionKey` | Wall for sidecar memory | Native memory off or scoped | C11 |
+| `mem.dm-isolated` | A DM never shares scope with a group | Door picks `sessionKey` | Wall | Honour session keys | C11 |
+| `mem.team-read-only` | Private rooms read team notes, cannot write them | Memory service | Wall | No | D, C11 |
+| `mem.person-scoped` | Person notes are per room | Memory service | Wall | No | C11 |
+| `sess.reset` | Nightly reset at local time | Door sends `reset` | Wall | `reset` works | C14 |
+| `sub.G1`-`sub.G4` | No route out, shim read-only, no host secret, limits | Substrate | Wall | No | S1-S4 |
+| `ctl.identity` | An agent cannot ask about, or pose as, another | Per-agent secret; link identity | Wall | No | C9 |
+| `ctl.applied` | The UI knows which policy is live | Heartbeat hash | Control plane | No | C15 |
+| `ctl.receipts` | Every decision leaves a receipt | Sidecar | Control plane | No | P |
+| Operator login, audit log, artifact pre-scan, CI sanitization gate, extra env and mount validation | | Unchanged | Control plane | No | existing |
+
+Deleted rather than fixed, when the native-mode work is done: settings that no code reads, tool
+tiers and memory scopes presented as permissions, and any claim in the README that no test backs.
 
 Count: 30 of the 42 rule rows need nothing from the harness in door mode, including every "who may
 it hear and answer" rule. What stays per harness is tool veto, approval, the tool map, native memory
@@ -591,10 +599,6 @@ and gate files not writable. S3 no host credential in env or mounts. S4 limits a
   leaks env, replies to dropped messages). If it passes, the suite is wrong.
 - **Matrix is generated.** `rule x harness x version x mode`, pass / fail / n-a, committed.
 
-What this would have caught on Hermes already: the budget check with no caller, three dead env keys,
-the never-called group check, two diverged copies of the policy plugin, Discord channels seeded open
-on connect and closed on deploy, two compose generators with different hardening.
-
 ## 8. First slice: Pi, on a laptop, with fakes only
 
 **Goal.** One Pi agent in a Docker cell, driven through the door by a scripted room and a scripted
@@ -628,8 +632,8 @@ is red, and the matrix file has a Pi column made from test output.
 
 **Left out of the slice on purpose:** real Discord or Signal; `ask` approvals (C6); memory service
 (C11); broker and sidecar tools; `chat.post`; Hermes importer and renderer; capability-driven UI;
-Letta Code. Order after the slice: Hermes importer + renderer + N1-N4 (turns today's dead rules into
-evidence), then C6 and C11, then one real connector, then the Letta Code shim.
+Letta Code. Order after the slice: Hermes importer + renderer + N1-N4 (turns each native-mode claim
+into evidence), then C6 and C11, then one real connector, then the Letta Code shim.
 
 **Letta in parallel.** Deleting the old Letta server path and the Hermes-to-Letta bridge is
 independent and can start now (inventory in `map-runtime-seam.md` section 9). The Letta Code shim
@@ -639,7 +643,7 @@ starts once PR 3 has frozen the protocol. There is no elizaOS code to remove.
 
 | Stays as is | Moves under `lib/runtimes/hermes/` | New | Goes |
 |---|---|---|---|
-| `docker.ts`, key store and encryption, operator auth, audit, resolvers, artifact gate, token broker, CI sanitization gate, `harnesses.json` | `.env` / `config.yaml` / compose rendering, the hand parsers (as `readBack`), Discord fleet healers (replaced by N2 drift) | `lib/core/`, `lib/door/`, `lib/runtimes/pi/`, `conformance/` | Old Letta REST path, the bridge, dead env keys, the fallback-to-Hermes in `adapterForRuntime` |
+| `docker.ts`, key store and encryption, operator auth, audit, resolvers, artifact gate, token broker, CI sanitization gate, `harnesses.json` | `.env` / `config.yaml` / compose rendering, the hand parsers (as `readBack`), Discord fleet healers (replaced by N2 drift) | `lib/core/`, `lib/door/`, `lib/runtimes/pi/`, `conformance/` | Old Letta REST path, the bridge, the fallback-to-Hermes in `adapterForRuntime` |
 
 Nothing in the first slice touches a Hermes agent.
 
@@ -682,4 +686,4 @@ Nothing in the first slice touches a Hermes agent.
 - Docker `internal: true` behaviour on Docker Desktop for macOS.
 - Hermes API-server path carrying sender and room; Letta Code headless behaviour, RAM, and Anthropic
   base URL override; everything about OpenClaw; ACP's coverage of tool approval.
-- Upstream Hermes was compared at a July 2026 snapshot, so some FORK cells may be upstream by now.
+- Upstream Hermes was compared at a July 2026 snapshot, so what is noted as fork-only may be upstream by now.
