@@ -32,6 +32,8 @@ export interface LabOptions {
   verdictTimeoutMs?: number
   /** How long the in-cell veto waits for the shim. Default 2000 ms. */
   vetoTimeoutMs?: number
+  /** Where the lab's work dir is made. Default: the temp dir. Anywhere unsafe is refused (F5). */
+  workRoot?: string
 }
 
 export interface Lab {
@@ -65,8 +67,14 @@ const PRICES = { scripted: { inPerMTok: 5000, outPerMTok: 25000 } }
 
 export async function startLab(o: LabOptions): Promise<Lab> {
   const nonce = randomBytes(4).toString('hex')
-  const dir = mkdtempSync(path.join(os.tmpdir(), `swarmlab-${nonce}-`))
-  assertSafeWorkDir(dir, { home: os.homedir(), tmp: os.tmpdir() })
+  const dir = mkdtempSync(path.join(o.workRoot ?? os.tmpdir(), `swarmlab-${nonce}-`))
+  // F5: checked before anything is written there or started. A refused dir is removed again.
+  try {
+    assertSafeWorkDir(dir, { home: os.homedir(), tmp: os.tmpdir() })
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true })
+    throw err
+  }
 
   const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: `cell-${randomBytes(8).toString('hex')}` }
   const placeholder = `PLACEHOLDER-${nonce}`
