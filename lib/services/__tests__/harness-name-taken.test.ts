@@ -75,6 +75,24 @@ describe('nameTaken', () => {
     expect(harness.nameTaken('Two Words')).toBe(true)
   })
 
+  it('is true for a stored name even when the row id is not the one built from it', () => {
+    // Rows keep the id they were first stored with, so a name can sit on a row
+    // whose id says something else.
+    storage.write('harnesses.json', [{ id: 'h_first_name', name: 'renamed' }, { id: 'h_no_name' }])
+    expect(harness.nameTaken('renamed')).toBe(true)
+    expect(harness.nameTaken('Renamed')).toBe(true)
+    expect(harness.nameTaken('first-name')).toBe(true)
+    expect(harness.nameTaken('no-name')).toBe(true)
+    expect(harness.nameTaken('other')).toBe(false)
+  })
+
+  it('refuses an import under a name held by a row with another id, before copying anything', async () => {
+    storage.write('harnesses.json', [{ id: 'h_first_name', name: 'renamed' }])
+    const before = snapshot()
+    await expect(harness.importFromDir(source, 'renamed')).rejects.toThrow('already exists')
+    expect(snapshot()).toEqual(before)
+  })
+
   it('is false for a free name', () => {
     for (const name of ['free', 'taken2', 'take']) expect(harness.nameTaken(name), name).toBe(false)
   })
