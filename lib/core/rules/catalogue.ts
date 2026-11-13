@@ -70,7 +70,7 @@ export const RULES: Rule[] = [
   { id: 'priv.admins', statement: 'The admin list is separate from admission.',
     klass: 'security', kind: 'wall', reads: [`${S}.admins`], enforcer: 'door', tests: ['D:priv.admins/admin-not-admitted', 'D:priv.admins/listed-admin'] },
   { id: 'priv.no-forged-identity', statement: 'Message text and display names cannot raise privilege.',
-    klass: 'security', kind: 'wall', reads: [`${S}.admins`], enforcer: 'door', tests: ['D:priv.no-forged-identity/claims-admin'] },
+    klass: 'security', kind: 'wall', reads: [`${S}.admins`], enforcer: 'door', tests: ['D:priv.no-forged-identity/claims-admin', 'U:pi-preamble'] },
 
   { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied.',
     klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/not-allowed'] },
