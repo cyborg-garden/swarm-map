@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server'
-import { services } from '@/lib/services'
 import { readModelConfig, readModelProvider, readFallbackProviders, readCascade, cascadeChain, sameCascadeRow, guessDataDir } from '@/lib/services/harness'
 // The ONE guarded writer for model: / fallback_providers: (also used by the
 // cascade library and the model-update scheduler). Every body shape goes
 // through it — validate → render → splice → write → overlay.
 import { applyCascadeToHarness, type CascadeWriteInput } from '@/lib/services/cascade-writer'
+import { requireHarness } from '@/lib/harness-ref'
 
 function dataDirFor(harness: { name: string; serviceName?: string }): string {
   const containerName = harness.serviceName
@@ -33,10 +33,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   const dataDir = dataDirFor(harness)
   const models = readModelConfig(dataDir)
@@ -117,10 +115,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   let body: {
     provider?: string

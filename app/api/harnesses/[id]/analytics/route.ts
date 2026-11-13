@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { clampDays } from '@/lib/services/analytics'
+import { invalidHarnessId } from '@/lib/harness-ref'
 
 // GET /api/harnesses/:id/analytics?days=30 — daily cost/tokens/sessions/tool
 // calls for one harness, from its state.db (live or ≤5-min snapshot).
@@ -10,6 +11,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
   const days = clampDays(new URL(request.url).searchParams.get('days'))
 
   try {

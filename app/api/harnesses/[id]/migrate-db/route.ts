@@ -28,6 +28,7 @@ import { services } from '@/lib/services'
 import { agentDataDirForName } from '@/lib/services/harness'
 import { addStateMigrationToCompose, stateVolumeName } from '@/lib/services/harness-compose'
 import { isStateDbMigrated } from '@/lib/services/db-path'
+import { requireHarness } from '@/lib/harness-ref'
 
 type Step = { step: string; ok: boolean; detail?: string }
 
@@ -62,12 +63,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
   const steps: Step[] = []
   const fail = (status: number, error: string) =>
     NextResponse.json({ ok: false, error, steps }, { status })
-
-  const harness = services.harness.get(id)
-  if (!harness) return fail(404, `Unknown harness: ${id}`)
 
   const target = services.harness.composeTarget(id)
   if (!target || !fs.existsSync(target.composeFile)) {

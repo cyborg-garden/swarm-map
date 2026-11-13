@@ -40,6 +40,8 @@ export async function GET(
  *     admin. The plugin should leave the group.
  *   400 { "error": "<what>" }                          — unsupported platform,
  *     structurally invalid groupId, missing addedByUserId, or no agent .env.
+ *   404 { "error": "Unknown agent" }                   — :id is neither an
+ *     agent's id nor its bare slug.
  *
  * Policy: allow-all → approve for anyone; approved-only/unset → approve only
  * when addedByUserId is an admin (SurfaceAdminService.isAdmin, fail-closed).
@@ -83,7 +85,7 @@ export async function POST(
   // env-writing route. Best-effort: the env is written either way.
   let restarted = false
   try {
-    services.harness.restart(id, 'recreate')
+    services.harness.restart(result.harnessId, 'recreate')
     restarted = true
   } catch {}
 

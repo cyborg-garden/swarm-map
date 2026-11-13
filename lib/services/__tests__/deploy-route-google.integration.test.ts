@@ -64,7 +64,7 @@ vi.mock('@/lib/services', () => ({
     docker: { isAvailable: () => true, pullImage: () => ({ ok: true }), healthCheck: h.healthCheck, start: h.dockerStart },
     config: { getSettings: () => ({ ...h.settings, dataDir: h.tmpData }) },
     keys: { getDecryptedValue: h.getDecryptedValue, list: h.list, update: h.update, setAssignment: h.setAssignment, add: h.add },
-    harness: { createOverlay: h.createOverlay, list: () => [] },
+    harness: { createOverlay: h.createOverlay, list: () => [], nameTaken: () => false },
   },
 }))
 

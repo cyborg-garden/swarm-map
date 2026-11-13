@@ -9,11 +9,8 @@ import { GROUPS_VARS as GROUP_VARS } from '@/lib/surfaces/derive'
 // Shared id guards: this route is agent-callable without the operator cookie,
 // so the harness id must never escape ~/.hermes-* and a chatId must never
 // add a line to the .env.
-import { agentDataDir, isValidHarnessId, sanitizeGroupId } from '@/lib/services/surface-admins'
-
-function invalidHarnessId() {
-  return NextResponse.json({ error: 'Invalid harness id' }, { status: 400 })
-}
+import { agentDataDir, sanitizeGroupId } from '@/lib/services/surface-admins'
+import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
 
 function parseEnvFile(envPath: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -48,7 +45,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  if (!isValidHarnessId(id)) return invalidHarnessId()
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
   const url = new URL(request.url)
   const action = url.searchParams.get('action') || 'group-check'
 
@@ -141,7 +139,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  if (!isValidHarnessId(id)) return invalidHarnessId()
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json() as {
     action: string
     platform: string

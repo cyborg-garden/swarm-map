@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server'
 import { getUsageSummary } from '@/lib/services/usage'
+import { invalidHarnessId } from '@/lib/harness-ref'
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
 
   const usage = getUsageSummary(id)
 

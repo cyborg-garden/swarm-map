@@ -8,7 +8,9 @@
  * name (discovery). This test plants a marker in the directory each rule
  * names and checks that the real reader finds it there, for a spread of
  * names: hyphens, underscores, dots, capitals, an `h_` at the front, a
- * leading separator, and "personal".
+ * leading separator, and "personal". Key writes, the admins service and the
+ * routes check an id's shape first (isValidHarnessId) and refuse one that
+ * fails it; the test expects that refusal for those shapes.
  *
  * It pins the mapping. A change that moves any agent's home, for any of
  * these shapes, fails here.
@@ -77,7 +79,12 @@ describe('from a name', () => {
     fs.mkdirSync(homeOfName(name), { recursive: true })
     fs.writeFileSync(path.join(homeOfName(name), '.env'), 'BRAVE_SEARCH_API_KEY=planted-value\n')
     expect(keys.list([name]).map((k) => k.provider)).toEqual(['brave'])
-    // A write takes an id or a name: anything starting `h_` is read as an id.
+    // A write takes an id or a name, and checks its shape first.
+    if (!isValidHarnessId(name)) {
+      expect(() => keys.writeKeyToEnv(name, 'notion', 'written-value')).toThrow(/invalid harness id/i)
+      return
+    }
+    // Anything starting `h_` is read as an id.
     const written = name.startsWith('h_') ? homeOfId(name) : homeOfName(name)
     expect(keys.writeKeyToEnv(name, 'notion', 'written-value')).toBe(true)
     expect(fs.readFileSync(path.join(written, '.env'), 'utf-8')).toContain('NOTION_API_KEY=written-value')
@@ -99,6 +106,11 @@ describe('from an id', () => {
     const keys = new KeysService(storage, new AuditService(storage))
     // Keys take an id or a name: an `h_` id is converted, anything else is a name.
     const want = id.startsWith('h_') ? homeOfId(id) : homeOfName(id)
+    if (!isValidHarnessId(id)) {
+      expect(() => keys.writeKeyToEnv(id, 'notion', 'written-value')).toThrow(/invalid harness id/i)
+      expect(fs.readdirSync(home)).toEqual([])
+      return
+    }
     expect(keys.writeKeyToEnv(id, 'notion', 'written-value')).toBe(true)
     expect(fs.readFileSync(path.join(want, '.env'), 'utf-8')).toContain('NOTION_API_KEY=written-value')
     expect(fs.readdirSync(home)).toEqual([path.basename(want)])
@@ -114,6 +126,10 @@ describe('from an id', () => {
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'discord-approved.json'), JSON.stringify({ planted: { user_name: 'p', approved_at: 1 } }))
     const res = await pairingGET(new Request('http://localhost/x'), { params: Promise.resolve({ id }) })
+    if (!isValidHarnessId(id)) {
+      expect(res.status).toBe(400)
+      return
+    }
     expect((await res.json()).users.map((u: { userId: string }) => u.userId)).toEqual(['planted'])
   })
 

@@ -13,7 +13,7 @@ import os from 'os'
 const restartMock = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/services', () => ({
   services: {
-    harness: { restart: restartMock },
+    harness: { get: (id: string) => ({ id }), restart: restartMock },
   },
 }))
 

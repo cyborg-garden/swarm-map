@@ -17,7 +17,7 @@ const listAdminsMock = vi.hoisted(() => vi.fn((): { source: string; admins: stri
 const getSettingsMock = vi.hoisted(() => vi.fn(() => ({})))
 vi.mock('@/lib/services', () => ({
   services: {
-    harness: { restart: restartMock },
+    harness: { get: (id: string) => ({ id }), restart: restartMock },
     surfaceAdmins: { syncFromAllowlist: syncFromAllowlistMock, listAdmins: listAdminsMock },
     config: { getSettings: getSettingsMock },
   },

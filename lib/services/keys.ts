@@ -10,6 +10,7 @@ import { assertNoNewline } from '@/lib/env-helpers'
 import { SURFACES } from '@/lib/surfaces/registry'
 import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { readEnvValue } from './discord-thread-gate'
+import { isValidHarnessId } from './surface-admins'
 
 const KEYS_FILE = 'keys.json'
 
@@ -216,6 +217,14 @@ function withoutBlockedAgents(provider: string, assignedTo: string[]): string[] 
   if (p !== 'anthropic' && p !== 'github') return assignedTo
   const blocked = p === 'anthropic' ? anthropicBlocked : githubBrokered
   return assignedTo.filter((h) => !blocked(agentDataDir(h.startsWith('h_') ? idToName(h) : h)))
+}
+
+// A key names the agents it is written to by harness id or name. Both are
+// checked for shape here, before either becomes a directory.
+function assertHarnessRefs(refs: readonly unknown[] | undefined): void {
+  for (const ref of refs ?? []) {
+    if (!isValidHarnessId(ref)) throw new Error('Invalid harness id')
+  }
 }
 
 function agentDataDir(harnessName: string): string {
@@ -430,6 +439,7 @@ export class KeysService {
 
   // Manual add (user-input key not from a .env file)
   add(input: KeyInput & { assignedTo?: string[] }): Key {
+    assertHarnessRefs(input.assignedTo)
     const stored = this.storage.read<StoredKey[]>(KEYS_FILE, [])
     const newKey: StoredKey = {
       // Fingerprint id (== the id discovery assigns) so an added+assigned key
@@ -483,6 +493,7 @@ export class KeysService {
 
   // Returns whether the .env changed. An already-correct .env is not rewritten.
   writeKeyToEnv(harnessIdOrName: string, provider: string, value: string, hints?: EnvVarHints): boolean {
+    assertHarnessRefs([harnessIdOrName])
     const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
     const dataDir = agentDataDir(name)
     const envPath = path.join(dataDir, '.env')
@@ -544,6 +555,7 @@ export class KeysService {
   }
 
   removeKeyFromEnv(harnessIdOrName: string, provider: string, hints?: EnvVarHints): void {
+    if (!isValidHarnessId(harnessIdOrName)) return // names no agent, so there is no .env to clean
     const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
     const dataDir = agentDataDir(name)
     const envPath = path.join(dataDir, '.env')
@@ -642,6 +654,7 @@ export class KeysService {
   // can recreate those containers (env_file is read at container creation, not on
   // a plain restart).
   setAssignment(id: string, assignedTo: string[]): string[] {
+    assertHarnessRefs(assignedTo)
     const before = this.list().find((k) => k.id === id)
     if (!before) return []
     const prev = before.assignedTo ?? []
@@ -691,6 +704,7 @@ export class KeysService {
   }
 
   rotateValue(id: string, newValue: string, updates?: Partial<Key>): Key | undefined {
+    assertHarnessRefs(updates?.assignedTo)
     // Read stored keys and deduplicate by ID (cleanup from prior bugs)
     const raw = this.storage.read<StoredKey[]>(KEYS_FILE, [])
     const seen = new Set<string>()

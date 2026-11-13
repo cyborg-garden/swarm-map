@@ -51,7 +51,7 @@ export const services = {
   tools,
   memory: new MemoryService(storage),
   signalPin: new SignalPinService(keysService, process.env.SIGNAL_API_URL || 'http://localhost:8080'),
-  surfaceAdmins: new SurfaceAdminService(storage, audit),
+  surfaceAdmins: new SurfaceAdminService(storage, audit, harness),
   // Named cascade library: saved fallback_providers shapes, portable across harnesses.
   cascades: new CascadeLibraryService(storage, audit),
   analytics,

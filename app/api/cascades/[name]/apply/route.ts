@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
 import { applyCascadeToHarness } from '@/lib/services/cascade-writer'
 
 // POST /api/cascades/:name/apply { harnessId, restart?: boolean (default true) }
@@ -29,6 +30,8 @@ export async function POST(
   if (!harnessId) {
     return NextResponse.json({ error: 'harnessId is required' }, { status: 400 })
   }
+  const { refusal } = requireHarness(harnessId)
+  if (refusal) return refusal
 
   const cascade = services.cascades.get(name)
   if (!cascade) {

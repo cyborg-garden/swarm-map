@@ -55,7 +55,8 @@ export function generateDefaultConfig(params: {
   if (provider === 'ollama' || provider === 'custom') {
     summaryModel = `custom/${primaryModel}`
   } else {
-    const catalogEntries = MODEL_CATALOG[provider] ?? []
+    // Retired rows are in the catalog for display only — never written into a new config.
+    const catalogEntries = (MODEL_CATALOG[provider] ?? []).filter((e) => !e.retired)
     const summaryEntry =
       catalogEntries.find((e) => e.tier === 'fallback') ??
       catalogEntries.find((e) => e.tier === 'local')

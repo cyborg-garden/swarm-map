@@ -50,7 +50,7 @@ describe('POST group-invite approval', () => {
   }
 
   it('approves, recreates the container, and reports restarted when the allowlist was updated', async () => {
-    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: true })
+    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: true, harnessId: 'h_seraph' })
     const res = await POST(makePost('111'), makeParams('h_seraph', 'telegram', '-100777'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ approved: true, restarted: true })
@@ -60,14 +60,14 @@ describe('POST group-invite approval', () => {
   })
 
   it('reports restarted:false (still approved) when the recreate fails', async () => {
-    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: true })
+    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: true, harnessId: 'h_seraph' })
     restart.mockImplementationOnce(() => { throw new Error('no compose file') })
     const res = await POST(makePost('111'), makeParams('h_seraph', 'telegram', '-100777'))
     expect(await res.json()).toEqual({ approved: true, restarted: false })
   })
 
   it('approves without a restart when the group is already allowed', async () => {
-    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: false })
+    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: false, harnessId: 'h_seraph' })
     const res = await POST(makePost('111'), makeParams('h_seraph', 'telegram', '-100777'))
     expect(await res.json()).toEqual({ approved: true, already_allowed: true })
     expect(restart).not.toHaveBeenCalled()
@@ -78,6 +78,20 @@ describe('POST group-invite approval', () => {
     const res = await POST(makePost('222'), makeParams('h_seraph', 'telegram', '-100777'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ approved: false, reason: 'not an admin' })
+    expect(restart).not.toHaveBeenCalled()
+  })
+
+  it('recreates the agent the service resolved, not the id in the URL', async () => {
+    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: true, harnessId: 'h_seraph_doer' })
+    await POST(makePost('111'), makeParams('seraph-doer', 'telegram', '-100777'))
+    expect(restart).toHaveBeenCalledTimes(1)
+    expect(restart).toHaveBeenCalledWith('h_seraph_doer', 'recreate')
+  })
+
+  it('404 and no recreate when the service knows no such agent', async () => {
+    approveGroupInvite.mockReturnValue({ ok: false, status: 404, error: 'Unknown agent' })
+    const res = await POST(makePost('111'), makeParams('h_seraph-x', 'telegram', '-100777'))
+    expect(res.status).toBe(404)
     expect(restart).not.toHaveBeenCalled()
   })
 
@@ -101,7 +115,7 @@ describe('POST group-invite approval', () => {
   })
 
   it('URL-decodes the groupId (signal ids are base64 with url-encoded chars)', async () => {
-    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: false })
+    approveGroupInvite.mockReturnValue({ ok: true, approved: true, updated: false, harnessId: 'h_seraph' })
     await POST(makePost('111'), makeParams('h_seraph', 'signal', 'abc%2Bdef%3D%3D'))
     expect(approveGroupInvite).toHaveBeenCalledWith('h_seraph', 'signal', 'abc+def==', '111')
   })

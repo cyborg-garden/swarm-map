@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('@/lib/services', () => ({
-  services: { harness: { imageStatus: vi.fn(), setAgentImage: vi.fn() } },
+  services: { harness: { get: vi.fn((id: string) => ({ id })), imageStatus: vi.fn(), setAgentImage: vi.fn() } },
 }))
 import { GET, PUT } from './route'
 import { services } from '@/lib/services'

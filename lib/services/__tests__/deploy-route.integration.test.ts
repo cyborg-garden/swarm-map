@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   setAssignment: vi.fn(),
   add: vi.fn(),
   createOverlay: vi.fn(async () => ({ id: 'h_matilde' })),
+  nameTaken: vi.fn<(name: string) => boolean>(() => false),
   dockerStart: vi.fn(),
   healthCheck: vi.fn(() => false),
 }))
@@ -52,7 +53,7 @@ vi.mock('@/lib/services', () => ({
     docker: { isAvailable: () => true, pullImage: () => ({ ok: true }), healthCheck: h.healthCheck, start: h.dockerStart },
     config: { getSettings: () => ({ ...h.settings, dataDir: h.tmpData }) },
     keys: { getDecryptedValue: h.getDecryptedValue, list: h.list, update: h.update, setAssignment: h.setAssignment, add: h.add },
-    harness: { createOverlay: h.createOverlay, list: () => [] },
+    harness: { createOverlay: h.createOverlay, list: () => [], nameTaken: h.nameTaken },
   },
 }))
 
@@ -78,6 +79,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     h.add.mockClear()
     h.createOverlay.mockClear()
     h.createOverlay.mockResolvedValue({ id: 'h_matilde' })
+    h.nameTaken.mockReset()
+    h.nameTaken.mockReturnValue(false)
     h.dockerStart.mockClear()
     h.healthCheck.mockReset()
     h.healthCheck.mockReturnValue(false)
@@ -208,6 +211,26 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     const cmds = vi.mocked(execFileSync).mock.calls.map(c => [c[0], ...((c[1] as string[] | undefined) ?? [])].join(' '))
     expect(cmds.some(c => /compose -f .* build$/.test(c))).toBe(false)
     expect(cmds.some(c => /compose -f .* up -d/.test(c))).toBe(true)
+  })
+
+  it('refuses a name a stored agent already has, before writing anything', async () => {
+    // The stored agent has no data dir on disk, so only the name check can
+    // tell the name is taken.
+    h.nameTaken.mockImplementation((name: string) => name === 'matilde')
+    for (const name of ['matilde', 'Matilde']) {
+      const res = await deploy({
+        name, provider: 'anthropic', primaryModel: 'claude-opus-4-6',
+        tier: 'individual', existingKeyId: 'k_known',
+      })
+      expect(res.status, name).toBe(409)
+      expect((await res.json()).error, name).toContain('already exists')
+    }
+    expect(fs.readdirSync(h.tmpHome)).toEqual([])
+    expect(fs.readdirSync(h.tmpData)).toEqual([])
+    expect(h.createOverlay).not.toHaveBeenCalled()
+    expect(h.getDecryptedValue).not.toHaveBeenCalled()
+    expect(h.setAssignment).not.toHaveBeenCalled()
+    expect(h.add).not.toHaveBeenCalled()
   })
 
   it('1A: resolves an existing key server-side, writes it to .env, records assignment', async () => {

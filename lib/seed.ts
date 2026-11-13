@@ -34,7 +34,6 @@ storage.write('harnesses.json', [])
 // down/auth-failing and removed from all agent cascades.
 storage.write('models.json', [
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', vendor: 'anthropic', accessTier: 'admin', costClass: 'high', notes: 'Primary — direct Anthropic API.' },
-  { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', vendor: 'anthropic', accessTier: 'admin', costClass: 'high', notes: 'Direct Anthropic API.' },
   { id: 'qwen3.5-9b', name: 'Qwen 3.5 9B', vendor: 'ollama', accessTier: 'open', costClass: 'local', notes: 'Local fallback (Ollama).' },
 ])
 

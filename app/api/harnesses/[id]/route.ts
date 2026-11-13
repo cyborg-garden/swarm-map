@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
   return NextResponse.json(harness)
 }
 
@@ -18,6 +17,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const url = new URL(request.url)
   const deleteFiles = url.searchParams.get('deleteFiles') === 'true'
 

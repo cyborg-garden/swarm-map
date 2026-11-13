@@ -114,6 +114,15 @@ export async function POST(request: Request) {
     if (!slug) {
       return NextResponse.json({ ok: false, error: 'Invalid name — could not slugify' }, { status: 400 })
     }
+    // A name a stored agent already has is refused here, before anything is
+    // written. (The data-dir check further down covers a directory with no
+    // stored agent.)
+    if (services.harness.nameTaken(slug)) {
+      return NextResponse.json(
+        { ok: false, error: `Agent "${slug}" already exists. Pick a different name, or manage the existing agent from the dashboard.` },
+        { status: 409 },
+      )
+    }
 
     // Agents on a broker host hold no GitHub token, and a new agent has no marker for
     // the key sync to see. Refused here, before anything is written.

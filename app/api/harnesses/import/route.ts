@@ -21,6 +21,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'dataDir and name are required' }, { status: 400 })
   }
 
+  if (typeof name !== 'string' || typeof dataDir !== 'string') {
+    return NextResponse.json({ error: 'dataDir and name must be strings' }, { status: 400 })
+  }
+  if (services.harness.nameTaken(name)) {
+    return NextResponse.json({ error: `An agent named "${name.trim()}" already exists` }, { status: 409 })
+  }
+
   const pkg = loadBasePackage()
   if (body.surface !== undefined && !isSurface(body.surface)) {
     return NextResponse.json({ error: `Invalid surface "${body.surface}" (private | team | public)` }, { status: 400 })

@@ -19,6 +19,7 @@ vi.mock('@/lib/services', () => ({
     storage: { read: (_f: string, def: unknown) => stored.report ?? def },
     config: { getModelAutoUpdate: () => settings },
     audit: { append: auditAppend },
+    harness: { get: (id: string) => ({ id }) },
   },
 }))
 vi.mock('@/lib/services/model-update-scheduler', async (importOriginal) => {

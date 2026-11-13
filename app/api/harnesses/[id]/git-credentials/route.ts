@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
 
 /**
  * Refresh an agent's git credentials.
@@ -17,6 +18,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   try {
     const result = services.harness.refreshGitCredentials(id)
     return NextResponse.json(result)

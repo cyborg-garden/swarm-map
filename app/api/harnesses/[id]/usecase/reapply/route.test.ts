@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 vi.mock('@/lib/services', () => ({
-  services: { harness: { reapplyUseCaseTemplate: vi.fn() } },
+  services: { harness: { get: vi.fn((id: string) => ({ id })), reapplyUseCaseTemplate: vi.fn() } },
 }))
 
 import { POST } from './route'
