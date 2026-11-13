@@ -156,6 +156,7 @@ describe('key discovery skips rows Swarm Map does not manage', () => {
     if (prevHome === undefined) delete process.env.HOME
     else process.env.HOME = prevHome
     fs.rmSync(tmpHome, { recursive: true, force: true })
+    fs.rmSync(storage.getBaseDir(), { recursive: true, force: true })
   })
 
   const assigned = () => keys.list().flatMap((k) => k.assignedTo ?? [])
@@ -221,6 +222,7 @@ describe('key assignment leaves rows Swarm Map does not manage alone', () => {
     if (prevHome === undefined) delete process.env.HOME
     else process.env.HOME = prevHome
     fs.rmSync(tmpHome, { recursive: true, force: true })
+    fs.rmSync(storage.getBaseDir(), { recursive: true, force: true })
   })
 
   it.each(['h_old', 'old', 'h_odd'])('writeKeyToEnv(%s) writes nothing and says so', (id) => {
@@ -233,6 +235,13 @@ describe('key assignment leaves rows Swarm Map does not manage alone', () => {
     keys.removeKeyFromEnv(id, 'brave')
     expect(env('old')).toBe(SEED)
     expect(env('odd')).toBe(SEED)
+  })
+
+  it('a refused write leaves an audit line naming the agent', () => {
+    keys.writeKeyToEnv('h_old', 'brave', 'new-brave')
+    const audit = fs.readFileSync(path.join(storage.getBaseDir(), 'audit.jsonl'), 'utf-8')
+    expect(audit).toContain('key:refused-unmanaged-row')
+    expect(audit).toContain('"old"')
   })
 
   it('writeKeyToEnv does not create a home for an unmanaged id that has none', () => {

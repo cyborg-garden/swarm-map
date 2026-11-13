@@ -6,7 +6,7 @@ import {
   pickContainerAdapter,
   registerContainerAdapter,
 } from '../harness'
-import { retiredRuntimeOfRow } from '../runtime-adapter'
+import { retiredRuntimeOfRow, unsupportedRowReason } from '../runtime-adapter'
 import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
@@ -106,5 +106,24 @@ describe('retiredRuntimeOfRow: the id is only evidence when nothing better exist
 
   it('other ids are never retired by id', () => {
     expect(retiredRuntimeOfRow({ id: 'h_letta_fan' }, noHome)).toBeNull()
+    // The two patterns are exact: a longer id, or the agent form without
+    // its hyphen (what a Hermes agent named letta-agent-smith derives).
+    expect(retiredRuntimeOfRow({ id: 'h_letta_server_two' }, noHome)).toBeNull()
+    expect(retiredRuntimeOfRow({ id: 'h_letta_agent_smith' }, noHome)).toBeNull()
+    expect(retiredRuntimeOfRow({ id: 'h_letta_agent' }, noHome)).toBeNull()
+  })
+
+  it('a null runtime (a hand edit) is read like a missing one', () => {
+    expect(retiredRuntimeOfRow({ id: 'h_iris', runtime: null as unknown as undefined }, noHome)).toBeNull()
+    expect(unsupportedRowReason({ id: 'h_iris', runtime: null as unknown as undefined })).toBeNull()
+  })
+})
+
+describe('registering an adapter makes its runtime drivable', () => {
+  it('rows of a newly registered runtime stop being "unknown"', () => {
+    const tag = 'test-runtime-registered-here'
+    expect(unsupportedRowReason({ id: 'h_x', runtime: tag })).toMatchObject({ reason: 'unknown' })
+    registerContainerAdapter({ ...hermesAdapter, runtime: tag as never, matches: () => false })
+    expect(unsupportedRowReason({ id: 'h_x', runtime: tag })).toBeNull()
   })
 })

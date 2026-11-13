@@ -6,7 +6,7 @@ import type { AuditService } from './audit'
 import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
-import { canonicalHarnessId, findUnmanagedRow, retiredRuntimeOfId, unmanagedRowNote } from './runtime-adapter'
+import { canonicalHarnessId, findUnmanagedRow, isValidHarnessId, retiredRuntimeOfId, unmanagedRowNote } from './runtime-adapter'
 import { agentHome, agentHomeForSelfRead, type StoredRow } from './agent-home'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
@@ -34,17 +34,8 @@ export function isSupportedSurface(platform: string): boolean {
   return isSurfaceSlug(platform)
 }
 
-// Harness ids reach these paths straight from URL segments, some on routes
-// agents call without the operator cookie. Real ids are `h_<name>` (e.g.
-// h_personal, h_cyborg_public), or bare agent slugs (`seraph-doer`, sent by the
-// policy plugin). All are ASCII
-// letters, digits, '_' and '-'. Anything else ('/', '.', '%', whitespace) is
-// rejected so an id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
-const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
-
-export function isValidHarnessId(raw: unknown): raw is string {
-  return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
-}
+// The id rule lives beside the id-to-directory mapping (runtime-adapter).
+export { isValidHarnessId }
 
 // Structural guard for a group/chat id before it is written into an agent
 // .env: no whitespace/control chars (line injection), no comma (list

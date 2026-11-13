@@ -1,6 +1,6 @@
 import { Storage } from './storage'
 import { DATA_DIR, agentHomeForName } from './data-dir'
-import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId } from './runtime-adapter'
+import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId, isValidHarnessId } from './runtime-adapter'
 
 /**
  * From an id or an agent name to its Hermes home (`~/.hermes-<name>`).
@@ -18,7 +18,7 @@ import { UnsupportedRuntimeError, findUnmanagedRow, harnessNameOfId } from './ru
  */
 
 /** As much of a harnesses.json row as the check needs. */
-export type StoredRow = { id?: string; runtime?: string }
+export type StoredRow = { id?: string; runtime?: string | null }
 
 /** The rows of harnesses.json. No Docker call: cheap enough to ask before every write. */
 export function storedHarnessRows(): StoredRow[] {
@@ -27,19 +27,35 @@ export function storedHarnessRows(): StoredRow[] {
 }
 
 /**
- * The Hermes home for this id or agent name. Throws UnsupportedRuntimeError
- * when the stored row for it is one Swarm Map does not manage. `rows` is
+ * The Hermes home for this ID (or the bare slug an agent sends). Throws when
+ * the id is not an agent id at all, and UnsupportedRuntimeError when the
+ * stored row for it is one Swarm Map does not manage. `rows` is
  * harnesses.json as the caller already holds it; left out, it is read.
  */
-export function agentHome(idOrName: string, rows: readonly StoredRow[] = storedHarnessRows()): string {
-  const unmanaged = findUnmanagedRow(rows, idOrName)
+export function agentHome(idOrSlug: string, rows: readonly StoredRow[] = storedHarnessRows()): string {
+  if (!isValidHarnessId(idOrSlug)) throw new Error('Invalid harness id')
+  const unmanaged = findUnmanagedRow(rows, idOrSlug)
   if (unmanaged) throw new UnsupportedRuntimeError(unmanaged.runtime, unmanaged.reason)
-  return agentHomeForName(harnessNameOfId(idOrName))
+  return agentHomeForName(harnessNameOfId(idOrSlug))
 }
 
-/** agentHome(), with null in place of the throw. For loops that skip what they may not touch. */
+/** A name that stays inside the home directory when `.hermes-` is put in front of it. */
+function isPathSafeName(name: string): boolean {
+  return name.length > 0 && name !== '.' && name !== '..' && !/[/\\\0]/.test(name) && !name.includes('..')
+}
+
+/**
+ * The same question for the lanes that hold an id OR an agent name (key
+ * assignment, and the loops over discovered names), with null in place of
+ * the throw so a loop can skip what it may not touch. An `h_` id is turned
+ * into its name; a bare name is used as it stands, because a container made
+ * by hand can carry an underscore or a dot and its home is
+ * `~/.hermes-<that name>`. Null too for a name that would leave the home dir.
+ */
 export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] = storedHarnessRows()): string | null {
-  return findUnmanagedRow(rows, idOrName) ? null : agentHomeForName(harnessNameOfId(idOrName))
+  const name = idOrName.startsWith('h_') ? harnessNameOfId(idOrName) : idOrName
+  if (!isPathSafeName(name)) return null
+  return findUnmanagedRow(rows, idOrName) ? null : agentHomeForName(name)
 }
 
 /**
@@ -51,5 +67,6 @@ export function agentHomeIfManaged(idOrName: string, rows: readonly StoredRow[] 
  * lists the files that may use this.
  */
 export function agentHomeForSelfRead(idOrSlug: string): string {
+  if (!isValidHarnessId(idOrSlug)) throw new Error('Invalid harness id')
   return agentHomeForName(harnessNameOfId(idOrSlug))
 }

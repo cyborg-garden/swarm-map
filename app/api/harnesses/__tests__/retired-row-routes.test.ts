@@ -135,7 +135,7 @@ const BODY = {
 
 function call(handler: Handler, method: string, file: string, id: string, platform = 'discord', query = ''): Promise<Response> {
   const rel = path.relative(ROUTES_DIR, path.dirname(file))
-  const url = `http://localhost:3000/api/harnesses/${id}/${rel}?deleteFiles=true&platform=discord&userId=${A}&chatId=-1001${query}`
+  const url = `http://localhost:3000/api/harnesses/${id}/${rel}?${query ? `${query.slice(1)}&` : ''}deleteFiles=true&platform=discord&userId=${A}&chatId=-1001`
   const init: RequestInit =
     method === 'GET' ? { method } : { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(BODY) }
   return handler(new Request(url, init), {
@@ -206,7 +206,7 @@ describe('the sweep can see the routes (a sweep over nothing passes everything)'
   })
 })
 
-describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row }) => {
+describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row, dir }) => {
   beforeEach(() => seed([row, { id: 'h_iris', name: 'iris', runtime: 'hermes' }]))
 
   it('every mutating per-agent route answers 409 and changes nothing on disk', async () => {
@@ -258,8 +258,36 @@ describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row }) =
       const res = await call(h.handler, 'GET', h.file, id)
       const text = await res.text()
       expect(text, h.label).not.toContain(ROW_ADMIN)
-      expect(res.status, h.label).toBeLessThan(500)
+      // Answered, not refused: the agent plugin reads these on every message
+      // and takes anything but 200 as "no". With no agent home on disk the
+      // group check has nothing to read and says 404, as it always did.
+      if (dir) expect(res.status, h.label).toBe(200)
+      else expect([200, 404], h.label).toContain(res.status)
       expect(snapshot(), h.label).toEqual(before)
+    }
+  })
+
+  it('the self-reads answer from the agent\'s own .env', async () => {
+    if (!dir) return // nothing on disk to answer from; covered by the status check above
+    const admins = readers.find((r) => r.label === 'GET surfaces/[platform]/admins/route.ts')!
+    expect(await (await call(admins.handler, 'GET', admins.file, id)).json()).toMatchObject({ admins: [A], source: 'allowlist' })
+    const isAdmin = readers.find((r) => r.label === 'GET surfaces/[platform]/admins/[userId]/route.ts')!
+    expect(await (await call(isAdmin.handler, 'GET', isAdmin.file, id)).json()).toEqual({ is_admin: true })
+    const group = readers.find((r) => r.label === 'GET policy/route.ts')!
+    expect(await (await call(group.handler, 'GET', group.file, id, 'telegram', '&platform=telegram')).json()).toEqual({ allowed: true })
+  })
+
+  it('other spellings of the same id are refused the same way', async () => {
+    // Each of these builds the same directory as the stored id.
+    const name = id.replace(/^h_/, '').replace(/_/g, '-')
+    const spellings = [`h_${name}`, name.toUpperCase(), `h_${name.toUpperCase()}`, name.replace(/-/g, '_')]
+    const write = handlers.find((h) => h.label === 'POST surfaces/disconnect/route.ts')!
+    const read = readers.find((h) => h.label === 'GET settings/route.ts')!
+    for (const spelling of spellings) {
+      const before = snapshot()
+      expect((await call(write.handler, 'POST', write.file, spelling)).status, `POST ${spelling}`).toBe(409)
+      expect((await call(read.handler, 'GET', read.file, spelling)).status, `GET ${spelling}`).toBe(409)
+      expect(snapshot(), spelling).toEqual(before)
     }
   })
 

@@ -122,15 +122,15 @@ function hermesHomeExists(name: string): boolean {
  * exists (see RETIRED_ID_RUNTIME).
  */
 export function retiredRuntimeOfRow(
-  row: { id?: string; runtime?: string },
+  row: { id?: string; runtime?: string | null },
   hasHermesHome: (name: string) => boolean = hermesHomeExists,
 ): string | null {
-  if (row.runtime !== undefined) {
+  if (row.runtime != null) {
     return Object.hasOwn(RETIRED_RUNTIMES, row.runtime) ? row.runtime : null
   }
   if (!row.id) return null
   for (const [field, value] of Object.entries(row)) {
-    if (value !== undefined && !LEFTOVER_ROW_FIELDS.has(field)) return null
+    if (value != null && !LEFTOVER_ROW_FIELDS.has(field)) return null
   }
   const retired = retiredRuntimeOfId(row.id)
   if (!retired) return null
@@ -162,8 +162,9 @@ export function markRuntimeDrivable(runtime: string): void {
  * is drivable: rows written before the `runtime` field existed are Hermes.
  * Everything else must have a registered adapter. There is no fallback.
  */
-export function unsupportedRuntimeReason(runtime?: string): 'retired' | 'unknown' | null {
-  if (runtime === undefined) return null
+export function unsupportedRuntimeReason(runtime?: string | null): 'retired' | 'unknown' | null {
+  // null is what a hand edit leaves; it is read like a missing tag.
+  if (runtime == null) return null
   if (drivableRuntimes.has(runtime)) return null
   return Object.hasOwn(RETIRED_RUNTIMES, runtime) ? 'retired' : 'unknown'
 }
@@ -176,7 +177,7 @@ export function unsupportedRuntimeReason(runtime?: string): 'retired' | 'unknown
  * `runtime` is the label to show for it.
  */
 export function unsupportedRowReason(
-  row: { id?: string; runtime?: string } | undefined,
+  row: { id?: string; runtime?: string | null } | undefined,
 ): { reason: 'retired' | 'unknown'; runtime: string } | null {
   if (!row) return null
   const byTag = unsupportedRuntimeReason(row.runtime)
@@ -200,18 +201,48 @@ export function harnessNameOfId(idOrSlug: string): string {
 }
 
 /**
+ * Harness ids reach the id-to-directory mapping straight from URL segments,
+ * some on routes agents call without the operator cookie. Real ids are
+ * `h_<name>` (h_personal, h_cyborg_public) or bare agent slugs
+ * (`seraph-doer`, sent by the policy plugin). All are ASCII letters, digits,
+ * '_' and '-'. Anything else ('/', '.', '%', whitespace) is rejected so an
+ * id like `x/../.hermes-cryptids` can never leave ~/.hermes-*.
+ */
+const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
+
+export function isValidHarnessId(raw: unknown): raw is string {
+  return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
+}
+
+/**
+ * What an id or slug MEANS, for comparing two spellings: the agent name,
+ * lower-cased. `h_seraph_doer`, `seraph-doer`, `h_seraph-doer` and
+ * `SERAPH-DOER` all build the same directory (the last on a
+ * case-insensitive disk), so they must all find the same stored row.
+ */
+function harnessKey(idOrSlug: string): string {
+  return harnessNameOfId(idOrSlug).toLowerCase()
+}
+
+/**
  * The stored row for this id or bare slug, if Swarm Map does not manage it.
  * agentHome() (./agent-home), the one place an id becomes `~/.hermes-<name>`,
- * asks this first.
+ * asks this first. Rows are matched by harnessKey, not by the exact string,
+ * and one unmanaged row is enough when several share an id. A harnesses.json
+ * that is not a list holds no rows.
  */
-export function findUnmanagedRow<T extends { id?: string; runtime?: string }>(
+export function findUnmanagedRow<T extends { id?: string; runtime?: string | null }>(
   rows: readonly T[],
   idOrSlug: string,
 ): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
-  const id = canonicalHarnessId(idOrSlug)
-  const row = rows.find((r) => r.id === id)
-  const unsupported = unsupportedRowReason(row)
-  return row && unsupported ? { row, ...unsupported } : null
+  if (!Array.isArray(rows)) return null
+  const key = harnessKey(idOrSlug)
+  for (const row of rows) {
+    if (typeof row?.id !== 'string' || harnessKey(row.id) !== key) continue
+    const unsupported = unsupportedRowReason(row)
+    if (unsupported) return { row, ...unsupported }
+  }
+  return null
 }
 
 /** One sentence for the UI and for a refused request. */
