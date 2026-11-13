@@ -66,6 +66,37 @@ function writeHome(agents: Record<string, string>, overlays: unknown[]) {
 afterEach(() => { if (home) fs.rmSync(home, { recursive: true, force: true }) })
 
 describe('backfill planner', () => {
+  // A stored row with any runtime but Hermes is not this script's to edit,
+  // even when a compose directory of the same name sits beside it.
+  it.each(['some-retired-runtime', 'pi-from-the-future'])('skips an agent whose stored row has runtime %s', (runtime) => {
+    const rows = [
+      { id: 'h_old', name: 'old', runtime },
+      { id: 'h_kept', name: 'kept', runtime: 'hermes' },
+    ]
+    writeHome(
+      {
+        old: googleCompose('old', '/data/old', '/src/google-mcp'),
+        kept: googleCompose('kept', '/data/kept', '/src/google-mcp'),
+      },
+      rows,
+    )
+    const plan = buildPlan({ hsmHome: home })
+    expect(plan.agents.map((a: { agent: string }) => a.agent)).toEqual(['kept'])
+    expect(plan.warnings.join('\n')).toMatch(/old: .*runtime "[^"]+".*skipped/)
+    const after = JSON.parse(applyPlan(plan))
+    expect(after.find((r: { id: string }) => r.id === 'h_old')).toEqual(rows[0])
+    expect(after.find((r: { id: string }) => r.id === 'h_kept').extraMounts.length).toBeGreaterThan(0)
+  })
+
+  it('control: the same row tagged hermes, untagged, or with a null tag IS planned', () => {
+    for (const tag of [{ runtime: 'hermes' }, {}, { runtime: null }]) {
+      writeHome({ old: googleCompose('old', '/data/old', '/src/google-mcp') }, [{ id: 'h_old', name: 'old', ...tag }])
+      const plan = buildPlan({ hsmHome: home })
+      expect(plan.agents[0].additions.length).toBeGreaterThan(0)
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
   it('records the google-MCP mounts and leaves the generator-owned ones alone', () => {
     writeHome(
       { personal: googleCompose('personal', '/data/personal', '/src/google-mcp') },
