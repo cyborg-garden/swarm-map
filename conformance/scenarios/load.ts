@@ -5,7 +5,8 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Event, Facts, Principal, RoomRef, Verdict } from '../../lib/core/events.ts'
+import type { Event, Facts, Verdict } from '../../lib/core/events.ts'
+import { toPrincipal, toRoom, type RoomInput, type SenderInput } from '../../lib/core/normalise.ts'
 import type { PolicyRecord } from '../../lib/core/policy/types.ts'
 import { withHash } from '../../lib/core/policy/canonical.ts'
 
@@ -19,8 +20,6 @@ export interface Expectation {
   privilege?: 'admin' | 'member' | 'guest'
 }
 
-type RoomInput = string | RoomRef
-type SenderInput = string | Partial<Principal> & { id: string }
 
 export interface SayStep {
   room: RoomInput; sender: SenderInput; text: string
@@ -87,15 +86,6 @@ export function scenarioFacts(s: Scenario, which: 'base' | 'twin'): Facts {
 
 export function scenarioSteps(s: Scenario, which: 'base' | 'twin'): Step[] {
   return which === 'twin' && s.twin.steps ? s.twin.steps : s.steps
-}
-
-export function toRoom(room: RoomInput, isDm = false): RoomRef {
-  return typeof room === 'string' ? { id: room, kind: isDm ? 'dm' : 'channel' } : room
-}
-
-export function toPrincipal(sender: SenderInput): Principal {
-  const p = typeof sender === 'string' ? { id: sender } : sender
-  return { display: p.id, isBot: false, isSelf: false, roles: [], ...p }
 }
 
 /** Turn one step into the Event decide() is asked about. */

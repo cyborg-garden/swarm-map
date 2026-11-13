@@ -1,0 +1,447 @@
+// @vitest-environment node
+//
+// P: door plumbing, with the fake connector and the echo shim. No Docker, no
+// model, no network: the tripwire is armed and must record nothing.
+import { afterEach, describe, expect, it } from 'vitest'
+import { armTripwire, tripwireAttempts } from '../../../conformance/guards/tripwire.ts'
+import { genInbound, genPolicy, rng } from '../../../conformance/gen.ts'
+import {
+  applyPatch, loadFixturePolicy, loadScenarios, scenarioPolicy, scenarioSteps, type Scenario,
+} from '../../../conformance/scenarios/load.ts'
+import { decide } from '../../core/decide.ts'
+import { withHash } from '../../core/policy/canonical.ts'
+import type { PolicyRecord } from '../../core/policy/types.ts'
+import type { SurfaceConnector } from '../connector.ts'
+import { createFakeConnector } from '../connectors/fake.ts'
+import { createDoor } from '../door.ts'
+import { createReceiptLog, explain } from '../receipts.ts'
+import { createSanitizer, type Sanitizer } from '../sanitizer.ts'
+import { startRig, type Rig } from '../testing/rig.ts'
+
+armTripwire()
+
+const F = 'surfaces.fake.'
+const team = (patch: Record<string, unknown> = {}): PolicyRecord =>
+  withHash(applyPatch(loadFixturePolicy('policy-team.json'), patch))
+
+let rig: Rig | undefined
+afterEach(async () => {
+  await rig?.close()
+  rig = undefined
+  expect(tripwireAttempts()).toEqual([])
+})
+
+// A secret-shaped string, minted here so none is ever committed.
+const fakeSecret = (): string => 'ghp_' + 'q7W3'.repeat(9)
+
+describe('door: one turn', () => {
+  it('[P:round-trip] one message in, one stamped reply out, for the right turn', async () => {
+    rig = await startRig(team())
+    const id = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hello there' })
+    await rig.door.idle()
+
+    expect(rig.shim.heard).toHaveLength(1)
+    const env = rig.shim.heard[0]
+    expect(env).toMatchObject({
+      id, surface: 'fake', sessionKey: 'fake:room:r-general', text: 'hello there',
+      sender: { id: 'u-alice', display: 'u-alice', isBot: false }, room: { id: 'r-general', kind: 'channel' },
+    })
+    expect(rig.fake.ledger).toEqual([
+      expect.objectContaining({ nonce: rig.nonce, room: 'r-general', text: 'echo: hello there', turnId: env.turnId }),
+    ])
+  })
+
+  it('[P:round-trip] the envelope lists only the tools this turn may use', async () => {
+    rig = await startRig(team({ 'tools.allow': ['file_read', 'network'] }))
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.shim.heard[0].tools.sort()).toEqual(['fetch', 'read'])
+  })
+
+  it('[P:no-harness] a message with no harness connected is not delivered, and says why', async () => {
+    rig = await startRig(team(), { noShim: true })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'anyone?' })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deliver/addr.mention', 'drop/turn.no-harness'])
+  })
+})
+
+describe('door: fakes only', () => {
+  it('[P:fake-only] refuses to start with any connector that is not the fake one', async () => {
+    const dummy: SurfaceConnector = { ...createFakeConnector({ nonce: 'deadbeef' }).connector, id: 'discord' }
+    await expect(createDoor({
+      policy: team(), connectors: [dummy], creds: {}, receipts: createReceiptLog(), brainToken: 't', testing: true,
+    })).rejects.toThrow("REFUSING TO RUN: F1 connector 'discord' is not the fake connector")
+  })
+
+  it('[P:fake-only] the fake connector refuses a token that is not from this run', async () => {
+    const fake = createFakeConnector({ nonce: 'deadbeef' })
+    await expect(fake.connector.connect({ token: 'FAKECHAT-0badf00d' })).rejects.toThrow(/REFUSING/)
+    await expect(fake.connector.connect({ token: 'xoxb-something' })).rejects.toThrow(/REFUSING/)
+    await expect(fake.connector.send({ id: 'r', kind: 'channel' }, { text: 'x' })).rejects.toThrow(/not connected/)
+    await expect(fake.connector.connect({ token: 'FAKECHAT-deadbeef' })).resolves.toBeUndefined()
+  })
+
+  it('[P:fake-only] refuses a policy that does not validate', async () => {
+    const stale = { ...team(), posture: 'public' as const }
+    await expect(startRig(stale)).rejects.toThrow(/hash: does not match/)
+  })
+})
+
+describe('door: every scenario, end to end', () => {
+  const scenarios = loadScenarios().filter((s) => s.expect.heard !== undefined)
+
+  async function run(s: Scenario, which: 'base' | 'twin') {
+    const canary = `CANARY-${Math.random().toString(36).slice(2)}`
+    const r = await startRig(scenarioPolicy(s, which))
+    try {
+      for (const step of scenarioSteps(s, which)) {
+        if ('say' in step) r.fake.say({ ...step.say, text: step.say.text.replaceAll('{{canary}}', canary) })
+      }
+      await r.door.idle()
+      return {
+        heard: r.shim.heard.some((env) => env.text.includes(canary)),
+        answered: r.fake.ledger.length > 0,
+        stamped: r.fake.ledger.every((p) => p.nonce === r.nonce),
+        receipt: r.receipts.all()[0],
+      }
+    } finally {
+      await r.close()
+    }
+  }
+
+  it('covers the inbound rules', () => {
+    expect(scenarios.length).toBeGreaterThan(20)
+  })
+
+  it.each(scenarios.map((s) => [s.id, s] as const))('[P:scenarios] %s', async (_id, s) => {
+    for (const which of ['base', 'twin'] as const) {
+      const want = which === 'base' ? s.expect : s.twin.expect
+      const got = await run(s, which)
+      expect({ heard: got.heard, answered: got.answered }, which).toEqual({ heard: want.heard, answered: want.answered })
+      expect({ verdict: got.receipt.verdict, rule: got.receipt.rule }, which).toEqual(want.receipt)
+      expect(got.stamped).toBe(true)
+    }
+  })
+})
+
+describe('door: properties', () => {
+  it('[P:drop-never-sends] over random policies and messages, only a delivered message is heard or answered', async () => {
+    rig = await startRig(genPolicy(rng(1)))
+    const r = rng(2024)
+    const seen = { deliver: 0, observe: 0, drop: 0 }
+    for (let i = 0; i < 300; i++) {
+      const policy = genPolicy(r)
+      const canary = `CANARY-${i}-`
+      const event = genInbound(r, canary)
+      rig.door.setPolicy(policy)
+      const heardBefore = rig.shim.heard.length
+      const postsBefore = rig.fake.ledger.length
+      rig.fake.say(event)
+      await rig.door.idle()
+      const verdict = decide(policy, event, {}).verdict as keyof typeof seen
+      seen[verdict]++
+      const heard = rig.shim.heard.length - heardBefore
+      const posts = rig.fake.ledger.length - postsBefore
+      expect({ heard, posts }, `case ${i}: ${verdict}`).toEqual(verdict === 'deliver' ? { heard: 1, posts: 1 } : { heard: 0, posts: 0 })
+      if (verdict !== 'deliver') {
+        // Nothing of an unheard message may ride along in a later envelope's text.
+        expect(rig.shim.heard.some((env) => env.text.includes(canary))).toBe(false)
+      }
+    }
+    expect(seen.deliver).toBeGreaterThan(10)
+    expect(seen.drop).toBeGreaterThan(10)
+    // Overheard messages are rare in this generator (about one case in a hundred).
+    expect(seen.observe).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('door: observe', () => {
+  it('[P:observe] overheard lines arrive as context on the next turn in that room, once, and are never answered', async () => {
+    rig = await startRig(team({ [F + 'observeUnmentioned']: true }))
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'first overheard' })
+    rig.fake.say({ room: 'r-general', sender: { id: 'u-bob', roles: ['role-staff'], display: 'Bob' }, text: 'second overheard' })
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'a different room' })
+    await rig.door.idle()
+    // The lounge is a free room, so that one was a turn. The two in general were only overheard.
+    expect(rig.shim.heard.map((e) => e.text)).toEqual(['a different room'])
+    expect(rig.shim.heard[0].context.observed ?? []).toEqual([])
+    expect(rig.fake.ledger.map((p) => p.room)).toEqual(['r-lounge'])
+
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'now I ask' })
+    await rig.door.idle()
+    const env = rig.shim.heard[1]
+    expect(env.text).toBe('now I ask')
+    expect(env.context.observed?.map((l) => `${l.sender}: ${l.text}`)).toEqual(['u-alice: first overheard', 'Bob: second overheard'])
+
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'and again' })
+    await rig.door.idle()
+    expect(rig.shim.heard[2].context.observed ?? []).toEqual([])
+    expect(rig.fake.ledger).toHaveLength(3)
+  })
+
+  it('[P:observe] the buffer is bounded, keeping the newest lines', async () => {
+    rig = await startRig(team({ [F + 'observeUnmentioned']: true }), { door: { observeLimit: 3 } })
+    for (let i = 0; i < 6; i++) rig.fake.say({ room: 'r-general', sender: 'u-alice', text: `line ${i}` })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'go' })
+    await rig.door.idle()
+    expect(rig.shim.heard[0].context.observed?.map((l) => l.text)).toEqual(['line 3', 'line 4', 'line 5'])
+  })
+})
+
+describe('door: session keys', () => {
+  it('[P:session-keys] a room, a thread in it, and a DM', async () => {
+    rig = await startRig(team({ [F + 'dm']: { mode: 'open', users: [] }, [F + 'threadsRequireMention']: false }))
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'room' })
+    rig.fake.say({ room: { id: 't-7', kind: 'thread', parentId: 'r-lounge' }, sender: 'u-alice', text: 'thread' })
+    rig.fake.say({ room: 'dm:u-alice', sender: 'u-alice', isDm: true, text: 'dm' })
+    await rig.door.idle()
+    expect(Object.fromEntries(rig.shim.heard.map((e) => [e.text, e.sessionKey]))).toEqual({
+      room: 'fake:room:r-lounge', thread: 'fake:room:r-lounge', dm: 'fake:dm:u-alice',
+    })
+    // The reply to a thread goes back to the thread, not the parent room.
+    expect(rig.fake.ledger.map((p) => p.room).sort()).toEqual(['dm:u-alice', 'r-lounge', 't-7'])
+  })
+})
+
+describe('door: sanitizer', () => {
+  const outboundOnly = (): Sanitizer => {
+    const real = createSanitizer()
+    return { run: (dir, text, ctx) => (dir === 'inbound' ? { text, findings: [] } : real.run(dir, text, ctx)) }
+  }
+
+  it('[P:scrub-in] a pasted secret is scrubbed before the harness sees it', async () => {
+    rig = await startRig(team())
+    const secret = fakeSecret()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `my token is ${secret} ok` })
+    await rig.door.idle()
+    expect(rig.shim.heard[0].text).toBe('my token is [redacted:github-token] ok')
+    expect(JSON.stringify(rig.shim.heard)).not.toContain(secret)
+    expect(JSON.stringify(rig.fake.ledger)).not.toContain(secret)
+    expect(rig.receipts.all().some((r) => r.rule === 'san.in' && r.note === 'github-token x1')).toBe(true)
+  })
+
+  it('[P:scrub-in] an overheard secret is scrubbed before it is buffered', async () => {
+    rig = await startRig(team({ [F + 'observeUnmentioned']: true }))
+    const secret = fakeSecret()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: `psst ${secret}` })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'go' })
+    await rig.door.idle()
+    expect(JSON.stringify(rig.shim.heard)).not.toContain(secret)
+    expect(rig.shim.heard[0].context.observed?.[0].text).toBe('psst [redacted:github-token]')
+  })
+
+  it('[P:scrub-in] inbound fails open, and leaves a receipt saying so', async () => {
+    const broken: Sanitizer = { run: (dir, text) => { if (dir === 'inbound') throw new Error('boom'); return { text, findings: [] } } }
+    rig = await startRig(team(), { door: { sanitizer: broken } })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'plain' })
+    await rig.door.idle()
+    expect(rig.shim.heard.map((e) => e.text)).toEqual(['plain'])
+    expect(rig.receipts.all().some((r) => r.rule === 'san.in' && r.note === 'scrub failed; delivered unscrubbed')).toBe(true)
+  })
+
+  it('[P:redact-out] a secret in a reply is redacted before it is posted', async () => {
+    rig = await startRig(team(), { door: { sanitizer: outboundOnly() } })
+    const secret = fakeSecret()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `repeat ${secret}` })
+    await rig.door.idle()
+    expect(rig.shim.heard[0].text).toContain(secret) // the harness had it; the room must not get it
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: repeat [redacted:github-token]'])
+  })
+
+  it('[P:redact-out] secrets the sidecar itself holds are always redacted', async () => {
+    const upstream = 'UPSTREAM-' + 'f00dfeed'
+    const real = createSanitizer({ extraSecrets: [upstream] })
+    const sanitizer: Sanitizer = { run: (dir, text, ctx) => (dir === 'inbound' ? { text, findings: [] } : real.run(dir, text, ctx)) }
+    rig = await startRig(team(), { door: { sanitizer } })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `leak ${upstream}` })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: leak [redacted:held-secret]'])
+  })
+
+  it('[P:out-fails-closed] if the outbound sanitizer throws, nothing is posted', async () => {
+    const broken: Sanitizer = { run: (dir, text) => { if (dir === 'outbound') throw new Error('boom'); return { text, findings: [] } } }
+    rig = await startRig(team(), { door: { sanitizer: broken } })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hello' })
+    await rig.door.idle()
+    expect(rig.shim.heard).toHaveLength(1)
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'san.out' })
+  })
+})
+
+describe('door: outbound re-check', () => {
+  it('[P:out-recheck] a reply is dropped when the room was removed mid-turn', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'slow one' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'out.still-allowed' })
+  })
+
+  it('[P:out-recheck] a reply is dropped when the sender was removed mid-turn', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'slow one' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.setPolicy(team({ version: 2, [F + 'users']: [{ kind: 'user', id: 'u-bob' }] }))
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'out.still-allowed' })
+  })
+
+  it('[P:out-recheck] an unrelated policy change mid-turn does not drop the reply', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'slow one' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.setPolicy(team({ version: 2 }))
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toHaveLength(1)
+  })
+})
+
+describe('door: one reply per turn, only after settled', () => {
+  it('[P:one-reply] nothing is posted until the harness says it is finished', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(rig.fake.ledger).toEqual([])
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: hi'])
+  })
+
+  it('[P:one-reply] a second reply for the same turn is dropped', async () => {
+    rig = await startRig(team(), { mode: 'reply-twice' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: hi'])
+    expect(rig.receipts.all().filter((r) => r.rule === 'turn.one-reply')).toHaveLength(1)
+  })
+
+  it('[P:unknown-turn] a reply after settled, or for a turn the door never sent, is dropped', async () => {
+    rig = await startRig(team(), { mode: 'reply-after-settled' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    rig.shim.client.send({ t: 'reply', turnId: 'never-issued', text: 'surprise', attachments: [] })
+    rig.shim.client.send({ t: 'settled', turnId: 'never-issued' })
+    await expect.poll(() => rig!.receipts.all().filter((r) => r.rule === 'turn.known').length).toBe(3)
+    expect(rig.fake.ledger).toEqual([])
+  })
+
+  it('[P:one-reply] a turn that never settles dies at its deadline, and a late reply is dropped', async () => {
+    rig = await startRig(team(), { mode: 'never-settle', door: { turnDeadlineMs: 60 } })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'out.still-allowed' })
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await expect.poll(() => rig!.receipts.all().at(-1)?.rule).toBe('turn.known')
+    expect(rig.fake.ledger).toEqual([])
+  })
+
+  it('[P:one-reply] a turn that settles with no reply posts nothing', async () => {
+    rig = await startRig(team(), { mode: 'silent' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+  })
+})
+
+describe('door: tool verdicts', () => {
+  it('[P:tool-verdict] an allowed tool runs, a denied or unmapped one does not', async () => {
+    rig = await startRig(team({ 'tools.allow': ['shell'] }))
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'do !tool bash and !tool read and !tool mystery' })
+    await rig.door.idle()
+    expect(rig.shim.toolsRan.map((t) => t.tool)).toEqual(['bash'])
+    expect(rig.shim.verdicts).toEqual([
+      { tool: 'bash', allow: true },
+      { tool: 'read', allow: false, reason: 'file_read tools are not on the allow list.' },
+      { tool: 'mystery', allow: false, reason: 'unknown tools are not on the allow list.' },
+    ])
+    const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool' && r.rule === 'tools.lists')
+    expect(tools.map((r) => r.verdict)).toEqual(['allow', 'deny', 'deny'])
+  })
+
+  it('[P:tool-verdict] a tool request for a turn the door never sent is denied', async () => {
+    rig = await startRig(team({ 'tools.allow': ['shell'] }))
+    expect(await rig.shim.client.requestTool('never-issued', 'bash', {})).toEqual({ allow: false, reason: 'unknown turn' })
+  })
+
+  it('[P:tool-verdict] with the door told to stay silent, the shim treats it as no', async () => {
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { door: { silentVerdicts: true }, verdictTimeoutMs: 60 })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: '!tool bash' })
+    await rig.door.idle()
+    expect(rig.shim.toolsRan).toEqual([])
+    expect(rig.shim.verdicts).toEqual([{ tool: 'bash', allow: false, reason: 'no verdict in time' }])
+  })
+})
+
+describe('door: receipts and heartbeat', () => {
+  it('[P:receipts] every decision leaves a receipt with ids and sizes, and no message text', async () => {
+    rig = await startRig(team({ [F + 'observeUnmentioned']: true, 'tools.allow': ['shell'] }))
+    const canary = 'CANARY-receipt-text'
+    const dropped = rig.fake.say({ room: 'r-elsewhere', sender: 'u-alice', mention: true, text: `${canary} one` })
+    const observed = rig.fake.say({ room: 'r-general', sender: 'u-alice', text: `${canary} two` })
+    const delivered = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `${canary} !tool bash` })
+    await rig.door.idle()
+
+    const all = rig.receipts.all()
+    expect(JSON.stringify(all)).not.toContain(canary)
+    const first = (id: string) => all.find((r) => r.event.messageId === id)!
+    expect(first(dropped)).toMatchObject({
+      agentId: 'agent-team', policyHash: rig.door.policy().hash, verdict: 'drop', rule: 'adm.rooms',
+      event: { kind: 'inbound', surface: 'fake', room: 'r-elsewhere', sender: 'u-alice', bytes: Buffer.byteLength(`${canary} one`) },
+    })
+    expect(first(observed)).toMatchObject({ verdict: 'observe', rule: 'addr.observe' })
+    expect(first(delivered)).toMatchObject({ verdict: 'deliver', rule: 'addr.mention' })
+    expect(all.map((r) => `${r.event.kind}:${r.verdict}`)).toEqual([
+      'inbound:drop', 'inbound:observe', 'inbound:deliver', 'tool:allow', 'outbound:allow',
+    ])
+    for (const r of all) expect(Number.isNaN(Date.parse(r.ts))).toBe(false)
+  })
+
+  it('[P:receipts] "why didn\'t it answer?" reads straight off the receipts', async () => {
+    rig = await startRig(team())
+    const dropped = rig.fake.say({ room: 'r-elsewhere', sender: 'u-alice', mention: true, text: 'hello?' })
+    const answered = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hello!' })
+    await rig.door.idle()
+    expect(explain(rig.receipts.all(), dropped)).toEqual([
+      'inbound  drop  adm.rooms  This room is not on the list.',
+    ])
+    expect(explain(rig.receipts.all(), answered)).toEqual([
+      'inbound  deliver  addr.mention  The agent was addressed in an approved room.',
+      'outbound  allow  out.still-allowed  The room is still approved.',
+    ])
+    expect(explain(rig.receipts.all(), 'no-such-message')).toEqual(['No receipt for that message. The door never saw it.'])
+  })
+
+  it('[P:heartbeat-hash] the heartbeat carries the hash of the live policy, and a policy change shows at once', async () => {
+    rig = await startRig(team())
+    const before = rig.door.heartbeat()
+    expect(before).toMatchObject({ agentId: 'agent-team', policyHash: team().hash, caps: { harness: 'echo' } })
+
+    // Closed room now; the next message is dropped with no restart.
+    const next = team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] })
+    rig.door.setPolicy(next)
+    expect(rig.door.heartbeat().policyHash).toBe(next.hash)
+    expect(next.hash).not.toBe(before.policyHash)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'still there?' })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+  })
+
+  it('[P:heartbeat-hash] a policy that does not validate is refused and the old one stays live', async () => {
+    rig = await startRig(team())
+    const stale = { ...team(), posture: 'public' as const }
+    expect(() => rig!.door.setPolicy(stale)).toThrow(/hash: does not match/)
+    expect(() => rig!.door.setPolicy(team({ agentId: 'someone-else' }))).toThrow(/agentId: belongs to another agent/)
+    expect(rig.door.heartbeat().policyHash).toBe(team().hash)
+  })
+})

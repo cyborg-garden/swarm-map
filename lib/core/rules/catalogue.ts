@@ -22,7 +22,14 @@ const S = 'surfaces.*'
 
 export const RULES: Rule[] = [
   { id: 'ctl.valid', statement: 'A record that fails validation is never applied.',
-    klass: 'security', kind: 'control-plane', reads: ['schema', 'agentId', 'version', 'hash'], enforcer: 'control-plane', tests: ['U:validate'] },
+    klass: 'security', kind: 'control-plane', reads: ['schema', 'agentId', 'version', 'hash'], enforcer: 'control-plane', tests: ['U:validate', 'P:fake-only'] },
+
+  { id: 'ctl.applied', statement: 'Swarm Map can tell which version of the policy is live, and a change applies with no restart.',
+    klass: 'security', kind: 'control-plane', reads: ['hash', 'version'], enforcer: 'door', tests: ['P:heartbeat-hash'] },
+  { id: 'ctl.receipts', statement: 'Every decision leaves a receipt, and a receipt never holds message text.',
+    klass: 'security', kind: 'control-plane', reads: ['agentId'], enforcer: 'door', tests: ['P:receipts'] },
+  { id: 'ctl.brain-token', statement: 'A harness that does not present the token for its cell is refused.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:hello-token'] },
 
   { id: 'adm.surface', statement: 'A surface that is switched off hears nothing.',
     klass: 'security', kind: 'wall', reads: [`${S}.enabled`], enforcer: 'door', tests: ['D:adm.surface/switched-off'] },
@@ -51,7 +58,7 @@ export const RULES: Rule[] = [
   { id: 'addr.free-rooms', statement: 'Named rooms need no mention.',
     klass: 'behaviour', kind: 'wall', reads: [`${S}.rooms`], enforcer: 'door', tests: ['D:addr.free-rooms/no-mention-needed'] },
   { id: 'addr.observe', statement: 'Unaddressed text is kept as context and never answered.',
-    klass: 'behaviour', kind: 'wall', reads: [`${S}.observeUnmentioned`], enforcer: 'door', tests: ['D:addr.observe/overheard'] },
+    klass: 'behaviour', kind: 'wall', reads: [`${S}.observeUnmentioned`], enforcer: 'door', tests: ['D:addr.observe/overheard', 'P:observe'] },
 
   { id: 'bots.mode', statement: 'Other bots are ignored, heard when they address the agent, or always heard.',
     klass: 'security', kind: 'wall', reads: [`${S}.bots.mode`], enforcer: 'door', tests: ['D:bots.mode/bot-ignored', 'D:bots.mode/bot-must-address'] },
@@ -77,4 +84,18 @@ export const RULES: Rule[] = [
 
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.enabled`], enforcer: 'door', tests: ['D:out.still-allowed/dm-closed', 'D:out.still-allowed/room-removed', 'D:out.still-allowed/turn-dead'] },
+
+  { id: 'turn.one-reply', statement: 'A turn gets at most one reply, and only once the harness says it is finished.',
+    klass: 'behaviour', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:one-reply'] },
+  { id: 'turn.known', statement: 'Anything the harness sends for a turn the door did not open is dropped.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:unknown-turn'] },
+  { id: 'turn.no-harness', statement: 'A message is not delivered while no harness is connected, and the receipt says so.',
+    klass: 'behaviour', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:no-harness'] },
+  { id: 'tools.no-verdict', statement: 'A tool with no verdict in time does not run.',
+    klass: 'security', kind: 'guardrail', reads: [], enforcer: 'gate', tests: ['P:no-verdict-is-no', 'P:tool-verdict'] },
+
+  { id: 'san.in', statement: 'Pasted secrets are scrubbed before the harness sees them.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:scrub-in'] },
+  { id: 'san.out', statement: 'Secrets are redacted before a reply is posted, and a failed check posts nothing.',
+    klass: 'security', kind: 'wall', reads: [], enforcer: 'door', tests: ['P:redact-out', 'P:out-fails-closed'] },
 ]
