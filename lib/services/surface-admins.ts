@@ -14,6 +14,7 @@ import {
 } from '@/lib/surfaces/derive'
 
 const HARNESSES_FILE = 'harnesses.json'
+const UNKNOWN_AGENT = 'Unknown agent'
 
 // Per-platform DM-allowlist env var. This is the BOOTSTRAP admin set: when a
 // surface has no explicit admin list, its admins default to whoever is in the
@@ -43,6 +44,15 @@ const HARNESS_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 export function isValidHarnessId(raw: unknown): raw is string {
   return typeof raw === 'string' && HARNESS_ID_RE.test(raw)
+}
+
+// The id HarnessService gives an agent named `name` (discover / createOverlay).
+function idFromName(name: string): string {
+  return `h_${name.replace(/-/g, '_')}`
+}
+
+function isBuiltFromName(id: string): boolean {
+  return id.startsWith('h_') && id === idFromName(id.slice(2))
 }
 
 // Structural guard for a group/chat id before it is written into an agent
@@ -111,6 +121,17 @@ function parseCommaList(value: string | undefined): string[] {
 
 export type AdminSource = 'explicit' | 'allowlist'
 
+// The slice of HarnessService this store needs: the app's own lookup of an
+// agent by id, and its own way of saving a field on one.
+export type HarnessDirectory = {
+  get(id: string): Harness | undefined
+  updateConfig(id: string, partial: Partial<Harness>): Harness | undefined
+}
+
+// What a caller-supplied id resolved to. `row` is the stored harnesses.json
+// entry; `id` is the id every later read and write uses.
+type Target = { id: string; row?: Partial<Harness> }
+
 export type AdminList = {
   platform: string
   admins: string[]
@@ -148,6 +169,7 @@ export class SurfaceAdminService {
   constructor(
     private storage: Storage,
     private audit?: AuditService,
+    private harnesses?: HarnessDirectory,
   ) {}
 
   // Read the raw persisted overlays directly (NOT via HarnessService.list(),
@@ -157,19 +179,39 @@ export class SurfaceAdminService {
     return this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])
   }
 
-  // Agents call the policy API with their bare slug (HERMES_AGENT_NAME, e.g.
-  // "seraph-doer") while harnesses.json ids are "h_seraph_doer". agentDataDir()
-  // already tolerates both, but the overlay lookup matched by exact id — so an
-  // agent-side call silently missed every EXPLICIT admin list and fell back to
-  // the allowlist bootstrap. Normalize before matching.
-  private canonicalHarnessId(idOrSlug: string): string {
-    return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
+  // Resolve a caller-supplied id to ONE agent, or to nothing.
+  //
+  // Two spellings name an agent: its id (`h_seraph_doer`, what the dashboard
+  // sends) and its bare slug (`seraph-doer`, what the policy plugin sends as
+  // HERMES_AGENT_NAME). A slug becomes the id by the rule that builds an id
+  // from a name everywhere else (idFromName); an id is taken as written.
+  //
+  // agentDataDir() accepts several spellings for one directory. Two rules
+  // keep it to one agent per directory here:
+  //   - a stored row whose id is not in the built-from-a-name form answers
+  //     only when no other stored row shares its data dir;
+  //   - an id with no stored row resolves (to itself, admins from its own
+  //     .env — an agent Docker discovers has no row until something is saved
+  //     on it) only when no built-from-a-name row owns its data dir.
+  // Everything else resolves to nothing; callers treat that as "no such agent".
+  //
+  // Reads the stored rows only (never HarnessService.list(), which shells out
+  // to Docker) — this runs on the per-message is-admin path.
+  private resolve(idOrSlug: string, overlays: Partial<Harness>[] = this.readOverlays()): Target | undefined {
+    if (!isValidHarnessId(idOrSlug)) return undefined
+    const id = idOrSlug.startsWith('h_') ? idOrSlug : idFromName(idOrSlug)
+    const home = agentDataDir(id).toLowerCase()
+    const sharing = overlays.filter((h) => isValidHarnessId(h.id) && agentDataDir(h.id).toLowerCase() === home)
+
+    const row = overlays.find((h) => h.id === id)
+    if (row) {
+      return isBuiltFromName(id) || sharing.length === 1 ? { id, row } : undefined
+    }
+    return sharing.some((h) => isBuiltFromName(h.id!)) ? undefined : { id }
   }
 
-  private explicitAdmins(harnessId: string, platform: string): string[] | undefined {
-    const canonical = this.canonicalHarnessId(harnessId)
-    const overlay = this.readOverlays().find((h) => h.id === canonical)
-    const list = overlay?.surfaceAdmins?.[platform]
+  private explicitAdmins(target: Target, platform: string): string[] | undefined {
+    const list = target.row?.surfaceAdmins?.[platform]
     return Array.isArray(list) ? list : undefined
   }
 
@@ -193,11 +235,17 @@ export class SurfaceAdminService {
     if (!isSupportedSurface(platform)) {
       return { platform, admins: [], source: 'allowlist', allowAllDm: false }
     }
-    const explicit = this.explicitAdmins(harnessId, platform)
+    const target = this.resolve(harnessId)
+    if (!target) return { platform, admins: [], source: 'allowlist', allowAllDm: false }
+    return this.adminsOf(target, platform)
+  }
+
+  private adminsOf(target: Target, platform: string): AdminList {
+    const explicit = this.explicitAdmins(target, platform)
     if (explicit !== undefined) {
       return { platform, admins: [...explicit], source: 'explicit', allowAllDm: false }
     }
-    const { admins, allowAllDm } = this.allowlistAdmins(harnessId, platform)
+    const { admins, allowAllDm } = this.allowlistAdmins(target.id, platform)
     return { platform, admins, source: 'allowlist', allowAllDm }
   }
 
@@ -213,6 +261,15 @@ export class SurfaceAdminService {
     if (!target) return false
     try {
       return this.listAdmins(harnessId, platform).admins.includes(target)
+    } catch {
+      return false
+    }
+  }
+
+  // isAdmin for an id that is already resolved. Fail-closed like isAdmin.
+  private isAdminOf(target: Target, platform: string, userId: string): boolean {
+    try {
+      return this.adminsOf(target, platform).admins.includes(userId)
     } catch {
       return false
     }
@@ -238,6 +295,11 @@ export class SurfaceAdminService {
    * reports a list left alone or an admin the runtime will refuse. No other
    * surface's .env is touched (see lib/surfaces/dm-allowlist).
    *
+   * `harnessId` is resolved to one agent first (see resolve); 404 when it names
+   * none. The list is saved on that agent's stored row. An agent with no row
+   * yet is saved through HarnessService, and only if HarnessService lists it.
+   * The result carries the resolved id for the caller to act on.
+   *
    * Returns a discriminated result rather than throwing so the route can map it
    * to the right HTTP status.
    */
@@ -247,8 +309,8 @@ export class SurfaceAdminService {
     admins: unknown,
     actor: string,
   ):
-    | { ok: true; admins: string[]; dmEnvUpdated?: true; dmEnvWarning?: string }
-    | { ok: false; status: 400 | 403; error: string } {
+    | { ok: true; harnessId: string; admins: string[]; dmEnvUpdated?: true; dmEnvWarning?: string }
+    | { ok: false; status: 400 | 403 | 404; error: string } {
     if (!isSupportedSurface(platform)) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
     }
@@ -258,9 +320,14 @@ export class SurfaceAdminService {
     if (typeof actor !== 'string' || !actor.trim()) {
       return { ok: false, status: 400, error: 'actor is required' }
     }
+    // One read of the stored rows serves the whole call: the id is resolved,
+    // the actor is checked and the list is written against the same agent.
+    const overlays = this.readOverlays()
+    const target = this.resolve(harnessId, overlays)
+    if (!target) return { ok: false, status: 404, error: UNKNOWN_AGENT }
     // Authorize BEFORE validating the new list, so the endpoint never reveals
     // anything to an unauthorized caller.
-    if (!this.isAdmin(harnessId, platform, actor.trim())) {
+    if (!this.isAdminOf(target, platform, actor.trim())) {
       return { ok: false, status: 403, error: 'actor is not an admin for this surface' }
     }
     // Validate + dedupe every identity.
@@ -277,28 +344,37 @@ export class SurfaceAdminService {
       }
     }
 
-    const previousExplicit = this.explicitAdmins(harnessId, platform)
+    const previousExplicit = this.explicitAdmins(target, platform)
 
-    // Persist onto the harness overlay (read-modify-write the raw array — the
-    // single persisted shape; HarnessService tolerates partial overlays).
-    const overlays = this.readOverlays()
-    const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
-    if (idx !== -1) {
-      const existing = overlays[idx].surfaceAdmins ?? {}
-      overlays[idx] = { ...overlays[idx], surfaceAdmins: { ...existing, [platform]: cleaned } }
+    if (target.row) {
+      // Persist onto the stored row (read-modify-write the raw array — the
+      // single persisted shape; HarnessService tolerates partial overlays).
+      const idx = overlays.indexOf(target.row)
+      overlays[idx] = { ...target.row, surfaceAdmins: { ...(target.row.surfaceAdmins ?? {}), [platform]: cleaned } }
+      this.storage.write(HARNESSES_FILE, overlays)
     } else {
-      overlays.push({ id: harnessId, surfaceAdmins: { [platform]: cleaned } })
+      // No stored row. Only an agent the app itself lists (a discovered
+      // container) may get one, and HarnessService writes it — this store
+      // never adds a row of its own for an id it was handed.
+      const known = this.harnesses?.get(target.id)
+      if (!known) return { ok: false, status: 404, error: UNKNOWN_AGENT }
+      const saved = this.harnesses!.updateConfig(known.id, { surfaceAdmins: { [platform]: cleaned } })
+      if (!saved) return { ok: false, status: 404, error: UNKNOWN_AGENT }
     }
-    this.storage.write(HARNESSES_FILE, overlays)
 
     this.audit?.append({
       who: actor.trim(),
       what: `surface-admins:set:${platform}`,
-      target: harnessId,
+      target: target.id,
       meta: { count: cleaned.length },
     })
 
-    return { ok: true, admins: cleaned, ...(platform === 'discord' ? this.syncDiscordDmEnv(harnessId, previousExplicit, cleaned) : {}) }
+    return {
+      ok: true,
+      harnessId: target.id,
+      admins: cleaned,
+      ...(platform === 'discord' ? this.syncDiscordDmEnv(target.id, previousExplicit, cleaned) : {}),
+    }
   }
 
   // Never throws: the admin change has already been saved, so a failed .env write
@@ -363,9 +439,10 @@ export class SurfaceAdminService {
   syncFromAllowlist(harnessId: string, platform: string, allowlist: string[]): void {
     if (!isSupportedSurface(platform)) return
     const overlays = this.readOverlays()
-    const idx = overlays.findIndex((h) => h.id === this.canonicalHarnessId(harnessId))
+    const target = this.resolve(harnessId, overlays)
+    const idx = target?.row ? overlays.indexOf(target.row) : -1
     const existing = idx !== -1 ? overlays[idx].surfaceAdmins?.[platform] : undefined
-    if (!Array.isArray(existing)) return // no explicit list → bootstrap default already tracks the env
+    if (!target || !Array.isArray(existing)) return // no explicit list → bootstrap default already tracks the env
 
     const cleaned: string[] = []
     const seen = new Set<string>()
@@ -387,7 +464,7 @@ export class SurfaceAdminService {
     this.audit?.append({
       who: 'operator',
       what: `surface-admins:sync:${platform}`,
-      target: harnessId,
+      target: target.id,
       meta: { count: cleaned.length },
     })
   }
@@ -402,7 +479,9 @@ export class SurfaceAdminService {
     const varName = GROUP_ALLOWED_VARS[platform]
     if (!varName) return false
     try {
-      const env = parseEnvFile(path.join(agentDataDir(harnessId), '.env'))
+      const target = this.resolve(harnessId)
+      if (!target) return false
+      const env = parseEnvFile(path.join(agentDataDir(target.id), '.env'))
       const raw = env[varName]
       if (raw === '*') return true
       return parseCommaList(raw).includes(groupId.trim())
@@ -436,9 +515,9 @@ export class SurfaceAdminService {
     groupId: string,
     addedByUserId: string,
   ):
-    | { ok: true; approved: true; updated: boolean }
+    | { ok: true; approved: true; updated: boolean; harnessId: string }
     | { ok: true; approved: false; reason: string }
-    | { ok: false; status: 400; error: string } {
+    | { ok: false; status: 400 | 404; error: string } {
     const varName = GROUP_ALLOWED_VARS[platform]
     if (!varName) {
       return { ok: false, status: 400, error: `Unsupported platform: ${platform}` }
@@ -456,7 +535,10 @@ export class SurfaceAdminService {
       return { ok: false, status: 400, error: 'addedByUserId is required (max 128 chars)' }
     }
 
-    const envPath = path.join(agentDataDir(harnessId), '.env')
+    const target = this.resolve(harnessId)
+    if (!target) return { ok: false, status: 404, error: UNKNOWN_AGENT }
+
+    const envPath = path.join(agentDataDir(target.id), '.env')
     if (!fs.existsSync(envPath)) {
       return { ok: false, status: 400, error: 'Agent .env not found' }
     }
@@ -465,7 +547,7 @@ export class SurfaceAdminService {
     // Unset defaults to approved-only — the secure default everywhere else.
     const policyVar = GROUP_INVITE_POLICY_VARS[platform]
     const policy = policyVar ? env[policyVar] : undefined
-    if (policy !== 'allow-all' && !this.isAdmin(harnessId, platform, actor)) {
+    if (policy !== 'allow-all' && !this.isAdminOf(target, platform, actor)) {
       return {
         ok: true,
         approved: false,
@@ -475,7 +557,7 @@ export class SurfaceAdminService {
 
     const raw = env[varName]
     if (raw === '*' || parseCommaList(raw).includes(group)) {
-      return { ok: true, approved: true, updated: false }
+      return { ok: true, approved: true, updated: false, harnessId: target.id }
     }
 
     // Append the group to the allowlist line (create it if absent).
@@ -495,10 +577,10 @@ export class SurfaceAdminService {
     this.audit?.append({
       who: actor,
       what: `surface-groups:approve:${platform}`,
-      target: harnessId,
+      target: target.id,
       meta: { groupId: group },
     })
 
-    return { ok: true, approved: true, updated: true }
+    return { ok: true, approved: true, updated: true, harnessId: target.id }
   }
 }
