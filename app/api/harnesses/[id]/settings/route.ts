@@ -43,6 +43,7 @@ import {
   sharedVpnPaths,
   type SharedVpnState,
 } from '@/lib/services/shared-vpn'
+import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -240,6 +241,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
   const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 
@@ -439,6 +442,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const dataDir = agentDataDir(id)
   const envPath = path.join(dataDir, '.env')
 

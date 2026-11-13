@@ -5,6 +5,7 @@ import os from 'os'
 import { services } from '@/lib/services'
 import { setPlatformEnabled } from '@/lib/config-yaml-helpers'
 import { PLATFORM_ENV_KEYS as DERIVED_PLATFORM_ENV_KEYS } from '@/lib/surfaces/derive'
+import { requireHarness } from '@/lib/harness-ref'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -27,6 +28,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json()
   const { platform } = body as { platform: string }
 

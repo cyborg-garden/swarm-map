@@ -2,12 +2,15 @@ import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { isRestarting } from '@/lib/services/restart-tracker'
 import type { RestartMode } from '@/lib/types'
+import { requireHarness } from '@/lib/harness-ref'
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json().catch(() => ({}))
   const mode: RestartMode = body.mode || 'quick'
 

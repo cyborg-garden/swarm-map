@@ -23,6 +23,7 @@ vi.mock('@/lib/services', () => ({
       list: vi.fn(() => []),
     },
     harness: {
+      get: vi.fn((id: string) => ({ id })),
       restart: vi.fn(),
     },
   },

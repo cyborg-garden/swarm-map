@@ -12,7 +12,7 @@ import path from 'path'
 
 const h = vi.hoisted(() => ({ restart: vi.fn() }))
 vi.mock('@/lib/services', () => ({
-  services: { harness: { restart: h.restart }, keys: { list: () => [] } },
+  services: { harness: { get: (id: string) => ({ id }), restart: h.restart }, keys: { list: () => [] } },
 }))
 vi.mock('@/lib/services/usage', () => ({ getCostMonth: () => 0 }))
 

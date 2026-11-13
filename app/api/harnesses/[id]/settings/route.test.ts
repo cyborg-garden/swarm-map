@@ -12,7 +12,7 @@ import os from 'os'
 
 vi.mock('@/lib/services', () => ({
   services: {
-    harness: { restart: vi.fn(), get: vi.fn(() => undefined), updateConfig: vi.fn() },
+    harness: { restart: vi.fn(), get: vi.fn((id: string) => ({ id }) as never), updateConfig: vi.fn() },
     config: { getSettings: vi.fn(() => ({})) },
     surfaceAdmins: { syncFromAllowlist: vi.fn() },
   },

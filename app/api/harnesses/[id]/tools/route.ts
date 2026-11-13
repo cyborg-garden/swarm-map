@@ -1,15 +1,14 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { harness, refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   return NextResponse.json({ tools: harness.tools })
 }
@@ -19,10 +18,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const harness = services.harness.get(id)
-  if (!harness) {
-    return NextResponse.json({ error: 'Harness not found' }, { status: 404 })
-  }
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
 
   let body: { tools?: string[] }
   try {

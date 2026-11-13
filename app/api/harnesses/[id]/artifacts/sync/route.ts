@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
+import { requireHarness } from '@/lib/harness-ref'
 
 // POST /api/harnesses/:id/artifacts/sync — adopt / update the base package.
 // Body (optional):
@@ -15,6 +16,8 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   const body = await request.json().catch(() => ({}))
   const dryRun = body?.dryRun === true
   const force = body?.force === true

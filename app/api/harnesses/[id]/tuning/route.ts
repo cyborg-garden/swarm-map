@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { applyTuningToHarness, readHarnessTuning, TUNING_SPEC, type TuningEdits, type TuningValues } from '@/lib/services/tuning-writer'
+import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
 
 /**
  * GET /api/harnesses/:id/tuning
@@ -13,6 +14,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const invalid = invalidHarnessId(id)
+  if (invalid) return invalid
   const r = readHarnessTuning(id)
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status })
   return NextResponse.json({ values: r.values, spec: TUNING_SPEC })
@@ -32,6 +35,8 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const { refusal } = requireHarness(id)
+  if (refusal) return refusal
   let body: { values?: TuningEdits; expected?: Partial<TuningValues> }
   try {
     body = await request.json()
