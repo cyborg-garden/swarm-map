@@ -326,6 +326,71 @@ describe.each(CASES)('row $id, which Swarm Map does not manage', ({ id, row, dir
   })
 })
 
+// The other direction. The refusal is for rows Swarm Map does not manage and
+// for nothing else: a Hermes agent must never be answered with it, whatever
+// its stored row looks like and whatever unmanaged rows sit beside it.
+describe('a Hermes agent is never refused as unmanaged', () => {
+  // Every row shape a Hermes agent "old" can have in harnesses.json.
+  const HERMES_SHAPES: Array<[string, Array<Record<string, unknown>>]> = [
+    ['a tagged row', [{ id: 'h_old', name: 'old', runtime: 'hermes' }]],
+    ['a row older than the tag', [{ id: 'h_old', name: 'old', tier: 'team' }]],
+    ['a row with a null tag', [{ id: 'h_old', name: 'old', runtime: null }]],
+    ['only the row the admins write made', [{ id: 'h_old', surfaceAdmins: { discord: [A] } }]],
+    ['no stored row at all (discovered only)', []],
+  ]
+  // Unmanaged rows for OTHER agents, stored beside it. Their names share a
+  // prefix or a suffix with "old" on purpose.
+  const NEIGHBOURS = [
+    { id: 'h_older', name: 'older', runtime: 'letta' },
+    { id: 'h_ol', name: 'ol', runtime: 'letta' },
+    { id: 'h_very_old', name: 'very-old', runtime: 'pi-from-the-future' },
+    { id: 'h_letta_server', surfaceAdmins: { discord: [ROW_ADMIN] } },
+    { id: LEFTOVER_AGENT, surfaceAdmins: { discord: [ROW_ADMIN] } },
+  ]
+
+  const refusedAsUnmanaged = async (h: (typeof handlers)[number], id: string): Promise<boolean> => {
+    let res: Response
+    try {
+      res = await call(h.handler, h.method, h.file, id)
+    } catch {
+      return false // a route failing for its own reasons is not this refusal
+    }
+    const body = (await res.json().catch(() => null)) as { reason?: string } | null
+    return res.status === 409 && (body?.reason === 'retired' || body?.reason === 'unknown')
+  }
+
+  it.each(HERMES_SHAPES)('%s: no per-agent route, read or write, by id or by slug', async (_label, rows) => {
+    const refused: string[] = []
+    for (const h of [...handlers, ...readers]) {
+      if (h.label === 'DELETE route.ts') continue // would forget the row under test
+      for (const id of ['h_old', 'old']) {
+        seed([...rows, ...NEIGHBOURS])
+        if (await refusedAsUnmanaged(h, id)) refused.push(`${h.label} as ${id}`)
+      }
+    }
+    expect(refused).toEqual([])
+  })
+
+  it('an admins-only row under an ordinary id is Hermes even with no home on disk', async () => {
+    // Only the two ids the old integration minted are judged by that shape.
+    const refused: string[] = []
+    for (const h of [...handlers, ...readers]) {
+      if (h.label === 'DELETE route.ts') continue
+      seed([{ id: 'h_ghost', surfaceAdmins: { discord: [A] } }, ...NEIGHBOURS])
+      expect(fs.existsSync(path.join(scratch.home, '.hermes-ghost'))).toBe(false)
+      if (await refusedAsUnmanaged(h, 'h_ghost')) refused.push(h.label)
+    }
+    expect(refused).toEqual([])
+  })
+
+  it('control: the same sweep does report a row that IS unmanaged', async () => {
+    seed([{ id: 'h_old', name: 'old', runtime: 'letta' }])
+    const h = handlers.find((x) => x.label === 'POST surfaces/disconnect/route.ts')!
+    expect(await refusedAsUnmanaged(h, 'h_old')).toBe(true)
+    expect(await refusedAsUnmanaged(h, 'old')).toBe(true)
+  })
+})
+
 describe('control: the same GETs on a Hermes row are answered', () => {
   // Proves the GET sweep can fail, and that a self-read CAN serve a row's admins.
   beforeEach(() => seed([{ id: 'h_old', name: 'old', runtime: 'hermes', surfaceAdmins: { discord: [ROW_ADMIN] } }]))

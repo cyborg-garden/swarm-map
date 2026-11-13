@@ -57,6 +57,14 @@ Hermes name derives, so they are retired whatever is on disk.
   slug: `GET .../policy`, `GET .../surfaces/:platform/admins`, `.../admins/:userId` and
   `.../groups/:groupId`. They answer from that agent's own `.env`, never from the row's
   stored fields, and write nothing.
+- What a running agent sees. The policy plugin (`infra/templates/plugins/swarm_map_policy`,
+  and its copy in the agent runtime) makes three calls. The two checks it makes on every
+  message, "is this group allowed" and "is this user my admin", are among the four reads
+  above and are never refused. The third, the invite approval it sends once when it is
+  added to a group, gets the 409 if an unmanaged row is stored under the agent's own id. The
+  plugin reads any answer but 200 as "not approved", once, with no retry: the agent leaves
+  that group. A Hermes agent with a Hermes row, or with no row, never gets this 409;
+  `retired-row-routes.test.ts` sweeps every route for each row shape to hold that.
 - The path `~/.hermes-<name>` is built in one file, `lib/services/data-dir.ts`. Code that
   was handed an id or a name (a URL, a request body, `keys.json`, a list of names) reaches
   it through `agentHome()` / `agentHomeIfManaged()` in `lib/services/agent-home.ts`, which
