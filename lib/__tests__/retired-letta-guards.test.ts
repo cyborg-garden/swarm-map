@@ -42,7 +42,7 @@ function repoFiles(): string[] {
 
 const BINARY = /\.(png|jpe?g|gif|ico|webp|woff2?|ttf|otf|pdf|zip|gz|sqlite|db)$/i
 
-function hits(pattern: RegExp, allow: (file: string) => boolean): string[] {
+function hits(pattern: { test(line: string): boolean }, allow: (file: string) => boolean): string[] {
   const found: string[] = []
   for (const file of repoFiles()) {
     if (BINARY.test(file) || allow(file)) continue
@@ -119,22 +119,34 @@ describe('the Hermes-to-Letta bridge stays deleted', () => {
 const TRANSLATED = (f: string) =>
   f === 'README.zh-CN.md' || f === 'README.zh-TW.md' || f.startsWith('scripts/__tests__/fixtures/readme-pair/')
 
-// The names the removed integration went by: its modules, its symbols, its
-// env vars, its compose services and volumes, its runtime tags and row ids,
-// and the SDK for the retired server. These are what must not come back.
+// The names the removed integration went by, by the shape of the name: its
+// symbols, its env vars, its modules, compose services and volumes, its
+// runtime tags and row ids, and its files. These are what must not come back.
 //
 // The word "Letta" on its own is not on the list. A Letta Code adapter is
 // planned, and docs, the capability matrix and the adapter itself have to be
-// able to name it. Prose about what was removed is fine too. What this
-// catches is code or config that is, or points at, the old integration.
+// able to name it, so every shape leaves out the `code` forms (`LettaCode…`,
+// `LETTA_CODE_…`, `letta-code`, `letta_code`). Prose about what was removed
+// is fine too. What this catches is code or config that is, or points at,
+// the old integration: an identifier, not a mention.
 const REMOVED_NAMES: [string, RegExp][] = [
-  ['a module of the old integration', /letta-(agent-provider|deploy-templates|agent-detail|compose|client)\b|services\/letta(?![\w-])/],
-  ['a symbol of the old integration', /\b(LettaService|LettaAgentProvider|LettaAgentDetail|LettaServerInfo|LettaPage|ensureLettaServer|deployLettaAgent|isLettaHarnessId|lettaAgentToHarness|lettaAgentIdFromHarnessId|repoLettaComposePath|lettaServer\w*|lettaModel|lettaKeyVar|lettaSettings|lettaBrain\w*|isLetta)\b/],
-  ['an env var of the old integration', /\bLETTA_(PORT|IMAGE|DEFAULT_PORT|CONTAINER_NAME|BRAIN_\w*|SERVER_\w+|MODERN_AGENT_TYPE|LEGACY_AGENT_TYPE|SERVICE|SERVICE_NAME|BASE_URL|DEFAULT_BASE_URL|PROJECT|PG_URI|COMPOSE_FILE|MODEL_SUGGESTIONS)\b/],
-  ['a compose service, container or volume of the old integration', /\bletta-(server|srv|db|pgdata|dbdata)\b|container_name:.*letta|^\s+letta:\s*(#.*)?$/i],
-  ['a retired runtime tag or row id', /runtime['"]?\s*(:|===?|!==?)\s*['"]letta['"]|\|\s*['"]letta['"]|['"]letta['"]\s*\||\bh_letta_|\bletta_(agent|v|brain)\b/],
+  // LettaService, ensureLettaServer, lettaBrain, isLetta. Not LettaCodeShim.
+  ['a symbol', /\bLetta(?!Code)[A-Z]\w*|\b[a-z]\w*Letta(?!Code)\w*|\bletta(?!Code)[A-Z]\w*/],
+  // LETTA_BASE_URL, LETTA_BRAIN_AGENT_ID. Not LETTA_CODE_BIN.
+  ['an env var or constant', /\bLETTA_(?!CODE(_|\b))[A-Z0-9_]*/],
+  // letta-compose, letta-agent-provider, letta-server, letta-db, letta-pgdata, letta-client. Not letta-code.
+  // Lower case only: these are names. "Letta-style" in a sentence is not one.
+  ['a module, service, volume or package', /\bletta-(?!code\b)[a-z0-9]/],
+  // letta_agent, letta_brain, h_letta_server. Not letta_code.
+  ['a row id or snake-case name', /(?<![A-Za-z0-9])letta_(?!code(_|\b))[a-z0-9]/],
+  // The retired runtime tag, as a quoted value: runtime: 'letta', 'hermes' | 'letta'.
+  ['the retired runtime tag', /['"`]letta['"`]/],
+  // A compose service or a config key named letta.
+  ['a service or key named letta', /^\s+letta:\s*(#.*)?$|container_name:.*\bletta\b/],
+  // lib/services/letta.ts, imported or named.
+  ['a file of the old client', /services\/letta(?![\w-])|\/letta\.(ts|tsx|js|mjs|py|ya?ml|json)\b/],
 ]
-const REMOVED = new RegExp(REMOVED_NAMES.map(([, re]) => `(?:${re.source})`).join('|'), 'i')
+const REMOVED = { test: (line: string): boolean => REMOVED_NAMES.some(([, re]) => re.test(line)) }
 
 // Files that may hold one of those names. Each entry is a reason, not a
 // convenience. Adding one is a decision.
@@ -179,6 +191,12 @@ describe('what counts as a name of the removed integration', () => {
     ['a row id of the old integration', "const id = 'h_letta_server'"],
     ['the wizard field', "lettaModel: ''"],
     ['the server SDK', '"@letta-ai/letta-client": "^1.0.0"'],
+    ['the server SDK, in Python', 'from letta_client import Letta'],
+    ['a symbol the old code never had', 'export class LettaClient {}'],
+    ['a helper named after it', 'const fakeLetta = makeFake()'],
+    ['an env var the old code never had', 'LETTA_API_URL=http://localhost:1'],
+    ['a module the old code never had', "import { x } from './letta-memory'"],
+    ['the old file, by path', "const file = 'lib/services/letta.ts'"],
   ])('%s is caught', (_what, line) => {
     expect(REMOVED.test(line), line).toBe(true)
   })
@@ -193,6 +211,11 @@ describe('what counts as a name of the removed integration', () => {
     ['the bridge, in prose', 'The Hermes-to-Letta bridge is gone.'],
     ['a product name in a glossary', 'Product names (Swarm Map, SM, Hermes, Letta) stay in English.'],
     ['its wire format, in prose', "Letta Code's Anthropic path uses the Anthropic Messages API."],
+    ['a symbol of the planned adapter', 'export function startLettaCodeShim(): void {}'],
+    ['a constant of the planned adapter', 'const LETTA_CODE_VERSION = process.env.LETTA_CODE_BIN'],
+    ['a snake-case name of the planned adapter', 'letta_code_caps = {}'],
+    ['a sentence that hyphenates the product name', 'Letta-style ids are id-shaped.'],
+    ['a possessive', "Letta's self-hosted server was retired."],
   ])('%s is let through', (_what, line) => {
     expect(REMOVED.test(line), line).toBe(false)
   })
