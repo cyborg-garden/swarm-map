@@ -50,6 +50,18 @@ describe('brain server', () => {
       await expect(createBrainServer({ token, onShim: () => {} })).rejects.toThrow(/token/)
     })
 
+  it('[P:hello-token] refuses a wrong token of exactly the right length', async () => {
+    const seen: Capabilities[] = []
+    const { port, refused } = await start((_link, caps) => seen.push(caps))
+    const { socket, closed } = await rawSocket(port)
+    const nearly = TOKEN.slice(0, -1) + (TOKEN.endsWith('x') ? 'y' : 'x')
+    expect(nearly).toHaveLength(TOKEN.length)
+    socket.write(encodeLine({ t: 'hello', token: nearly, protocol: 1, caps: ECHO_CAPS } satisfies FromShim))
+    await closed
+    expect(seen).toEqual([])
+    expect(refused).toEqual(['wrong token'])
+  })
+
   it('[P:hello-token] refuses a wrong token and hangs up', async () => {
     const seen: Capabilities[] = []
     const { port, refused } = await start((_link, caps) => seen.push(caps))

@@ -78,6 +78,11 @@ export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'gateTimeo
   }
 }
 
+/** A session's own transcript folder. Named by a hash of the key, so the key is never used as a path. */
+export function sessionDirFor(sessionsDir: string, sessionKey: string): string {
+  return path.join(sessionsDir, createHash('sha256').update(sessionKey).digest('hex').slice(0, 16))
+}
+
 /** One running Pi, and the tool list it was started with. */
 interface Live { rpc: PiRpc; tools: string; turnId?: string }
 /** One session: its turns run one at a time, on whichever Pi is live for it. */
@@ -92,7 +97,7 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
   const slots = new Map<string, Slot>()
 
   const open = (slot: Slot, env: Envelope, resume: boolean): Live => {
-    const sessionDir = path.join(opts.sessionsDir, createHash('sha256').update(env.sessionKey).digest('hex').slice(0, 16))
+    const sessionDir = sessionDirFor(opts.sessionsDir, env.sessionKey)
     mkdirSync(sessionDir, { recursive: true })
     const tools = toolsKey(env.tools)
     const args = piArgs({ sessionDir, tools: tools === '' ? [] : tools.split(','), gate: opts.gate, model: opts.model ?? 'scripted', resume })

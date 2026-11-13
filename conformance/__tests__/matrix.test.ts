@@ -73,6 +73,12 @@ describe('conformance matrix', () => {
     expect(m.suiteTrusted).toBe(false)
   })
 
+  it('[U:matrix] a broken shim that failed only some of its named checks was not caught', () => {
+    const m = buildMatrix(meta, [], { 'ignores-verdicts': { mustFail: ['C4', 'C5'], failed: ['C4'] } }, quiet)
+    expect(m.mustFail[0].suiteCaughtIt).toBe(false)
+    expect(m.suiteTrusted).toBe(false)
+  })
+
   // A rule is claimed for a harness only on what that harness's own run showed.
   describe('rule by harness', () => {
     const rules = [

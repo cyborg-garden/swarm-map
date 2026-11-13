@@ -462,8 +462,7 @@ describe('door: tool verdicts', () => {
     const env = await shim.turn
     // The lookup now takes longer than the turn has left.
     rig.fake.facts.delayMs = 500
-    const verdict = await shim.client.requestTool(env.turnId, 'bash', {})
-    expect(verdict.allow).toBe(false)
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'the turn is over' })
     const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
     expect(tools.map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/turn.known'])
     shim.client.close()
@@ -487,8 +486,8 @@ describe('door: tool verdicts', () => {
     rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
     const env = await shim.turn
     rig.fake.facts.fail = true
-    const verdict = await shim.client.requestTool(env.turnId, 'bash', {})
-    expect(verdict.allow).toBe(false)
+    // The door itself says no; the shim is not left to time out.
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'could not decide' })
     expect(rig.receipts.all().filter((r) => r.event.kind === 'tool').map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/tools.no-verdict'])
     rig.fake.facts.fail = false
     expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true })

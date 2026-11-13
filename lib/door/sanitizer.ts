@@ -3,7 +3,8 @@
 // Inbound: scrub secrets someone pasted, before the harness sees them.
 // Outbound: redact anything secret-shaped before it is posted. The door
 // treats a throw here differently by direction: outbound fails closed
-// (nothing is posted), inbound fails open with a receipt.
+// (nothing is posted), and so does inbound (the message is dropped), each
+// with a receipt.
 import type { RoomRef } from '../core/events.ts'
 import type { Posture } from '../core/policy/types.ts'
 
