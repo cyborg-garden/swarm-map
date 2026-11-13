@@ -35,6 +35,26 @@ export interface LabOptions {
   vetoTimeoutMs?: number
   /** Where the lab's work dir is made. Default: the temp dir. Anywhere unsafe is refused (F5). */
   workRoot?: string
+  /**
+   * Set when the harness runs in a container of its own and this lab is the
+   * sidecar's side of a rig. The rig was given its nonce, its cell token and
+   * its shared folder from outside, and the cell dials in over the rig's
+   * network, so the lab listens on every interface of its own container.
+   */
+  remote?: RemoteCell
+  /** How long a turn may take before the door gives up on it. Default 8 s. */
+  turnDeadlineMs?: number
+}
+
+export interface RemoteCell {
+  nonce: string
+  brainToken: string
+  /** The folder both containers mount. It is used as it is: not created, not removed. */
+  dir: string
+  /** The name the cell knows this container by. */
+  advertise: string
+  brainPort: number
+  routePort: number
 }
 
 export interface Lab {
@@ -54,6 +74,8 @@ export interface Lab {
    * hand-listed environment will not.
    */
   hostCanary: { name: string; value: string }
+  /** The lab's work dir. Where the harness is in a container, it is the folder both sides mount. */
+  dir: string
   canary(name: string): string
   /** A path a tool run by the harness can touch, and the lab can see. */
   file(name: string): string
@@ -69,24 +91,25 @@ export interface Lab {
 const PRICES = { scripted: { inPerMTok: 5000, outPerMTok: 25000 } }
 
 export async function startLab(o: LabOptions): Promise<Lab> {
-  const nonce = randomBytes(4).toString('hex')
-  const dir = mkdtempSync(path.join(o.workRoot ?? os.tmpdir(), `swarmlab-${nonce}-`))
+  const nonce = o.remote?.nonce ?? randomBytes(4).toString('hex')
+  const dir = o.remote?.dir ?? mkdtempSync(path.join(o.workRoot ?? os.tmpdir(), `swarmlab-${nonce}-`))
   // F5: checked before anything is written there or started. A refused dir is removed again.
   try {
     assertSafeWorkDir(dir, { home: os.homedir(), tmp: os.tmpdir() })
   } catch (err) {
-    rmSync(dir, { recursive: true, force: true })
+    if (!o.remote) rmSync(dir, { recursive: true, force: true })
     throw err
   }
 
-  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: `cell-${randomBytes(8).toString('hex')}` }
+  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: o.remote?.brainToken ?? `cell-${randomBytes(8).toString('hex')}` }
+  const listen = o.remote ? '0.0.0.0' : undefined
   const placeholder = `PLACEHOLDER-${nonce}`
   const policy = (patch: Record<string, unknown> = {}): PolicyRecord =>
     withHash(applyPatch(loadFixturePolicy('policy-team.json'), { ...o.policy, ...patch }))
 
   const hostCanary = { name: `LABHOST_CANARY_${nonce.toUpperCase()}`, value: `host-env-${randomBytes(6).toString('hex')}` }
   const closers: (() => Promise<void> | void)[] = [
-    () => rmSync(dir, { recursive: true, force: true }),
+    () => { if (!o.remote) rmSync(dir, { recursive: true, force: true }) },
     () => { delete process.env[hostCanary.name] },
   ]
   const closeAll = async (): Promise<void> => { for (const close of closers.reverse()) await close() }
@@ -99,21 +122,23 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     const fake = createFakeConnector({ nonce })
     const door = await createDoor({
       policy: policy(), connectors: [fake.connector], creds: { fake: { token: secrets.chat } },
-      receipts, brainToken: secrets.brain, testing: true, silentVerdicts: o.silentVerdicts,
+      receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
       sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] }),
-      turnDeadlineMs: 8000,
+      turnDeadlineMs: o.turnDeadlineMs ?? 8000,
     })
     closers.push(() => door.close())
     const route = await startModelRoute({
       upstream: model.baseUrl, upstreamKey: secrets.upstream, placeholder, shape: o.harness.modelShape,
       // A lab lives for one check and is never restarted, so its spend need not outlive it.
       policy: () => door.policy(), receipts, prices: PRICES, ledger: createMemoryLedger(),
+      host: listen, port: o.remote?.routePort,
     })
     closers.push(() => route.close())
 
     const cell: Cell = {
-      nonce, dir, placeholder, modelBaseUrl: route.baseUrl, upstreamKey: secrets.upstream,
-      link: { host: '127.0.0.1', port: door.brainPort, token: secrets.brain },
+      nonce, dir, placeholder, upstreamKey: secrets.upstream,
+      modelBaseUrl: o.remote ? `http://${o.remote.advertise}:${o.remote.routePort}/v1` : route.baseUrl,
+      link: { host: o.remote?.advertise ?? '127.0.0.1', port: door.brainPort, token: secrets.brain },
       verdictTimeoutMs: o.verdictTimeoutMs ?? 400, vetoTimeoutMs: o.vetoTimeoutMs ?? 2000,
     }
 
@@ -131,7 +156,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     await door.shimConnected()
 
     return {
-      nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, policy,
+      nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, dir, policy,
       canary: (name) => `CANARY-${name}-${nonce}`,
       file: (name) => o.harness.workFile(cell, name),
       tripwire: () => o.harness.tripwire(cell),

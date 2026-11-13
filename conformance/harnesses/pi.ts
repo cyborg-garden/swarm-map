@@ -70,6 +70,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
     shell: {
       touch: (file) => ({ name: 'bash', args: { command: `touch ${file}` } }),
       dumpEnv: (file) => ({ name: 'bash', args: { command: `env > ${file}` } }),
+      exec: (command) => ({ name: 'bash', args: { command } }),
     },
     workFile: (cell, name) => path.join(dirs(cell).work, name),
     cellEnv: (cell, variant) => piEnv(options(cell, variant)),

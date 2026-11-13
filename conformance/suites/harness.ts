@@ -44,8 +44,8 @@ export interface HarnessUnderTest {
   build: 'real' | 'fake'
   /** The wire format it speaks to the model route. */
   modelShape: ModelShape
-  /** Native calls of class `shell` that touch a file and dump the environment to a file. */
-  shell: { touch(file: string): NativeToolCall; dumpEnv(file: string): NativeToolCall }
+  /** Native calls of class `shell` that touch a file, dump the environment to a file, and run one command line. */
+  shell: { touch(file: string): NativeToolCall; dumpEnv(file: string): NativeToolCall; exec(command: string): NativeToolCall }
   /** Where a tool started by this harness would write `name` so the lab can see it. */
   workFile(cell: Cell, name: string): string
   /** The exact environment the harness process will get, for the F2 preflight. */

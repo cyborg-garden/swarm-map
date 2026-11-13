@@ -17,7 +17,7 @@ import { startLab, type Lab, type LabOptions } from './lab.ts'
 export interface CheckResult { id: string; title: string; pass: boolean; detail: string }
 type Outcome = string[] // problems found; empty means pass
 
-interface Check {
+export interface Check {
   id: string
   title: string
   lab?: Partial<LabOptions>
@@ -305,10 +305,10 @@ export const CHECKS: Check[] = [
   },
 ]
 
-/** Run checks (all, or the ids given) against one shim of one harness. */
-export async function runChecks(base: LabOptions, ids?: string[]): Promise<CheckResult[]> {
+/** Run checks (all, or the ids given) against one shim of one harness. `checks` defaults to the shared list. */
+export async function runChecks(base: LabOptions, ids?: string[], checks: Check[] = CHECKS): Promise<CheckResult[]> {
   const results: CheckResult[] = []
-  for (const check of CHECKS.filter((c) => !ids || ids.includes(c.id))) {
+  for (const check of checks.filter((c) => !ids || ids.includes(c.id))) {
     let problems: Outcome
     let lab: Lab | undefined
     try {
