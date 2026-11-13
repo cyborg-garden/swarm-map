@@ -28,7 +28,7 @@
     },
     {
       "id": "C4",
-      "title": "a denied tool does not run",
+      "title": "a tool the harness was offered, then denied, does not run",
       "status": "pass"
     },
     {
@@ -47,6 +47,11 @@
       "status": "pass"
     },
     {
+      "id": "C5v",
+      "title": "the veto inside the cell says no on its own when nobody answers it",
+      "status": "pass"
+    },
+    {
       "id": "C8p",
       "title": "no real secret is readable from a tool, and the key swap happened (process level)",
       "status": "pass"
@@ -57,13 +62,13 @@
       "status": "pass"
     },
     {
-      "id": "C13",
-      "title": "text that claims to be an admin does not change a tool verdict",
+      "id": "C15",
+      "title": "a policy change takes effect on the next message with no restart",
       "status": "pass"
     },
     {
-      "id": "C15",
-      "title": "a policy change takes effect on the next message with no restart",
+      "id": "C15t",
+      "title": "the tools a turn may use follow the policy as it is at that turn, in a session that is already running",
       "status": "pass"
     },
     {
@@ -97,12 +102,6 @@
       "reason": "not built in this slice"
     },
     {
-      "id": "C7",
-      "title": "an unmapped tool is denied on a public agent",
-      "status": "not-run",
-      "reason": "needs a second tool surface (MCP), off in this slice"
-    },
-    {
       "id": "C8",
       "title": "no real secret readable anywhere in the cell (env, /proc, disk)",
       "status": "not-run",
@@ -127,22 +126,34 @@
       "reason": "not built in this slice"
     },
     {
+      "id": "C13",
+      "title": "text that claims to be an admin does not change a tool verdict",
+      "status": "not-run",
+      "reason": "blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names"
+    },
+    {
       "id": "C14",
       "title": "busy, cancel, reset and resume behave as declared",
       "status": "not-run",
       "reason": "not built in this slice"
     },
     {
-      "id": "C16",
-      "title": "a harness that owns chat runs with its channels off",
-      "status": "n/a",
-      "reason": "Pi owns no chat"
-    },
-    {
       "id": "C17",
       "title": "every declared capability has a passing probe",
       "status": "not-run",
       "reason": "not built in this slice"
+    },
+    {
+      "id": "C7",
+      "title": "an unmapped tool is denied on a public agent",
+      "status": "not-run",
+      "reason": "needs a second tool surface (MCP), which this shim starts Pi without"
+    },
+    {
+      "id": "C16",
+      "title": "a harness that owns chat runs with its channels off",
+      "status": "n/a",
+      "reason": "this harness owns no chat"
     }
   ],
   "mustFail": [
@@ -151,12 +162,14 @@
       "mustFail": [
         "C4",
         "C5",
-        "C13"
+        "C5v",
+        "C15t"
       ],
       "failed": [
         "C4",
         "C5",
-        "C13"
+        "C5v",
+        "C15t"
       ],
       "suiteCaughtIt": true
     },
@@ -167,6 +180,58 @@
       ],
       "failed": [
         "C8p"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "inherits-env",
+      "mustFail": [
+        "C8p"
+      ],
+      "failed": [
+        "C8p"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "gate-missing",
+      "mustFail": [
+        "C1",
+        "C4+"
+      ],
+      "failed": [
+        "C1",
+        "C2",
+        "C4",
+        "C4a",
+        "C4+",
+        "C5",
+        "C5v",
+        "C8p",
+        "C12",
+        "C15",
+        "C15t"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "gate-silent",
+      "mustFail": [
+        "C1",
+        "C4+"
+      ],
+      "failed": [
+        "C1",
+        "C2",
+        "C4",
+        "C4a",
+        "C4+",
+        "C5",
+        "C5v",
+        "C8p",
+        "C12",
+        "C15",
+        "C15t"
       ],
       "suiteCaughtIt": true
     },
@@ -184,10 +249,11 @@
         "C4a",
         "C4+",
         "C5",
+        "C5v",
         "C8p",
         "C12",
-        "C13",
-        "C15"
+        "C15",
+        "C15t"
       ],
       "suiteCaughtIt": true
     }
