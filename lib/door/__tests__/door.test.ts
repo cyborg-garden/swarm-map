@@ -248,6 +248,19 @@ describe('door: a DM needs a harness that keeps sessions apart', () => {
     rig = undefined
   })
 
+  it('[P:dm-isolated] a DM is known by its room as well as its flag: a connector that forgets the flag changes nothing', async () => {
+    const brainToken = 'cell-test-token'
+    // The DM room is on the room list, so without the flag it is admitted the way a room is.
+    const listed = team({ [F + 'rooms']: [{ match: { room: 'dm:u-alice' }, mode: 'free' }] })
+    rig = await startRig(listed, { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, { sessionIsolation: 'none' })
+    const dm = rig.fake.say({ room: { id: 'dm:u-alice', kind: 'dm' }, sender: 'u-alice', isDm: false, text: 'private thing' })
+    await rig.door.idle()
+    expect(shim.heard).toEqual([])
+    expect(explain(rig.receipts.all(), dm).at(-1)).toContain('drop  mem.dm-isolated')
+    shim.client.close()
+  })
+
   it('[P:dm-isolated] positive control: a harness that keeps sessions apart is given the DM', async () => {
     const brainToken = 'cell-test-token'
     rig = await startRig(dmOpen(), { noShim: true, door: { brainToken } })
@@ -287,13 +300,17 @@ describe('door: sanitizer', () => {
     expect(rig.shim.heard[0].context.observed?.[0].text).toBe('psst [redacted:github-token]')
   })
 
-  it('[P:scrub-in] inbound fails open, and leaves a receipt saying so', async () => {
+  it('[P:scrub-in] a scrub that fails delivers nothing, and leaves a receipt saying so', async () => {
     const broken: Sanitizer = { run: (dir, text) => { if (dir === 'inbound') throw new Error('boom'); return { text, findings: [] } } }
-    rig = await startRig(team(), { door: { sanitizer: broken } })
-    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'plain' })
+    rig = await startRig(team({ [F + 'observeUnmentioned']: true }), { door: { sanitizer: broken } })
+    const asked = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'plain' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'overheard' })
     await rig.door.idle()
-    expect(rig.shim.heard.map((e) => e.text)).toEqual(['plain'])
-    expect(rig.receipts.all().some((r) => r.rule === 'san.in' && r.note === 'scrub failed; delivered unscrubbed')).toBe(true)
+    expect(rig.shim.heard).toEqual([])
+    expect(rig.fake.ledger).toEqual([])
+    expect(explain(rig.receipts.all(), asked).at(-1)).toBe('inbound  drop  san.in  The inbound scrub failed, so the message was not passed on.')
+    // The overheard line was not kept either: a later turn must not carry it unscrubbed.
+    expect(rig.receipts.all().filter((r) => r.rule === 'san.in').map((r) => r.verdict)).toEqual(['drop', 'drop'])
   })
 
   it('[P:redact-out] a secret in a reply is redacted before it is posted', async () => {
@@ -427,6 +444,55 @@ describe('door: tool verdicts', () => {
   it('[P:tool-verdict] a tool request for a turn the door never sent is denied', async () => {
     rig = await startRig(team({ 'tools.allow': ['shell'] }))
     expect(await rig.shim.client.requestTool('never-issued', 'bash', {})).toEqual({ allow: false, reason: 'unknown turn' })
+  })
+
+  /** A shim that takes a turn and never finishes it, so a test can ask for a tool whenever it likes. */
+  async function idleShim(r: Rig, brainToken: string): Promise<{ client: ShimClient; turn: Promise<Envelope> }> {
+    const client = await connectShim({ host: '127.0.0.1', port: r.door.brainPort, token: brainToken, caps: ECHO_CAPS, verdictTimeoutMs: 3000 })
+    const turn = new Promise<Envelope>((resolve) => client.onMessage((msg) => { if (msg.t === 'turn') resolve(msg.env) }))
+    await r.door.shimConnected()
+    return { client, turn }
+  }
+
+  it('[P:tool-verdict] a turn that died while the door was looking things up gets a no, not a late yes', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { noShim: true, door: { brainToken, turnDeadlineMs: 150 } })
+    const shim = await idleShim(rig, brainToken)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    const env = await shim.turn
+    // The lookup now takes longer than the turn has left.
+    rig.fake.facts.delayMs = 500
+    const verdict = await shim.client.requestTool(env.turnId, 'bash', {})
+    expect(verdict.allow).toBe(false)
+    const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
+    expect(tools.map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/turn.known'])
+    shim.client.close()
+  })
+
+  it('[P:tool-verdict] positive control: the same slow lookup inside a live turn is still a yes', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { noShim: true, door: { brainToken, turnDeadlineMs: 5000 } })
+    const shim = await idleShim(rig, brainToken)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    const env = await shim.turn
+    rig.fake.facts.delayMs = 300
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true })
+    shim.client.close()
+  })
+
+  it('[P:tool-verdict] a lookup that fails is a no, with a receipt, and the door carries on', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { noShim: true, door: { brainToken, turnDeadlineMs: 5000 } })
+    const shim = await idleShim(rig, brainToken)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    const env = await shim.turn
+    rig.fake.facts.fail = true
+    const verdict = await shim.client.requestTool(env.turnId, 'bash', {})
+    expect(verdict.allow).toBe(false)
+    expect(rig.receipts.all().filter((r) => r.event.kind === 'tool').map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/tools.no-verdict'])
+    rig.fake.facts.fail = false
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true })
+    shim.client.close()
   })
 
   it('[P:tool-verdict] with the door told to stay silent, the shim treats it as no', async () => {

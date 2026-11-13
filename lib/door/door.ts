@@ -123,8 +123,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           scrubbed.findings.map((f) => `${f.pattern} x${f.count}`).join(', '))
       }
     } catch {
-      receipt(about(e, 'inbound'), { verdict: d.verdict, rule: 'san.in', why: 'The inbound scrub failed.' },
-        'scrub failed; delivered unscrubbed')
+      // Fail closed: text that could not be scrubbed is not delivered and not kept as context.
+      receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'san.in', why: 'The inbound scrub failed, so the message was not passed on.' })
+      return
     }
 
     const sessionKey = d.sessionKey!
@@ -139,7 +140,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     // A DM must not land where a room's turn can read it back. The session key
     // keeps them apart in name only; on disk that is the harness's job, and a
     // harness that does not declare it is not given the message.
-    if (e.isDm && policy.memory.dmIsolated && shim.caps.sessionIsolation !== 'sealed') {
+    if ((e.isDm || e.room.kind === 'dm') && policy.memory.dmIsolated && shim.caps.sessionIsolation !== 'sealed') {
       receipt(about(e, 'inbound'), {
         verdict: 'drop', rule: 'mem.dm-isolated',
         why: 'This harness keeps every session in one place on disk, so a direct message is not delivered to it.',
@@ -239,14 +240,26 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         // written down; anything else is the fixed code 'unmapped'.
         const mapped = typeof msg.tool === 'string' && Object.hasOwn(caps.toolMap, msg.tool)
         const toolName = mapped ? msg.tool : 'unmapped'
+        const verdict = (allow: boolean, reason?: string): void => {
+          if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? {} : { reason }) })
+        }
         void factsFor(turn.connector, e).then((facts) => {
+          // The lookup took time. A turn that ended meanwhile gets a no, whatever the policy says.
+          if (turns.get(msg.turnId) !== turn) {
+            receipt(about(e, 'tool', turn.turnId), { verdict: 'deny', rule: 'turn.known', why: 'The turn ended before the tool could be decided.' }, `tool=${toolName}`)
+            return verdict(false, 'the turn is over')
+          }
           const d = decide(policy, {
             kind: 'tool', surface: e.surface, room: e.room, actor: e.sender,
             toolClass: mapped ? caps.toolMap[msg.tool] : 'unknown', toolName, argsDigest: '',
           }, facts)
           if (opts.silentVerdicts) return
           receipt(about(e, 'tool', turn.turnId), d, `tool=${toolName}`)
-          link.send({ t: 'tool_verdict', callId: msg.callId, allow: d.verdict === 'allow', ...(d.verdict === 'allow' ? {} : { reason: d.why }) })
+          verdict(d.verdict === 'allow', d.why)
+        }).catch(() => {
+          // No facts, or no decision: that is no verdict, and no verdict is a no.
+          receipt(about(e, 'tool', turn.turnId), { verdict: 'deny', rule: 'tools.no-verdict', why: 'The tool could not be decided, so it does not run.' }, `tool=${toolName}`)
+          verdict(false, 'could not decide')
         })
         return
       }

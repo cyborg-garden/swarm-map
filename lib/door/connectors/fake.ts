@@ -25,14 +25,14 @@ export interface FakeConnector {
   say(input: SayInput): string
   /** Every post the door made. This is `answered`. */
   ledger: LedgerEntry[]
-  /** Live facts the door will be given, by principal id. */
-  facts: { rolesOf: Record<string, string[]> }
+  /** Live facts the door will be given, by principal id. `delayMs` makes the lookup slow; `fail` makes it throw. */
+  facts: { rolesOf: Record<string, string[]>; delayMs?: number; fail?: boolean }
 }
 
 export function createFakeConnector(opts: { nonce: string }): FakeConnector {
   const listeners: ((e: ConnectorInbound | InviteEvent) => void)[] = []
   const ledger: LedgerEntry[] = []
-  const facts = { rolesOf: {} as Record<string, string[]> }
+  const facts: FakeConnector['facts'] = { rolesOf: {} }
   let connected = false
 
   const connector: SurfaceConnector = {
@@ -51,6 +51,8 @@ export function createFakeConnector(opts: { nonce: string }): FakeConnector {
       return { id: entry.id, ts: entry.ts }
     },
     async facts(q): Promise<Facts> {
+      if (facts.delayMs) await new Promise((resolve) => setTimeout(resolve, facts.delayMs))
+      if (facts.fail) throw new Error('fake connector: the facts lookup failed')
       const id = q.principal?.id
       return id && facts.rolesOf[id] ? { rolesOf: { [id]: facts.rolesOf[id] } } : {}
     },
