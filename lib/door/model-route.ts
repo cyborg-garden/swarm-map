@@ -197,9 +197,14 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         })
         billable = upstream.ok
         await relay(upstream, res, Boolean(body.stream), {
-          usage: (u) => { usage = believed(u) ?? usage },
-          // A figure covers what came before it. Text after it is not in it, so it no longer stands.
-          textAfterUsage: () => { usage = undefined },
+          // One event, or the whole of a plain reply. A figure that can be believed stands. A
+          // figure covers what came before it, so output that comes with no such figure, or
+          // that the route could not read, means the earlier one no longer stands.
+          event: (u, output) => {
+            const real = believed(u)
+            if (real) usage = real
+            else if (output) usage = undefined
+          },
           received: (n) => { received += n },
         })
       } finally {
@@ -217,17 +222,37 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     }
   }
 
+  /** Redact the key from every string inside a parsed JSON value, in place. True if anything changed. */
+  function redactDeep(value: unknown): boolean {
+    if (value === null || typeof value !== 'object') return false
+    let changed = false
+    for (const [name, inner] of Object.entries(value)) {
+      if (typeof inner === 'string') {
+        const clean = redact(inner)
+        if (clean !== inner) { (value as Record<string, unknown>)[name] = clean; changed = true }
+      } else if (redactDeep(inner)) changed = true
+    }
+    return changed
+  }
+
   /** Pass the provider's reply back to the cell, redacted, reporting usage and size as they go by. */
   async function relay(
     upstream: Response, res: http.ServerResponse, stream: boolean,
-    seen: { usage(u: { inTokens: number; outTokens: number } | undefined): void; textAfterUsage(): void; received(bytes: number): void },
+    seen: { event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void; received(bytes: number): void },
   ): Promise<void> {
     if (!stream || !upstream.body) {
       const text = await upstream.text()
       seen.received(Buffer.byteLength(text))
-      try { seen.usage(shape.usage(JSON.parse(text))) } catch { /* not JSON: it reports no usage */ }
-      res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') ?? 'application/json' })
-      res.end(redact(text))
+      // Passed on as it came, unless the key is in it. JSON may write the key with an escape
+      // in it, which a search of the raw text misses, so the parsed strings are searched too.
+      let out = redact(text)
+      try {
+        const json: unknown = JSON.parse(text)
+        seen.event(shape.usage(json), false)
+        if (redactDeep(json)) out = redact(JSON.stringify(json))
+      } catch { /* not JSON: it reports no usage, and was searched as it stands */ }
+      res.writeHead(upstream.status, { 'content-type': redact(upstream.headers.get('content-type') ?? 'application/json') })
+      res.end(out)
       return
     }
 
@@ -243,28 +268,32 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       for (const [key, text] of held) if (text !== '') write(`data: ${JSON.stringify(shape.textEvent(key, text))}`)
       held.clear()
     }
+    const isData = (line: string): boolean => line.startsWith('data:')
     const flush = (event: string): void => {
       const lines = event.split('\n')
-      // SSE allows `data:` with or without one space after the colon.
-      const at = lines.findIndex((line) => line.startsWith('data:'))
-      const data = at === -1 ? undefined : lines[at].slice('data:'.length).replace(/^ /, '')
-      if (data === undefined) return write(event) // a comment or a bare event name
+      const dataLines = lines.filter(isData)
+      if (dataLines.length === 0) return write(event) // a comment or a bare event name
+      // An event's data is every `data:` line, joined: one JSON value may be spread over
+      // several. `data:` may be followed by one space or none.
+      const data = dataLines.map((line) => line.slice('data:'.length).replace(/^ /, '')).join('\n')
       if (data === '[DONE]') { drain(); return write(event) }
       let json: unknown
-      try { json = JSON.parse(data) } catch { return write(event) } // not JSON: checked as it stands
-      const reported = shape.usage(json)
-      const pieces = shape.streamText(json)
-      if (reported) seen.usage(reported)
-      else if (shape.hasOutput(json)) seen.textAfterUsage()
-      if (pieces.length === 0) return write(event)
-      for (const piece of pieces) {
+      try { json = JSON.parse(data) } catch {
+        // Not JSON, so the route cannot tell what it is. It is sent with the key searched for
+        // as it stands, and counted as output nobody metered.
+        seen.event(undefined, true)
+        return write(event)
+      }
+      seen.event(shape.usage(json), shape.hasOutput(json))
+      for (const piece of shape.streamText(json)) {
         const clean = redact((held.get(piece.key) ?? '') + piece.text)
         const keep = piece.last ? 0 : heldBack(clean, opts.upstreamKey)
         piece.set(clean.slice(0, clean.length - keep))
         held.set(piece.key, clean.slice(clean.length - keep))
       }
-      lines[at] = `data: ${JSON.stringify(json)}`
-      write(lines.join('\n'))
+      // Every other string in the event, searched after JSON's escapes are undone.
+      redactDeep(json)
+      write([...lines.filter((line) => !isData(line)), `data: ${JSON.stringify(json)}`].join('\n'))
     }
     const decoder = new TextDecoder()
     let pending = ''

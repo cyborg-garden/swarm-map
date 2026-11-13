@@ -442,6 +442,91 @@ describe('model route: a call the provider did not meter', () => {
   })
 })
 
+// The route passes a provider's reply on. Whatever it cannot read, it still has
+// to redact and still has to charge for: a part of a reply it did not
+// understand is not a part it may wave through.
+describe('model route: replies written in ways the route did not expect', () => {
+  const bytes = (text: string) => Buffer.byteLength(text)
+  const SSE = 'text/event-stream'
+  const ev = (o: unknown): string => `data: ${JSON.stringify(o)}\n\n`
+  const content = (text: string, extra: object = {}) => ({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }], ...extra })
+  /** What a client that follows the SSE rules rebuilds: every data line of an event, joined, then every text piece. */
+  const rebuilt = (sse: string): string => sse.split('\n\n').map((e) => e.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n'))
+    .filter((d) => d && d !== '[DONE]').map((d) => (JSON.parse(d) as { choices: { delta?: { content?: string } }[] }).choices[0]?.delta?.content ?? '').join('')
+  const streamed = async (rawBody: string) => {
+    const got = await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody, rawType: SSE }])
+    const raw = await (await ask(user('CANARY-m', { stream: true }))).text()
+    return { ...got, raw }
+  }
+  /** One event whose JSON is spread over two data lines, which SSE allows. */
+  const twoLines = (text: string): string => `data: {"choices":[{"index":0,\ndata: "delta":{"content":${JSON.stringify(text)}},"finish_reason":null}]}\n\n`
+
+  it('[U:key-swap] a key split across events whose data is spread over several lines is redacted', async () => {
+    const half = Math.floor(UPSTREAM.length / 2)
+    const { raw } = await streamed(twoLines(`the key is ${UPSTREAM.slice(0, half)}`) + twoLines(`${UPSTREAM.slice(half)} ok`) + 'data: [DONE]\n\n')
+    expect(rebuilt(raw)).toBe(`the key is ${REDACTED} ok`)
+    expect(raw).not.toContain(UPSTREAM)
+  })
+
+  it('[U:budget-unmetered] output in an event spread over several data lines is still seen as output after a usage figure', async () => {
+    const { raw } = await streamed(ev({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }) + twoLines('y'.repeat(4000)) + 'data: [DONE]\n\n')
+    expect(rebuilt(raw)).toBe('y'.repeat(4000))
+    expect(route!.meter().outTokens).toBeGreaterThanOrEqual(4000)
+    expect(route!.unmetered).toBe(1)
+  })
+
+  it('[U:budget-unmetered] output that comes with a usage figure that cannot be true voids the figure before it', async () => {
+    await streamed(ev({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+      + ev(content('y'.repeat(4000), { usage: { prompt_tokens: 0, completion_tokens: 0 } })) + 'data: [DONE]\n\n')
+    expect(route!.meter().outTokens).toBeGreaterThanOrEqual(4000)
+    expect(route!.unmetered).toBe(1)
+  })
+
+  it('[U:budget-unmetered] an event that is not JSON counts as output the route could not read', async () => {
+    const { raw } = await streamed(ev({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }) + `data: ${'z'.repeat(3000)}\n\n` + 'data: [DONE]\n\n')
+    expect(raw).toContain('z'.repeat(3000))
+    expect(route!.meter().outTokens).toBeGreaterThanOrEqual(3000)
+    expect(route!.unmetered).toBe(1)
+  })
+
+  // The key written the way JSON may write it: one character as an escape.
+  const escaped = UPSTREAM.replace('-', '\\u002d')
+
+  it('[U:key-swap] a key written with a JSON escape is redacted from a plain reply', async () => {
+    const body = `{"choices":[{"index":0,"message":{"role":"assistant","content":"my key is ${escaped}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20}}`
+    expect(JSON.parse(body).choices[0].message.content).toBe(`my key is ${UPSTREAM}`)
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: body, rawType: 'application/json' }])
+    const reply = await (await ask(user('CANARY-m'))).json()
+    expect(JSON.stringify(reply)).not.toContain(UPSTREAM)
+    expect(reply.choices[0].message.content).toBe(`my key is ${REDACTED}`)
+    expect(route!.meter()).toMatchObject({ inTokens: 100, outTokens: 20 })
+  })
+
+  it('[U:key-swap] a key written with a JSON escape is redacted from a stream, in any field', async () => {
+    const { raw } = await streamed(
+      `data: {"choices":[{"index":0,"delta":{"content":"my key is ${escaped}"},"finish_reason":null}]}\n\n`
+      + `data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"bash","arguments":"echo ${escaped}"}}]},"finish_reason":null}]}\n\n`
+      + 'data: [DONE]\n\n')
+    const seen = raw.split('\n\n').map((e) => e.replace(/^data: /, '')).filter((d) => d && d !== '[DONE]').map((d) => JSON.stringify(JSON.parse(d)))
+    expect(seen).toHaveLength(2)
+    expect(seen.join(' ')).not.toContain(UPSTREAM)
+    expect(seen.join(' ')).toContain(REDACTED)
+  })
+
+  it('[U:key-swap] the key does not come back in the content type either', async () => {
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: '{}', rawType: `application/json; note=${UPSTREAM}` }])
+    const res = await ask(user('CANARY-m'))
+    expect([...res.headers.values()].join(' ')).not.toContain(UPSTREAM)
+    expect(route!.meter().outTokens).toBe(bytes('{}'))
+  })
+
+  it('positive control: an ordinary plain reply comes back byte for byte', async () => {
+    const body = '{"choices":[{"index":0,"message":{"role":"assistant","content":"caf\\u00e9  ok"},"finish_reason":"stop"}],  "usage":{"prompt_tokens":100,"completion_tokens":20}}'
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: body, rawType: 'application/json' }])
+    expect(await (await ask(user('CANARY-m'))).text()).toBe(body)
+  })
+})
+
 describe('model route: the cap under parallel calls', () => {
   const five = () => Promise.all([1, 2, 3, 4, 5].map((n) => ask(user(`CANARY-p${n}`)).then((r) => r.status)))
 

@@ -42,6 +42,8 @@ export interface ScriptEntry {
   status?: number
   /** Answer 200 with exactly this body, which need not be JSON. */
   rawBody?: string
+  /** The content type sent with `rawBody`. Default text/html. */
+  rawType?: string
   /** Wait this long before answering. */
   delayMs?: number
   /** Accept the request and never answer. */
@@ -113,7 +115,7 @@ export function startScriptedModel(opts: {
       return
     }
     if (entry?.rawBody !== undefined) {
-      res.writeHead(200, { 'content-type': 'text/html' })
+      res.writeHead(200, { 'content-type': entry.rawType ?? 'text/html' })
       res.end(entry.rawBody)
       return
     }

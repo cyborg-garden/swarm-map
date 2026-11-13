@@ -212,8 +212,10 @@ build a matrix from it.
   before it forwards a call, and a charge lost after a call stops every later one until the route
   is restarted. Stream events
   written as `data:` with no space, or with lines ending in CRLF or a bare CR, are now parsed, and
-  a usage figure no longer stands once any output (text, a tool call) follows it. A price that is
-  not two plain rates counts as no price.
+  a usage figure no longer stands once any output (text, a tool call, an event the route cannot
+  read) follows it without a believable figure of its own. An event's data is read across all its
+  `data:` lines. The key is searched for in every string of a reply after JSON's escapes are
+  undone, and in the content type. A price that is not two plain rates counts as no price.
 - **`mem.dm-isolated` does not mean what the spec's row says.** The spec's rule is "a DM never
   shares scope with a group", proven by C11. Memory scopes are not built, so the rule here is
   narrower and blunter: no DM is delivered to a harness that does not keep sessions apart.
@@ -266,7 +268,8 @@ build a matrix from it.
    at 4 and nothing counts turns, so with bots allowed, two bots can answer each other without end.
    A bot is admitted by the bots rules alone and is not checked against the user list. One model
    call can overshoot the cap, because the cap is checked before a call, not during it. A usage
-   figure that is false but could be true (one token for a long reply) is believed. A charge the
+   figure that is false but could be true (one token for a long reply) is believed. So is a
+   provider that answers with an error status: the call is charged only if the reply reports usage. A charge the
    ledger loses stops the route, but a restart forgets that and the charge stays lost. C12b (a key
    scoped to one room) is listed as not-run.
 9. **Not every line of every check has a broken shim behind it.** The eight broken shims prove the
