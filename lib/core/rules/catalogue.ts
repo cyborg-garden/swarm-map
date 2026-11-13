@@ -78,7 +78,7 @@ export const RULES: Rule[] = [
   { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied.',
     klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/not-allowed'] },
   { id: 'tools.posture', statement: 'Public agents lose shell, file, code-exec and chat-admin tools.',
-    klass: 'security', kind: 'guardrail', reads: ['posture'], enforcer: 'gate', tests: ['D:tools.posture/public-loses-shell'] },
+    klass: 'security', kind: 'guardrail', reads: ['posture'], enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'U:tools-posture'] },
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'] },
 

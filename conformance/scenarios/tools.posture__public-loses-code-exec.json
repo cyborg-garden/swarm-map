@@ -1,0 +1,37 @@
+{
+  "id": "tools.posture/public-loses-code-exec",
+  "rule": "tools.posture",
+  "policy": "policy-public.json",
+  "patch": {
+    "tools.allow": [
+      "code_exec"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-plaza",
+        "actor": "u-alice",
+        "toolClass": "code_exec",
+        "toolName": "python"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.posture"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

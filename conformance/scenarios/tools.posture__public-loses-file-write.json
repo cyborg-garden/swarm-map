@@ -1,0 +1,37 @@
+{
+  "id": "tools.posture/public-loses-file-write",
+  "rule": "tools.posture",
+  "policy": "policy-public.json",
+  "patch": {
+    "tools.allow": [
+      "file_write"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-plaza",
+        "actor": "u-alice",
+        "toolClass": "file_write",
+        "toolName": "write"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.posture"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

@@ -8,6 +8,10 @@ import { decide } from '../decide.ts'
 import {
   loadScenarios, scenarioFacts, scenarioPolicy, scenarioSteps, stepEvent, type Scenario,
 } from '../../../conformance/scenarios/load.ts'
+import { applyPatch, loadFixturePolicy } from '../../../conformance/scenarios/load.ts'
+import { withHash } from '../policy/canonical.ts'
+import { TOOL_CLASSES } from '../policy/shape.ts'
+import { toPrincipal, toRoom } from '../normalise.ts'
 
 function run(s: Scenario, which: 'base' | 'twin') {
   const policy = scenarioPolicy(s, which)
@@ -52,5 +56,27 @@ describe('decide() table', () => {
     it('every decision carries the hash of the policy that made it', () => {
       expect(run(s, 'base').policyHash).toBe(scenarioPolicy(s, 'base').hash)
     })
+  })
+})
+
+// The scenario files prove each stripped class one at a time. This pins the
+// set from both sides: nothing may leave it, and nothing may join it unseen.
+describe('tools.posture, class by class', () => {
+  const everything = [...TOOL_CLASSES, 'mcp:notes']
+  const verdictFor = (posture: 'public' | 'team', toolClass: string) => decide(
+    withHash(applyPatch(loadFixturePolicy('policy-public.json'), { posture, 'tools.allow': everything })),
+    { kind: 'tool', surface: 'fake', room: toRoom('r-plaza'), actor: toPrincipal('u-alice'), toolClass: toolClass as never, toolName: 't', argsDigest: '' },
+    {},
+  )
+
+  it('[U:tools-posture] with every class allowed, a public agent loses exactly shell, file, code-exec and chat-admin tools', () => {
+    const lost = everything.filter((c) => c !== 'unknown' && verdictFor('public', c).verdict === 'deny')
+    expect(lost).toEqual(['shell', 'file_read', 'file_write', 'code_exec', 'chat_admin'])
+    for (const c of lost) expect(verdictFor('public', c).rule, c).toBe('tools.posture')
+    expect(verdictFor('public', 'unknown')).toMatchObject({ verdict: 'deny', rule: 'tools.unknown' })
+  })
+
+  it('[U:tools-posture] positive control: the same record on a team agent allows every class', () => {
+    expect(everything.filter((c) => verdictFor('team', c).verdict !== 'allow')).toEqual([])
   })
 })
