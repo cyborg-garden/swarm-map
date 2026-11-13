@@ -16,7 +16,9 @@ export default defineConfig({
     // deleted: these are live worktrees someone is working in.
     // `*.real.test.ts` needs a real harness installed, which CI does not have.
     // It runs through `npm run conformance` (vitest.conformance.config.ts).
-    exclude: [...configDefaults.exclude, '**/.wt-*/**', 'conformance/suites/*.real.test.ts'],
+    // `*.docker.test.ts` needs a Docker daemon and the lab's images, which CI
+    // does not have. It runs through `npm run conformance:docker`.
+    exclude: [...configDefaults.exclude, '**/.wt-*/**', 'conformance/suites/*.real.test.ts', 'conformance/suites/*.docker.test.ts'],
   },
   resolve: {
     alias: {

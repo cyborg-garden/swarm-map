@@ -17,6 +17,8 @@ export interface MatrixMeta {
   harnessBuild: 'real' | 'fake'
   substrate: 'process' | 'docker'
   date: string
+  /** What ran the cell, when there was one: the Docker that was asked, as it named itself. */
+  runner?: { kind: 'docker'; server: string; host: string }
 }
 
 /** What the matrix needs from the harness under test. */
@@ -114,6 +116,8 @@ function perHarnessRows(harness: MatrixHarness): MatrixRow[] {
 export function buildMatrix(
   meta: MatrixMeta, results: CheckResult[], mustFail: Record<string, MustFailInput>, harness: MatrixHarness,
   rules: { id: string; checks: string[] }[] = RULES,
+  /** Checks of the shared list this run left out on purpose, with the reason. They show as not-run. */
+  skipped: Record<string, string> = {},
 ): Matrix {
   if (meta.harnessBuild === 'fake') {
     throw new Error('a matrix is evidence about a real harness; refusing to build one from the fake harness')
@@ -121,7 +125,7 @@ export function buildMatrix(
   const byId = new Map(results.map((r) => [r.id, r]))
   const ran: MatrixRow[] = CHECKS.map((check) => {
     const r = byId.get(check.id)
-    if (!r) return { id: check.id, title: check.title, status: 'not-run', reason: 'no result from this run' }
+    if (!r) return { id: check.id, title: check.title, status: 'not-run', reason: skipped[check.id] ?? 'no result from this run' }
     return r.pass ? { id: r.id, title: r.title, status: 'pass' } : { id: r.id, title: r.title, status: 'fail', reason: r.detail }
   })
   const extra: MatrixRow[] = results.filter((r) => !CHECKS.some((c) => c.id === r.id))
@@ -137,7 +141,7 @@ export function buildMatrix(
       'Every row was run against a scripted model. That tests the plumbing, not what a real model would say.',
       meta.substrate === 'process'
         ? 'The harness ran as a plain process on this machine: no wall. Nothing here shows the cell is sealed.'
-        : 'The harness ran in a Docker cell.',
+        : `The harness ran in a Docker cell on one machine${meta.runner ? ` (${meta.runner.host}, Docker ${meta.runner.server})` : ''}. Another Docker host, or another version, is not shown.`,
       'A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell.',
     ],
     rows,

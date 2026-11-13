@@ -1,0 +1,10 @@
+# Only the lab's own folders go to the builder.
+*
+!lib/core
+!lib/door
+!lib/runtimes
+!conformance
+**/__tests__
+**/node_modules
+conformance/matrix
+conformance/out
