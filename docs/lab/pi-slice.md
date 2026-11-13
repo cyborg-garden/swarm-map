@@ -241,6 +241,9 @@ build a matrix from it.
 4. **The key is redacted from streamed reply text even when it is split across events**, by
    holding back any ending that could be the start of the key. That covers the text of the reply
    only. Streamed tool-call arguments and any other field are still checked one event at a time.
+   A reply that is part JSON body and part event stream is searched as raw text for its JSON
+   part, so a key written there with a JSON escape gets through. Comments a stream sends before
+   its first event are held until that event comes, so a keep-alive does not keep anything alive.
    The key travels in a header the model never sees. That nothing else in the harness can reach
    it is the cell's job, and not proven.
 5. **The tool map can be wrong, not just incomplete.**

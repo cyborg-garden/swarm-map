@@ -364,7 +364,8 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         let out = ''
         const reader = eventReader((piece) => { out += piece }, seen)
         reader.feed(text)
-        body = out + (reader.end() ?? '')
+        const notEvents = reader.end() // writes the last event and anything held back into `out`
+        body = out + (notEvents ?? '')
       } else {
         body = plainBody(text, seen)
       }

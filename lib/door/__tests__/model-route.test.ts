@@ -590,6 +590,13 @@ describe('model route: replies written in ways the route did not expect', () => 
     expect(rebuilt(raw)).toBe(`ends like a key: ${start}`)
   })
 
+  it('[U:key-swap] the same holds for a stream that was read whole: its last event and its held-back text are not lost', async () => {
+    const begin = UPSTREAM.slice(0, 6)
+    const body = ev(content(`ends like a key: ${begin}`)).replace(/\n\n$/, '') // no blank line after the last event
+    await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: body, rawType: 'application/json' }])
+    expect(rebuilt(await (await ask(user('CANARY-m'))).text())).toBe(`ends like a key: ${begin}`)
+  })
+
   it('[U:key-swap] a reply that is one JSON string has an escaped key redacted', async () => {
     await start(policy(), [{ match: 'CANARY-m', text: 'unused', rawBody: `"my key is ${escaped}"`, rawType: 'application/json' }])
     expect(JSON.parse(await (await ask(user('CANARY-m'))).text())).toBe(`my key is ${REDACTED}`)
