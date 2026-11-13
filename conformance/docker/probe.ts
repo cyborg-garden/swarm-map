@@ -3,7 +3,7 @@
 // image so a tool run by the harness can run it, and so the rig can run it
 // there from outside.
 //
-//   node probe.ts nonce=<nonce> sink=<ip> hostport=<port> [out=<file>]
+//   node probe.ts nonce=<nonce> sink=<ip> hostip=<ip> hostport=<port> [out=<file>]
 //
 // It prints one line of JSON, or writes it to `out`. Every network answer is
 // either `open` (a connection was made, a name was resolved) or the reason it
@@ -37,6 +37,26 @@ const resolve4 = (name: string): Promise<string> =>
     const timer = setTimeout(() => resolve('timeout'), WAIT * 2)
     dns.resolve4(name, (err) => { clearTimeout(timer); resolve(err ? err.code ?? 'error' : 'open') })
   })
+/** Asks a public resolver directly, over UDP, skipping the resolver Docker gives the container. */
+const askResolver = (server: string, name: string): Promise<string> =>
+  new Promise((resolve) => {
+    const resolver = new dns.Resolver({ timeout: WAIT, tries: 1 })
+    resolver.setServers([server])
+    const timer = setTimeout(() => { resolver.cancel(); resolve('timeout') }, WAIT * 2)
+    resolver.resolve4(name, (err) => { clearTimeout(timer); resolve(err ? err.code ?? 'error' : 'open') })
+  })
+/** The first address of each network this container is on: where Docker's own side of that network sits. */
+function gateways(): string[] {
+  return Object.values(os.networkInterfaces()).flat()
+    .filter((a) => a && a.family === 'IPv4' && !a.internal && a.cidr)
+    .map((a) => {
+      const [address, bits] = a!.cidr!.split('/')
+      const mask = Number(bits) === 0 ? 0 : (0xffffffff << (32 - Number(bits))) >>> 0
+      const n = address.split('.').reduce((acc, part) => ((acc << 8) | Number(part)) >>> 0, 0)
+      const first = ((n & mask) >>> 0) + 1
+      return [first >>> 24, (first >>> 16) & 255, (first >>> 8) & 255, first & 255].join('.')
+    })
+}
 const lookup = (name: string): Promise<string> =>
   new Promise((resolve) => {
     const timer = setTimeout(() => resolve('timeout'), WAIT * 2)
@@ -119,6 +139,12 @@ async function main(): Promise<void> {
     'a listener on this machine, by name': connect('host.docker.internal', hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`),
     'a listener on this machine, by the gateway name': connect('gateway.docker.internal', hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`),
     'the cloud metadata address': connect('169.254.169.254', 80),
+    'a public resolver, asked directly over UDP': askResolver('1.1.1.1', 'example.com'),
+  }
+  if (args.hostip) netChecks['a listener on this machine, by address'] = connect(args.hostip, hostPort, `GET /probe-${nonce} HTTP/1.0\r\n\r\n`)
+  for (const gateway of gateways()) {
+    // Where a Docker engine would answer if it were ever put on the network, and this machine's listener again.
+    for (const port of [2375, 2376, hostPort]) netChecks[`port ${port === hostPort ? 'of this machine\'s listener' : port} on Docker's side of the network (${gateway})`] = connect(gateway, port)
   }
   if (args.sink) netChecks['the sink, by address'] = connect(args.sink, SINK_PORT, `GET /probe-by-address-${nonce} HTTP/1.0\r\n\r\n`)
   const netAnswers: Record<string, string> = {}

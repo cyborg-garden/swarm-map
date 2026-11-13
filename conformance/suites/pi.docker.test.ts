@@ -19,7 +19,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { DOCKER_CHECKS } from '../docker/checks.ts'
+import { BROKEN_RIGS as BROKEN, IN_CELL, SKIPPED_IN_CELL as SKIPPED } from '../docker/broken.ts'
 import type { RigVariant } from '../docker/compose.ts'
 import {
   cellRefuses, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, withRig,
@@ -28,40 +28,12 @@ import {
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
 import { piHarness } from '../harnesses/pi.ts'
 import { buildMatrix, type MustFailInput } from '../matrix.ts'
-import { CHECKS, type Check, type CheckResult } from './checks.ts'
+import type { CheckResult } from './checks.ts'
 
 armTripwire()
 
 const harness = piHarness(['pi'], 'real')
-// C9p reads a tripwire inside the harness process. In a cell there is none: the wall and the sink do that job (C9).
-const SKIPPED = { C9p: 'not run in a cell: it reads a tripwire inside the harness process, and here the wall is checked instead (C9)' }
-const IN_CELL: Check[] = [...CHECKS.filter((c) => !(c.id in SKIPPED)), ...DOCKER_CHECKS]
 const EXPECTED = SEAL_CHECKS.length + IN_CELL.length
-
-/** A rig broken in one way on purpose, the checks run against it, and what each must do. */
-interface BrokenRig { what: string; variant: RigVariant; gate?: 'real' | 'allows-all'; seal: boolean; checks: string[]; red: string[]; green: string[] }
-const BROKEN: Record<string, BrokenRig> = {
-  'route-out': {
-    what: 'The cell is also put on the network the sink is on',
-    variant: 'route-out', seal: true, checks: ['C9', 'C10'], red: ['S1', 'C9', 'C10'], green: ['S0', 'S2', 'S3'],
-  },
-  'open': {
-    what: 'The cell is also put on an ordinary Docker network, with a route to the internet and to this machine',
-    variant: 'open', seal: true, checks: ['C9'], red: ['S1', 'C9'], green: ['S0', 'S2', 'S3'],
-  },
-  'leaks-env': {
-    what: 'The model key of the run is planted in the cell container\'s environment',
-    variant: 'leaks-env', seal: true, checks: ['C8', 'C9'], red: ['S3', 'C8'], green: ['S0', 'S1', 'S2', 'C9'],
-  },
-  'writable': {
-    what: 'The cell runs as root on a disk it can write',
-    variant: 'writable', seal: true, checks: [], red: ['S2'], green: ['S0', 'S1', 'S3'],
-  },
-  'gate-kept': {
-    what: 'C10 run in a cell that still has its gate, so the denied tool never runs',
-    variant: 'good', gate: 'real', seal: false, checks: ['C10'], red: ['C10'], green: [],
-  },
-}
 
 const results: CheckResult[] = []
 const mustFail: Record<string, MustFailInput> = {}
@@ -73,7 +45,7 @@ let before: ReturnType<typeof labObjects>
 const run = (id: string, variant: RigVariant, gate?: 'real' | 'allows-all'): Promise<CheckResult> => {
   const check = IN_CELL.find((c) => c.id === id)!
   return runInRig(id, check.title, {
-    variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'),
+    variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'), hostIp: facts!.hostIp,
     verdictTimeoutMs: check.lab?.verdictTimeoutMs, vetoTimeoutMs: check.lab?.vetoTimeoutMs,
   }, host)
 }
@@ -108,7 +80,7 @@ afterAll(async () => {
 
 describe(`real Pi ${PI_VERSION} in a sealed Docker cell`, () => {
   it('S0-S3: the cell, looked at from outside', async () => {
-    const seal = await runSealChecks('good', host, hostCanary)
+    const seal = await runSealChecks('good', host, facts!.hostIp, hostCanary)
     results.push(...seal)
     for (const r of seal) expect(r.detail, r.id).toBe('ok')
   }, 180_000)
@@ -123,7 +95,7 @@ describe(`real Pi ${PI_VERSION} in a sealed Docker cell`, () => {
 describe('must-fail: a rig broken on purpose turns its named checks red', () => {
   it.each(Object.entries(BROKEN))('%s', async (name, rig) => {
     const got: CheckResult[] = []
-    if (rig.seal) got.push(...await runSealChecks(rig.variant, host, hostCanary))
+    if (rig.seal) got.push(...await runSealChecks(rig.variant, host, facts!.hostIp, hostCanary))
     for (const id of rig.checks) got.push(await run(id, rig.variant, rig.gate))
     const failed = got.filter((r) => !r.pass).map((r) => r.id)
     mustFail[name] = { mustFail: rig.red, failed }
@@ -143,6 +115,8 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
       expect(detail('S1')).toContain('reached a public address')
       expect(detail('S1')).toContain('reached a public name, asked of DNS')
       expect(detail('S1')).toContain('a listener on this machine was reached from inside the rig')
+      expect(detail('S1')).toContain('reached a public resolver, asked directly over UDP')
+      expect(detail('S1')).toContain('reached a listener on this machine, by address')
       expect(detail('C9')).toContain('reached a public address')
     }
     if (name === 'leaks-env') {
@@ -150,6 +124,8 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
       expect(detail('C8')).toContain('a secret of this run is readable at /proc/')
     }
     if (name === 'writable') expect(detail('S2')).toContain('the gate could be written from inside')
+    if (name === 'host-mount') expect(detail('S3')).toContain('mounted in the cell: bind ')
+    if (name === 'blind-sink') expect(detail('S0')).toContain('the control reached the sink 0 times')
     if (name === 'gate-kept') expect(detail('C10')).toContain('this cell still has its gate')
   }, 900_000)
 })

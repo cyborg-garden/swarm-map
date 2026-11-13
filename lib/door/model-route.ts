@@ -4,7 +4,8 @@
 // placeholder for a key. This process holds the real key, swaps it in,
 // counts tokens, and refuses once the monthly budget is spent. The route never
 // hands the real key to the harness. That the harness has no other way to it
-// is the sealed cell's job, and the cell is not built: not proven yet.
+// is the sealed cell's job. The lab's Docker cell shows it for Pi (check C8,
+// docs/lab/pi-slice.md). Nothing shows it for any other harness or cell.
 //
 // The route knows no wire format of its own. Where the placeholder is
 // presented, which path is a model call, where usage is reported and how a

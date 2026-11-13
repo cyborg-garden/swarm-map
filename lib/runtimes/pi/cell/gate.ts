@@ -8,8 +8,10 @@
 //
 // This is a guardrail, not a wall. It runs inside the cell, where the model
 // has a shell. It stops mistakes. What is meant to stop an attack is a cell
-// with no route out and no real key in it, and that cell is not built yet, so
-// nothing behind this gate is proven. Once it exists, mount this read-only.
+// with no route out and no real key in it. The lab's Docker cell is one: with
+// this gate swapped for one that lets everything run, nothing left the cell
+// and no secret was readable (check C10). There, this file sits on a
+// read-only disk, owned by root, and the cell cannot change it (check S2).
 //
 // It imports nothing, so it loads in a cell that has only Pi installed. The
 // few Pi types it needs are declared here by hand, from Pi 1.5.2.

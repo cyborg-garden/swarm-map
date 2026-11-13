@@ -8,7 +8,7 @@
 // like a real credential, before a container exists.
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
@@ -41,7 +41,7 @@ function tryDocker(args: string[], opts: { timeoutMs?: number } = {}): { ok: boo
 }
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-export interface DockerFacts { endpoint: string; server: string; os: string; arch: string }
+export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; /** Where a container on an ordinary network reaches this machine. Empty if Docker gives no such name. */ hostIp: string }
 
 /** S0, the part that needs no rig: Docker is local, both images are built, and the cell holds the pinned harness. */
 export function preflight(): DockerFacts {
@@ -57,8 +57,13 @@ export function preflight(): DockerFacts {
   const name = `smlab-${randomBytes(4).toString('hex')}-version`
   const version = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1', CELL_IMAGE, 'pi', '--version'])
   if (version.out.trim() !== PI_VERSION) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
+  // Asked from a container on Docker's default network, which is the one place the name resolves.
+  // The container runs one lookup and is gone; no harness is in it.
+  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', '-e',
+    'require("node:dns").lookup("host.docker.internal",{family:4},(e,a)=>console.log(e?"":a))'])
+  const hostIp = /^\d+\.\d+\.\d+\.\d+$/.test(lookup.out.trim()) ? lookup.out.trim() : ''
   const [server, system, arch] = info.out.trim().split('|')
-  return { endpoint, server, os: system, arch }
+  return { endpoint, server, os: system, arch, hostIp }
 }
 
 /** Build both images. The only step that uses the network, and never part of a test run. */
@@ -116,18 +121,20 @@ export interface LiveRig {
   doorLine(marker: string, timeoutMs: number): Promise<string | undefined>
 }
 
-export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
+export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'hostIp' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
 
 /** Start one rig, hand it to `body`, and take it down whatever happens. */
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
   const nonce = randomBytes(4).toString('hex')
   const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}` }
   // F2 and F5 happen in here, before Docker is asked for anything.
-  const first = renderRig(options)
-  if (request.variant === 'good') assertSealed(first)
-  const project = first.project
+  const project = renderRig(options).project
   const dir = mkdtempSync(path.join(os.tmpdir(), `${project}-`))
   assertSafeWorkDir(dir, { home: os.homedir(), tmp: os.tmpdir() })
+  // The one folder of this machine a broken rig may mount: this rig's own, which holds its compose file and nothing else.
+  options.hostDir = realpathSync(dir)
+  const first = renderRig(options)
+  if (request.variant === 'good') assertSealed(first)
   const file = path.join(dir, 'compose.json')
   const compose = (args: string[], timeoutMs = 120_000): string => docker(['compose', '--project-name', project, '--file', file, ...args], { timeoutMs })
   const container = (service: string): string => `${project}-${service}-1`
@@ -199,7 +206,7 @@ const hostProblems = (host: HostListener, before: number): string[] =>
   host.hits.slice(before).map((url) => `a listener on this machine was reached from inside the rig (${url})`)
 
 /** Run one check in a rig of its own. What was seen from outside the rig is added to what the check found inside. */
-export async function runInRig(id: string, title: string, request: Omit<RigRequest, 'check'>, host: HostListener, timeoutMs = 120_000): Promise<CheckResult> {
+export async function runInRig(id: string, title: string, request: Omit<RigRequest, 'check' | 'hostPort'>, host: HostListener, timeoutMs = 120_000): Promise<CheckResult> {
   const seen = host.hits.length
   return withRig({ ...request, check: id, hostPort: host.port }, async (rig) => {
     const line = await rig.doorLine('SMLAB-RESULT ', timeoutMs)
@@ -222,13 +229,13 @@ export const SEAL_CHECKS = [
 ] as const
 
 /** S0 to S3: start a rig that stays up, and look at its containers from outside. */
-export async function runSealChecks(variant: RigVariant, host: HostListener, hostCanary: { name: string; value: string }): Promise<CheckResult[]> {
+export async function runSealChecks(variant: RigVariant, host: HostListener, hostIp: string, hostCanary: { name: string; value: string }): Promise<CheckResult[]> {
   const seen = host.hits.length
-  return withRig({ check: 'hold', variant, hostPort: host.port }, async (rig) => {
+  return withRig({ check: 'hold', variant, hostPort: host.port, hostIp }, async (rig) => {
     const s: Record<string, string[]> = { S0: [], S1: [], S2: [], S3: [] }
     const ready = await rig.doorLine('SMLAB-READY', 60_000)
     const probe = async (service: string): Promise<ProbeReport | undefined> =>
-      parseReport(await rig.exec(service, ['node', `${SWARM_ROOT}/conformance/docker/probe.ts`, `nonce=${rig.nonce}`, `sink=${rig.sinkIp}`, `hostport=${host.port}`]))
+      parseReport(await rig.exec(service, ['node', `${SWARM_ROOT}/conformance/docker/probe.ts`, `nonce=${rig.nonce}`, `sink=${rig.sinkIp}`, `hostip=${hostIp}`, `hostport=${host.port}`]))
     const cell = ready ? await probe('cell') : undefined
     const door = ready ? await probe('door') : undefined
     await sleep(300) // let this process hear anything that reached its listener

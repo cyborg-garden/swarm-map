@@ -77,7 +77,7 @@ describe('the sealed rig', () => {
 
   it('[U:rig-compose] passes its own seal check, and so does no broken variant', () => {
     expect(() => assertSealed(rig())).not.toThrow()
-    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'writable'])
+    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'writable', 'host-mount', 'blind-sink'])
     for (const variant of RIG_VARIANTS.filter((v) => v !== 'good')) {
       expect(() => assertSealed(rig({ variant })), variant).toThrow(RefusingToRun)
     }
@@ -105,6 +105,14 @@ describe('each broken rig is broken in one named way', () => {
     expect(cell.user).toBe('0')
     expect(cell.read_only).toBe(false)
     expect(cell.cap_add).toEqual(['DAC_OVERRIDE'])
+  })
+
+  it('[U:rig-compose] host-mount: a folder of this machine is mounted into the cell', () => {
+    expect(rig({ variant: 'host-mount', hostDir: '/tmp/x' }).file.services.cell.volumes).toEqual(['lab:/tmp/smlab', '/tmp/x:/mnt/host:ro'])
+  })
+
+  it('[U:rig-compose] blind-sink: the control is put where it cannot reach the sink', () => {
+    expect(rig({ variant: 'blind-sink' }).file.services.control.networks).toEqual(['cell'])
   })
 
   it('[U:rig-compose] removing the gate changes nothing about the wall: only what is loaded inside differs', () => {

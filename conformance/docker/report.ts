@@ -38,7 +38,7 @@ export function parseReport(text: string): ProbeReport | undefined {
 export function netProblems(r: ProbeReport): string[] {
   const p: string[] = []
   if (r.door !== 'open' || r.doorRoute !== 'open') p.push(`the probe could not reach the door (${r.door}, ${r.doorRoute}), so its other answers mean nothing`)
-  if (Object.keys(r.net).length < 8) p.push('the probe tried fewer ways out than it should')
+  if (Object.keys(r.net).length < 14) p.push('the probe tried fewer ways out than it should')
   for (const [what, answer] of Object.entries(r.net)) if (answer === 'open') p.push(`reached ${what}`)
   if (r.wrongToken !== 'refused') p.push(`the door did not hang up on a wrong cell token (${r.wrongToken})`)
   if (r.ipv6.length > 0) p.push('the container has an IPv6 address')

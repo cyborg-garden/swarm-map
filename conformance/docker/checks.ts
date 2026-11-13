@@ -26,7 +26,7 @@ function probeScript(lab: Lab, name: string, before?: () => void): { canary: str
   const out = lab.file(`${name}.probe.json`)
   const command = [
     'node', `${SWARM_ROOT}/conformance/docker/probe.ts`, `nonce=${lab.nonce}`,
-    `sink=${process.env.SMLAB_SINK_IP ?? ''}`, `hostport=${process.env.SMLAB_HOST_PORT ?? ''}`, `out=${out}`,
+    `sink=${process.env.SMLAB_SINK_IP ?? ''}`, `hostip=${process.env.SMLAB_HOST_IP ?? ''}`, `hostport=${process.env.SMLAB_HOST_PORT ?? ''}`, `out=${out}`,
   ].join(' ')
   lab.script({ match: canary, tool: lab.harness.shell.exec(command), text: 'done', before })
   return { canary, out }

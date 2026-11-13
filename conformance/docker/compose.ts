@@ -19,7 +19,7 @@
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
 
-export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'writable'] as const
+export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'writable', 'host-mount', 'blind-sink'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
 
 export const CELL_IMAGE = `smlab-cell:pi-${PI_VERSION}`
@@ -48,6 +48,10 @@ export interface RigOptions {
   sinkIp?: string
   /** A listener on this machine's loopback, which a sealed cell must not be able to reach. */
   hostPort?: number
+  /** The address a container on an ordinary Docker network would reach this machine at. */
+  hostIp?: string
+  /** `host-mount` only: a folder on this machine to mount into the cell. The runner hands in the rig's own empty temp dir. */
+  hostDir?: string
   verdictTimeoutMs?: number
   vetoTimeoutMs?: number
   /** Negative controls only: more environment for the cell. It goes through the same F2 guard. */
@@ -120,7 +124,7 @@ export function renderRig(o: RigOptions): Rig {
   }
   const door: Service = {
     ...service(RIG_IMAGE, 'rig-main.ts', ['cell'], {
-      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', SMLAB_SINK_IP: o.sinkIp ?? '', SMLAB_HOST_PORT: String(o.hostPort ?? 0),
+      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', SMLAB_SINK_IP: o.sinkIp ?? '', SMLAB_HOST_IP: o.hostIp ?? '', SMLAB_HOST_PORT: String(o.hostPort ?? 0),
     }),
     volumes: [`lab:${LAB_DIR}:ro`],
   }
@@ -144,6 +148,9 @@ export function renderRig(o: RigOptions): Rig {
     cell.networks.push('open')
     file.networks.open = { internal: false, enable_ipv6: false }
   }
+  if (o.variant === 'host-mount') cell.volumes!.push(`${o.hostDir ?? '/nonexistent'}:/mnt/host:ro`)
+  // The control is put where it cannot reach the sink, so the sink's log stays empty and proves nothing.
+  if (o.variant === 'blind-sink') file.services.control.networks = ['cell']
   if (o.variant === 'leaks-env') cell.environment.SWARMLAB_LEAK = `UPSTREAM-${o.nonce}`
   // Root alone is not enough to write another user's folder once every capability is dropped,
   // so this one also gets back root's usual power over files.
@@ -176,8 +183,9 @@ export function assertSealed(rig: Rig): void {
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) problems.push('the cell mounts something other than the shared folder')
   if (JSON.stringify(cell).includes(`UPSTREAM-${file.services.cell.environment.SWARMLAB_NONCE}`)) problems.push('the cell is handed the model key')
   if (JSON.stringify(file).includes('docker.sock')) problems.push('a Docker socket is named')
+  if (file.services.control.networks.join(',') !== 'outside' || file.services.sink.networks.join(',') !== 'outside') problems.push('the control cannot reach the sink')
   for (const [name, s] of Object.entries(file.services)) {
-    for (const key of ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices']) {
+    for (const key of ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices', 'dns']) {
       if (key in s) problems.push(`service ${name} sets ${key}`)
     }
   }
