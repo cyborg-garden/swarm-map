@@ -338,13 +338,13 @@ interface Usage { model: string; inTokens: number; outTokens: number; usd: numbe
 | Kind | How it works | In the cell |
 |---|---|---|
 | `model` | Harness is started with the provider base URL pointed at the sidecar. Sidecar adds the real key, counts tokens, refuses over budget | A placeholder string |
-| `broker` | Today's host token broker, reached through the sidecar. Short-lived, narrow tokens. Caller is identified by its link, not a name in the URL | A token that expires |
+| `broker` | The host token broker, reached through the sidecar. Short-lived, narrow tokens. Caller is identified by its link | A token that expires |
 | `sidecar-tool` | The tool (GitHub, Notion, Google) runs as an MCP server on the sidecar side | Nothing |
 | `env` | A line in the agent's `.env` file | The real key. Native mode only. Refused on `public` posture |
 | chat tokens | Door only | Nothing |
 
 `.hsm-no-anthropic` and `.hsm-github-broker` become fields on grants. `forbiddenEnv` for public
-agents becomes a validation error at save, not a drift report.
+agents is a validation error at save.
 
 ### 4.7 Sanitizer
 
@@ -422,7 +422,7 @@ interface Heartbeat { agentId: string; policyHash: string; caps: Capabilities; t
 - Receipts hold ids and sizes, not message text. They are the "why didn't it answer?" view.
 - The heartbeat hash differing from the saved record shows as "saved, not applied".
 - Sidecar-to-Swarm-Map calls carry a per-agent secret minted at deploy. Cell-to-sidecar calls are
-  identified by the link and a per-cell token, never by a name the caller gives for itself.
+  identified by the link and a per-cell token.
 
 ### 4.11 Native-mode adapter (Hermes only)
 
@@ -496,9 +496,6 @@ each gap they name is closed.
 | `ctl.applied` | The UI knows which policy is live | Heartbeat hash | Control plane | No | C15 |
 | `ctl.receipts` | Every decision leaves a receipt | Sidecar | Control plane | No | P |
 | Operator login, audit log, artifact pre-scan, CI sanitization gate, extra env and mount validation | | Unchanged | Control plane | No | existing |
-
-Deleted rather than fixed, when the native-mode work is done: settings that no code reads, tool
-tiers and memory scopes presented as permissions, and any claim in the README that no test backs.
 
 Count: 30 of the 42 rule rows need nothing from the harness in door mode, including every "who may
 it hear and answer" rule. What stays per harness is tool veto, approval, the tool map, native memory
