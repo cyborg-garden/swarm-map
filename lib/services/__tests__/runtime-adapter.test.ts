@@ -6,7 +6,7 @@ import {
   pickContainerAdapter,
   registerContainerAdapter,
 } from '../harness'
-import { findUnmanagedRow, unsupportedRowReason } from '../runtime-adapter'
+import { unsupportedRowReason } from '../runtime-adapter'
 import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
@@ -50,20 +50,11 @@ describe('adapterForRuntime (overlay-fallback selection)', () => {
   })
 
   it('only the tag decides whether a row is managed', () => {
-    const rows = [
-      { id: 'h_a', runtime: 'letta' },
-      { id: 'h_b', runtime: 'pi-from-the-future' },
-      { id: 'h_c', runtime: 'hermes' },
-      { id: 'h_d' },
-      { id: 'h_letta_server', surfaceAdmins: {} },
-    ]
-    expect(findUnmanagedRow(rows, 'h_a')).toMatchObject({ reason: 'retired', runtime: 'letta' })
-    expect(findUnmanagedRow(rows, 'a')).toMatchObject({ reason: 'retired' })
-    expect(findUnmanagedRow(rows, 'h_b')).toMatchObject({ reason: 'unknown', runtime: 'pi-from-the-future' })
-    for (const id of ['h_c', 'h_d', 'h_letta_server', 'letta-server', 'h_nobody', 'h_A']) {
-      expect(findUnmanagedRow(rows, id), id).toBeNull()
+    expect(unsupportedRowReason({ runtime: 'letta' })).toEqual({ reason: 'retired', runtime: 'letta' })
+    expect(unsupportedRowReason({ runtime: 'pi-from-the-future' })).toEqual({ reason: 'unknown', runtime: 'pi-from-the-future' })
+    for (const row of [{ id: 'h_c', runtime: 'hermes' }, { id: 'h_d' }, { id: 'h_letta_server', surfaceAdmins: {} }, undefined]) {
+      expect(unsupportedRowReason(row), JSON.stringify(row)).toBeNull()
     }
-    expect(findUnmanagedRow({ not: 'a list' } as unknown as [], 'h_a')).toBeNull()
   })
 
   it('a newly registered runtime stops being unknown', () => {

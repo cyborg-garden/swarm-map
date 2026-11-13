@@ -32,9 +32,14 @@ the tag decides: nothing is inferred from an id, a name or what is on disk.
 - Such a row is left out of `GET /api/harnesses` and has no detail page.
   `GET /api/harnesses/retired` lists it with the stored tag and a reason, and the fleet
   page shows it under "Rows Swarm Map no longer manages" with one action, "Forget row".
-- A `POST`, `PUT`, `PATCH` or `DELETE` to a route under `/api/harnesses/<id>/` is answered
-  409 when `<id>` is the stored id of such a row (or the bare slug of that id). The check
-  is made in one place, the request gate in `proxy.ts`.
+- A request that would change something is answered 409 when the id it carries is the
+  stored id of such a row, whether the id is in the URL (`/api/harnesses/<id>/...`) or
+  in the body (a key's `assignedTo`, a cascade or model-update `harnessId`). The id is
+  matched exactly. The check is made in one place, the shared id step in
+  `lib/harness-ref.ts`.
+- The three surface policy routes (`/api/harnesses/<id>/surfaces/<platform>/...`) take a
+  bare slug as well as an id and resolve it through `SurfaceAdminService`, which treats
+  such a row as no agent: reads answer with no admins and no groups, writes with 404.
 - `DELETE /api/harnesses/:id` is the exception. It forgets the row and nothing else: no
   container, data directory or volume is touched, even with `deleteFiles=true`.
 - Inside the server, `adapterForRuntime` throws `UnsupportedRuntimeError` for such a tag,
@@ -42,8 +47,9 @@ the tag decides: nothing is inferred from an id, a name or what is on disk.
 - `POST /api/setup/deploy` with any `runtime` other than `hermes` returns 400 and creates
   nothing.
 
-Tests: `app/api/harnesses/__tests__/unknown-runtime-routes.test.ts` (walks the route
-directory and sends a request for every per-agent write route through the gate),
+Tests: `app/api/harness-id-sweep.test.ts` (walks every route file and sends each write
+route the id of such a row), `app/api/harnesses/__tests__/unknown-runtime-routes.test.ts`
+(the real services over real files),
 `lib/services/__tests__/retired-runtime.test.ts`,
 `lib/services/__tests__/deploy-route.integration.test.ts`.
 

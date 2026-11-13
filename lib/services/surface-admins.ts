@@ -7,6 +7,7 @@ import type { AuditService } from './audit'
 import { SURFACE_SLUGS as REGISTRY_SLUGS, isSurfaceSlug, surfaceSpec } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS, discordDmAfterAdminSet, discordDmRefusedWarning, setEnvLine } from '@/lib/surfaces/dm-allowlist'
 import { hasDiscordSurface, readEnvValue } from './discord-thread-gate'
+import { unsupportedRowReason } from './runtime-adapter'
 import {
   USERS_VARS as DERIVED_USERS_VARS,
   GROUPS_VARS as DERIVED_GROUPS_VARS,
@@ -186,10 +187,11 @@ export class SurfaceAdminService {
   // HERMES_AGENT_NAME). A slug becomes the id by the rule that builds an id
   // from a name everywhere else (idFromName); an id is taken as written.
   //
-  // agentDataDir() accepts several spellings for one directory. Two rules
+  // agentDataDir() accepts several spellings for one directory. Three rules
   // keep it to one agent per directory here:
   //   - a stored row whose id is not in the built-from-a-name form answers
   //     only when no other stored row shares its data dir;
+  //   - a stored row whose runtime tag has no adapter answers to nothing;
   //   - an id with no stored row resolves (to itself, admins from its own
   //     .env — an agent Docker discovers has no row until something is saved
   //     on it) only when no built-from-a-name row owns its data dir.
@@ -205,6 +207,8 @@ export class SurfaceAdminService {
 
     const row = overlays.find((h) => h.id === id)
     if (row) {
+      // A row whose runtime tag Swarm Map does not know is not an agent here.
+      if (unsupportedRowReason(row)) return undefined
       return isBuiltFromName(id) || sharing.length === 1 ? { id, row } : undefined
     }
     return sharing.some((h) => isBuiltFromName(h.id!)) ? undefined : { id }

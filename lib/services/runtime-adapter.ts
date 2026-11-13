@@ -80,8 +80,8 @@ export const RETIRED_RUNTIMES: Readonly<Record<string, string>> = {
 
 // Runtime tags that have a registered container adapter. Hermes is built in;
 // HarnessService adds to this when an adapter is registered. It lives here,
-// not beside the adapters, so the request gate (proxy.ts) can ask the
-// question without loading HarnessService.
+// not beside the adapters, so the question can be asked without loading
+// HarnessService.
 const drivableRuntimes = new Set<string>(['hermes'])
 
 export function markRuntimeDrivable(runtime: string): void {
@@ -109,30 +109,6 @@ export function unsupportedRowReason(
 ): { reason: 'retired' | 'unknown'; runtime: string } | null {
   const reason = unsupportedRuntimeReason(row?.runtime)
   return reason ? { reason, runtime: String(row?.runtime) } : null
-}
-
-/**
- * The id harnesses.json stores for what a caller passed. Agents call the
- * policy API with their bare slug ("seraph-doer"); stored ids are
- * "h_seraph_doer".
- */
-export function canonicalHarnessId(idOrSlug: string): string {
-  return idOrSlug.startsWith('h_') ? idOrSlug : `h_${idOrSlug.replace(/-/g, '_')}`
-}
-
-/**
- * The stored row with this id (or bare slug), if its runtime tag is one Swarm
- * Map does not know. The request gate in proxy.ts asks this for every write.
- */
-export function findUnmanagedRow<T extends { id?: string; runtime?: string | null }>(
-  rows: readonly T[],
-  idOrSlug: string,
-): { row: T; reason: 'retired' | 'unknown'; runtime: string } | null {
-  if (!Array.isArray(rows)) return null
-  const id = canonicalHarnessId(idOrSlug)
-  const row = rows.find((r) => r?.id === id)
-  const unsupported = unsupportedRowReason(row)
-  return row && unsupported ? { row, ...unsupported } : null
 }
 
 /** One sentence for the UI and for a refused request. */

@@ -1,9 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { SESSION_COOKIE, verifySession } from '@/lib/auth/session'
-import { Storage } from '@/lib/services/storage'
-import { DATA_DIR } from '@/lib/services/data-dir'
-import { findUnmanagedRow, unmanagedRowNote } from '@/lib/services/runtime-adapter'
 
 /**
  * Auth gate for mutating API routes.
@@ -86,51 +83,6 @@ function requiresAuth(method: string, pathname: string): boolean {
   return false // OPTIONS and other non-mutating verbs
 }
 
-/**
- * Second gate: a stored row whose `runtime` tag Swarm Map does not know is
- * read-only.
- *
- * Such a row is kept and shown, but it is not an agent Swarm Map drives.
- * Every write or lifecycle request for its id (`/api/harnesses/<id>/...`,
- * any mutating method) is answered 409 here, before any route runs. The one
- * exception is `DELETE /api/harnesses/<id>`, which forgets the row. Reads
- * pass. This is the only place the rule is applied to requests, and every
- * `/api` request comes through this file (see `config.matcher`).
- *
- * Only the tag decides: a row with no tag is Hermes, and nothing is inferred
- * from an id, a name or the disk. The id is matched as stored, or as the
- * bare slug an agent sends. Reads harnesses.json and nothing else.
- */
-const PER_AGENT_PATH = /^\/api\/harnesses\/([^/]+)(\/.*)?$/
-// The fleet-wide routes that sit beside `[id]/`. Their first segment is not
-// an agent id. The route sweep reads this list off the directory.
-const FLEET_ROUTES = new Set(['create', 'import', 'restart-running', 'retired'])
-
-function refuseUnknownRuntime(method: string, pathname: string): NextResponse | null {
-  if (!MUTATING_METHODS.has(method)) return null
-  const match = PER_AGENT_PATH.exec(pathname)
-  if (!match || FLEET_ROUTES.has(match[1])) return null
-  const rest = match[2] ?? ''
-  if (method === 'DELETE' && (rest === '' || rest === '/')) return null
-  let id: string
-  try {
-    id = decodeURIComponent(match[1])
-  } catch {
-    return null
-  }
-  const rows = new Storage(DATA_DIR).read<Array<{ id?: string; runtime?: string | null }>>('harnesses.json', [])
-  const found = findUnmanagedRow(rows, id)
-  if (!found) return null
-  return NextResponse.json(
-    {
-      error: `${unmanagedRowNote(found)} Nothing can be changed through it. Forget the row to free the name.`,
-      reason: found.reason,
-      runtime: found.runtime,
-    },
-    { status: 409 },
-  )
-}
-
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   const method = request.method.toUpperCase()
   const pathname = request.nextUrl.pathname
@@ -142,7 +94,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
   // Ordinary reads (agents' policy/is-admin reads, dashboard reads) pass ungated.
   if (!requiresAuth(method, pathname)) {
-    return refuseUnknownRuntime(method, pathname) ?? NextResponse.next()
+    return NextResponse.next()
   }
 
   const token = process.env.HSM_OPERATOR_TOKEN
@@ -153,7 +105,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
   const cookie = request.cookies.get(SESSION_COOKIE)?.value
   if (await verifySession(cookie, token)) {
-    return refuseUnknownRuntime(method, pathname) ?? NextResponse.next()
+    return NextResponse.next()
   }
 
   return NextResponse.json({ error: 'auth required' }, { status: 401 })

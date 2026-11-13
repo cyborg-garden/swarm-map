@@ -18,9 +18,15 @@
  *
  * What is checked, with every service mocked and every fs write stubbed:
  *
- *   malformed id  → 400, no service call at all, no fs write   (every method)
- *   unknown id    → 404, nothing but harness.get, no fs write  (POST/PUT/PATCH/DELETE)
- *   unknown id    → no fs write                                (GET)
+ *   malformed id   → 400, no service call at all, no fs write        (every method)
+ *   unknown id     → 404, nothing but harness.get, no fs write  (POST/PUT/PATCH/DELETE)
+ *   unknown id     → no fs write                                (GET)
+ *   unmanaged row  → 409, no service call at all, no fs write   (POST/PUT/PATCH/DELETE)
+ *
+ * An unmanaged row is a stored row whose runtime tag Swarm Map does not know
+ * (the sweep stores one in a real harnesses.json for that check). It is
+ * read-only on every route; the one exception is DELETE /api/harnesses/:id,
+ * which forgets the row.
  *
  * Both checks run with an empty body, so the id check has to come before the
  * body is looked at.
@@ -45,6 +51,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { syncBuiltinESMExports } from 'module'
+import { DATA_DIR } from '@/lib/services/data-dir'
 
 const state = vi.hoisted(() => ({
   calls: [] as string[],
@@ -256,6 +263,13 @@ const NO_AGENT_ID = new Set([
 
 const MALFORMED = ['x/../.hermes-other', '..', '.', 'h_a.b', 'h_a b', '', 'h_' + 'a'.repeat(200), 'h_agent-x/../y']
 const UNKNOWN = 'h_no_such_agent'
+// A stored row whose runtime tag has no adapter, and the one route that may
+// act on it.
+const UNMANAGED = { id: 'h_old', name: 'old', runtime: 'some-other-runtime' }
+const FORGET_ROUTE = './harnesses/[id]/route.ts'
+// The sweep stubs fs writes; the stored rows are put in place with the real one.
+const realWriteFileSync = fs.writeFileSync
+const storeRows = (rows: unknown[]) => realWriteFileSync(path.join(DATA_DIR, 'harnesses.json'), JSON.stringify(rows))
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
 const FS_WRITES = [
   'writeFileSync', 'appendFileSync', 'mkdirSync', 'rmSync', 'rmdirSync', 'unlinkSync',
@@ -285,6 +299,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   syncBuiltinESMExports()
   fs.rmSync(home, { recursive: true, force: true })
+  fs.rmSync(path.join(DATA_DIR, 'harnesses.json'), { force: true })
 })
 
 function request(method: string, body: unknown = {}): Request {
@@ -367,6 +382,30 @@ describe('routes with the agent id in the URL', () => {
       expect(state.calls, method).toEqual(['harness.get'])
       expect(fsWrites, method).toEqual([])
     }
+  })
+
+  it.each(URL_ID_ROUTES)('%s changes nothing on a row with an unknown runtime tag', async (file) => {
+    for (const [method, handler] of await handlers(file)) {
+      if (method === 'GET') continue
+      state.calls.length = 0
+      state.canned = { 'harness.remove': { removed: true } }
+      storeRows([UNMANAGED])
+      const res = await handler(request(method), { params: Promise.resolve({ id: UNMANAGED.id }) })
+      if (file === FORGET_ROUTE && method === 'DELETE') {
+        // Forgetting the row is the one thing that works on it.
+        expect(res.status, method).toBe(200)
+        expect(state.calls, method).toEqual(['harness.remove'])
+      } else {
+        expect(res.status, method).toBe(409)
+        expect(await res.json(), method).toMatchObject({ reason: 'unknown', runtime: UNMANAGED.runtime })
+        expect(state.calls, method).toEqual([])
+      }
+      expect(fsWrites, method).toEqual([])
+    }
+  })
+
+  it('the route that forgets a row is one of them', () => {
+    expect(URL_ID_ROUTES).toContain(FORGET_ROUTE)
   })
 })
 
@@ -548,6 +587,20 @@ describe('routes with the agent id in the body', () => {
       const res = await handler(request(spec.method, bodyWith(spec, field, UNKNOWN)), { params: Promise.resolve(spec.params ?? {}) })
       expect([400, 404]).toContain(res.status)
       expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual(['harness.get'])
+      expect(fsWrites).toEqual([])
+    },
+  )
+
+  it.each(BODY_CASES.filter(([, , s]) => !s.unknown))(
+    '%s changes nothing when %s is a row with an unknown runtime tag',
+    async (file, field, spec) => {
+      const handler = (await modules[file]())[spec.method]!
+      state.canned = spec.reads ?? {}
+      storeRows([UNMANAGED])
+      const res = await handler(request(spec.method, bodyWith(spec, field, UNMANAGED.id)), { params: Promise.resolve(spec.params ?? {}) })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ reason: 'unknown', runtime: UNMANAGED.runtime })
+      expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual([])
       expect(fsWrites).toEqual([])
     },
   )

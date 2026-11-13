@@ -4,18 +4,22 @@
  * every write and lifecycle request for its id is refused, and the one thing
  * that works is forgetting the row.
  *
- * The rule lives in one place, the request gate in proxy.ts, which every
- * `/api` request passes through before it reaches a route. This test does
- * not list the routes by hand. It walks app/api/harnesses/[id]/, finds every
- * exported POST, PUT, PATCH and DELETE handler, and sends a request for each
- * through the gate. A route added later is covered the day it lands.
+ * The rule lives in the shared id step, lib/harness-ref.ts: requireHarness()
+ * answers 409 for the id of such a row, whether the id came from the URL or
+ * from a request body, and matches the stored id exactly. The three
+ * surfaces/[platform] routes resolve through SurfaceAdminService instead,
+ * which treats such a row as no agent. app/api/harness-id-sweep.test.ts walks
+ * every route file with the services mocked; this file runs the real
+ * HarnessService and SurfaceAdminService over real files in a temp home.
  *
  * Only the tag decides. A row with no tag, or a null one, is Hermes.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
-import { NextRequest } from 'next/server'
+
+vi.mock('@/lib/services/docker')
 
 const scratch = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -24,136 +28,162 @@ const scratch = vi.hoisted(() => {
   const nodeOs = require('os') as typeof import('os')
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodePath = require('path') as typeof import('path')
-  const data = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'swarm-unknown-runtime-'))
+  const data = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'swarm-unknown-runtime-data-'))
   // lib/services/data-dir reads DATA_DIR once, at import.
   process.env.DATA_DIR = data
   return { data }
 })
 
-import { proxy, config } from '@/proxy'
-import { SESSION_COOKIE, computeSessionValue } from '@/lib/auth/session'
+const holder = vi.hoisted(() => ({ svc: {} as Record<string, unknown> }))
+vi.mock('@/lib/services', () => ({ services: holder.svc }))
 
-const TOKEN = 'operator-token-for-this-test'
-const ROUTES_DIR = path.resolve(__dirname, '../[id]')
-const MUTATING = ['POST', 'PUT', 'PATCH', 'DELETE'] as const
-let cookie = ''
+import { requireHarness, refuseUnknownHarnesses } from '@/lib/harness-ref'
+import { DELETE as deleteAgent, GET as getAgent } from '../[id]/route'
+import { PATCH as patchTier } from '../[id]/tier/route'
+import { POST as startAgent } from '../[id]/start/route'
+import { GET as getAdmins, PUT as putAdmins } from '../[id]/surfaces/[platform]/admins/route'
+import { GET as getIsAdmin } from '../[id]/surfaces/[platform]/admins/[userId]/route'
+import { GET as getGroup, POST as postGroup } from '../[id]/surfaces/[platform]/groups/[groupId]/route'
+import { HarnessService } from '@/lib/services/harness'
+import { SurfaceAdminService } from '@/lib/services/surface-admins'
+import { Storage } from '@/lib/services/storage'
+import { DockerService } from '@/lib/services/docker'
+import { AuditService } from '@/lib/services/audit'
+import { ConfigService } from '@/lib/services/config'
 
-function routeFiles(dir: string): string[] {
-  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const full = path.join(dir, e.name)
-    if (e.isDirectory()) return routeFiles(full)
-    return e.name === 'route.ts' ? [full] : []
-  })
-}
+const OWNER = '111111111111111111'
+const OLD_ENV = `DISCORD_BOT_TOKEN=x\nDISCORD_ALLOWED_USERS=${OWNER}\nDISCORD_GROUP_INVITE_POLICY=allow-all\nDISCORD_ALLOWED_CHANNELS=c1\n`
+const IRIS = { id: 'h_iris', name: 'iris', runtime: 'hermes', tier: 'team' }
 
-/** Every (method, path under the agent) a route file under [id]/ answers. */
-const endpoints: Array<{ method: string; rel: string }> = []
+let home: string
+let storage: Storage
+let harness: HarnessService
+let docker: DockerService
 
-const urlFor = (id: string, rel: string) =>
-  `/api/harnesses/${id}${rel ? `/${rel}` : ''}`
-    .replace('[platform]', 'discord')
-    .replace('[groupId]', '-1002')
-    .replace('[userId]', '123456789012345678')
+const rows = () => storage.read<Array<Record<string, unknown>>>('harnesses.json', [])
+const params = <T extends object>(p: T) => ({ params: Promise.resolve(p) })
+const json = (method: string, body: unknown, query = '') =>
+  new Request(`http://localhost/x${query}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+const oldEnv = () => fs.readFileSync(path.join(home, '.hermes-old', '.env'), 'utf-8')
 
-function send(method: string, id: string, rel: string, withCookie = true): Promise<Response> {
-  const headers = new Headers()
-  if (withCookie) headers.set('cookie', `${SESSION_COOKIE}=${cookie}`)
-  return proxy(new NextRequest(new URL(`http://localhost:3000${urlFor(id, rel)}`), { method, headers }))
-}
-
-const passed = (res: Response) => res.headers.get('x-middleware-next') === '1'
-const store = (rows: unknown) => fs.writeFileSync(path.join(scratch.data, 'harnesses.json'), JSON.stringify(rows))
-
-beforeAll(async () => {
-  process.env.HSM_OPERATOR_TOKEN = TOKEN
-  cookie = await computeSessionValue(TOKEN)
-  for (const file of routeFiles(ROUTES_DIR)) {
-    const src = fs.readFileSync(file, 'utf-8')
-    const rel = path.relative(ROUTES_DIR, path.dirname(file))
-    for (const method of [...MUTATING, 'GET']) {
-      if (new RegExp(`export\\s+(async\\s+)?function\\s+${method}\\b`).test(src)) endpoints.push({ method, rel })
-    }
+// Everything under the fake home, as "relative/path" → file bytes.
+function snapshot(dir = home, prefix = ''): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix + e.name
+    if (e.isDirectory()) Object.assign(out, { [rel + '/']: '' }, snapshot(path.join(dir, e.name), rel + '/'))
+    else out[rel] = fs.readFileSync(path.join(dir, e.name), 'utf-8')
   }
+  return out
+}
+
+beforeEach(() => {
+  home = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-unknown-runtime-'))
+  vi.spyOn(os, 'homedir').mockReturnValue(home)
+  storage = new Storage(scratch.data)
+  storage.write('settings.json', { hermesDir: home, dataDir: scratch.data, theme: 'light', composeFiles: [] })
+
+  // What a Hermes agent called "old" would own. If the row is ever treated as
+  // Hermes, these are what a write would land in.
+  fs.mkdirSync(path.join(home, '.hermes-old'))
+  fs.writeFileSync(path.join(home, '.hermes-old', '.env'), OLD_ENV)
+  fs.mkdirSync(path.join(home, '.hermes-iris'))
+  fs.writeFileSync(path.join(home, '.hermes-iris', '.env'), OLD_ENV)
+
+  docker = new DockerService()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(docker.isAvailable as any).mockReturnValue(false)
+  const audit = new AuditService(storage)
+  harness = new HarnessService(storage, docker, audit, new ConfigService(storage))
+  for (const key of Object.keys(holder.svc)) delete holder.svc[key]
+  Object.assign(holder.svc, { harness, audit, surfaceAdmins: new SurfaceAdminService(storage, audit, harness) })
 })
 
-afterAll(() => {
-  delete process.env.HSM_OPERATOR_TOKEN
-  fs.rmSync(scratch.data, { recursive: true, force: true })
+afterEach(() => {
+  vi.restoreAllMocks()
+  fs.rmSync(home, { recursive: true, force: true })
+  fs.rmSync(path.join(scratch.data, 'harnesses.json'), { force: true })
 })
 
-const writes = () => endpoints.filter((e) => e.method !== 'GET')
-const label = (e: { method: string; rel: string }) => `${e.method} ${e.rel || '(the agent itself)'}`
-
-describe('the sweep can see the routes (a sweep over nothing passes everything)', () => {
-  it('finds the per-agent write routes', () => {
-    const labels = writes().map(label)
-    expect(labels.length).toBeGreaterThanOrEqual(25)
-    for (const must of [
-      'POST start',
-      'POST stop',
-      'POST restart',
-      'POST duplicate',
-      'PUT settings',
-      'PATCH tier',
-      'POST surfaces/connect',
-      'POST surfaces/disconnect',
-      'POST policy',
-      'DELETE pairing',
-      'PUT surfaces/[platform]/admins',
-      'POST surfaces/[platform]/groups/[groupId]',
-      'DELETE (the agent itself)',
-    ]) {
-      expect(labels, must).toContain(must)
-    }
-  })
-
-  it('every /api request goes through the gate', () => {
-    expect(config.matcher).toBe('/api/:path*')
-  })
-})
+afterAll(() => fs.rmSync(scratch.data, { recursive: true, force: true }))
 
 describe.each([
-  ['a retired tag', { id: 'h_old', name: 'old', runtime: 'letta' }],
-  ['an unknown tag', { id: 'h_old', name: 'old', runtime: 'pi-from-the-future' }],
-])('a row with %s', (_label, row) => {
-  beforeEach(() => store([row, { id: 'h_iris', name: 'iris', runtime: 'hermes' }]))
+  ['a retired tag', { id: 'h_old', name: 'old', runtime: 'letta' }, 'retired'],
+  ['an unknown tag', { id: 'h_old', name: 'old', runtime: 'pi-from-the-future' }, 'unknown'],
+])('a row with %s', (_label, row, reason) => {
+  let before: Record<string, string>
 
-  it('every write and lifecycle route is refused with 409, by id and by bare slug', async () => {
-    const wrong: string[] = []
-    for (const e of writes()) {
-      if (e.method === 'DELETE' && e.rel === '') continue // forgetting the row is the one thing that works
-      for (const id of ['h_old', 'old']) {
-        const res = await send(e.method, id, e.rel)
-        const body = (await res.json().catch(() => null)) as { reason?: string; runtime?: string } | null
-        if (res.status !== 409 || body?.runtime !== row.runtime || !['retired', 'unknown'].includes(body?.reason ?? '')) {
-          wrong.push(`${label(e)} as ${id}: ${res.status} ${JSON.stringify(body)}`)
-        }
-      }
-    }
-    expect(wrong).toEqual([])
+  beforeEach(() => {
+    storage.write('harnesses.json', [row, IRIS])
+    before = snapshot()
   })
 
-  it('forgetting the row is let through', async () => {
-    expect(passed(await send('DELETE', 'h_old', ''))).toBe(true)
+  it('the shared step answers 409 for its id, with the tag and the reason', async () => {
+    const { harness: resolved, refusal } = requireHarness('h_old')
+    expect(resolved).toBeUndefined()
+    expect(refusal?.status).toBe(409)
+    expect(await refusal!.json()).toMatchObject({ reason, runtime: row.runtime, error: expect.stringContaining('Forget the row') })
   })
 
-  it('reads are let through: the row is shown, not hidden behind an error', async () => {
-    for (const e of endpoints.filter((x) => x.method === 'GET')) {
-      expect(passed(await send('GET', 'h_old', e.rel)), label(e)).toBe(true)
+  it('matches the stored id exactly: no other spelling is the row', () => {
+    for (const id of ['old', 'h_Old', 'H_old', 'h_old_', 'h_ol', 'h_h_old']) {
+      expect(requireHarness(id).refusal?.status, id).toBe(404)
     }
   })
 
-  it('the one write an agent may send without the operator cookie is refused too', async () => {
-    const res = await send('POST', 'old', 'surfaces/[platform]/groups/[groupId]', false)
-    expect(res.status).toBe(409)
+  it('an id from a request body is refused the same way', async () => {
+    const refusal = refuseUnknownHarnesses(['h_iris', 'h_old'])
+    expect(refusal?.status).toBe(409)
+    expect(await refusal!.json()).toMatchObject({ reason, runtime: row.runtime })
+    expect(refuseUnknownHarnesses(['h_iris'])).toBeUndefined()
   })
 
-  it('a request with no session still gets 401, not a hint about the row', async () => {
-    expect((await send('POST', 'h_old', 'start', false)).status).toBe(401)
+  it('write and lifecycle routes change nothing', async () => {
+    const tier = await patchTier(json('PATCH', { tier: 'public' }), params({ id: 'h_old' }))
+    expect(tier.status).toBe(409)
+    const start = await startAgent(json('POST', {}), params({ id: 'h_old' }))
+    expect(start.status).toBe(409)
+    expect(rows()).toEqual([row, IRIS])
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('the surface policy routes treat it as no agent, by id and by bare slug', async () => {
+    for (const id of ['h_old', 'old']) {
+      const put = await putAdmins(json('PUT', { admins: [OWNER], actor: OWNER }), params({ id, platform: 'discord' }))
+      expect(put.status, id).toBe(404)
+      const invite = await postGroup(json('POST', { addedByUserId: OWNER }), params({ id, platform: 'discord', groupId: 'c2' }))
+      expect(invite.status, id).toBe(404)
+      const admins = await getAdmins(new Request('http://localhost/x'), params({ id, platform: 'discord' }))
+      expect((await admins.json()).admins, id).toEqual([])
+      const isAdmin = await getIsAdmin(new Request('http://localhost/x'), params({ id, platform: 'discord', userId: OWNER }))
+      expect((await isAdmin.json()).is_admin, id).toBe(false)
+      const group = await getGroup(new Request('http://localhost/x'), params({ id, platform: 'discord', groupId: 'c1' }))
+      expect((await group.json()).allowed, id).toBe(false)
+    }
+    expect(rows()).toEqual([row, IRIS])
+    expect(oldEnv()).toBe(OLD_ENV)
+    expect(snapshot()).toEqual(before)
+  })
+
+  it('it has no detail to read', async () => {
+    expect((await getAgent(new Request('http://localhost/x'), params({ id: 'h_old' }))).status).toBe(409)
+  })
+
+  it('forgetting the row works, and touches nothing but the row', async () => {
+    const res = await deleteAgent(json('DELETE', {}, '?deleteFiles=true'), params({ id: 'h_old' }))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ removed: true, stopped: false, filesDeleted: false, volumeRemoved: false })
+    expect(rows()).toEqual([IRIS])
+    expect(snapshot()).toEqual(before)
   })
 
   it('the other agent in the file is not affected', async () => {
-    for (const e of writes()) expect(passed(await send(e.method, 'h_iris', e.rel)), label(e)).toBe(true)
+    expect(requireHarness('h_iris').harness?.id).toBe('h_iris')
+    const tier = await patchTier(json('PATCH', { tier: 'public' }), params({ id: 'h_iris' }))
+    expect(tier.status).toBe(200)
+    expect(rows()).toEqual([row, { ...IRIS, tier: 'public' }])
+    const invite = await postGroup(json('POST', { addedByUserId: OWNER }), params({ id: 'iris', platform: 'discord', groupId: 'c2' }))
+    expect(await invite.json()).toMatchObject({ approved: true })
   })
 })
 
@@ -169,41 +199,30 @@ describe('a Hermes agent is never refused this way', () => {
     ['a tagged row', [{ id: 'h_old', name: 'old', runtime: 'hermes' }]],
     ['a row with no tag', [{ id: 'h_old', name: 'old', tier: 'team' }]],
     ['a row with a null tag', [{ id: 'h_old', name: 'old', runtime: null }]],
-    ['a row holding only surface admins', [{ id: 'h_old', surfaceAdmins: { discord: ['1'] } }]],
-    ["a row whose id looks like the removed integration's", [{ id: 'h_letta_server', surfaceAdmins: { discord: ['1'] } }]],
-    ['no stored row at all', []],
-  ] as Array<[string, Array<Record<string, unknown>>]>)('%s', async (_label, rows) => {
-    store([...rows, ...NEIGHBOURS])
-    const id = (rows[0]?.id as string | undefined) ?? 'h_old'
-    for (const e of endpoints) {
-      for (const spelled of [id, id.replace(/^h_/, '').replace(/_/g, '-')]) {
-        const res = await send(e.method, spelled, e.rel)
-        expect(res.status, `${label(e)} as ${spelled}`).not.toBe(409)
-        expect(passed(res), `${label(e)} as ${spelled}`).toBe(true)
-      }
+    ['a row holding only surface admins', [{ id: 'h_old', surfaceAdmins: { discord: [OWNER] } }]],
+    ["a row whose id looks like the removed integration's", [{ id: 'h_letta_server', surfaceAdmins: { discord: [OWNER] } }]],
+  ] as Array<[string, Array<Record<string, unknown>>]>)('%s', async (_label, stored) => {
+    storage.write('harnesses.json', [...stored, ...NEIGHBOURS])
+    const id = stored[0].id as string
+    expect(requireHarness(id).harness?.id).toBe(id)
+    expect(refuseUnknownHarnesses([id])).toBeUndefined()
+    const slug = id.replace(/^h_/, '').replace(/_/g, '-')
+    fs.mkdirSync(path.join(home, `.hermes-${slug}`), { recursive: true })
+    fs.writeFileSync(path.join(home, `.hermes-${slug}`, '.env'), OLD_ENV)
+    for (const spelled of [id, slug]) {
+      const isAdmin = await getIsAdmin(new Request('http://localhost/x'), params({ id: spelled, platform: 'discord', userId: OWNER }))
+      expect((await isAdmin.json()).is_admin, spelled).toBe(true)
     }
   })
 
-  it('the fleet-wide routes beside [id]/ are not mistaken for an agent', async () => {
-    // /api/harnesses/create is not "the agent called create". Each sibling of
-    // [id]/ is read from the directory, so a new one is covered when it lands.
-    const siblings = fs
-      .readdirSync(path.resolve(ROUTES_DIR, '..'), { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name !== '[id]' && e.name !== '__tests__')
-      .map((e) => e.name)
-    expect(siblings).toEqual(expect.arrayContaining(['create', 'import', 'restart-running', 'retired']))
-    store(siblings.map((name) => ({ id: `h_${name.replace(/-/g, '_')}`, name, runtime: 'letta' })))
-    for (const name of siblings) {
-      expect(passed(await send('POST', name, '')), `POST /api/harnesses/${name}`).toBe(true)
-    }
-    // An agent that really has such a name is still reachable by its id.
-    expect((await send('POST', 'h_create', 'start')).status).toBe(409)
+  it('an id with no stored row at all is unknown, not unmanaged', () => {
+    storage.write('harnesses.json', NEIGHBOURS)
+    expect(requireHarness('h_old').refusal?.status).toBe(404)
   })
 
-  it('a harnesses.json that is missing or not a list refuses nothing', async () => {
+  it('a harnesses.json that is missing names no unmanaged row', () => {
     fs.rmSync(path.join(scratch.data, 'harnesses.json'), { force: true })
-    expect(passed(await send('POST', 'h_old', 'start'))).toBe(true)
-    store({ not: 'a list' })
-    expect(passed(await send('POST', 'h_old', 'start'))).toBe(true)
+    expect(requireHarness('h_old').refusal?.status).toBe(404)
+    expect(refuseUnknownHarnesses(['h_old'])?.status).toBe(404)
   })
 })
