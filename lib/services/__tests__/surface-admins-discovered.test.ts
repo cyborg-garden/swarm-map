@@ -66,6 +66,31 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
+describe('approveGroupInvite with the real harness directory', () => {
+  const envOf = (name: string) => fs.readFileSync(path.join(tmpDir, `.hermes-${name}`, '.env'), 'utf-8')
+
+  it('approves for a discovered agent with no stored row, by slug or by id, and stores no row', () => {
+    writeEnv('iris', 'TELEGRAM_ALLOWED_USERS=111\n')
+    expect(svc.approveGroupInvite('iris', 'telegram', '-100777', '111'))
+      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_iris' })
+    expect(svc.approveGroupInvite('h_iris', 'telegram', '-100888', '111'))
+      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_iris' })
+    expect(envOf('iris')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777,-100888')
+    expect(svc.isGroupAllowed('iris', 'telegram', '-100888')).toBe(true)
+    expect(svc.isAdmin('iris', 'telegram', '111')).toBe(true)
+    expect(stored()).toEqual([])
+  })
+
+  it('answers 404 for a directory Docker lists no agent for, and leaves its .env alone', () => {
+    const env = 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n'
+    writeEnv('ghost', env)
+    for (const id of ['h_ghost', 'ghost']) {
+      expect(svc.approveGroupInvite(id, 'telegram', '-100777', '111'), id).toMatchObject({ ok: false, status: 404 })
+    }
+    expect(envOf('ghost')).toBe(env)
+  })
+})
+
 describe('setAdmins with the real harness directory', () => {
   it('stores a discovered agent under its own id, by id or by slug', () => {
     writeEnv('iris', 'SIGNAL_ALLOWED_USERS=+64111\n')

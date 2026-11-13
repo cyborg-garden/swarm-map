@@ -195,6 +195,21 @@ describe('POST group invite', () => {
     }
   })
 
+  it('refuses a directory the app lists no agent for, and leaves its .env alone', async () => {
+    const leftover = path.join(home, '.hermes-leftover')
+    const env = `DISCORD_ALLOWED_USERS=${OWNER}\n`
+    fs.mkdirSync(leftover)
+    fs.writeFileSync(path.join(leftover, '.env'), env)
+    for (const id of ['h_leftover', 'leftover']) {
+      const res = await postGroup(json('POST', { addedByUserId: OWNER }), params({ id, platform: 'discord', groupId: 'c2' }))
+      expect(res.status, id).toBe(404)
+    }
+    expect(fs.readFileSync(path.join(leftover, '.env'), 'utf-8')).toBe(env)
+    expect(fs.readFileSync(envPath(), 'utf-8')).toBe(ENV)
+    expect(restart).not.toHaveBeenCalled()
+    expect(auditAppend).not.toHaveBeenCalled()
+  })
+
   it.each(AGENT_IDS)('does not approve for someone outside the stored list under %s, and writes nothing', async (id) => {
     const res = await postGroup(json('POST', { addedByUserId: OTHER }), params({ id, platform: 'discord', groupId: 'c2' }))
     expect(res.status).toBe(200)

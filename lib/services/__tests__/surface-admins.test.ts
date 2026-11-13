@@ -786,3 +786,113 @@ describe('SurfaceAdminService.setAdmins — an agent with no stored row', () => 
     }
   })
 })
+
+// The shapes of agent on a running fleet, each called the way the policy
+// plugin calls: with HERMES_AGENT_NAME (the lowercase directory slug) or, from
+// the dashboard, with the stored id. When HERMES_AGENT_NAME is unset the
+// plugin makes no request at all (swarm_map_policy `_harness_id()` returns
+// None and it answers locally), so there is no third spelling to resolve.
+describe('SurfaceAdminService — every kind of agent on a fleet still resolves', () => {
+  const ADMIN = '111'
+  const GROUP = '-100777'
+  const ENV = `TELEGRAM_ALLOWED_USERS=${ADMIN}\nTELEGRAM_GROUP_ALLOWED_CHATS=-100111\n`
+  const envOf = (dir: string) => fs.readFileSync(path.join(home, dir, '.env'), 'utf-8')
+
+  function expectWorks(id: string, storedId: string, dir: string) {
+    expect(svc.listAdmins(id, 'telegram').admins, id).toEqual([ADMIN])
+    expect(svc.isAdmin(id, 'telegram', ADMIN), id).toBe(true)
+    expect(svc.isAdmin(id, 'telegram', '999'), id).toBe(false)
+    expect(svc.isGroupAllowed(id, 'telegram', '-100111'), id).toBe(true)
+    expect(svc.approveGroupInvite(id, 'telegram', GROUP, '999'), id).toMatchObject({ ok: true, approved: false })
+    expect(svc.approveGroupInvite(id, 'telegram', GROUP, ADMIN), id)
+      .toEqual({ ok: true, approved: true, updated: true, harnessId: storedId })
+    expect(envOf(dir), id).toContain(`TELEGRAM_GROUP_ALLOWED_CHATS=-100111,${GROUP}`)
+    expect(svc.isGroupAllowed(id, 'telegram', GROUP), id).toBe(true)
+  }
+
+  it.each([
+    ['mare', 'h_mare'],
+    ['h_mare', 'h_mare'],
+    ['garden-admin', 'h_garden_admin'],
+    ['h_garden_admin', 'h_garden_admin'],
+  ])('a stored row with a name: %s', (id, storedId) => {
+    const name = storedId.replace(/^h_/, '').replace(/_/g, '-')
+    writeAgentEnv(name, ENV)
+    storage.write('harnesses.json', [{ id: storedId, name }])
+    expectWorks(id, storedId, `.hermes-${name}`)
+  })
+
+  it.each([
+    ['personal', 'h_personal', '.hermes'],
+    ['h_personal', 'h_personal', '.hermes'],
+    ['osint', 'h_osint', '.hermes-osint'],
+    ['h_osint', 'h_osint', '.hermes-osint'],
+  ])('a stored row whose name is null: %s', (id, storedId, dir) => {
+    writeAgentEnv(storedId.replace(/^h_/, ''), ENV)
+    storage.write('harnesses.json', [{ id: storedId, name: null }])
+    expectWorks(id, storedId, dir)
+  })
+
+  it.each([
+    ['evil-duck', 'h_evil_duck'],
+    ['h_evil_duck', 'h_evil_duck'],
+    ['seraph-doer', 'h_seraph_doer'],
+    ['egregore', 'h_egregore'],
+  ])('a running agent with no stored row: %s', (id, storedId) => {
+    const name = storedId.replace(/^h_/, '').replace(/_/g, '-')
+    writeAgentEnv(name, ENV)
+    // Other agents have rows; this one does not.
+    storage.write('harnesses.json', [{ id: 'h_mare', name: 'mare' }, { id: 'h_personal', name: null }])
+    expectWorks(id, storedId, `.hermes-${name}`)
+    expect(storage.read<Array<{ id: string }>>('harnesses.json', []).map((h) => h.id)).toEqual(['h_mare', 'h_personal'])
+  })
+
+  it('an explicit admin list on a null-name row is found by the slug', () => {
+    writeAgentEnv('cyborg', ENV)
+    storage.write('harnesses.json', [{ id: 'h_cyborg', name: null, surfaceAdmins: { telegram: ['222'] } }])
+    expect(svc.listAdmins('cyborg', 'telegram')).toMatchObject({ source: 'explicit', admins: ['222'] })
+    expect(svc.isAdmin('cyborg', 'telegram', '222')).toBe(true)
+    expect(svc.isAdmin('cyborg', 'telegram', ADMIN)).toBe(false)
+  })
+})
+
+describe('SurfaceAdminService.approveGroupInvite — a directory with no agent', () => {
+  const ENV = 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n'
+  const envPath = () => path.join(home, '.hermes-leftover', '.env')
+
+  beforeEach(() => {
+    writeAgentEnv('leftover', ENV)
+    listed.clear() // the directory is there, but the app lists no such agent
+  })
+
+  it('answers 404 and leaves the .env alone, for an admin and under allow-all', () => {
+    for (const id of ['h_leftover', 'leftover']) {
+      for (const actor of ['111', '999']) {
+        expect(svc.approveGroupInvite(id, 'telegram', '-100777', actor), `${id} ${actor}`)
+          .toMatchObject({ ok: false, status: 404 })
+      }
+    }
+    expect(fs.readFileSync(envPath(), 'utf-8')).toBe(ENV)
+    expect(audit.append).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 when no harness directory is wired', () => {
+    const bare = new SurfaceAdminService(storage, audit as never)
+    expect(bare.approveGroupInvite('h_leftover', 'telegram', '-100777', '111')).toMatchObject({ ok: false, status: 404 })
+    expect(fs.readFileSync(envPath(), 'utf-8')).toBe(ENV)
+  })
+
+  it('does not ask the harness directory for someone the policy turns away', () => {
+    fs.writeFileSync(envPath(), 'TELEGRAM_ALLOWED_USERS=111\n')
+    const get = vi.spyOn(directory, 'get')
+    expect(svc.approveGroupInvite('h_leftover', 'telegram', '-100777', '999')).toMatchObject({ ok: true, approved: false })
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('does not ask the harness directory for an agent that has a stored row', () => {
+    storage.write('harnesses.json', [{ id: 'h_leftover', name: 'leftover' }])
+    const get = vi.spyOn(directory, 'get')
+    expect(svc.approveGroupInvite('leftover', 'telegram', '-100777', '999')).toMatchObject({ ok: true, approved: true, updated: true })
+    expect(get).not.toHaveBeenCalled()
+  })
+})
