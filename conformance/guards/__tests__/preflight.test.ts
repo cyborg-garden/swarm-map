@@ -140,6 +140,10 @@ describe('F5: Docker is the local one, and the project is ours', () => {
     // Another lab run's container is not this run's either.
     expect(() => assertOurProject('smlab-deadbeef', ['smlab-0badf00d-cell-1'])).toThrow(/smlab-0badf00d-cell-1/)
     expect(() => assertOurProject('smlab-deadbeef', ['smlab-deadbeef-cell-1'])).not.toThrow()
+    // Under a prefix of its own, a run's project is that prefix's and no other.
+    expect(() => assertOurProject('smlabv-deadbeef', ['smlabv-deadbeef-cell-1'], 'smlabv')).not.toThrow()
+    expect(() => assertOurProject('smlab-deadbeef', [], 'smlabv')).toThrow(RefusingToRun)
+    expect(() => assertOurProject('smlabv-deadbeef', [])).toThrow(RefusingToRun)
   })
 
   it('accepts a cell token only when it carries the nonce of this run', () => {

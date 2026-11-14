@@ -416,6 +416,11 @@
       "checks": []
     },
     {
+      "rule": "mem.one-scope",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "san.in",
       "status": "shared",
       "checks": []

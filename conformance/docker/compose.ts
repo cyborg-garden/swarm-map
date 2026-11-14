@@ -16,14 +16,69 @@
 //
 // A variant other than `good` breaks the rig in one named way. Those exist so
 // the checks can be shown to go red.
+import { createHash } from 'node:crypto'
+import { readdirSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { assertNoCredentials, PROJECT_NAME, projectNameFor, RefusingToRun } from '../guards/preflight.ts'
+import { assertNoCredentials, labPrefix, projectPattern, RefusingToRun } from '../guards/preflight.ts'
 
 export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
 
-export const CELL_IMAGE = `smlab-cell:pi-${PI_VERSION}`
-export const RIG_IMAGE = 'smlab-rig:local'
+const REPO = path.resolve(import.meta.dirname, '..', '..')
+
+// The images are named for the code they were built from. A fixed name is
+// shared by every checkout on a machine: whoever built last decides what every
+// other run then tests, and nothing says so. With the hash of the source in
+// the name, a run can only find an image built from the code it is testing.
+/** Put on both images by the build: the hash of the source they were built from. */
+export const SOURCE_LABEL = 'swarmlab.source'
+/** Put on everything a run makes: the id of that run. Cleaning up goes by it. */
+export const RUN_LABEL = 'swarmlab.run'
+
+// What the builder is sent. This says again what Dockerfile.dockerignore says;
+// if the two part, the rig image no longer holds exactly these files and the
+// Docker run refuses to start.
+const CONTEXT_ROOTS = ['lib/core', 'lib/door', 'lib/runtimes', 'conformance']
+const sent = (rel: string): boolean =>
+  !/(^|\/)(__tests__|node_modules)(\/|$)/.test(rel) && !/^conformance\/(matrix|out)(\/|$)/.test(rel)
+
+/** Every file the builder is sent, as paths from the repo root, sorted. */
+export function contextFiles(repo: string = REPO): string[] {
+  const found: string[] = []
+  const walk = (rel: string): void => {
+    let entries
+    try { entries = readdirSync(path.join(repo, rel), { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const child = `${rel}/${entry.name}`
+      if (!sent(child)) continue
+      if (entry.isDirectory()) walk(child)
+      else if (entry.isFile()) found.push(child)
+    }
+  }
+  for (const root of CONTEXT_ROOTS) walk(root)
+  return found.sort()
+}
+
+export interface Source {
+  /** Twelve hex digits over every file's path and content. */
+  hash: string
+  /** The SHA-256 of each file, by path. */
+  files: Record<string, string>
+}
+
+/** The source as it is on disk now. */
+export function readSource(repo: string = REPO): Source {
+  const files: Record<string, string> = {}
+  const all = createHash('sha256')
+  for (const rel of contextFiles(repo)) {
+    files[rel] = createHash('sha256').update(readFileSync(path.join(repo, rel))).digest('hex')
+    all.update(`${files[rel]}  ${rel}\n`)
+  }
+  return { hash: all.digest('hex').slice(0, 12), files }
+}
+
+export interface LabImages { cell: string; rig: string; source: string }
 
 /**
  * Which harness a cell holds. The rig is the same for every harness; what
@@ -32,16 +87,9 @@ export const RIG_IMAGE = 'smlab-rig:local'
  */
 export interface CellKind {
   harness: string
-  /**
-   * What sets this lab's names apart: '' or two letters and a dash. It goes into the
-   * names of its images and of every project it starts, so a lab for another harness,
-   * built from another checkout on the same machine, cannot be mistaken for this one.
-   */
-  tag: string
-  image: string
-  /** The image of the sidecar's side, the sink and the control. */
-  rigImage: string
-  /** The Dockerfile stage the image is built from. */
+  /** The harness and its pinned version, as they go into the cell image's name. */
+  name: string
+  /** The Dockerfile stage the cell image is built from. */
   target: string
   /** The cell's entry script, under conformance/docker/. */
   entry: string
@@ -49,9 +97,50 @@ export interface CellKind {
   version: { command: string[]; env: Record<string, string>; says: string }
 }
 export const PI_CELL: CellKind = {
-  harness: 'pi', tag: '', image: CELL_IMAGE, rigImage: RIG_IMAGE, target: 'cell', entry: 'cell-main.ts',
+  harness: 'pi', name: `pi-${PI_VERSION}`, target: 'cell', entry: 'cell-main.ts',
   version: { command: ['pi', '--version'], env: { PI_OFFLINE: '1', PI_TELEMETRY: '0', PI_SKIP_VERSION_CHECK: '1' }, says: PI_VERSION },
 }
+
+/** The two image names for the code in `repo`, under this run's prefix. */
+export function labImages(env: Record<string, string | undefined> = process.env, repo: string = REPO, kind: CellKind = PI_CELL): LabImages {
+  const prefix = labPrefix(env)
+  const source = readSource(repo).hash
+  return { cell: `${prefix}-cell:${kind.name}-${source}`, rig: `${prefix}-rig:${source}`, source }
+}
+
+/**
+ * Why an image is not the code under test. `seen.label` is what the image
+ * says it was built from. `seen.listing` is what is really in it: one
+ * `<sha256>  ./<path>` line for each file under the lab's folder. The label is
+ * a claim, so the files are compared as well. The rig image must hold exactly
+ * the source. The cell holds a part of it, so it may lack files, but every
+ * file it has must be this code's.
+ */
+export function sourceProblems(kind: 'cell' | 'rig', image: string, seen: { label: string; listing: string }, expected: Source, cellEntry = PI_CELL.entry): string[] {
+  const problems: string[] = []
+  if (seen.label !== expected.hash) {
+    const says = /^[0-9a-f]{12}$/.test(seen.label) ? `source ${seen.label}` : 'no source'
+    problems.push(`image ${image} was built from other code: it names ${says}, and the code under test is ${expected.hash}`)
+  }
+  const inside = new Map<string, string>()
+  for (const line of seen.listing.split('\n')) {
+    const m = /^([0-9a-f]{64}) [ *]\.\/(.+)$/.exec(line)
+    if (m) inside.set(m[2], m[1])
+  }
+  if (inside.size === 0) return [...problems, `image ${image}: its files could not be read, so it was not compared with the code under test`]
+  const wrong: string[] = []
+  for (const [rel, sum] of inside) {
+    if (!(rel in expected.files)) wrong.push(`${rel} is not in this code`)
+    else if (expected.files[rel] !== sum) wrong.push(`${rel} differs`)
+  }
+  const needed = kind === 'rig' ? Object.keys(expected.files) : [`conformance/docker/${cellEntry}`]
+  for (const rel of needed) if (!inside.has(rel)) wrong.push(`${rel} is missing`)
+  if (wrong.length > 0) {
+    problems.push(`image ${image} does not hold the code under test: ${wrong.slice(0, 6).join(', ')}${wrong.length > 6 ? `, and ${wrong.length - 6} more` : ''}`)
+  }
+  return problems
+}
+
 /** Where both containers mount the shared volume. Under the temp dir, so the lab's work-dir guard holds inside too. */
 export const LAB_DIR = '/tmp/smlab'
 export const BRAIN_PORT = 7801
@@ -84,8 +173,14 @@ export interface RigOptions {
   vetoTimeoutMs?: number
   /** Negative controls only: more environment for the cell. It goes through the same F2 guard. */
   extraCellEnv?: Record<string, string>
-  /** Which harness the cell holds. Default: Pi. */
+  /** The prefix of every name. Left out, it is this run's (SWARMLAB_DOCKER_PREFIX, or `smlab`). */
+  prefix?: string
+  /** The images to start. Left out, they are the ones named for the code on disk. */
+  images?: LabImages
+  /** Which harness the cell holds. Left out, it is Pi. */
   cell?: CellKind
+  /** Sixteen hex digits. Put as a label on every container, network and volume of the rig. */
+  runId?: string
 }
 
 /**
@@ -132,6 +227,7 @@ export interface Service {
   volumes?: string[]
   depends_on?: string[]
   sysctls?: Record<string, string>
+  labels?: Record<string, string>
   pids_limit?: number
   mem_limit?: string
   cpus?: number
@@ -140,8 +236,8 @@ export interface Service {
 export interface ComposeFile {
   name: string
   services: Record<'door' | 'cell' | 'sink' | 'control', Service>
-  networks: Record<string, { internal: boolean; enable_ipv6: false }>
-  volumes: { lab: Record<string, never> }
+  networks: Record<string, { internal: boolean; enable_ipv6: false; labels?: Record<string, string> }>
+  volumes: { lab: { labels?: Record<string, string> } }
 }
 
 export interface Rig { project: string; file: ComposeFile }
@@ -165,14 +261,17 @@ export function rigEnv(file: ComposeFile): Record<string, Record<string, string>
 }
 
 export function renderRig(o: RigOptions): Rig {
-  const kind = o.cell ?? PI_CELL
-  const project = `smlab-${kind.tag}${o.nonce}`
-  if (!projectNameFor(kind.tag).test(project) || !PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
+  const prefix = o.prefix ?? labPrefix()
+  const project = `${prefix}-${o.nonce}`
+  if (!projectPattern(prefix).test(project)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!RIG_VARIANTS.includes(o.variant)) throw new RefusingToRun('F5', `not a rig variant: ${o.variant}`)
+  if (o.runId !== undefined && !/^[0-9a-f]{16}$/.test(o.runId)) throw new RefusingToRun('F5', 'not a run id')
+  const kind = o.cell ?? PI_CELL
+  const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? labImages(undefined, undefined, kind)
 
   const run = { SWARMLAB_NONCE: o.nonce, SWARMLAB_BRAIN: o.brainToken }
   const cell: Service = {
-    ...service(kind.image, kind.entry, ['cell'], {
+    ...service(CELL_IMAGE, kind.entry, ['cell'], {
       ...run,
       SMLAB_GATE: o.gate ?? 'real',
       SMLAB_VERDICT_MS: String(o.verdictTimeoutMs ?? 400),
@@ -182,7 +281,7 @@ export function renderRig(o: RigOptions): Rig {
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'], pids_limit: 256, mem_limit: '1g', cpus: 1,
   }
   const door: Service = {
-    ...service(kind.rigImage, 'rig-main.ts', ['cell'], {
+    ...service(RIG_IMAGE, 'rig-main.ts', ['cell'], {
       ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', SMLAB_HARNESS: kind.harness,
       // What the harness will be asked to hand the probe. Addresses and a port, checked above all else to be only that.
       SMLAB_PROBE_ARGS: probeArgs(o.nonce, o.sinkIp ?? '', o.hostPort ?? 0, o.targets).join(' '),
@@ -193,8 +292,8 @@ export function renderRig(o: RigOptions): Rig {
     name: project,
     services: {
       door, cell,
-      sink: service(kind.rigImage, 'sink.ts', ['outside'], {}),
-      control: { ...service(kind.rigImage, 'control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] },
+      sink: service(RIG_IMAGE, 'sink.ts', ['outside'], {}),
+      control: { ...service(RIG_IMAGE, 'control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] },
     },
     networks: {
       cell: { internal: true, enable_ipv6: false },
@@ -223,6 +322,12 @@ export function renderRig(o: RigOptions): Rig {
   // Root alone is not enough to write another user's folder once every capability is dropped,
   // so this one also gets back root's usual power over files.
   if (o.variant === 'writable') { cell.user = '0'; cell.read_only = false; cell.cap_add = ['DAC_OVERRIDE'] }
+
+  // Last, so a network added by a broken rig carries it too.
+  if (o.runId !== undefined) {
+    const labels = { [RUN_LABEL]: o.runId }
+    for (const part of [...Object.values(file.services), ...Object.values(file.networks), file.volumes.lab]) part.labels = { ...labels }
+  }
 
   // F2, on exactly what each container is about to be handed. A run fake must carry this run's nonce.
   for (const [name, env] of Object.entries(rigEnv(file))) {
@@ -256,8 +361,6 @@ export function assertSealed(rig: Rig, kind: CellKind = PI_CELL): void {
   if (door.networks.join(',') !== 'cell') problems.push(`the sidecar is on ${door.networks.join(' and ')}`)
   if (door.volumes?.join(',') !== `lab:${LAB_DIR}:ro`) problems.push('the sidecar can write the shared folder, or mounts something else')
   if (cell.command.join(' ') !== entry(kind.entry).join(' ')) problems.push('the cell runs another command than its entry')
-  if (cell.image !== kind.image) problems.push('the cell is not the image of its harness')
-  for (const name of ['door', 'sink', 'control'] as const) if (file.services[name].image !== kind.rigImage) problems.push(`service ${name} is not this lab's rig image`)
   if (cell.cap_drop?.join(',') !== 'ALL') problems.push('the cell keeps capabilities')
   if (cell.security_opt?.join(',') !== 'no-new-privileges:true') problems.push('the cell does not have no-new-privileges alone as its security option')
   if (cell.sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1') problems.push('the cell does not have IPv6 switched off')

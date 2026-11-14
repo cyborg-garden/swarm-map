@@ -42,10 +42,10 @@ npm run conformance:docker -- letta-code         # about four minutes
 Both real runs refuse to run without the pinned version, and never skip. A complete run rewrites
 its matrix file: `conformance/matrix/letta-code-0.34.60.process.json` or `.docker.json`.
 
-The Letta Code lab's images and rigs carry names of their own (`smlab-lc-...`), and it lists and
-removes only those. So it cannot pick up an image the Pi lab built from another checkout, or take
-one of the Pi lab's rigs for its own. To remove what a killed run left: `npm run
-conformance:docker:clean -- letta-code`.
+Both images are named for the code they were built from, as for Pi, so a run can only use
+images built from this checkout as it is now. Build again after any change to the lab's code.
+The Letta Code cell image is its own (`...-cell:letta-code-0.34.60-<source>`); the rig image is
+the same one the Pi run uses.
 
 ## What was built
 
@@ -184,14 +184,14 @@ Each of these was a place where the contract had been written around Pi.
    `nativeMemory`, which was declared and never used.
 3. **A harness can patch the lab's starting policy** (`HarnessUnderTest.policy`). The lab's
    fixture opens two rooms and a category, which no one-room harness can be given.
-4. **The Docker rig takes the cell's harness as a part** (`CellKind`): its images, its entry, how
-   to ask it for its version, and a tag for its names. The rig file, the runner and the probe had
-   Pi's written in, and every lab on a machine shared one set of image and project names.
+4. **The Docker rig takes the cell's harness as a part** (`CellKind`): the name of its image, its
+   entry, and how to ask it for its version. The rig file, the runner and the probe had Pi's
+   written in. A suite says which harness its cells hold with `setCell()`.
 5. **The probe is told what must not be writable by what is in the cell**, not by Pi's paths.
 
-Pi's process matrix was made again from a real Pi run after these changes, since it carries a line
-per rule and there is one more rule. All 14 of its checks still pass. Pi's Docker matrix was left
-as it was.
+Both of Pi's matrix files were made again from real Pi runs after these changes: they carry a
+line per rule and there is one more rule, and the Docker rig Pi runs in was changed. Pi still
+passes all 14 of its process checks and every check in its cell.
 
 ## Where the fake was wrong
 
