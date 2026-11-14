@@ -120,6 +120,19 @@ describe('one channel: who is heard', () => {
     expect(verdicts(rig).at(-1)).toBe('deliver/addr.mention')
   })
 
+  it('a ping of everyone, of a role the bot holds, or of somebody else is not a mention of the bot', async () => {
+    rig = await startDiscordRig(policy({ allowedRoleIds: [IDS.role] }))
+    const post = (extra: object): string => rig!.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: 'all of you, look at this', ...extra })
+    post({ everyone: true })
+    post({ roleMentions: [IDS.role] })
+    post({ mentions: [IDS.admin] })
+    post({ everyone: true, roleMentions: [IDS.role], mentions: [IDS.admin, IDS.stranger] })
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/addr.mention', 'drop/addr.mention', 'drop/addr.mention', 'drop/addr.mention'])
+    expect(rig.shim.heard).toEqual([])
+    expect(rig.fake.posted).toEqual([])
+  })
+
   it('with no mention there is no answer; with mentions switched off there is', async () => {
     rig = await startDiscordRig(policy())
     say(rig, { mention: false, text: 'just talking' })

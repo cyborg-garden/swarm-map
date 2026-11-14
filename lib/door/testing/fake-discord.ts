@@ -64,6 +64,10 @@ export interface FakePost {
   content: string
   /** User ids Discord says were pinged. */
   mentions?: string[]
+  /** The message pinged @everyone or @here. */
+  everyone?: boolean
+  /** Role ids Discord says were pinged. */
+  roleMentions?: string[]
   /** The author of the message this one replies to. */
   replyTo?: string
   type?: number
@@ -287,6 +291,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
         ...(m.webhook ? { webhook_id: 'w-1' } : {}),
         content: m.content,
         mentions: (m.mentions ?? []).map((u) => ({ id: u })),
+        mention_everyone: m.everyone === true, mention_roles: m.roleMentions ?? [],
         ...(m.replyTo ? { referenced_message: { author: { id: m.replyTo } } } : {}),
         attachments: [], timestamp: new Date().toISOString(),
       })

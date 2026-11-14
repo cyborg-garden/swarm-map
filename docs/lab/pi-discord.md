@@ -232,7 +232,9 @@ If a run was killed some other way, `stop` still removes what it left.
    no harness is connected, until you stop and start again. If the door stops, the cell stays
    up, sealed and silent, until `stop` or the next `start` removes it.
 6. **Text only.** Attachments are listed for the door and not passed to Pi. There are no slash
-   commands and no reactions.
+   commands and no reactions. A reply to the bot with its ping switched off counts as addressed
+   to it, but without `readAllMessages` Discord sends no text for such a message, so the agent is
+   handed an empty one.
 7. **How Pi behaves as a chat partner is not tested.** It is a coding agent started with no tools
    and told so. That the model is given that text is tested. That a real model keeps to it is not.
 8. **The budget is counted with the prices you give.** They are not checked against the
