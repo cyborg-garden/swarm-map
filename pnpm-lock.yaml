@@ -2350,8 +2350,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.12.18:
-    resolution: {integrity: sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ==}
+  hono@4.13.18:
+    resolution: {integrity: sha512-H9q/E1XizaWstJxUW881dmLxEj+t/TrGGnyxINkm4+sK0qUwsMtFdo2BWI9Vs3cIS19MU6b6iCijoUoEf4f3DA==}
     engines: {node: '>=16.9.0'}
 
   html-encoding-sniffer@6.0.0:
@@ -4483,9 +4483,9 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
-  '@hono/node-server@1.19.14(hono@4.12.18)':
+  '@hono/node-server@1.19.14(hono@4.13.18)':
     dependencies:
-      hono: 4.12.18
+      hono: 4.13.18
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -4658,9 +4658,9 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.32.2(supports-color@7.2.0)(zod@3.25.76)':
     dependencies:
-      '@hono/node-server': 1.19.14(hono@4.12.18)
+      '@hono/node-server': 1.19.14(hono@4.13.18)
       ajv: 8.20.0
-      ajv-formats: 3.0.1
+      ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
       cors: 2.8.6
       cross-spawn: 7.0.6
@@ -4668,7 +4668,7 @@ snapshots:
       eventsource-parser: 3.0.8
       express: 5.2.1(supports-color@7.2.0)
       express-rate-limit: 8.5.1(express@5.2.1(supports-color@7.2.0))
-      hono: 4.12.18
+      hono: 4.13.18
       jose: 6.2.3
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -5111,7 +5111,7 @@ snapshots:
       '@typescript-eslint/visitor-keys': 8.59.3
       debug: 4.4.3(supports-color@7.2.0)
       minimatch: 10.2.5
-      semver: 7.8.0
+      semver: 7.8.6
       tinyglobby: 0.2.16
       ts-api-utils: 2.5.0(typescript@5.9.3)
       typescript: 5.9.3
@@ -5253,8 +5253,8 @@ snapshots:
 
   agent-base@7.1.4: {}
 
-  ajv-formats@3.0.1:
-    dependencies:
+  ajv-formats@3.0.1(ajv@8.20.0):
+    optionalDependencies:
       ajv: 8.20.0
 
   ajv@6.15.0:
@@ -6461,7 +6461,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.12.18: {}
+  hono@4.13.18: {}
 
   html-encoding-sniffer@6.0.0(@noble/hashes@1.8.0):
     dependencies:
@@ -7601,8 +7601,7 @@ snapshots:
 
   semver@7.8.0: {}
 
-  semver@7.8.6:
-    optional: true
+  semver@7.8.6: {}
 
   send@1.2.1(supports-color@7.2.0):
     dependencies:
@@ -8174,7 +8173,7 @@ snapshots:
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.4
-      postcss: 8.5.14
+      postcss: 8.5.23
       rolldown: 1.0.0
       tinyglobby: 0.2.16
     optionalDependencies:
