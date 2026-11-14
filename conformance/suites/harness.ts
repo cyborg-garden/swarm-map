@@ -48,6 +48,7 @@ export interface HarnessUnderTest {
    * A patch to the lab's starting policy, for a harness the door would otherwise give
    * nothing: the lab's fixture opens several rooms, and a harness with one memory for
    * the whole agent may be given one. A check's own patch still goes on top.
+   * It may only take rooms away: a lab refuses to start for a patch that does anything else.
    */
   policy?: Record<string, unknown>
   /** Native calls of class `shell` that touch a file, dump the environment to a file, and run one command line. */

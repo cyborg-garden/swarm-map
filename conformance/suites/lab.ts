@@ -90,7 +90,30 @@ export interface Lab {
 // 100 in + 20 out per scripted reply; at these prices one reply costs exactly 1 USD.
 const PRICES = { scripted: { inPerMTok: 5000, outPerMTok: 25000 } }
 
+/**
+ * Why a harness's patch to the starting policy is not allowed. It comes from the adapter of
+ * the harness under test, so it may do one thing: take rooms away from a surface the fixture
+ * already has. Anything else (a tool, a sender, the posture, a room the fixture does not
+ * open, a room made easier to speak in) could make that harness's own checks easier to pass.
+ * Empty means the patch only narrows.
+ */
+export function narrowingProblems(fixture: PolicyRecord, patch: Record<string, unknown> | undefined): string[] {
+  const problems: string[] = []
+  for (const [key, value] of Object.entries(patch ?? {})) {
+    const m = /^surfaces\.([a-z]+)\.rooms$/.exec(key)
+    const had = m ? fixture.surfaces[m[1] as keyof PolicyRecord['surfaces']]?.rooms : undefined
+    if (!had) { problems.push(`${key} is not the room list of a surface the fixture has`); continue }
+    if (!Array.isArray(value)) { problems.push(`${key} is not a list`); continue }
+    const known = new Set(had.map((rule) => JSON.stringify(rule)))
+    const added = value.filter((rule) => !known.has(JSON.stringify(rule))).length
+    if (added > 0) problems.push(`${key} holds ${added} room rule(s) the fixture does not have`)
+  }
+  return problems
+}
+
 export async function startLab(o: LabOptions): Promise<Lab> {
+  const widened = narrowingProblems(loadFixturePolicy('policy-team.json'), o.harness.policy)
+  if (widened.length > 0) throw new Error(`REFUSING TO RUN: a harness may only take rooms away from the lab's starting policy: ${widened.join('; ')}`)
   const nonce = o.remote?.nonce ?? randomBytes(4).toString('hex')
   const dir = o.remote?.dir ?? mkdtempSync(path.join(o.workRoot ?? os.tmpdir(), `swarmlab-${nonce}-`))
   // F5: checked before anything is written there or started. A refused dir is removed again.
