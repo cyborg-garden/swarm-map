@@ -128,8 +128,11 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   }
 
   async function inbound(connector: SurfaceConnector, e: ConnectorInbound): Promise<void> {
+    // The lookup comes first. From the count being read to the count being written nothing waits,
+    // so messages that arrive together are counted one by one, not all against the same figure.
+    const looked = await connector.facts({ principal: e.sender, room: e.room })
     const botRun = botRuns.get(runKey(e)) ?? 0
-    const facts = await factsFor(connector, e, botRun)
+    const facts: Facts = { ...looked, botTurnsInARow: botRun }
     const d = decide(policy, e, facts)
     receipt(about(e, 'inbound'), d)
     if (d.verdict !== 'deliver' && d.verdict !== 'observe') return

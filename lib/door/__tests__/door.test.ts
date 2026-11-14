@@ -674,6 +674,16 @@ describe('door: bot loops', () => {
     expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: only one'])
   })
 
+  it('[P:bot-loop] a burst of bot messages that arrive together is still counted one by one', async () => {
+    rig = await startRig(loopy(2))
+    // A slow lookup holds every message of the burst at the same point before it is decided.
+    rig.fake.facts.delayMs = 50
+    for (let i = 0; i < 5; i++) rig.fake.say({ room: 'r-lounge', sender: bot, text: `burst ${i}` })
+    await rig.door.idle()
+    expect(verdicts(rig).sort()).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop', 'drop/bots.loop', 'drop/bots.loop'])
+    expect(rig.shim.heard).toHaveLength(2)
+  })
+
   it('[P:bot-loop] a limit of none answers no bot at all', async () => {
     rig = await startRig(loopy(0))
     rig.fake.say({ room: 'r-lounge', sender: bot, text: 'hello' })
