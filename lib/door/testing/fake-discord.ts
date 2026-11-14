@@ -70,7 +70,7 @@ export interface FakePost {
   webhook?: boolean
   id?: string
 }
-export interface Posted { channel: string; content: string; allowedMentions: unknown; auth: string }
+export interface Posted { channel: string; content: string; allowedMentions: unknown; replyTo?: string }
 
 export interface FakeDiscord {
   nonce: string
@@ -171,10 +171,10 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
           return reply(429, { message: 'You are being rate limited.', retry_after: limited.retryAfterSec, global: false })
         }
         if (failing.count > 0) { failing.count--; return reply(failing.status, { message: 'no' }) }
-        let body: { content?: string; allowed_mentions?: unknown }
+        let body: { content?: string; allowed_mentions?: unknown; message_reference?: { message_id?: string } }
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return reply(400, { message: 'bad json' }) }
         if (typeof body.content !== 'string' || body.content === '' || body.content.length > 2000) return reply(400, { message: 'Invalid Form Body' })
-        fake.posted.push({ channel: decodeURIComponent(msg[1]), content: body.content, allowedMentions: body.allowed_mentions, auth: 'bot' })
+        fake.posted.push({ channel: decodeURIComponent(msg[1]), content: body.content, allowedMentions: body.allowed_mentions, ...(body.message_reference?.message_id ? { replyTo: body.message_reference.message_id } : {}) })
         return reply(200, { id: String(++nextId), timestamp: new Date().toISOString() })
       }
       reply(404, { message: '404: Not Found' })

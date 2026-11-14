@@ -11,7 +11,8 @@ export interface InviteEvent { kind: 'invite'; surface: SurfaceId; room: RoomRef
  * edited or deleted. It carries ids only. What follows from it is the door's call.
  */
 export interface NoticeEvent { kind: 'notice'; what: 'edit' | 'delete'; surface: SurfaceId; room: string; messageId: string }
-export interface OutboundMessage { text: string; turnId?: string }
+/** `inReplyTo` is the id of the message being answered, for a surface that can show a reply under it. */
+export interface OutboundMessage { text: string; turnId?: string; inReplyTo?: string }
 export interface SendReceipt { id: string; ts: string }
 
 export interface SurfaceConnector {

@@ -219,7 +219,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const chars = [...clean.text]
     const cut = chars.length > maxReplyChars
     const body = cut ? `${chars.slice(0, maxReplyChars).join('')}\n[cut: the reply was longer than this room allows]` : clean.text
-    await turn.connector.send(e.room, { text: body, turnId: turn.turnId })
+    await turn.connector.send(e.room, { text: body, turnId: turn.turnId, inReplyTo: e.messageId })
     const notes = clean.findings.map((f) => `${f.pattern} x${f.count}`)
     receipt({ ...tag, bytes: Buffer.byteLength(body) }, out, notes.length > 0 ? notes.join(', ') : undefined)
     if (cut) receipt({ ...tag, bytes: Buffer.byteLength(body) }, { verdict: 'allow', rule: 'out.size', why: 'The reply was longer than the limit, so it was cut before it was posted.' }, `chars=${chars.length} limit=${maxReplyChars}`)

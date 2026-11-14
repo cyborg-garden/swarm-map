@@ -348,16 +348,18 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     })
   }
 
-  async function post(room: RoomRef, text: string): Promise<SendReceipt> {
+  async function post(room: RoomRef, text: string, inReplyTo?: string): Promise<SendReceipt> {
     let last: SendReceipt | undefined
-    for (const piece of chunk(text)) {
+    for (const [i, piece] of chunk(text).entries()) {
       const wait = (holdUntil.get(room.id) ?? 0) - Date.now()
       if (wait > maxWait) throw new Error('discord: rate limited for longer than this connector will wait (POST)')
       if (wait > 0) await sleep(wait)
       const { json, headers } = await rest('POST', `/channels/${encodeURIComponent(room.id)}/messages`, {
         content: piece,
-        // Nothing the model writes can ping a person, a role or everyone.
-        allowed_mentions: { parse: [] },
+        // Nothing the model writes can ping a person, a role or everyone, and a reply pings nobody either.
+        allowed_mentions: { parse: [], replied_user: false },
+        // The first piece sits under the message it answers. If that message is gone, it is posted plainly.
+        ...(i === 0 && inReplyTo ? { message_reference: { message_id: inReplyTo, fail_if_not_exists: false } } : {}),
       })
       if (headers.get('x-ratelimit-remaining') === '0') {
         const after = Number(headers.get('x-ratelimit-reset-after'))
@@ -396,7 +398,7 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
       if (room.kind === 'dm' || room.kind === 'group' || home === undefined || !scope.has(home)) {
         return Promise.reject(new Error('discord: refusing to post outside the channels this connector was started for'))
       }
-      const turn = (posting.get(room.id) ?? Promise.resolve()).catch(() => {}).then(() => post(room, msg.text))
+      const turn = (posting.get(room.id) ?? Promise.resolve()).catch(() => {}).then(() => post(room, msg.text, msg.inReplyTo))
       posting.set(room.id, turn)
       return turn
     },

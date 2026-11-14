@@ -70,7 +70,7 @@ describe('one channel: who is heard', () => {
     const id = say(rig, { text: 'hello there' })
     await rig.posts(1)
     expect(rig.shim.heard.map((e) => [e.id, e.room.id, e.sender.id, e.surface])).toEqual([[id, IDS.home, IDS.member, 'discord']])
-    expect(rig.fake.posted).toEqual([{ channel: IDS.home, content: `echo: <@${rig.fake.selfId}> hello there`, allowedMentions: { parse: [] }, auth: 'bot' }])
+    expect(rig.fake.posted).toEqual([{ channel: IDS.home, content: `echo: <@${rig.fake.selfId}> hello there`, allowedMentions: { parse: [], replied_user: false }, replyTo: id }])
     expect(verdicts(rig)).toEqual(['deliver/addr.mention'])
   })
 
@@ -235,7 +235,7 @@ describe('one channel: what goes out', () => {
     shim.client.send({ t: 'settled', turnId: 'made-up' })
     await rig.settle()
     expect(rig.fake.posted.map((p) => p.channel)).toEqual([IDS.home])
-    expect(rig.fake.posted[0].allowedMentions).toEqual({ parse: [] })
+    expect(rig.fake.posted[0].allowedMentions).toEqual({ parse: [], replied_user: false })
     expect(verdicts(rig, 'outbound')).toEqual(['allow/out.still-allowed', 'drop/turn.known', 'drop/turn.known'])
     shim.client.close()
   })
@@ -301,6 +301,8 @@ describe('one channel: what goes out', () => {
     await rig.settle()
     expect(rig.fake.posted.map((p) => p.channel)).toEqual([IDS.home, IDS.home, IDS.home])
     for (const p of rig.fake.posted) expect(p.content.length).toBeLessThanOrEqual(2000)
+    // Only the first piece is shown as a reply to the message.
+    expect(rig.fake.posted.map((p) => p.replyTo !== undefined)).toEqual([true, false, false])
     expect(rig.fake.posted.at(-1)?.content).toContain('[cut:')
     expect(verdicts(rig, 'outbound')).toEqual(['allow/out.still-allowed', 'allow/out.size'])
     shim.client.close()
