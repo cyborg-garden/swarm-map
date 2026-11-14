@@ -88,10 +88,13 @@ describe('one channel: who is heard', () => {
   it('a message in another server is not heard, even from an admin', async () => {
     rig = await startDiscordRig(policy())
     rig.fake.addChannel({ id: '7100000000000000009', guild: '7000000000000000009' })
+    // And a thread over there that names the allowed channel as its parent borrows nothing from it.
+    rig.fake.addChannel({ id: '7200000000000000009', type: 11, parent: IDS.home, guild: '7000000000000000009', listed: false })
     say(rig, { channel: '7100000000000000009', guild: '7000000000000000009', author: IDS.admin, text: 'hi' })
+    say(rig, { channel: '7200000000000000009', guild: '7000000000000000009', author: IDS.admin, text: 'hi from a thread' })
     await rig.settle()
     expect(rig.shim.heard).toEqual([])
-    expect(verdicts(rig)).toEqual(['drop/adm.rooms'])
+    expect(verdicts(rig)).toEqual(['drop/adm.rooms', 'drop/adm.rooms'])
   })
 
   it('a person who is not listed is refused, mention or not', async () => {

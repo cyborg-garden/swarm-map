@@ -35,7 +35,7 @@ function loadConfig(): LabConfig {
 }
 const stateDirFor = (config: LabConfig): string =>
   prepareStateDir(path.resolve(flag('state') ?? process.env.SMLAB_STATE_DIR ?? path.join(os.homedir(), '.swarm-map-lab', config.agentId)))
-const mark = (c: Check): string => `  ${c.pass ? 'pass' : 'FAIL'}  ${c.id.padEnd(4)} ${c.title}${c.pass ? '' : `\n          ${c.detail}`}${c.note ? `\n          note: ${c.note}` : ''}`
+const mark = (c: Check): string => `  ${c.pass ? 'pass' : 'FAIL'}  ${c.id.padEnd(4)} ${c.title}${c.pass ? '' : `\n          ${c.detail}`}`
 
 async function dryRun(): Promise<void> {
   const config = loadConfig()

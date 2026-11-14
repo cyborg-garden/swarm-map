@@ -144,7 +144,8 @@ describe('pi-discord secret files', () => {
 })
 
 describe('pi-discord cell, as written', () => {
-  const options: CellOptions = { nonce: '0badf00d', brainToken: 'BRAIN-0badf00d-0123456789abcdef', brainPort: 50001, routePort: 50002, model: 'lab/model' }
+  const cellNonce = '0123456789abcdef'.repeat(2)
+  const options: CellOptions = { nonce: '0badf00d', cellNonce, brainToken: `BRAIN-${cellNonce}-0123456789abcdef`, brainPort: 50001, routePort: 50002, model: 'lab/model' }
 
   it('is sealed: one network with no way out, read-only, non-root, one folder of its own, no published port', () => {
     const file = renderCell(options)
@@ -190,5 +191,8 @@ describe('pi-discord cell, as written', () => {
   it('refuses a nonce or a port that is not one', () => {
     expect(() => renderCell({ ...options, nonce: 'prod' })).toThrow(/REFUSING TO RUN: F5/)
     expect(() => renderCell({ ...options, brainPort: 80 })).toThrow(/REFUSING TO RUN: F5/)
+    // The cell's placeholder must not be something a container name gives away.
+    expect(() => renderCell({ ...options, cellNonce: '0badf00d', brainToken: 'BRAIN-0badf00d-0123456789abcdef' })).toThrow(/REFUSING TO RUN: F5/)
+    expect(JSON.stringify(renderCell(options).services.cell)).not.toContain('0badf00d')
   })
 })

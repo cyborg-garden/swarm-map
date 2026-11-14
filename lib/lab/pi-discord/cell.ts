@@ -14,12 +14,18 @@
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { CELL_IMAGE, LAB_DIR, BRAIN_PORT, ROUTE_PORT, RIG_IMAGE, SWARM_ROOT, probeArgs, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
-import { mountProblems, netProblems, parseReport, secretProblems, writeProblems } from '../../../conformance/docker/report.ts'
+import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig } from '../../../conformance/docker/report.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
 
 export interface CellOptions {
-  /** Eight hex digits. Names the compose project. */
+  /** Eight hex digits. Names the compose project, and anyone on this machine can read it. */
   nonce: string
+  /**
+   * The cell's own nonce: long, random, and not the project's. The cell's
+   * placeholder for a model key is made from it, so the placeholder cannot be
+   * worked out from a container name.
+   */
+  cellNonce: string
   brainToken: string
   /** Where the door listens on this machine. */
   brainPort: number
@@ -54,10 +60,11 @@ function service(image: string, script: string, networks: string[], environment:
 export function renderCell(o: CellOptions): LiveFile {
   const name = `smlab-${o.nonce}`
   if (!PROJECT_NAME.test(name)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
+  if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
   const cell: Service = {
     ...service(CELL_IMAGE, 'conformance/docker/cell-main.ts', ['cell'], {
-      SWARMLAB_NONCE: o.nonce, SWARMLAB_BRAIN: o.brainToken, SMLAB_GATE: 'real',
+      SWARMLAB_NONCE: o.cellNonce, SWARMLAB_BRAIN: o.brainToken, SMLAB_GATE: 'real',
       // A real model is slower than a scripted one: the shim waits this long for the door's answer on a tool.
       SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000', SMLAB_MODEL: o.model,
     }),
@@ -172,7 +179,7 @@ export function runningCellProblems(project: string): string[] {
     Config: { Env: string[]; User: string }
     Mounts: { Type: string; Name?: string; Destination: string }[]
     NetworkSettings: { Networks: Record<string, unknown>; Ports?: Record<string, unknown> }
-    HostConfig: { ReadonlyRootfs: boolean; Privileged: boolean; CapDrop: string[] | null; CapAdd: string[] | null; PortBindings?: Record<string, unknown> | null }
+    HostConfig: HostConfig & { ReadonlyRootfs: boolean }
   }]
   if (!c.State.Running) p.push('the cell is not running')
   const networks = Object.keys(c.NetworkSettings.Networks).sort()
@@ -181,9 +188,9 @@ export function runningCellProblems(project: string): string[] {
     if (docker(['network', 'inspect', '--format', '{{.Internal}}', network]).out.trim() !== 'true') p.push(`network ${network} is not internal`)
   }
   if (!c.HostConfig.ReadonlyRootfs) p.push('the cell\'s disk is not read-only')
-  if (c.HostConfig.Privileged) p.push('the cell is privileged')
-  if (!(c.HostConfig.CapDrop ?? []).includes('ALL') || (c.HostConfig.CapAdd ?? []).length > 0) p.push('the cell holds capabilities')
-  if (Object.keys(c.HostConfig.PortBindings ?? {}).length > 0) p.push('the cell publishes a port')
+  // The lab's own reading of what Docker says it gave a container: ports, namespaces, capabilities, host paths.
+  const given = hostConfigProblems(c.HostConfig, `${project}_cell`)
+  p.push(...given.net, ...given.privilege, ...given.mounts)
   if (c.Config.User !== 'node') p.push(`the cell runs as ${c.Config.User || 'root'}`)
   if (c.Mounts.length !== 1 || c.Mounts[0].Type !== 'volume' || c.Mounts[0].Name !== `${project}_lab`) p.push('the cell mounts something other than its own folder')
   // Names only. What the image itself sets is not ours to list.
@@ -193,21 +200,12 @@ export function runningCellProblems(project: string): string[] {
 }
 
 /** Run the lab's probe inside the cell: it tries every way out it knows and reports what happened. */
-export async function probeCell(project: string, nonce: string, sinkIp: string, hostPort: number, targets: ProbeTargets): Promise<{ id: string; title: string; problems: string[]; note?: string }[]> {
-  const out = await dockerAsync(['exec', `${project}-cell-1`, 'node', `${SWARM_ROOT}/conformance/docker/probe.ts`, ...probeArgs(nonce, sinkIp, hostPort, targets)], 90_000)
+export async function probeCell(project: string, cellNonce: string, sinkIp: string, hostPort: number, targets: ProbeTargets): Promise<{ id: string; title: string; problems: string[] }[]> {
+  const out = await dockerAsync(['exec', `${project}-cell-1`, 'node', `${SWARM_ROOT}/conformance/docker/probe.ts`, ...probeArgs(cellNonce, sinkIp, hostPort, targets)], 90_000)
   const report = parseReport(out)
   const none = ['the probe did not run in the cell, so nothing was checked']
-  let net = report ? netProblems(report) : none
-  let note: string | undefined
-  // Some networks hand out no IPv6 address to try. That one way out is then untried, and it is said
-  // rather than failed, but only while the cell itself has no IPv6 address to leave by.
-  const untried6 = 'did not try a public address over IPv6: the rig was given no address for it'
-  if (report && targets.resolverIp6 === '' && report.ipv6.length === 0 && net.includes(untried6)) {
-    net = net.filter((x) => x !== untried6)
-    note = 'IPv6 out was not tried: this network gave no IPv6 address to try. The cell has no IPv6 address'
-  }
   return [
-    { id: 'S1', title: 'the cell reaches the door and nothing else: not the internet, not this machine', problems: net, note },
+    { id: 'S1', title: 'the cell reaches the door and nothing else: not the internet, not this machine', problems: report ? netProblems(report) : none },
     { id: 'S2', title: 'the shim, the gate and Pi cannot be changed from inside the cell', problems: report ? writeProblems(report) : none },
     { id: 'S3', title: 'no folder of this machine is in the cell', problems: report ? [...mountProblems(report), ...secretProblems(report).filter((x) => x.startsWith('the search'))] : none },
   ]

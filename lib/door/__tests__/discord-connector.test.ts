@@ -16,13 +16,10 @@ armTripwire()
 type Seen = ConnectorInbound | InviteEvent | NoticeEvent
 interface Bench { fake: FakeDiscord; connector: SurfaceConnector; events: Seen[]; logs: string[]; fatal: number[] }
 let bench: Bench | undefined
-let extra: FakeDiscord | undefined
 afterEach(async () => {
   await bench?.connector.close()
   await bench?.fake.close()
-  await extra?.close()
   bench = undefined
-  extra = undefined
   expect(tripwireAttempts()).toEqual([])
 })
 
@@ -211,14 +208,13 @@ describe('Discord connector: the gateway', () => {
     await expect(b.connector.send(home, { text: 'x' })).rejects.toThrow(/not connected/)
   })
 
-  it('a gateway that never says ready fails the connect', async () => {
-    extra = await startFakeDiscord()
+  it('a gateway that never says ready fails the connect, and the connector then gives up for good', async () => {
     const b = await start({ connect: false, readyTimeoutMs: 100 })
-    // Pointed at a port where nothing speaks the gateway protocol: the fake's REST path.
-    const deaf = createDiscordConnector({ apiBase: extra.apiBase, gatewayUrl: extra.gatewayUrl.replace('/gateway', '/nothing'), sendScope: [IDS.home], readyTimeoutMs: 100, reconnect: { firstMs: 5, maxMs: 10 } })
-    await expect(deaf.connect({ token: extra.token })).rejects.toThrow(/did not say ready in time/)
-    await deaf.close()
-    expect(b.fake.identifies).toEqual([])
+    b.fake.holdReady(true)
+    await expect(b.connector.connect({ token: b.fake.token })).rejects.toThrow(/did not say ready in time/)
+    await sleep(150)
+    expect(b.fake.identifies).toHaveLength(1)
+    await expect(b.connector.send(home, { text: 'x' })).rejects.toThrow(/not connected/)
   })
 })
 

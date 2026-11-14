@@ -25,7 +25,7 @@ export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 
 export interface RunRecord { pid: number; project: string; agentId: string; policyHash: string; startedAt: string }
 export interface Running { project: string; door: Door; stop(): Promise<void> }
-export interface Check { id: string; title: string; pass: boolean; detail: string; note?: string }
+export interface Check { id: string; title: string; pass: boolean; detail: string }
 
 const inside = (child: string, parent: string): boolean => {
   const rel = path.relative(parent, child)
@@ -86,13 +86,14 @@ export async function start(o: StartOptions): Promise<Running> {
 
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
-  const brainToken = `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`
+  const cellNonce = randomBytes(16).toString('hex')
+  const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const policy = policyFor(o.config)
   const receipts = createReceiptLog({ file: path.join(stateDir, 'receipts.jsonl') })
   const [brainPort, routePort] = [await freePort(), await freePort()]
   const secrets = [o.secrets.discordToken, o.secrets.modelKey]
 
-  const cellOptions: CellOptions = { nonce, brainToken, brainPort, routePort, model: o.config.model.id }
+  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id }
   const file = renderCell(cellOptions)
   const problems = sealProblems(file, secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
@@ -115,7 +116,7 @@ export async function start(o: StartOptions): Promise<Running> {
     // Written first, so `stop` can clean up whatever happens next.
     writeFileSync(runFile(stateDir), JSON.stringify({ pid: process.pid, project, agentId: policy.agentId, policyHash: policy.hash, startedAt: new Date().toISOString() } satisfies RunRecord) + '\n', { mode: 0o600 })
     route = await startModelRoute({
-      upstream: o.config.model.baseUrl, upstreamKey: o.secrets.modelKey, placeholder: `PLACEHOLDER-${nonce}`, shape: OPENAI_CHAT,
+      upstream: o.config.model.baseUrl, upstreamKey: o.secrets.modelKey, placeholder: `PLACEHOLDER-${cellNonce}`, shape: OPENAI_CHAT,
       policy: () => door?.policy() ?? policy, receipts,
       prices: { [o.config.model.id]: { inPerMTok: o.config.model.usdPerMTokIn, outPerMTok: o.config.model.usdPerMTokOut } },
       ledger: createFileLedger(path.join(stateDir, 'spend.json')),
@@ -158,12 +159,13 @@ export async function start(o: StartOptions): Promise<Running> {
 export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken'] }): Promise<Check[]> {
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
-  const brainToken = `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`
+  const cellNonce = randomBytes(16).toString('hex')
+  const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const options: CellOptions = { nonce, brainToken, brainPort, routePort, model: o.model, withSink: true, broken: o.broken }
+  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, withSink: true, broken: o.broken }
   const file = renderCell(options)
   const checks: Check[] = []
-  const add = (id: string, title: string, problems: string[], note?: string): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok', ...(note ? { note } : {}) }) }
+  const add = (id: string, title: string, problems: string[]): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok' }) }
   add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file))
 
   const targets = findTargets()
@@ -172,7 +174,7 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
   const receipts = createReceiptLog()
   const door = await createDoor({ policy, connectors: [], creds: {}, receipts, brainToken, brainPort })
   const route = await startModelRoute({
-    upstream: 'http://127.0.0.1:9/v1', upstreamKey: `UPSTREAM-${nonce}`, placeholder: `PLACEHOLDER-${nonce}`, shape: OPENAI_CHAT,
+    upstream: 'http://127.0.0.1:9/v1', upstreamKey: `UPSTREAM-${cellNonce}`, placeholder: `PLACEHOLDER-${cellNonce}`, shape: OPENAI_CHAT,
     policy: () => policy, receipts, prices: {}, ledger: createMemoryLedger(), host: '127.0.0.1', port: routePort,
   })
   const composePath = path.join(o.workDir, `compose-${nonce}.json`)
@@ -187,11 +189,11 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
     add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project))
     if (reached) {
       const seen = host.hits.length
-      const probed = await probeCell(project, nonce, sinkIp, host.port, targets)
+      const probed = await probeCell(project, cellNonce, sinkIp, host.port, targets)
       await new Promise((resolve) => setTimeout(resolve, 300)) // let this process hear anything that reached its listener
       const sinkHits = docker(['logs', `${project}-sink-1`]).out.split('\n').filter((l) => l.startsWith('SINK-HIT '))
       const outside = [...sinkProblems(sinkHits, nonce), ...host.hits.slice(seen).map((url) => `a listener on this machine was reached from inside the cell (${url})`)]
-      for (const c of probed) add(c.id, c.title, c.id === 'S1' ? [...c.problems, ...outside] : c.problems, c.note)
+      for (const c of probed) add(c.id, c.title, c.id === 'S1' ? [...c.problems, ...outside] : c.problems)
     }
   } finally {
     await door.close()

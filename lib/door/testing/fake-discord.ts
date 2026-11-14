@@ -102,6 +102,8 @@ export interface FakeDiscord {
   sendOp(op: number, d?: unknown): void
   /** Stop answering heartbeats, as a dead connection would. */
   muteHeartbeats(mute: boolean): void
+  /** Take identifies and say nothing back, as a gateway that never gets to ready. */
+  holdReady(hold: boolean): void
   /** Refuse the next identify with this close code. */
   refuseIdentify(code: number): void
   connections(): number
@@ -134,6 +136,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
   let failing = { count: 0, status: 500 }
   let mute = false
   let refuse: number | undefined
+  let hold = false
 
   const fake = {
     nonce, token, selfId, posted: [] as Posted[], requests: [] as string[], identifies: [] as { intents: number }[],
@@ -227,6 +230,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
           if (p.d?.token !== token) { conn.close(4004); return }
           if (refuse !== undefined) { const code = refuse; refuse = undefined; conn.close(code); return }
           fake.identifies.push({ intents: Number(p.d.intents) })
+          if (hold) continue
           conns.add(conn)
           conn.send({ op: 0, t: 'READY', s: ++seq, d: { user: { id: selfId }, session_id: sessionId, resume_gateway_url: gatewayUrl } })
           for (const guild of new Set([...channels.values()].map((c) => c.guild))) {
@@ -285,6 +289,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
     drop(code: number) { for (const c of [...conns]) c.close(code) },
     sendOp(op: number, d?: unknown) { for (const c of conns) c.send({ op, d }) },
     muteHeartbeats(m: boolean) { mute = m },
+    holdReady(h: boolean) { hold = h },
     refuseIdentify(code: number) { refuse = code },
     connections: () => conns.size,
     close: () => new Promise<void>((resolve) => {
