@@ -1,0 +1,43 @@
+{
+  "id": "bots.inline-mention/reply-ping",
+  "rule": "bots.inline-mention",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "mentions"
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        },
+        "mention": true,
+        "replyToAgent": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.inline-mention"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.bots.inlineMentionOnly": false
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "adm.surface/switched-off",
+  "rule": "adm.surface",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.enabled": false
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-alice",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.surface"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.enabled": true
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": "addr.observe/overheard",
+  "rule": "addr.observe",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.observeUnmentioned": true
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-alice"
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "observe",
+      "rule": "addr.observe"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.observeUnmentioned": false
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

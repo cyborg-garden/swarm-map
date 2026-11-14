@@ -1,0 +1,52 @@
+{
+  "id": "bots.no-self/own-message",
+  "rule": "bots.no-self",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "all"
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-lounge",
+        "sender": {
+          "id": "b-self",
+          "isBot": true,
+          "isSelf": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.no-self"
+    }
+  },
+  "twin": {
+    "steps": [
+      {
+        "say": {
+          "text": "hi {{canary}}",
+          "room": "r-lounge",
+          "sender": {
+            "id": "b-self",
+            "isBot": true,
+            "isSelf": false
+          }
+        }
+      }
+    ],
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.free-rooms"
+      }
+    }
+  }
+}

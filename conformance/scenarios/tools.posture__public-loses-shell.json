@@ -1,0 +1,32 @@
+{
+  "id": "tools.posture/public-loses-shell",
+  "rule": "tools.posture",
+  "policy": "policy-public.json",
+  "steps": [
+    {
+      "tool": {
+        "room": "r-plaza",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.posture"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

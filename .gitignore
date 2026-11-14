@@ -73,3 +73,6 @@ __pycache__/
 compose/
 
 .venv-scan/
+
+# Lab conformance output
+conformance/out/

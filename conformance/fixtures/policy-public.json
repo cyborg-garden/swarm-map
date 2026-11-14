@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "agentId": "agent-public",
+  "version": 1,
+  "hash": "",
+  "posture": "public",
+  "mode": "door",
+  "surfaces": {
+    "fake": {
+      "enabled": true,
+      "account": "fake-bot",
+      "users": [],
+      "anyoneInAllowedRoom": true,
+      "rooms": [
+        {
+          "match": {
+            "room": "r-plaza"
+          },
+          "mode": "mention"
+        }
+      ],
+      "dm": {
+        "mode": "closed",
+        "users": []
+      },
+      "bots": {
+        "mode": "none",
+        "inlineMentionOnly": true,
+        "roles": [],
+        "maxAlternatingTurns": 4
+      },
+      "invites": {
+        "mode": "closed"
+      },
+      "threadsRequireMention": true,
+      "observeUnmentioned": false,
+      "admins": [
+        {
+          "kind": "user",
+          "id": "u-root"
+        }
+      ],
+      "approverRoles": []
+    }
+  },
+  "tools": {
+    "allow": [
+      "file_read",
+      "network",
+      "shell",
+      "unknown"
+    ],
+    "ask": [],
+    "deny": [],
+    "browserGuard": "off"
+  },
+  "keys": [],
+  "egress": {
+    "default": "deny",
+    "hosts": [],
+    "blockPrivateRanges": true
+  },
+  "memory": {
+    "threadsPoolIntoParent": true,
+    "dmIsolated": true,
+    "team": {
+      "dm": "none",
+      "group": "none",
+      "public": "none"
+    },
+    "store": {
+      "kind": "git-markdown",
+      "repo": ""
+    }
+  },
+  "session": {
+    "groupShared": true,
+    "timezone": "UTC"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "budget.cap/warn-only",
+  "rule": "budget.cap",
+  "policy": "policy-team.json",
+  "patch": {
+    "budget": {
+      "monthlyUsd": 5,
+      "onExceed": "warn"
+    }
+  },
+  "steps": [
+    {
+      "model": {
+        "provider": "swarm",
+        "model": "scripted"
+      }
+    }
+  ],
+  "facts": {
+    "spentUsdThisMonth": 6
+  },
+  "expect": {
+    "receipt": {
+      "verdict": "allow",
+      "rule": "budget.cap"
+    }
+  },
+  "twin": {
+    "patch": {
+      "budget.onExceed": "refuse"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "deny",
+        "rule": "budget.cap"
+      }
+    }
+  }
+}

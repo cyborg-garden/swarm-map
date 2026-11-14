@@ -1,0 +1,43 @@
+{
+  "id": "dm.open/anyone",
+  "rule": "dm.open",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.dm": {
+      "mode": "open",
+      "users": []
+    }
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "dm:u-mallory",
+        "sender": "u-mallory",
+        "isDm": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": true,
+    "answered": true,
+    "receipt": {
+      "verdict": "deliver",
+      "rule": "dm.open"
+    },
+    "privilege": "guest"
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.dm.mode": "closed"
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "dm.closed"
+      }
+    }
+  }
+}

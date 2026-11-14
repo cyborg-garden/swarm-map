@@ -1,0 +1,42 @@
+{
+  "id": "addr.mention/unaddressed",
+  "rule": "addr.mention",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-alice"
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "addr.mention"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-general"
+          },
+          "mode": "free"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.free-rooms"
+      }
+    }
+  }
+}

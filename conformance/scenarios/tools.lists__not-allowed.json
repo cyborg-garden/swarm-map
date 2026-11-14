@@ -1,0 +1,35 @@
+{
+  "id": "tools.lists/not-allowed",
+  "rule": "tools.lists",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "browser",
+        "toolName": "browse"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.lists"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.allow": [
+        "file_read",
+        "browser"
+      ]
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

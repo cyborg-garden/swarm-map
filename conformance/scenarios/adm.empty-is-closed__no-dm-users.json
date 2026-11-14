@@ -1,0 +1,47 @@
+{
+  "id": "adm.empty-is-closed/no-dm-users",
+  "rule": "adm.empty-is-closed",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.dm": {
+      "mode": "allowlist",
+      "users": []
+    }
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "dm:u-alice",
+        "sender": "u-alice",
+        "isDm": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.empty-is-closed"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.dm.users": [
+        {
+          "kind": "user",
+          "id": "u-alice"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "dm.allowlist"
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "tools.posture/public-loses-file-read",
+  "rule": "tools.posture",
+  "policy": "policy-public.json",
+  "patch": {
+    "tools.allow": [
+      "file_read"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-plaza",
+        "actor": "u-alice",
+        "toolClass": "file_read",
+        "toolName": "read"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.posture"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

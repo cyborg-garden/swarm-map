@@ -1,0 +1,41 @@
+{
+  "id": "adm.users/stranger-in-room",
+  "rule": "adm.users",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": "u-mallory",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "adm.users"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.users": [
+        {
+          "kind": "user",
+          "id": "u-mallory"
+        }
+      ]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}

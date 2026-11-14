@@ -1,0 +1,39 @@
+{
+  "id": "budget.cap/spent",
+  "rule": "budget.cap",
+  "policy": "policy-team.json",
+  "patch": {
+    "budget": {
+      "monthlyUsd": 5,
+      "onExceed": "refuse"
+    }
+  },
+  "steps": [
+    {
+      "model": {
+        "provider": "swarm",
+        "model": "scripted"
+      }
+    }
+  ],
+  "facts": {
+    "spentUsdThisMonth": 5
+  },
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "budget.cap"
+    }
+  },
+  "twin": {
+    "patch": {
+      "budget.monthlyUsd": 50
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "budget.cap"
+      }
+    }
+  }
+}

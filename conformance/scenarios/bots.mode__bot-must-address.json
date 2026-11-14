@@ -1,0 +1,41 @@
+{
+  "id": "bots.mode/bot-must-address",
+  "rule": "bots.mode",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "mentions"
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-lounge",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.mode"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.bots.mode": "all"
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.free-rooms"
+      }
+    }
+  }
+}

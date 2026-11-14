@@ -1,0 +1,39 @@
+{
+  "id": "addr.threads/thread-needs-mention",
+  "rule": "addr.threads",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": {
+          "id": "t-1",
+          "kind": "thread",
+          "parentId": "r-lounge"
+        },
+        "sender": "u-alice"
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "addr.threads"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.threadsRequireMention": false
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.threads"
+      }
+    }
+  }
+}

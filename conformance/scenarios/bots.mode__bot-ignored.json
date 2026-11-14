@@ -1,0 +1,41 @@
+{
+  "id": "bots.mode/bot-ignored",
+  "rule": "bots.mode",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        },
+        "mention": true,
+        "inlineMention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.mode"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.bots.mode": "mentions"
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      },
+      "privilege": "guest"
+    }
+  }
+}

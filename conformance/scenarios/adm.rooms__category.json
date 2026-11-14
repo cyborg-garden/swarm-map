@@ -1,0 +1,47 @@
+{
+  "id": "adm.rooms/category",
+  "rule": "adm.rooms",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": {
+          "id": "r-proj-1",
+          "kind": "channel",
+          "categoryId": "c-projects"
+        },
+        "sender": "u-alice",
+        "mention": true
+      }
+    }
+  ],
+  "expect": {
+    "heard": true,
+    "answered": true,
+    "receipt": {
+      "verdict": "deliver",
+      "rule": "addr.mention"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-general"
+          },
+          "mode": "mention"
+        }
+      ]
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "adm.rooms"
+      }
+    }
+  }
+}

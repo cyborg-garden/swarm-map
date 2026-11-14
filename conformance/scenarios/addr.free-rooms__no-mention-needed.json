@@ -1,0 +1,42 @@
+{
+  "id": "addr.free-rooms/no-mention-needed",
+  "rule": "addr.free-rooms",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-lounge",
+        "sender": "u-alice"
+      }
+    }
+  ],
+  "expect": {
+    "heard": true,
+    "answered": true,
+    "receipt": {
+      "verdict": "deliver",
+      "rule": "addr.free-rooms"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.rooms": [
+        {
+          "match": {
+            "room": "r-lounge"
+          },
+          "mode": "mention"
+        }
+      ]
+    },
+    "expect": {
+      "heard": false,
+      "answered": false,
+      "receipt": {
+        "verdict": "drop",
+        "rule": "addr.mention"
+      }
+    }
+  }
+}
