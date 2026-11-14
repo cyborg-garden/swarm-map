@@ -81,6 +81,24 @@ export const LETTA_CODE_CHECKS: Check[] = [
       const refused = lab.receipts.all().filter((r) => r.rule === 'mem.one-scope' && r.verdict === 'drop').length
       want(p, refused === 2, `expected both rooms to be refused under mem.one-scope, got ${refused}`)
       want(p, !lab.model.heard(first) && !lab.model.heard(second), 'a room was delivered to a harness that should have been refused it')
+
+      // The same two rooms, opened one after the other. Each policy opens one room, so each
+      // fits. The harness is given the first, writes a note there, and must not be given the second.
+      const moved = lab.canary('c11n-moved-note')
+      const [third, fourth] = [lab.canary('c11n-third'), lab.canary('c11n-fourth')]
+      lab.door.setPolicy(lab.policy({ version: 2, [F + 'rooms']: [room('r-general', 'mention')] }))
+      lab.script({ match: third, tool: plant(moved), text: 'noted' })
+      lab.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `remember ${third}` })
+      await lab.door.idle()
+      want(p, lab.model.heard(third), 'the one room it may be given was not delivered, so moving it was not tested')
+      lab.door.setPolicy(lab.policy({ version: 3, [F + 'rooms']: [room('r-lounge', 'free')] }))
+      lab.script({ match: fourth, text: 'hello' })
+      lab.fake.say({ room: 'r-lounge', sender: 'u-alice', text: `what do you know ${fourth}` })
+      await lab.door.idle()
+      want(p, !lab.model.heard(fourth), 'after its one room was moved, the harness was given the new room')
+      want(p, !lab.model.requests.some((r) => r.body.includes(fourth) && r.body.includes(moved)), 'a note written to memory in one room was sent to the model in the room it was moved to')
+      const after = lab.receipts.all().filter((r) => r.rule === 'mem.one-scope' && r.verdict === 'drop').length
+      want(p, after === refused + 1, `expected the room it was moved to to be refused under mem.one-scope, got ${after - refused} such refusal(s)`)
       return p
     },
   },
@@ -199,10 +217,10 @@ export function lettaCodeHarness(command: string[], build: 'real' | 'fake'): Har
         red: ['C1', 'C4+'], green: ['C3'],
       },
       // Every check that starts Letta Code goes red, not only C9p: an attempt to leave the
-      // machine fails whichever check it happened in. C3 and C11n start none, so they stay green.
+      // machine fails whichever check it happened in. C3 starts none, so it stays green.
       'dials-out': {
         what: 'A Letta Code that tries to connect to an address outside this machine when it starts',
-        red: allBut('C3', 'C11n'), green: ['C3', 'C11n'],
+        red: allBut('C3'), green: ['C3'],
       },
       // Everything works, but nothing was watching. No evidence is not a pass: C9p must say so.
       'unwatched': {

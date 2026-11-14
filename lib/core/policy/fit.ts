@@ -36,10 +36,26 @@ export function sessionsOpened(policy: PolicyRecord): number | 'many' {
   return total
 }
 
+/** Does this harness keep one memory for the whole agent? Anything but a plain "none" or "can be turned off" is read as yes. */
+export function keepsOneMemory(caps: MemoryShape): boolean {
+  return caps.nativeMemory !== 'none' && caps.nativeMemory !== 'off-able'
+}
+
+/**
+ * Why a message of conversation `asked` cannot be delivered to a harness that was already
+ * given conversation `given`. A policy is checked one at a time, and two policies that each
+ * open one room can open two between them. What the harness learned in the first is still
+ * in its memory, so the first conversation it is given is the only one it is ever given.
+ * Empty means the message may go.
+ */
+export function scopeProblems(given: string | undefined, asked: string, caps: MemoryShape): string[] {
+  if (!keepsOneMemory(caps) || given === undefined || given === asked) return []
+  return ['mem.one-scope: this harness keeps one memory for the whole agent, and it has already been given another conversation. What it learned there would be known here.']
+}
+
 /** Why this policy cannot be given to a harness with these capabilities. Empty means it fits. */
 export function fitProblems(policy: PolicyRecord, caps: MemoryShape): string[] {
-  // Anything but a plain "none" or "can be turned off" is read as one memory for the whole agent.
-  if (caps.nativeMemory === 'none' || caps.nativeMemory === 'off-able') return []
+  if (!keepsOneMemory(caps)) return []
   const opened = sessionsOpened(policy)
   if (opened !== 'many' && opened <= 1) return []
   return [`mem.one-scope: this harness keeps one memory for the whole agent, so it may be given one room, or one person's direct messages, and no more. This policy opens ${opened === 'many' ? 'more than can be counted' : opened}.`]

@@ -15,6 +15,7 @@ import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
 import { ALL_CHECKS, fakeLettaCodeCommand, LETTA_CODE_CHECKS, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { KNOWN_CHECK_IDS, type Matrix } from '../matrix.ts'
 import { runChecks, type CheckResult } from './checks.ts'
+import { startLab } from './lab.ts'
 import { brokenVariants } from './harness.ts'
 
 armTripwire()
@@ -23,6 +24,7 @@ afterAll(() => expect(tripwireAttempts()).toEqual([]))
 const harness = lettaCodeHarness(fakeLettaCodeCommand(), 'fake')
 const byId = (results: CheckResult[]) => Object.fromEntries(results.map((r) => [r.id, r]))
 const run = (shim: string, ids?: string[]) => runChecks({ harness, shim }, ids, ALL_CHECKS)
+const C11N = LETTA_CODE_CHECKS.find((c) => c.id === 'C11n')!
 
 describe('Letta Code shim, against the fake Letta Code', () => {
   it.each(ALL_CHECKS.map((c) => [c.id, c.title] as const))('[U:letta-code-shim] %s %s', async (id) => {
@@ -75,8 +77,27 @@ describe('must-fail: broken shims turn their named checks red', () => {
   it('[U:letta-code-must-fail] C11n only passes when the rooms were refused for the reason it names, not for some other', async () => {
     // Nobody is admitted, so both rooms are dropped before the memory rule is ever reached. Nothing crosses, and the check still fails.
     const [c11n] = await runChecks({ harness, shim: 'good', policy: { 'surfaces.fake.users': [] } }, ['C11n'], ALL_CHECKS)
-    expect(c11n.detail).toBe('expected both rooms to be refused under mem.one-scope, got 0')
+    expect(c11n.detail).toContain('expected both rooms to be refused under mem.one-scope, got 0')
   }, 30_000)
+
+  it('[U:letta-code-must-fail] C11n also moves the one room after a turn in it, and a door that gave the harness the new room would fail it', async () => {
+    // The good shim passes, and the move is what it passed: three refusals, the third for the room it was moved to.
+    const good = await startLab({ harness, shim: 'good', policy: C11N.lab!.policy })
+    try {
+      expect(await C11N.run(good)).toEqual([])
+      const refused = good.receipts.all().filter((r) => r.rule === 'mem.one-scope' && r.verdict === 'drop')
+      expect(refused.map((r) => r.event.room)).toEqual(['r-general', 'r-lounge', 'r-lounge'])
+      expect(refused[2].why).toContain('it has already been given another conversation')
+    } finally { await good.close() }
+    // A shim that hides the memory is given the moved room too, and the check says so by name.
+    const lax = await startLab({ harness, shim: 'hides-memory', policy: { ...C11N.lab!.policy, 'surfaces.fake.rooms': [] } })
+    try {
+      // No room is open at the start, so the first half of the check has nothing to cross: only the move is left.
+      const problems = await C11N.run(lax)
+      expect(problems).toContain('after its one room was moved, the harness was given the new room')
+      expect(problems).toContain('a note written to memory in one room was sent to the model in the room it was moved to')
+    } finally { await lax.close() }
+  }, 60_000)
 
   it('[U:letta-code-must-fail] a cell with chat channels set up fails C16 for both reasons: the folder and the token', async () => {
     const [c16] = await run('holds-chat-token', ['C16'])

@@ -324,6 +324,65 @@ describe('door: a harness with one memory for the whole agent is given one conve
     expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-lounge'])
     shim.client.close()
   })
+
+  it('[P:one-scope] once it has been given a conversation, moving the one room gives it no other: what it learned would move with it', async () => {
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, oneMemory)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'a thing said in general' })
+    await rig.door.idle()
+    // Each policy opens one room, so each one fits. Together they would be two rooms on one memory.
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    const moved = rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'what was said in general?' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-general'])
+    expect(rig.fake.ledger.map((p) => p.room)).toEqual(['r-general'])
+    expect(explain(rig.receipts.all(), moved).at(-1)).toMatch(/^inbound  drop  mem\.one-scope  mem\.one-scope: this harness keeps one memory for the whole agent, and it has already been given another conversation/)
+    // Moving back is still the same conversation.
+    rig.door.setPolicy(team({ version: 3, [F + 'rooms']: [{ match: { room: 'r-general' }, mode: 'free' }] }))
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'back again' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-general', 'fake:room:r-general'])
+    shim.client.close()
+  })
+
+  it('[P:one-scope] the conversation it was given stays the only one when its shim connects again', async () => {
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const first = await bareShim(rig, brainToken, oneMemory)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'a thing said in general' })
+    await rig.door.idle()
+    first.client.close()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    const again = await bareShim(rig, brainToken, oneMemory)
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'what was said in general?' })
+    await rig.door.idle()
+    expect(again.heard).toEqual([])
+    again.client.close()
+  })
+
+  it('[P:one-scope] one listed room is one conversation even where a room under it is not a thread', async () => {
+    // A room rule also matches a room whose parent it names. Only a thread pools into its
+    // parent, so a channel under the listed room would be a second conversation.
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, oneMemory)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'in general' })
+    rig.fake.say({ room: { id: 'r-under', kind: 'channel', parentId: 'r-general' }, sender: 'u-alice', text: 'under general' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-general'])
+    shim.client.close()
+  })
+
+  it('[P:one-scope] positive control: a harness with no memory of its own follows the room when it moves', async () => {
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, { nativeMemory: 'none' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'in general' })
+    await rig.door.idle()
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'in the lounge' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-general', 'fake:room:r-lounge'])
+    shim.client.close()
+  })
 })
 
 describe('door: sanitizer', () => {

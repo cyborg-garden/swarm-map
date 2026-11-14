@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { decide } from '../core/decide.ts'
 import type { Decision, Event, Facts } from '../core/events.ts'
-import { fitProblems } from '../core/policy/fit.ts'
+import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.ts'
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId } from '../core/policy/types.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
@@ -74,6 +74,10 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
 
   let policy = opts.policy
   let shim: { link: ShimLink; caps: Capabilities } | undefined
+  // The one conversation a harness with one memory for the whole agent has been given. It is
+  // kept for as long as this door runs, whichever shim is connected: the door cannot tell
+  // whether a shim that connects again still holds the memory of the one before it.
+  let given: string | undefined
   const sanitizer = opts.sanitizer ?? createSanitizer()
   const observed = createObserveBuffer(opts.observeLimit)
   const turns = new Map<string, Turn>()
@@ -141,7 +145,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     // A harness that keeps one memory for the whole agent is given one conversation. A policy
     // that opens more is refused for it when it is set; this is the same check at the last
     // moment, for a harness that connected under a policy already in place.
-    const misfit = fitProblems(policy, shim.caps)
+    // And the first conversation it is given is the only one: a policy that moves the one room
+    // fits by itself, but the harness would carry what it learned in the old room into the new.
+    const misfit = [...fitProblems(policy, shim.caps), ...scopeProblems(given, sessionKey, shim.caps)]
     if (misfit.length > 0) {
       receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'mem.one-scope', why: misfit[0] })
       return
@@ -179,6 +185,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     }
     turns.set(turnId, turn)
     begin()
+    if (keepsOneMemory(caps)) given = sessionKey
     shim.link.send({ t: 'turn', env })
   }
 

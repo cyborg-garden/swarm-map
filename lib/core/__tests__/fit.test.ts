@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { applyPatch, loadFixturePolicy } from '../../../conformance/scenarios/load.ts'
 import { withHash } from '../policy/canonical.ts'
-import { fitProblems, sessionsOpened } from '../policy/fit.ts'
+import { fitProblems, scopeProblems, sessionsOpened } from '../policy/fit.ts'
 import type { PolicyRecord } from '../policy/types.ts'
 
 const F = 'surfaces.fake.'
@@ -75,5 +75,16 @@ describe('a harness with one memory for the whole agent', () => {
     const wide = policy({ [F + 'rooms']: [room('r-a'), room('r-b')] })
     expect(fitProblems(wide, { nativeMemory: undefined as never })).toHaveLength(1)
     expect(fitProblems(wide, { nativeMemory: 'sometimes' as never })).toHaveLength(1)
+  })
+
+  it('[U:one-scope] the first conversation it is given is the only one it is given', () => {
+    expect(scopeProblems(undefined, 'fake:room:r-a', ONE_MEMORY)).toEqual([])
+    expect(scopeProblems('fake:room:r-a', 'fake:room:r-a', ONE_MEMORY)).toEqual([])
+    for (const asked of ['fake:room:r-b', 'fake:dm:u-a', 'discord:room:r-a']) {
+      expect(scopeProblems('fake:room:r-a', asked, ONE_MEMORY)[0]).toMatch(/^mem\.one-scope: .* it has already been given another conversation/)
+      expect(scopeProblems('fake:room:r-a', asked, { nativeMemory: 'sometimes' as never })).toHaveLength(1)
+      // A harness with no memory of its own carries nothing from one room to the next.
+      expect(scopeProblems('fake:room:r-a', asked, { nativeMemory: 'none' })).toEqual([])
+    }
   })
 })
