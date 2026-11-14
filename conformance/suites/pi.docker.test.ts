@@ -4,25 +4,28 @@
 // cell, plus the checks that need one: S0-S3, C8, C9 and C10. Not part of the
 // default test run (CI has no Docker). Run it with:
 //
-//   npm run conformance:docker:build     (once)
+//   npm run conformance:docker:build     (once for each state of the code)
 //   npm run conformance:docker
 //
 // Each check gets a rig of its own: a cell, the sidecar's side, a sink that
 // stands in for the internet, and a control that proves the sink can be hit.
 // It refuses to run, rather than skip, when Docker is not local or the images
-// are not built. A complete run writes the Docker matrix from what it saw.
+// were not built from the code in this worktree: they are named for it, say
+// so in a label, and their files are compared with it before anything else.
+// A complete run writes the Docker matrix from what it saw.
 //
 // Must-fail: the same checks against rigs that are broken on purpose. A wall
 // check that stays green on a cell with a route out is not a check.
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { BROKEN_RIGS as BROKEN, IN_CELL, SKIPPED_IN_CELL as SKIPPED } from '../docker/broken.ts'
-import type { RigVariant } from '../docker/compose.ts'
+import { contextFiles, readSource, type RigVariant } from '../docker/compose.ts'
 import {
-  cellRefuses, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, withRig,
+  cellRefuses, imageProblems, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, withRig,
   type DockerFacts, type HostListener,
 } from '../docker/runner.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
@@ -51,7 +54,7 @@ const run = (id: string, variant: RigVariant, gate?: 'real' | 'allows-all'): Pro
 }
 
 beforeAll(async () => {
-  // Throws REFUSING TO RUN when Docker is not this machine's, or an image is missing. This suite never skips.
+  // Throws REFUSING TO RUN when Docker is not this machine's, or an image is missing or holds other code. This suite never skips.
   facts = preflight()
   before = labObjects()
   process.env[hostCanary.name] = hostCanary.value
@@ -159,6 +162,35 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
     }
     if (name === 'gate-kept') expect(detail('C10')).toContain('this cell still has its gate')
   }, 900_000)
+})
+
+describe('must-fail: images that do not hold the code under test are refused', () => {
+  const repo = path.resolve(import.meta.dirname, '..', '..')
+  let other = ''
+  beforeAll(() => {
+    other = mkdtempSync(path.join(os.tmpdir(), 'smlab-source-'))
+    for (const rel of contextFiles(repo)) {
+      mkdirSync(path.dirname(path.join(other, rel)), { recursive: true })
+      cpSync(path.join(repo, rel), path.join(other, rel))
+    }
+  })
+  afterAll(() => { if (other) rmSync(other, { recursive: true, force: true }) })
+
+  it('green against this code, and against a copy of it', () => {
+    expect(imageProblems(facts!.images, readSource(repo))).toEqual([])
+    expect(imageProblems(facts!.images, readSource(other))).toEqual([])
+  }, 180_000)
+
+  it('red against code that differs by one line: by what each image says, and by what each holds', () => {
+    appendFileSync(path.join(other, 'lib/core/decide.ts'), '\n// one line more\n')
+    const problems = imageProblems(facts!.images, readSource(other))
+    for (const image of [facts!.images.cell, facts!.images.rig]) {
+      expect(problems).toContainEqual(expect.stringMatching(new RegExp(`^image ${image} was built from other code: it names source ${facts!.images.source}, `)))
+      expect(problems).toContain(`image ${image} does not hold the code under test: lib/core/decide.ts differs`)
+    }
+    expect(problems).toHaveLength(4)
+    expect(labObjects()).toEqual(before)
+  }, 180_000)
 })
 
 describe('a cell handed a real-looking key is refused', () => {
