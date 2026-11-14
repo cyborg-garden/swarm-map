@@ -16,7 +16,7 @@ or any running agent. It is a library, a test rig and one command.
 - **Real Pi 1.5.2 passes all fourteen process-level checks.**
 - **There is now a wall, on one machine.** With Pi in a sealed Docker cell on Docker Desktop for
   Mac, a tool run by Pi could not reach the internet, the laptop or a stand-in for the internet,
-  and could not read the model key or the chat token. That held with the tool gate removed. Seven
+  and could not read the model key or the chat token. That held with the tool gate removed. Ten
   cells broken on purpose each turned the right checks red. It is shown for that machine, that
   Docker version and the ways out the probe tries, and for nothing wider. See "The Docker cell".
 - **Three limits to know before reading on.** The key swap and the budget cap only exist for
@@ -144,7 +144,9 @@ red, on the fake Pi and on real Pi.
 
 Two things are read for every check. From inside: a probe, run in the cell, that tries each way
 out and reports what happened. From outside: the sink's own log and a listener on the laptop. Both
-must agree, and the sink's log must hold exactly one line, from the control.
+must agree, and the sink's log must hold exactly one line, from the control. S1 to S3 also read
+what Docker says it gave each container (`docker inspect`), not only what the compose file asked
+for: a published port, a shared namespace, an added capability or a host path fails them.
 
 | # | Check | Real Pi 1.5.2 in the cell |
 |---|---|---|
@@ -171,8 +173,11 @@ named checks red, for the reason it names, and left the others green.
 | `route-out` | The cell is also on the sink's network | S1, C9, C10: the probe got through, and the sink logged it |
 | `open` | The cell is also on an ordinary Docker network | S1, C9: it reached a public address, DNS and the laptop's listener. This also shows the probes can succeed |
 | `leaks-env` | The run's model key is in the cell container's environment | S3, C8 |
+| `leaks-file` | The run's model key is in a file in the cell, and in no environment or command line | S3, C8: only the search of the disk can find it |
 | `writable` | The cell runs as root on a disk it can write | S2 |
 | `host-mount` | A folder of the laptop is mounted into the cell | S3 |
+| `socket` | An empty file is mounted where a Docker socket would be | S1, S3: the probe looks there |
+| `door-out` | The door's container is also on the sink's network | S1: the door's side reached the sink, the cell still did not |
 | `blind-sink` | The control cannot reach the sink, so its log is empty | S0, C9: an empty log is not a pass |
 | `gate-kept` | C10 run in a cell that still has its gate | C10: the denied tool never ran, so the wall was not tested on its own |
 
@@ -216,7 +221,7 @@ or names a harness again.
 | F1 | `createDoor()` refuses any connector that is not the fake one | A connector with id `discord` must be refused |
 | F2 | The exact environment each shim, broken ones included, is about to hand to Pi is checked against a list of credential names and shapes. It is a list: a credential it has not been taught goes through, which is why Pi's environment is also listed by hand | `DISCORD_BOT_TOKEN=x` must be refused, by the guard and by a lab handed a harness that carries it |
 | F4 | A reply only counts if it carries the scripted model's stamp for this run | The `chatty` shim's unstamped replies fail C1 |
-| F5 | Work dirs must really be under the temp dir (links are followed), outside the home directory and nowhere near an agent's home. The Docker runner refuses a Docker that is not a local socket, and a container that is not named for its own rig | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start. A container of another rig must be refused |
+| F5 | Work dirs must really be under the temp dir (links are followed), outside the home directory and nowhere near an agent's home. The Docker runner refuses a Docker that is not a local socket, and a container that is not named for its own rig. It removes only what carries a lab project's label and is named for that project | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start. A container of another rig must be refused. A container that carries a lab label under another name must be left alone |
 | F6 | A tripwire in the test process throws on a TCP connect, UDP send, DNS lookup or query, or fetch that is not loopback, and on a connect to a local socket file. It sees that process only | A connect to TEST-NET must throw and be recorded |
 | F6c | The same tripwire, loaded first inside every Pi the lab starts (Node `--import`). The lab reads back what it saw. An attempt fails the check it happened in, and C9p fails if no tripwire was armed | The `dials-out` shim must turn every check that starts Pi red; the `unwatched` shim must turn C9p red; a fake Pi pointed at TEST-NET must be stopped |
 
@@ -263,6 +268,12 @@ build a matrix from it.
 - **The cell is given no `curl`.** The probe is a Node script in the cell image. It makes the same
   connections.
 - **The Docker project is named `smlab-<nonce>`**, not `swarmlab-<nonce>` as the plan had it.
+- **An audit of the Docker cell changed four things.** The probe's IPv6 address came from the
+  laptop's resolver, so on a network that answers no IPv6 question the whole run was red; the
+  public resolver is now asked itself. Three broken rigs were added (`leaks-file`, `socket`,
+  `door-out`), because the search of the disk, the socket check and the door's own probe had none.
+  S1 to S3 now also judge what Docker says each container was given. And cleaning up now needs the
+  lab's name as well as its label.
 - **`budget.cap` and `keys.model-route` now also name C9 and C8.** Both are walls and the route is
   half of each, so the process matrix no longer claims them.
 - **A fake Pi was added** so the shim checks run in CI. The first real-Pi run showed the fake was
@@ -330,14 +341,27 @@ build a matrix from it.
    - **A list, not a proof.** The probe tries the ways out listed above. A way out that is not on
      the list was not tried. A fault in Docker or in the kernel, and slow side channels, are out
      of reach of this kind of test.
-   - **DNS is judged by the answer.** A public name did not resolve from the cell. Whether the
-     question was passed on to a resolver before failing was not watched.
+   - **DNS is judged by the answer.** A public name does not resolve from the cell. Whether the
+     question is passed on first is not a standing check. It was watched by hand once, with a
+     packet capture on Docker's own network stack: eight kinds of question from the cell, over UDP
+     and TCP, were answered "failed" at once and none left. The same questions from an ordinary
+     Docker network were seen leaving, so the capture could see one.
    - **IPv6 has no control.** The cell has no IPv6 address and the IPv6 probe fails. But it fails
      from an ordinary Docker network on this machine too, so that probe was never seen to succeed.
-   - **The cell can talk to Docker's side of its own network.** That address answers "refused" on
-     the ports tried. Ports that other containers publish were tried by hand once, with two
-     containers of the lab's own, and could not be reached from an internal network. That is not a
-     standing check.
+     Tried by hand once: a container on an internal network had no IPv6 address even without the
+     cell's own IPv6 setting.
+   - **The cell can talk to Docker's side of its own network.** The probe tries three ports there.
+     By hand once, all 65,535 TCP ports there were tried from a cell: every one refused but one,
+     which timed out. A port that a lab container published on every interface timed out from the
+     cell, and was reached from an ordinary Docker network. Neither is a standing check.
+   - **Not every line of a wall check has a broken cell.** Ten broken rigs cover a route out, a
+     leaked key (environment and file), a writable root cell, a host folder, a Docker socket's
+     place, a door with a route out and a blind sink. No rig is broken by a published port, a
+     shared process namespace, a lost no-new-privileges alone, an IPv6 address, an inherited shell
+     variable, or a door that keeps a wrong cell token on the line. Those lines are tested on
+     made-up reports only (`report.test.ts`).
+   - **The run needs public DNS.** The probe's public addresses are looked up when a run starts.
+     On a network that answers no such question the run fails; it does not pass untried.
    - **The cell token can be read inside the cell.** The shim holds it, so a tool can read it. It
      only names the cell to its own door, but anything in the cell can then speak as the cell: it
      could stop the shim and answer a live turn itself. Such a reply still goes through the door's
@@ -348,7 +372,7 @@ build a matrix from it.
      out either. A door that talks to a real model and a real chat platform needs one. That side
      is not tested.
    - **The shared folder is a second channel.** The door reads files the cell wrote, to see what a
-     tool touched. It reads them as data and follows no links when it searches them.
+     tool touched. It reads them as data, and reads no link and no pipe the cell left there.
    - **No limits are tested.** The cell has a memory and process cap; nothing checks them (S4).
    - **The eight broken shims were not run again in a cell.** Only "the gate removed" was (C10).
    - **These are lab images.** The cell image holds the probe and the broken gate. Nothing in
