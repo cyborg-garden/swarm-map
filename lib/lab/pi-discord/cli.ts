@@ -13,7 +13,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseConfig, policyFor, type LabConfig } from './config.ts'
+import { botsLine, parseConfig, policyFor, type LabConfig } from './config.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker } from './cell.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, secretFileProblem, TOKEN_FILE_ENV } from './secrets.ts'
@@ -46,7 +46,11 @@ async function dryRun(): Promise<void> {
   say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
   say(`  ok    it introduces itself as "${config.persona.name}", and is told it has no tools`)
   say(`  ok    heard: ${d.adminUserIds.length} admin(s), ${d.allowedUserIds.length} other people, ${d.allowedRoleIds.length} role(s)${d.anyoneInChannel ? ', and anyone in the channel' : ''}`)
-  say(`  ok    other bots: ${d.bots === 'none' ? 'ignored' : `heard when they write the mention, up to ${d.botLoopLimit} in a row`}; direct messages: refused; tools: none`)
+  say(`  ${d.bots === 'mentions' && d.allowedBotIds.length === 0 ? 'note' : 'ok  '}  ${botsLine(config)}`)
+  say('  ok    direct messages: refused; tools: none')
+  say(d.readAllMessages
+    ? '  note  this config asks Discord for the Message Content intent. Switch it ON for the bot in the Developer Portal, or the start is refused. The dry run connects to nothing, so it cannot check'
+    : '  ok    the Message Content intent is not asked for, so its switch in the Developer Portal does not matter')
   say(`  ok    budget $${config.budget.monthlyUsd} a month, then model calls are refused; model ${config.model.id}`)
   if (config.model.usdPerMTokIn === 0 && config.model.usdPerMTokOut === 0) say('  note  both prices are 0, so the budget can never be reached')
   say(`  ok    policy ${policy.hash.slice(0, 12)}`)
@@ -102,7 +106,7 @@ async function run(): Promise<void> {
   process.on('SIGINT', () => { void stop(0) })
   process.on('SIGTERM', () => { void stop(0) })
   try {
-    running = await start({ config, secrets, stateDir, log, onFatal: (code) => { log(`Discord refused the bot (code ${code}). Stopping.`); void stop(1) } })
+    running = await start({ config, secrets, stateDir, log, onFatal: (code) => { log(`Discord refused the bot (code ${code}${code === 4014 ? ': it asked for the Message Content intent, which is not switched on for this bot in the Developer Portal' : ''}). Stopping.`); void stop(1) } })
   } catch (err) {
     fail(`start: ${(err as Error).message.split(secrets.discordToken).join('[redacted]').split(secrets.modelKey).join('[redacted]')}`)
   }

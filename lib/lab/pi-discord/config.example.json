@@ -11,6 +11,7 @@
     "anyoneInChannel": false,
     "mentionRequired": true,
     "bots": "none",
+    "allowedBotIds": [],
     "botLoopLimit": 4,
     "readAllMessages": false
   },

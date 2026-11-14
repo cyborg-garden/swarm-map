@@ -684,6 +684,40 @@ describe('door: bot loops', () => {
     expect(rig.shim.heard).toHaveLength(2)
   })
 
+  it('[P:bot-loop] each bot that is named has a count of its own, a burst from one is still counted, and only a person who is heard starts them again', async () => {
+    const friend = { id: 'b-friend', isBot: true }
+    rig = await startRig(team({ [F + 'bots.mode']: 'all', [F + 'bots.maxAlternatingTurns']: 2, [F + 'bots.ids']: ['b-other', 'b-friend'] }))
+    rig.fake.facts.delayMs = 30
+    for (let i = 0; i < 4; i++) rig.fake.say({ room: 'r-lounge', sender: bot, text: `other ${i}` })
+    await rig.door.idle()
+    expect(verdicts(rig).sort()).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop', 'drop/bots.loop'])
+    // The second bot has not used its own turns, in the room or in a thread of it.
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend 0' })
+    await rig.door.idle()
+    rig.fake.say({ room: { id: 't-1', kind: 'thread', parentId: 'r-lounge' }, sender: friend, mention: true, inlineMention: true, text: 'friend 1' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend 2' })
+    await rig.door.idle()
+    expect(verdicts(rig).slice(4)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.threads', 'drop/bots.loop'])
+    // A person who is not heard changes nothing. One who is heard starts both counts again.
+    rig.fake.say({ room: 'r-lounge', sender: 'u-stranger', text: 'go on' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'still stopped' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'go on' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'other again' })
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend again' })
+    await rig.door.idle()
+    expect(verdicts(rig).slice(7)).toEqual(['drop/adm.users', 'drop/bots.loop', 'deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'deliver/addr.free-rooms'])
+  })
+
+  it('[P:bot-loop] with no bot named, every bot in a room shares one count, so a new bot is not a new start', async () => {
+    rig = await startRig(loopy(2))
+    for (const id of ['b-1', 'b-2', 'b-3']) { rig.fake.say({ room: 'r-lounge', sender: { id, isBot: true }, text: `from ${id}` }); await rig.door.idle() }
+    expect(verdicts(rig)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop'])
+  })
+
   it('[P:bot-loop] a limit of none answers no bot at all', async () => {
     rig = await startRig(loopy(0))
     rig.fake.say({ room: 'r-lounge', sender: bot, text: 'hello' })

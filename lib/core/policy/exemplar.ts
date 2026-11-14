@@ -29,7 +29,7 @@ export const EXEMPLAR_POLICY: Exemplar = {
       anyoneInAllowedRoom: false,
       rooms: [{ match: { room: 'r-general' }, mode: 'mention' }],
       dm: { mode: 'closed', users: [] },
-      bots: { mode: 'none', inlineMentionOnly: true, roles: [], maxAlternatingTurns: 4 },
+      bots: { mode: 'none', inlineMentionOnly: true, roles: [], ids: [], maxAlternatingTurns: 4 },
       invites: { mode: 'closed' },
       threadsRequireMention: true,
       observeUnmentioned: false,

@@ -85,7 +85,7 @@ export const RULES: Rule[] = [
     klass: 'behaviour', kind: 'wall', reads: [`${S}.observeUnmentioned`], surfaces: 'all', enforcer: 'door', tests: ['D:addr.observe/overheard', 'P:observe'], checks: ['C2'] },
 
   { id: 'bots.mode', statement: 'Other bots are ignored, heard when they address the agent, or always heard.',
-    klass: 'security', kind: 'wall', reads: [`${S}.bots.mode`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.mode/bot-ignored', 'D:bots.mode/bot-must-address'], checks: [] },
+    klass: 'security', kind: 'wall', reads: [`${S}.bots.mode`, `${S}.bots.ids`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.mode/bot-ignored', 'D:bots.mode/bot-must-address', 'D:bots.mode/bot-not-listed'], checks: [] },
   { id: 'bots.inline-mention', statement: 'From a bot, a reply-ping is not a mention.',
     klass: 'security', kind: 'wall', reads: [`${S}.bots.inlineMentionOnly`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.inline-mention/reply-ping'], checks: [] },
   // The count is the door's own, kept per room and handed to decide() as a fact.

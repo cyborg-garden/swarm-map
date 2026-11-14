@@ -33,6 +33,11 @@ export interface LabConfig {
     mentionRequired: boolean
     /** Other bots: ignored, or heard only when they write the bot's mention in their text. */
     bots: 'none' | 'mentions'
+    /**
+     * The only bots that are heard, by user id. When any is named, every other
+     * bot and every webhook is ignored, whatever `bots` says.
+     */
+    allowedBotIds: string[]
     /** How many bot messages in a row are answered before a person has to speak. */
     botLoopLimit: number
     /** Ask Discord for the text of every message, not only the ones that mention the bot. */
@@ -57,7 +62,7 @@ const ONE_LINE = /^[^\u0000-\u001f\u007f]*$/
 
 const DEFAULTS: Record<string, unknown> = {
   allowedUserIds: [], allowedRoleIds: [], anyoneInChannel: false, mentionRequired: true,
-  bots: 'none', botLoopLimit: 4, readAllMessages: false,
+  bots: 'none', allowedBotIds: [], botLoopLimit: 4, readAllMessages: false,
 }
 
 /**
@@ -75,7 +80,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   const root = obj(raw, 'config', ['agentId', 'persona', 'discord', 'budget', 'model'])
   // With no persona the agent is named for its id and says nothing more about itself.
   const p: Record<string, unknown> = { name: root.agentId, description: '', ...(root.persona === undefined ? {} : obj(root.persona, 'persona', ['name', 'description'])) }
-  const d: Record<string, unknown> = { ...DEFAULTS, ...obj(root.discord, 'discord', ['guildId', 'channelId', 'adminUserIds', 'allowedUserIds', 'allowedRoleIds', 'anyoneInChannel', 'mentionRequired', 'bots', 'botLoopLimit', 'readAllMessages']) }
+  const d: Record<string, unknown> = { ...DEFAULTS, ...obj(root.discord, 'discord', ['guildId', 'channelId', 'adminUserIds', 'allowedUserIds', 'allowedRoleIds', 'anyoneInChannel', 'mentionRequired', 'bots', 'allowedBotIds', 'botLoopLimit', 'readAllMessages']) }
   const b = obj(root.budget, 'budget', ['monthlyUsd'])
   const m = obj(root.model, 'model', ['baseUrl', 'id', 'usdPerMTokIn', 'usdPerMTokOut'])
 
@@ -98,6 +103,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   if (Array.isArray(d.adminUserIds) && d.adminUserIds.length === 0) errors.push('discord.adminUserIds: name at least one admin')
   ids(d.allowedUserIds, 'discord.allowedUserIds')
   ids(d.allowedRoleIds, 'discord.allowedRoleIds')
+  ids(d.allowedBotIds, 'discord.allowedBotIds')
   flag(d.anyoneInChannel, 'discord.anyoneInChannel')
   flag(d.mentionRequired, 'discord.mentionRequired')
   flag(d.readAllMessages, 'discord.readAllMessages')
@@ -145,10 +151,22 @@ export function systemPromptFor(c: LabConfig): string {
   ].join('\n')
 }
 
+/** Which other bots are heard, in one plain line, for the dry run. */
+export function botsLine(c: LabConfig): string {
+  const d = c.discord
+  const how = d.mentionRequired ? 'when they write the mention' : 'with or without a mention'
+  if (d.allowedBotIds.length > 0) return `other bots: only ${d.allowedBotIds.join(', ')}, ${how}, up to ${d.botLoopLimit} each in a row. Every other bot and every webhook is ignored`
+  if (d.bots === 'none') return 'other bots: all ignored, webhooks too'
+  return `other bots: ANY bot or webhook in the channel that writes the mention is heard, up to ${d.botLoopLimit} in a row`
+}
+
 /** The policy record this config asks for. Everything not in the config is at its closed setting. */
 export function policyFor(c: LabConfig): PolicyRecord {
   const user = (id: string): PrincipalRef => ({ kind: 'user', id })
   const admins = c.discord.adminUserIds.map(user)
+  // Naming bots is asking for them to be heard: by mention where the channel needs one, without where it does not.
+  const named = c.discord.allowedBotIds
+  const botMode = named.length === 0 ? c.discord.bots : c.discord.mentionRequired ? 'mentions' : 'all'
   return withHash({
     schema: 1, agentId: c.agentId, version: 1, hash: '', posture: 'team', mode: 'door',
     surfaces: {
@@ -159,7 +177,7 @@ export function policyFor(c: LabConfig): PolicyRecord {
         anyoneInAllowedRoom: c.discord.anyoneInChannel,
         rooms: [{ match: { room: c.discord.channelId }, mode: c.discord.mentionRequired ? 'mention' : 'free' }],
         dm: { mode: 'closed', users: [] },
-        bots: { mode: c.discord.bots, inlineMentionOnly: true, roles: [], maxAlternatingTurns: c.discord.botLoopLimit },
+        bots: { mode: botMode, inlineMentionOnly: true, roles: [], ids: [...named], maxAlternatingTurns: c.discord.botLoopLimit },
         invites: { mode: 'closed' },
         threadsRequireMention: c.discord.mentionRequired,
         observeUnmentioned: false,

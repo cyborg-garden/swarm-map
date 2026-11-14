@@ -98,7 +98,7 @@ evidence.
 | Policy record, hash, validation of every closed set | `lib/core/policy/` (`shape.ts` lists the sets) | `validate.test.ts`, `schema-coverage.test.ts` |
 | Rule catalogue (38 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
 | Pi's own rules (4) | `lib/runtimes/pi/rules.ts` | `rules.test.ts` |
-| `decide()` | `lib/core/decide.ts` | 40 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
+| `decide()` | `lib/core/decide.ts` | 41 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
 | Brain protocol, framing, shim client | `lib/door/protocol.ts`, `framing.ts`, `brain-server.ts`, `shim-client.ts` | `framing.test.ts`, `brain-server.test.ts` |
 | The door, fake connector, sanitizer, receipts, observe buffer | `lib/door/` | `door.test.ts` |
 | Discord connector, and the fake Discord it is tested against | `lib/door/connectors/discord.ts`, `lib/door/testing/fake-discord.ts` | `discord-connector.test.ts` |

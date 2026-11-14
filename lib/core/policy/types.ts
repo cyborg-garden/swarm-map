@@ -32,6 +32,12 @@ export interface SurfacePolicy {
     mode: 'none' | 'mentions' | 'all'
     inlineMentionOnly: boolean
     roles: string[]
+    /**
+     * The only bots that are heard, by id. Empty or left out: `mode` alone
+     * decides. Non-empty: a bot that is not named is dropped whatever `mode`
+     * says, and a named one is still subject to `mode` and the loop limit.
+     */
+    ids?: string[]
     maxAlternatingTurns: number
   }
   invites: { mode: 'closed' | 'admins' | 'allowlisted' | 'open' }

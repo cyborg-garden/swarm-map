@@ -330,7 +330,9 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     emit({
       kind: 'inbound', surface: 'discord', messageId, room,
       sender: {
-        id: authorId,
+        // A webhook is not a member, and what it gives as its id is not a member's id. It is kept apart,
+        // so it can never be taken for a person or a bot that is on a list.
+        id: m.webhook_id !== undefined ? `webhook:${authorId}` : authorId,
         display: str(m.member?.nick) ?? str(m.author.global_name) ?? str(m.author.username) ?? authorId,
         // A webhook's post is not a person's, whatever it calls itself.
         isBot: m.author.bot === true || m.webhook_id !== undefined,

@@ -240,6 +240,87 @@ describe('one channel: other bots', () => {
   })
 })
 
+describe('one channel: bots that are named', () => {
+  const friend = '8900000000000000002'
+  const named = (discord: Partial<LabConfig['discord']> = {}) => policy({ allowedBotIds: [friend], botLoopLimit: 2, ...discord })
+  const hook = (r: DiscordRig, id: string): string =>
+    r.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id }, webhook: true, content: `<@${r.fake.selfId}> from a hook`, mentions: [r.fake.selfId] })
+
+  it('a named bot that mentions the agent is heard, though other bots are set to be ignored', async () => {
+    rig = await startDiscordRig(named({ bots: 'none' }))
+    say(rig, { author: friend, bot: true, text: 'hello from the bot you named' })
+    await rig.posts(1)
+    expect(verdicts(rig)).toEqual(['deliver/addr.mention'])
+    expect(rig.shim.heard.map((e) => e.sender)).toEqual([{ id: friend, display: friend, isBot: true }])
+  })
+
+  it('a bot that is not named is dropped, whatever the bots setting says', async () => {
+    for (const bots of ['none', 'mentions'] as const) {
+      rig = await startDiscordRig(named({ bots }))
+      say(rig, { author: IDS.bot, bot: true, text: 'let me in' })
+      await rig.settle()
+      expect(verdicts(rig)).toEqual(['drop/bots.mode'])
+      expect(rig.receipts.all()[0].why).toMatch(/not one of the bots/)
+      expect(rig.shim.heard).toEqual([])
+      await rig.close()
+      rig = undefined
+    }
+  })
+
+  it('a webhook is dropped, even one that gives the id of a named bot or of an admin', async () => {
+    rig = await startDiscordRig(named({ bots: 'mentions' }))
+    hook(rig, '8800000000000000001')
+    hook(rig, friend)
+    hook(rig, IDS.admin)
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/bots.mode', 'drop/bots.mode', 'drop/bots.mode'])
+    expect(rig.shim.heard).toEqual([])
+    expect(rig.fake.posted).toEqual([])
+  })
+
+  it('a named bot that does not mention the agent is dropped, and is heard without one only where no mention is needed', async () => {
+    rig = await startDiscordRig(named())
+    say(rig, { author: friend, bot: true, mention: false, text: 'talking past you' })
+    say(rig, { author: friend, bot: true, inline: false, replyTo: rig.fake.selfId, text: 'a reply-ping only' })
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/bots.mode', 'drop/bots.inline-mention'])
+    expect(rig.shim.heard).toEqual([])
+    rig.door.setPolicy(named({ mentionRequired: false, readAllMessages: true }))
+    say(rig, { author: friend, bot: true, mention: false, text: 'no mention needed now' })
+    say(rig, { author: IDS.bot, bot: true, mention: false, text: 'still not named' })
+    await rig.posts(1)
+    await rig.settle()
+    expect(verdicts(rig).slice(2)).toEqual(['deliver/addr.free-rooms', 'drop/bots.mode'])
+  })
+
+  it('a ping-pong with a named bot stops at the limit, and only a listed person starts it again', async () => {
+    rig = await startDiscordRig(named())
+    for (let i = 0; i < 4; i++) { say(rig, { author: friend, bot: true, text: `ping ${i}` }); await rig.settle() }
+    expect(verdicts(rig)).toEqual(['deliver/addr.mention', 'deliver/addr.mention', 'drop/bots.loop', 'drop/bots.loop'])
+    expect(rig.fake.posted).toHaveLength(2)
+    say(rig, { author: IDS.stranger, text: 'a stranger cannot restart it' })
+    say(rig, { author: IDS.member, mention: false, text: 'nor a listed person the agent does not hear' })
+    await rig.settle()
+    say(rig, { author: friend, bot: true, text: 'still stopped' })
+    await rig.settle()
+    expect(verdicts(rig).slice(4)).toEqual(['drop/adm.users', 'drop/addr.mention', 'drop/bots.loop'])
+    say(rig, { text: 'go on then' })
+    await rig.posts(3)
+    say(rig, { author: friend, bot: true, text: 'thanks' })
+    await rig.posts(4)
+    expect(verdicts(rig).slice(7)).toEqual(['deliver/addr.mention', 'deliver/addr.mention'])
+  })
+
+  it('a burst from a named bot stops at the limit too', async () => {
+    rig = await startDiscordRig(named())
+    for (let i = 0; i < 6; i++) say(rig, { author: friend, bot: true, text: `burst ${i}` })
+    await rig.posts(2)
+    await rig.settle()
+    expect(verdicts(rig).sort()).toEqual(['deliver/addr.mention', 'deliver/addr.mention', 'drop/bots.loop', 'drop/bots.loop', 'drop/bots.loop', 'drop/bots.loop'])
+    expect(rig.fake.posted).toHaveLength(2)
+  })
+})
+
 describe('one channel: what goes out', () => {
   it('whatever the model asks for, the reply goes to the channel the message came from and pings nobody', async () => {
     rig = await startDiscordRig(policy(), { noShim: true })

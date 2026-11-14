@@ -46,6 +46,9 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
   if (e.sender.isSelf) return drop('bots.no-self', 'The agent never answers itself.')
   if (e.sender.isBot) {
     if (surface.bots.mode === 'none') return drop('bots.mode', 'Other bots are ignored here.')
+    // Where bots are named, only those are heard. The id is the surface's own for the sender, never anything it wrote.
+    const named = surface.bots.ids ?? []
+    if (named.length > 0 && !named.includes(e.sender.id)) return drop('bots.mode', 'This bot is not one of the bots that are heard here.')
     pass('bots.mode')
   }
 

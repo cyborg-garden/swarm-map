@@ -112,8 +112,9 @@ server, the channel or a person and choose **Copy ID**.
 | `discord.allowedRoleIds` | `[]` | Holders of these roles are heard |
 | `discord.anyoneInChannel` | `false` | Hear anyone who can post in the channel |
 | `discord.mentionRequired` | `true` | Answer only when the bot is mentioned |
-| `discord.bots` | `"none"` | Other bots: `"none"`, or `"mentions"` to hear any bot or webhook in the channel that writes the bot's mention. The lists of people do not apply to bots, and one bot cannot be named |
-| `discord.botLoopLimit` | `4` | Bot messages answered in a row before a person has to speak |
+| `discord.bots` | `"none"` | Other bots when none is named: `"none"`, or `"mentions"` to hear any bot or webhook in the channel that writes the bot's mention. The lists of people do not apply to bots |
+| `discord.allowedBotIds` | `[]` | The only bots that are heard, by user id. With any id here, a named bot is heard when it writes the bot's mention (or without one, if `mentionRequired` is false), and every other bot and every webhook is dropped with a receipt, whatever `bots` says |
+| `discord.botLoopLimit` | `4` | Bot messages answered in a row before a listed person has to be answered. Each named bot has a count of its own; bots that are not named share one |
 | `discord.readAllMessages` | `false` | Ask Discord for the text of every message. Needed when `mentionRequired` is false |
 | `budget.monthlyUsd` | none | Model spend allowed in a calendar month (UTC). After it, model calls are refused |
 | `model.baseUrl` | none | An OpenAI-compatible base URL ending in `/v1`, over https |
@@ -136,6 +137,10 @@ do. A changed persona takes effect on the next `start`.
 ```bash
 node lib/lab/pi-discord/cli.ts dry-run --config /path/to/config.json
 ```
+
+It says in one line which other bots are heard. It cannot check the **Message Content** switch,
+because that needs a connection: if the config asks for the intent (`readAllMessages`) and the
+switch is off, `start` stops at once and says so. The other way round does no harm.
 
 It reads the config, checks the two secret files without using them, and starts the real cell
 with a door that has no Discord connection and a model route that points nowhere. Then a probe
@@ -190,7 +195,7 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `drop adm.users` | The sender is not on the list |
 | `drop addr.mention` | No mention |
 | `drop dm.closed` | A direct message |
-| `drop bots.mode` / `bots.loop` | Another bot, or too many bot messages in a row |
+| `drop bots.mode` / `bots.loop` | Another bot that is not heard (a webhook shows as `webhook:<id>`), or too many bot messages in a row |
 | `drop in.once` | An edited message is not read again; a reply to a deleted message is not posted |
 | `allow out.still-allowed` | A reply was posted |
 | `allow out.size` | The reply was too long and was cut |

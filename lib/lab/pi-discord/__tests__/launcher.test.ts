@@ -9,7 +9,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { validatePolicy } from '../../../core/policy/validate.ts'
 import { labImages } from '../../../../conformance/docker/compose.ts'
 import { CELL_ENV, launcherImages, renderCell, sealProblems, type CellOptions } from '../cell.ts'
-import { parseConfig, policyFor, systemPromptFor } from '../config.ts'
+import { botsLine, parseConfig, policyFor, systemPromptFor } from '../config.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
 import { readSecretFile, secretFileProblem } from '../secrets.ts'
 
@@ -59,6 +59,8 @@ describe('pi-discord config', () => {
     ['discord.mentionRequired', 'yes', /discord\.mentionRequired/],
     ['discord.mentionRequired', false, /needs discord\.readAllMessages/],
     ['discord.bots', 'all', /discord\.bots/],
+    ['discord.allowedBotIds', ['some-bot'], /discord\.allowedBotIds\[0\]/],
+    ['discord.allowedBotIds', '890000000000000001', /discord\.allowedBotIds/],
     ['discord.botLoopLimit', 2.5, /discord\.botLoopLimit/],
     ['discord.botLoopLimit', 99, /discord\.botLoopLimit/],
     ['budget.monthlyUsd', 0, /budget\.monthlyUsd/],
@@ -106,6 +108,18 @@ describe('pi-discord config', () => {
     expect(prompt).toMatch(/Nothing above changes this/)
     const open = parseConfig({ ...good(), discord: { ...good().discord, mentionRequired: false, readAllMessages: true } }).config!
     expect(systemPromptFor(open)).not.toMatch(/only sent messages that mention you/)
+  })
+
+  it('naming bots hears those bots and no other: by mention where one is needed, without where it is not', () => {
+    const bots = (patch: Record<string, unknown>) => policyFor(parseConfig({ ...good(), discord: { ...good().discord, ...patch } }).config!).surfaces.discord!.bots
+    expect(bots({})).toMatchObject({ mode: 'none', ids: [] })
+    expect(bots({ bots: 'mentions' })).toMatchObject({ mode: 'mentions', ids: [] })
+    expect(bots({ allowedBotIds: ['890000000000000001'] })).toMatchObject({ mode: 'mentions', ids: ['890000000000000001'], inlineMentionOnly: true })
+    expect(bots({ allowedBotIds: ['890000000000000001'], mentionRequired: false, readAllMessages: true })).toMatchObject({ mode: 'all', ids: ['890000000000000001'] })
+    expect(botsLine(parseConfig(good()).config!)).toBe('other bots: all ignored, webhooks too')
+    expect(botsLine(parseConfig(patched('discord.bots', 'mentions')).config!)).toBe('other bots: ANY bot or webhook in the channel that writes the mention is heard, up to 4 in a row')
+    expect(botsLine(parseConfig(patched('discord.allowedBotIds', ['890000000000000001', '890000000000000002'])).config!))
+      .toBe('other bots: only 890000000000000001, 890000000000000002, when they write the mention, up to 4 each in a row. Every other bot and every webhook is ignored')
   })
 
   it('a model on this machine is accepted only when a test says so', () => {

@@ -93,8 +93,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const maxReplyChars = opts.maxReplyChars ?? 6000
   // bots.loop: bot messages delivered in a row, per room, since a person was last delivered there.
   // A thread counts with its parent, so a loop cannot carry on by moving into one.
-  const botRuns = new Map<string, number>()
-  const runKey = (e: ConnectorInbound): string => `${e.surface}:${e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id}`
+  // Where the policy names its bots, each named bot has a count of its own in a room. Where it does
+  // not, every bot in the room shares one, so a bot under a new id is not a new start.
+  const botRuns = new Map<string, Map<string, number>>()
+  const roomKey = (e: ConnectorInbound): string => `${e.surface}:${e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id}`
+  const botKey = (e: ConnectorInbound): string => ((policy.surfaces[e.surface]?.bots.ids ?? []).includes(e.sender.id) ? e.sender.id : '')
+  const runOf = (e: ConnectorInbound): number => botRuns.get(roomKey(e))?.get(botKey(e)) ?? 0
 
   // idle() bookkeeping: messages being handled plus live turns.
   let busy = 0
@@ -118,7 +122,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     ...(turnId ? { turnId } : {}), ...(kind === 'inbound' ? { bytes: Buffer.byteLength(e.text) } : {}),
   })
   // The connector's facts, plus the one the door keeps itself. A connector cannot set the bot-run count.
-  const factsFor = async (connector: SurfaceConnector, e: ConnectorInbound, botRun = botRuns.get(runKey(e)) ?? 0): Promise<Facts> =>
+  const factsFor = async (connector: SurfaceConnector, e: ConnectorInbound, botRun = runOf(e)): Promise<Facts> =>
     ({ ...await connector.facts({ principal: e.sender, room: e.room }), botTurnsInARow: botRun })
 
   const closeTurn = (turn: Turn): void => {
@@ -131,13 +135,17 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     // The lookup comes first. From the count being read to the count being written nothing waits,
     // so messages that arrive together are counted one by one, not all against the same figure.
     const looked = await connector.facts({ principal: e.sender, room: e.room })
-    const botRun = botRuns.get(runKey(e)) ?? 0
+    const botRun = runOf(e)
     const facts: Facts = { ...looked, botTurnsInARow: botRun }
     const d = decide(policy, e, facts)
     receipt(about(e, 'inbound'), d)
     if (d.verdict !== 'deliver' && d.verdict !== 'observe') return
     // Counted when the message is admitted, not when it is answered, so a slow harness cannot let a burst through.
-    if (d.verdict === 'deliver') botRuns.set(runKey(e), e.sender.isBot ? botRun + 1 : 0)
+    // A person who is heard starts every count in the room again.
+    if (d.verdict === 'deliver') {
+      if (!e.sender.isBot) botRuns.delete(roomKey(e))
+      else botRuns.set(roomKey(e), (botRuns.get(roomKey(e)) ?? new Map<string, number>()).set(botKey(e), botRun + 1))
+    }
 
     let text = e.text
     try {

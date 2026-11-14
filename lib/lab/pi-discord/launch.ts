@@ -225,7 +225,7 @@ const DRY_POLICY_CONFIG = (model: string): LabConfig => ({
   persona: { name: 'dry-run', description: '' },
   discord: {
     guildId: '100000000000000000', channelId: '100000000000000001', adminUserIds: ['100000000000000002'], allowedUserIds: [], allowedRoleIds: [],
-    anyoneInChannel: false, mentionRequired: true, bots: 'none', botLoopLimit: 4, readAllMessages: false,
+    anyoneInChannel: false, mentionRequired: true, bots: 'none', allowedBotIds: [], botLoopLimit: 4, readAllMessages: false,
   },
   budget: { monthlyUsd: 1 },
   model: { baseUrl: 'https://model.invalid/v1', id: model, usdPerMTokIn: 0, usdPerMTokOut: 0 },
