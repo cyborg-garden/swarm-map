@@ -204,6 +204,10 @@ describe('what counts as a name of the removed integration', () => {
     ['a module the old code never had', "import { x } from './letta-memory'"],
     ['the old file, by path', "const file = 'lib/services/letta.ts'"],
     ['another package of the same npm scope', '"@letta-ai/letta-agent-sdk": "0.8.38"'],
+    // Only Letta Code's own name is let through, not its scope: the scope also holds the old server's packages.
+    ['a package of that scope with no other mark of the old code', '"@letta-ai/sdk": "1.0.0"'],
+    ['the old project, by its repository', 'git clone https://github.com/letta-ai/letta'],
+    ['a longer name that starts like the planned adapter\'s scope', '"@letta-ai/letta-codegen": "1.0.0"'],
   ])('%s is caught', (_what, line) => {
     expect(REMOVED.test(line), line).toBe(true)
   })
@@ -258,10 +262,17 @@ describe('the old Letta server client stays deleted', () => {
 
   it('no package of the retired server is a dependency', () => {
     const lock = (f: string) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml)$/.test(f)
+    const client = /letta-client|["'/]letta["']?\s*:/i
     // Letta Code brings that client along for its cloud mode, which the lab never starts.
-    expect(hits(/letta-client|["'/]letta["']?\s*:/i, (f) => !lock(f) || f === CELL_LOCK)).toEqual([])
+    const notRead = (f: string) => !lock(f) || f === CELL_LOCK
+    expect(hits(client, notRead)).toEqual([])
     // Swarm Map's own lock files are still read: the one exception is not the whole rule.
-    expect(repoFiles().filter((f) => lock(f) && f !== CELL_LOCK)).toEqual(expect.arrayContaining(['package.json', 'package-lock.json']))
+    const read = repoFiles().filter((f) => !notRead(f))
+    expect(read).toEqual(expect.arrayContaining(['package.json', 'package-lock.json', 'conformance/docker/letta-code/package.json']))
+    expect(read).not.toContain(CELL_LOCK)
+    // And the pattern would see the client there: it is in the one file that is let off.
+    const inCellLock = fs.readFileSync(path.join(ROOT, CELL_LOCK), 'utf-8').split('\n').filter((line) => client.test(line))
+    expect(inCellLock.length).toBeGreaterThan(0)
   })
 
   it('the files of the old integration are gone', () => {
