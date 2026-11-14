@@ -46,15 +46,42 @@ pinned version. It never skips. A complete run rewrites `conformance/matrix/pi-1
 
 ```bash
 # The same checks with Pi in a sealed Docker cell, plus the ones that need a cell (not in CI):
-npm run conformance:docker:build   # once. The only step that uses the network
+npm run conformance:docker:build   # once for each state of the code. The only step that uses the network
 npm run conformance:docker         # about two minutes. Rewrites conformance/matrix/pi-1.5.2.docker.json
-npm run conformance:docker:clean   # only if a run was killed: removes what it left, and nothing else
+npm run conformance:docker:clean   # only if a run was killed: removes what this worktree's runs left, and nothing else
+npm run conformance:docker:clean -- --images   # the same, and the images this worktree built
 ```
 
 The Docker run needs a Docker daemon on this machine, reached over a local socket. It refuses
-anything else, and it refuses to run if an image is missing. Every container, network and volume
-it makes is named `smlab-<8 hex digits>`; it stops and removes only those, by name, and never
+anything else. Every container, network and volume it makes is named `smlab-<8 hex digits>` and
+labelled with the id of the run that made it; it stops and removes only those, by name, and never
 prunes.
+
+**The images are per source.** They are named for the code they were built from:
+`smlab-cell:pi-1.5.2-<hash>` and `smlab-rig:<hash>`, where the hash covers every file the builder
+is sent (`lib/core`, `lib/door`, `lib/runtimes` and `conformance`, less tests and output). Change
+one of those files and the names change, so the run finds no image until you build again. The
+reason: with one fixed name, every checkout on a machine shared one pair of images. Whoever built
+last decided what every other run tested, and a run from one branch could go green on another
+branch's code without a sign of it. Three things now stand in the way:
+
+- **The name.** A run only looks for the images named for the code on disk.
+- **The label.** The build writes the hash on both images (`swarmlab.source`).
+- **The files.** Before any rig starts, the run lists the SHA-256 of every file in both images and
+  compares them with the worktree. The rig image must hold exactly the source. The cell holds a
+  part of it, and every file it holds must match. A difference is `REFUSING TO RUN: S0`, and every
+  test in the run fails. The run then shows this check can go red, against a copy of the code with
+  one line added.
+
+What this costs: a build after every change to those folders, and old images that stay until they
+are removed. `clean -- --images` removes the ones this worktree built and wrote down in
+`conformance/out/docker-ledger`, by exact name, and leaves any image a container still uses.
+`docker image ls 'smlab-*'` shows the rest. Cleaning up goes by the same file: it lists the runs
+this worktree started, and only objects labelled with one of those runs are removed. Another
+checkout's rigs and images are never touched, whatever they are named.
+
+Two runs can also be kept apart by name: `SWARMLAB_DOCKER_PREFIX=mylab` puts `mylab` in place of
+`smlab` in every image, project and container name (2 to 16 lower-case letters and digits).
 
 The run needs an internet connection, for its controls. Before any rig starts, a one-off container
 on Docker's default network asks DNS where `example.com` and one public resolver are, so no public
@@ -275,6 +302,9 @@ build a matrix from it.
 - **The cell is given no `curl`.** The probe is a Node script in the cell image. It makes the same
   connections.
 - **The Docker project is named `smlab-<nonce>`**, not `swarmlab-<nonce>` as the plan had it.
+- **The images are named for their source**, not `smlab-cell:pi-1.5.2` and `smlab-rig:local` as
+  first built. Fixed names were shared by every checkout on a machine. See "The images are per
+  source" above.
 - **An audit of the Docker cell changed four things.** The probe's IPv6 address came from the
   laptop's resolver, so on a network that answers no IPv6 question the whole run was red; the
   public resolver is now asked itself. Three broken rigs were added (`leaks-file`, `socket`,

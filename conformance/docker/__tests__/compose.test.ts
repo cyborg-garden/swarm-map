@@ -3,9 +3,15 @@
 // What the rig's compose file must say before Docker is ever asked to start
 // it. These run in CI with no Docker: they read the rendered file. Whether
 // Docker then does what the file says is what the Docker suite is for.
-import { describe, expect, it } from 'vitest'
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
 import { PROJECT_NAME, RefusingToRun } from '../../guards/preflight.ts'
-import { assertSealed, probeArgs, renderRig, rigEnv, RIG_VARIANTS, type RigOptions } from '../compose.ts'
+import {
+  assertSealed, contextFiles, labImages, probeArgs, readSource, renderRig, rigEnv, RIG_VARIANTS, RUN_LABEL, sourceProblems,
+  type RigOptions,
+} from '../compose.ts'
 
 const nonce = 'deadbeef'
 const base: RigOptions = { nonce, brainToken: `BRAIN-${nonce}-0123456789abcdef`, check: 'C1', variant: 'good', sinkIp: '10.0.0.9', hostPort: 4444 }
@@ -18,7 +24,7 @@ describe('the sealed rig', () => {
     expect(project).toMatch(PROJECT_NAME)
     expect(file.name).toBe(project)
     for (const [name, service] of Object.entries(file.services)) {
-      expect(service.image, name).toMatch(/^smlab-(cell|rig):/)
+      expect(service.image, name).toMatch(/^smlab-(cell:pi-[0-9.]+-|rig:)[0-9a-f]{12}$/)
       expect(service.pull_policy, name).toBe('never')
       expect(service.restart, name).toBe('no')
     }
@@ -209,5 +215,131 @@ describe('F2 for a rig: what every container is handed', () => {
   it('[U:rig-compose] refuses a nonce or a cell token that is not shaped like one', () => {
     expect(() => rig({ nonce: 'DEADBEEF' })).toThrow(RefusingToRun)
     expect(() => rig({ brainToken: 'hunter2' })).toThrow(RefusingToRun)
+  })
+})
+
+describe('the images are named for the code they were built from', () => {
+  const REPO = path.resolve(import.meta.dirname, '..', '..', '..')
+  const made: string[] = []
+  afterAll(() => { for (const dir of made) rmSync(dir, { recursive: true, force: true }) })
+  /** A copy of what the builder is sent, somewhere it can be changed. */
+  const copy = (): string => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'smlab-source-'))
+    made.push(dir)
+    for (const rel of contextFiles(REPO)) {
+      mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
+      cpSync(path.join(REPO, rel), path.join(dir, rel))
+    }
+    return dir
+  }
+
+  it('[U:rig-source] the source is what the builder is sent: the lab\'s folders, less tests, installs and output', () => {
+    const files = contextFiles(REPO)
+    expect(files).toEqual([...files].sort())
+    for (const must of ['conformance/docker/Dockerfile', 'conformance/docker/Dockerfile.dockerignore', 'conformance/docker/pi/package-lock.json',
+      'conformance/docker/cell-main.ts', 'lib/core/decide.ts', 'lib/door/door.ts', 'lib/runtimes/pi/caps.ts']) expect(files, must).toContain(must)
+    for (const rel of files) {
+      expect(rel).toMatch(/^(lib\/(core|door|runtimes)|conformance)\//)
+      expect(rel).not.toMatch(/(^|\/)(__tests__|node_modules)\//)
+      expect(rel).not.toMatch(/^conformance\/(matrix|out)\//)
+    }
+  })
+
+  it('[U:rig-source] both names carry the hash of that source, and the same source gives the same names', () => {
+    const dir = copy()
+    const here = labImages({}, REPO)
+    expect(here.source).toMatch(/^[0-9a-f]{12}$/)
+    expect(here.source).toBe(readSource(REPO).hash)
+    expect(here.cell).toBe(`smlab-cell:pi-1.5.2-${here.source}`)
+    expect(here.rig).toBe(`smlab-rig:${here.source}`)
+    expect(labImages({}, dir)).toEqual(here)
+    expect(rig().file.services.cell.image).toBe(here.cell)
+    for (const name of ['door', 'sink', 'control'] as const) expect(rig().file.services[name].image, name).toBe(here.rig)
+  })
+
+  it('[U:rig-source] one changed line, one new file or one renamed file gives other names', () => {
+    const before = labImages({}, REPO)
+    const changed = copy()
+    appendFileSync(path.join(changed, 'lib/core/decide.ts'), '\n// changed\n')
+    const added = copy()
+    writeFileSync(path.join(added, 'lib/door/extra.ts'), '')
+    const dockerfile = copy()
+    appendFileSync(path.join(dockerfile, 'conformance/docker/Dockerfile'), '\n# changed\n')
+    const seen = new Set([before.source])
+    for (const dir of [changed, added, dockerfile]) {
+      const after = labImages({}, dir)
+      expect(after.cell).not.toBe(before.cell)
+      expect(after.rig).not.toBe(before.rig)
+      seen.add(after.source)
+    }
+    expect(seen.size).toBe(4)
+  })
+
+  it('[U:rig-source] what the builder is never sent does not change the names', () => {
+    const dir = copy()
+    mkdirSync(path.join(dir, 'conformance/matrix'), { recursive: true })
+    mkdirSync(path.join(dir, 'conformance/out'), { recursive: true })
+    mkdirSync(path.join(dir, 'lib/core/__tests__'), { recursive: true })
+    mkdirSync(path.join(dir, 'lib/other'), { recursive: true })
+    for (const rel of ['conformance/matrix/x.json', 'conformance/out/ledger', 'lib/core/__tests__/x.test.ts', 'lib/other/x.ts', 'README.md']) writeFileSync(path.join(dir, rel), 'x')
+    expect(labImages({}, dir)).toEqual(labImages({}, REPO))
+  })
+
+  it('[U:rig-source] the prefix can be set for a run, and only to a plain short word', () => {
+    const mine = labImages({ SWARMLAB_DOCKER_PREFIX: 'smlabv' }, REPO)
+    expect(mine.cell).toBe(`smlabv-cell:pi-1.5.2-${mine.source}`)
+    expect(mine.rig).toBe(`smlabv-rig:${mine.source}`)
+    const { project, file } = rig({ prefix: 'smlabv', images: mine })
+    expect(project).toBe('smlabv-deadbeef')
+    expect(file.services.cell.image).toBe(mine.cell)
+    for (const bad of ['', 'Smlab', 'sm lab', 'sm-lab', 'x', 'a'.repeat(17), 'smlab;rm', '../x', '9lab']) {
+      expect(() => labImages({ SWARMLAB_DOCKER_PREFIX: bad }, REPO), bad).toThrow(/^REFUSING TO RUN: F5 /)
+    }
+  })
+
+  it('[U:rig-source] everything a rig makes carries the id of the run that made it, when it is given one', () => {
+    const { file } = rig({ runId: '0123456789abcdef' })
+    const label = { [RUN_LABEL]: '0123456789abcdef' }
+    for (const [name, service] of Object.entries(file.services)) expect(service.labels, name).toEqual(label)
+    for (const [name, network] of Object.entries(file.networks)) expect(network.labels, name).toEqual(label)
+    expect(file.volumes.lab.labels).toEqual(label)
+    expect(() => rig({ runId: 'not hex' })).toThrow(/^REFUSING TO RUN: F5 /)
+    expect(() => assertSealed(rig({ runId: '0123456789abcdef' }))).not.toThrow()
+  })
+})
+
+describe('an image is only used if it holds the code under test', () => {
+  const expected = { hash: 'aaaaaaaaaaaa', files: { 'lib/core/decide.ts': '1'.repeat(64), 'conformance/docker/cell-main.ts': '2'.repeat(64), 'conformance/docker/sink.ts': '3'.repeat(64) } }
+  const listing = (files: Record<string, string>): string => Object.entries(files).map(([rel, sum]) => `${sum}  ./${rel}\n`).join('')
+  const cellFiles = { 'lib/core/decide.ts': '1'.repeat(64), 'conformance/docker/cell-main.ts': '2'.repeat(64) }
+
+  it('[U:rig-source] passes an image that says it is from this source and holds its files', () => {
+    expect(sourceProblems('rig', 'i', { label: expected.hash, listing: listing(expected.files) }, expected)).toEqual([])
+    // The cell holds a part of the source, by design.
+    expect(sourceProblems('cell', 'i', { label: expected.hash, listing: listing(cellFiles) }, expected)).toEqual([])
+  })
+
+  it('[U:rig-source] goes red on an image that names another source, or none', () => {
+    for (const label of ['bbbbbbbbbbbb', '', '<no value>']) {
+      const problems = sourceProblems('rig', 'smlab-rig:x', { label, listing: listing(expected.files) }, expected)
+      expect(problems.join('; '), label).toMatch(/smlab-rig:x was built from other code/)
+    }
+  })
+
+  it('[U:rig-source] goes red on a file that differs, a file this code does not have, and a file the rig lacks, whatever the label says', () => {
+    const differs = sourceProblems('cell', 'i', { label: expected.hash, listing: listing({ ...cellFiles, 'lib/core/decide.ts': '9'.repeat(64) }) }, expected)
+    expect(differs.join('; ')).toContain('lib/core/decide.ts differs')
+    const foreign = sourceProblems('cell', 'i', { label: expected.hash, listing: listing({ ...cellFiles, 'lib/runtimes/other/shim.ts': '4'.repeat(64) }) }, expected)
+    expect(foreign.join('; ')).toContain('lib/runtimes/other/shim.ts is not in this code')
+    const lacks = sourceProblems('rig', 'i', { label: expected.hash, listing: listing(cellFiles) }, expected)
+    expect(lacks.join('; ')).toContain('conformance/docker/sink.ts is missing')
+    // The cell may lack files, but not its own entry.
+    expect(sourceProblems('cell', 'i', { label: expected.hash, listing: listing({ 'lib/core/decide.ts': '1'.repeat(64) }) }, expected).join('; ')).toContain('conformance/docker/cell-main.ts is missing')
+  })
+
+  it('[U:rig-source] goes red when the files could not be listed', () => {
+    for (const text of ['', 'sh: not found\n', 'docker: Error response from daemon\n']) {
+      expect(sourceProblems('rig', 'i', { label: expected.hash, listing: text }, expected).join('; '), text).toContain('its files could not be read')
+    }
   })
 })

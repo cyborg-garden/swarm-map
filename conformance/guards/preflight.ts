@@ -85,13 +85,24 @@ export function assertLocalDocker(docker: { dockerHost?: string; contextEndpoint
   }
 }
 
-// Every Docker object the lab makes carries this prefix, and the lab only ever
-// stops or removes objects that carry it.
-export const PROJECT_NAME = /^smlab-[0-9a-f]{8}$/
+// Every Docker object the lab makes carries one prefix, and the lab only ever
+// stops or removes objects that carry it. A run may be given a prefix of its
+// own (SWARMLAB_DOCKER_PREFIX), so two runs on one machine share no name.
+export const DEFAULT_PREFIX = 'smlab'
+
+/** F5. The prefix of this run: a short plain word, since it becomes part of image, project and container names. */
+export function labPrefix(env: Record<string, string | undefined> = process.env): string {
+  const prefix = env.SWARMLAB_DOCKER_PREFIX ?? DEFAULT_PREFIX
+  if (!/^[a-z][a-z0-9]{1,15}$/.test(prefix)) throw new RefusingToRun('F5', 'SWARMLAB_DOCKER_PREFIX must be 2 to 16 lower-case letters and digits, starting with a letter')
+  return prefix
+}
+
+export const projectPattern = (prefix: string = DEFAULT_PREFIX): RegExp => new RegExp(`^${prefix}-[0-9a-f]{8}$`)
+export const PROJECT_NAME = projectPattern()
 
 /** F5. Refuses a compose project or container that is not the lab's own. */
-export function assertOurProject(project: string, containerNames: string[]): void {
-  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `compose project is not a lab project: ${project}`)
+export function assertOurProject(project: string, containerNames: string[], prefix: string = DEFAULT_PREFIX): void {
+  if (!projectPattern(prefix).test(project)) throw new RefusingToRun('F5', `compose project is not a lab project: ${project}`)
   const foreign = containerNames.filter((name) => !name.startsWith(`${project}-`))
   if (foreign.length > 0) throw new RefusingToRun('F5', `container outside the lab project: ${foreign.join(', ')}`)
 }
