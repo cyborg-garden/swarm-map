@@ -1,0 +1,34 @@
+version: 2
+
+# This file holds one entry, and it turns Dependabot's update pull requests
+# OFF for one folder. Everything else in the repo keeps GitHub's defaults:
+# no entry here means no version updates, and security updates as set in the
+# repo settings.
+#
+# conformance/docker/letta-code pins one third-party package, the Letta Code
+# CLI, so a sealed test image can install exactly the version the lab tests
+# against. Every other package in its lock file belongs to Letta Code's own
+# tree. Dependabot cannot move those without changing the version under
+# test, so its security update jobs for this folder fail with
+# `security_update_not_possible` (glob and minimatch, 2026-11-14).
+#
+# Two settings, because each covers one kind of update:
+#   - open-pull-requests-limit: 0 stops version updates. It does not touch
+#     security updates.
+#   - ignore "*" stops security updates for every package in this folder.
+#
+# Alerts are not affected. They come from the dependency graph, not from
+# this file, and stay open in the Security tab until the lock file changes.
+#
+# To clear the alerts: bump the pinned Letta Code version (package.json in
+# that folder and LETTA_CODE_VERSION in lib/runtimes/letta-code/caps.ts),
+# regenerate the lock file, and rerun the lab checks against the new version.
+# To lift this: delete the entry below, or the whole file.
+updates:
+  - package-ecosystem: "npm"
+    directory: "/conformance/docker/letta-code"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
