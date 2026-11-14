@@ -10,6 +10,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, w
 import net from 'node:net'
 import path from 'node:path'
 import { sinkProblems, startHostListener } from '../../../conformance/docker/runner.ts'
+import { PROJECT_NAME } from '../../../conformance/guards/preflight.ts'
 import type { SurfaceConnector } from '../../door/connector.ts'
 import { createDiscordConnector } from '../../door/connectors/discord.ts'
 import { createDoor, type Door } from '../../door/door.ts'
@@ -18,8 +19,8 @@ import { OPENAI_CHAT } from '../../door/model-shapes.ts'
 import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
-import { cellDown, cellUp, docker, dockerProblems, findTargets, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
-import { policyFor, type LabConfig } from './config.ts'
+import { cellDown, cellUp, docker, dockerProblems, findTargets, launcherImages, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
+import { policyFor, systemPromptFor, type LabConfig } from './config.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 
@@ -81,8 +82,17 @@ export async function start(o: StartOptions): Promise<Running> {
   const stateDir = prepareStateDir(o.stateDir)
   const previous = readRun(stateDir)
   if (previous && alive(previous.pid)) throw new Error(`this agent is already running (pid ${previous.pid}). Stop it first`)
-  const dockerIssues = dockerProblems()
+  // Named once, checked against the code on disk, and the cell is started from exactly these.
+  const images = launcherImages()
+  const dockerIssues = dockerProblems(images)
   if (dockerIssues.length > 0) throw new Error(dockerIssues.join('; '))
+  // A run on record whose door is gone was killed before it could clean up. Its cell is sealed and
+  // silent, but it is still there, and once this start writes its own record nothing would name it.
+  if (previous && typeof previous.project === 'string' && PROJECT_NAME.test(previous.project)) {
+    const left = cellDown(previous.project)
+    if (left.length > 0) throw new Error(`the last run's containers could not be removed: ${left.join(', ')}`)
+    o.log(`removed what the last run left behind (${previous.project})`)
+  }
 
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
@@ -92,8 +102,10 @@ export async function start(o: StartOptions): Promise<Running> {
   const receipts = createReceiptLog({ file: path.join(stateDir, 'receipts.jsonl') })
   const [brainPort, routePort] = [await freePort(), await freePort()]
   const secrets = [o.secrets.discordToken, o.secrets.modelKey]
+  // What the cell holds is no use off this machine, but none of it belongs in a channel either.
+  const cellHeld = [brainToken, `PLACEHOLDER-${cellNonce}`, cellNonce]
 
-  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id }
+  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images }
   const file = renderCell(cellOptions)
   const problems = sealProblems(file, secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
@@ -138,7 +150,7 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
-      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: secrets }), turnDeadlineMs: 180_000,
+      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: 180_000,
     })
     await withTimeout(door.shimConnected(), o.cellReadyMs ?? 60_000, 'the cell did not reach the door in time')
     o.log(`live: agent ${policy.agentId}, policy ${policy.hash.slice(0, 12)}, one channel`)
@@ -157,18 +169,19 @@ export async function start(o: StartOptions): Promise<Running> {
  * Nothing is connected to Discord and no model is called.
  */
 export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken'] }): Promise<Check[]> {
+  const images = launcherImages()
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
   const cellNonce = randomBytes(16).toString('hex')
   const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, withSink: true, broken: o.broken }
+  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken }
   const file = renderCell(options)
   const checks: Check[] = []
   const add = (id: string, title: string, problems: string[]): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok' }) }
   add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file))
 
-  const targets = findTargets()
+  const targets = findTargets(images)
   const host = await startHostListener()
   const policy = policyFor(DRY_POLICY_CONFIG(o.model))
   const receipts = createReceiptLog()
@@ -209,6 +222,7 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
 /** A policy for the dry run's door. It has no connector, so the ids in it are never used. */
 const DRY_POLICY_CONFIG = (model: string): LabConfig => ({
   agentId: 'dry-run',
+  persona: { name: 'dry-run', description: '' },
   discord: {
     guildId: '100000000000000000', channelId: '100000000000000001', adminUserIds: ['100000000000000002'], allowedUserIds: [], allowedRoleIds: [],
     anyoneInChannel: false, mentionRequired: true, bots: 'none', botLoopLimit: 4, readAllMessages: false,

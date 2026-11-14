@@ -7,23 +7,25 @@
 // The cell is the lab's own cell image, started the way the conformance rig
 // starts it: read-only disk, non-root, every capability dropped, no host
 // folder, no published port. It is handed a run nonce, a cell token, two
-// timeouts and the model's name. Not a key, not a token.
+// timeouts, the model's name and what the harness is told it is. Not a key,
+// not a token.
 //
 // The relay is the one container with a route out, because it has to reach
 // the door on this machine. It carries bytes and holds nothing.
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SWARM_ROOT, probeArgs, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
-import { PI_VERSION } from '../../runtimes/pi/caps.ts'
+import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, probeArgs, readSource, sourceProblems, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
 import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig } from '../../../conformance/docker/report.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
 
-// The same two images the conformance rig uses, built from the same Dockerfile, under names of
-// their own. A test build on this machine replaces the rig's images whenever it likes; it must
-// not be able to change what a real run starts.
-export const CELL_IMAGE = `smlab-pi-discord-cell:pi-${PI_VERSION}`
-export const RIG_IMAGE = 'smlab-pi-discord-rig:local'
+// The same two images the conformance rig uses, built from the same Dockerfile and named the
+// same way: for the code they were built from. So a run can only start from an image of the
+// code it is run from, and an image left by an older checkout is never picked up by its name.
+// They carry a prefix of their own, so cleaning up after a test run cannot remove them.
+export const IMAGE_PREFIX = 'smlabpd'
+/** The two images for the code on disk now. */
+export const launcherImages = (): LabImages => labImages({ SWARMLAB_DOCKER_PREFIX: IMAGE_PREFIX })
 
 export interface CellOptions {
   /** Eight hex digits. Names the compose project, and anyone on this machine can read it. */
@@ -39,6 +41,10 @@ export interface CellOptions {
   brainPort: number
   routePort: number
   model: string
+  /** What the harness is told it is. Text the launcher wrote; not a secret. */
+  systemPrompt: string
+  /** The images to start. Left out, they are the ones named for the code on disk. */
+  images?: LabImages
   /** Dry run only: add the sink and its control, so "nothing got out" can be read from outside. */
   withSink?: boolean
   /** Tests only: break the seal in one named way, to show the checks go red. */
@@ -53,7 +59,7 @@ export interface LiveFile {
 }
 
 /** Every name the cell's environment may hold. Listed by hand; nothing is inherited. */
-export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
+export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_SYSTEM_PROMPT', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
 const FORBIDDEN_KEYS = ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices', 'dns']
 
 function service(image: string, script: string, networks: string[], environment: Record<string, string>): Service {
@@ -69,12 +75,14 @@ export function renderCell(o: CellOptions): LiveFile {
   const name = `smlab-${o.nonce}`
   if (!PROJECT_NAME.test(name)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
+  if (o.systemPrompt === '' || o.systemPrompt.length > 4000) throw new RefusingToRun('F5', 'not a system prompt')
+  const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages()
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
   const cell: Service = {
     ...service(CELL_IMAGE, 'conformance/docker/cell-main.ts', ['cell'], {
       SWARMLAB_NONCE: o.cellNonce, SWARMLAB_BRAIN: o.brainToken, SMLAB_GATE: 'real',
       // A real model is slower than a scripted one: the shim waits this long for the door's answer on a tool.
-      SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000', SMLAB_MODEL: o.model,
+      SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000', SMLAB_MODEL: o.model, SMLAB_SYSTEM_PROMPT: o.systemPrompt,
     }),
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'],
   }
@@ -144,27 +152,43 @@ const dockerAsync = (args: string[], timeoutMs = 120_000): Promise<string> => ne
   execFile('docker', args, { env: dockerEnv(), encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (_err, stdout, stderr) => resolve(`${stdout}${stderr}`))
 })
 
-/** Build the two images. The only step that uses the network to fetch anything, and never part of a start. */
+/** Build the two images, named for the code they are built from. The only step that uses the network to fetch anything, and never part of a start. */
 export function buildImages(): boolean {
   const repo = path.resolve(import.meta.dirname, '..', '..', '..')
-  return ([['cell', CELL_IMAGE], ['rig', RIG_IMAGE]] as const).every(([target, tag]) =>
-    spawnSync('docker', ['build', '--target', target, '--tag', tag, '--file', path.join(repo, 'conformance', 'docker', 'Dockerfile'), repo],
+  const images = launcherImages()
+  const built = ([['cell', images.cell], ['rig', images.rig]] as const).every(([target, tag]) =>
+    spawnSync('docker', ['build', '--target', target, '--tag', tag, '--label', `${SOURCE_LABEL}=${images.source}`, '--file', path.join(repo, 'conformance', 'docker', 'Dockerfile'), repo],
       { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 }).status === 0)
+  // A file saved during the build would leave images that are not what their name says.
+  return built && launcherImages().source === images.source
 }
 
-/** Docker is this machine's, both images are built, and they are new enough for a real run. */
-export function dockerProblems(): string[] {
+/** What an image says it was built from, and the hash of every file it really holds under the lab's folder. */
+function seeImage(image: string): { label: string; listing: string } {
+  const label = docker(['image', 'inspect', '--format', `{{index .Config.Labels "${SOURCE_LABEL}"}}`, image])
+  const listing = docker(['run', '--rm', '--network', 'none', '--read-only', '--pull', 'never', '--name', `smlab-${randomBytes(4).toString('hex')}-source`,
+    '--entrypoint', 'sh', image, '-c', `cd ${SWARM_ROOT} && find . -type f -print0 | xargs -0 sha256sum`], 60_000)
+  return { label: label.ok ? label.out.trim() : '', listing: listing.ok ? listing.out : '' }
+}
+
+/**
+ * Docker is this machine's, and both images hold exactly the code this run is started from:
+ * the label each carries and the hash of every file in it are compared with the code on disk.
+ */
+export function dockerProblems(images: LabImages = launcherImages()): string[] {
   const endpoint = docker(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).out.trim()
   try {
     assertLocalDocker({ dockerHost: process.env.DOCKER_HOST, contextEndpoint: process.env.DOCKER_HOST ? process.env.DOCKER_HOST : endpoint })
   } catch (err) { return [(err as Error).message] }
   if (!docker(['info', '--format', '{{.ServerVersion}}']).ok) return ['the Docker daemon is not answering']
-  const stale = 'is missing or out of date. Run: node lib/lab/pi-discord/cli.ts build'
-  const has = (image: string, file: string, word: string): boolean =>
-    docker(['run', '--rm', '--network', 'none', '--pull', 'never', '--name', `smlab-${randomBytes(4).toString('hex')}-check`, image, 'grep', '-q', word, `${SWARM_ROOT}/${file}`]).ok
+  const build = 'Run: node lib/lab/pi-discord/cli.ts build'
+  const expected = readSource()
+  if (expected.hash !== images.source) return [`the code changed since the images were named. ${build}`]
   const p: string[] = []
-  if (!has(CELL_IMAGE, 'conformance/docker/cell-main.ts', 'SMLAB_MODEL')) p.push(`image ${CELL_IMAGE} ${stale}`)
-  if (!has(RIG_IMAGE, 'lib/door/relay.ts', 'SMLAB_RELAY')) p.push(`image ${RIG_IMAGE} ${stale}`)
+  for (const [kind, image] of [['cell', images.cell], ['rig', images.rig]] as const) {
+    if (!docker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) { p.push(`image ${image} is not built for this code. ${build}`); continue }
+    p.push(...sourceProblems(kind, image, seeImage(image), expected).map((problem) => `${problem}. ${build}`))
+  }
   return p
 }
 
@@ -216,8 +240,8 @@ export function runningCellProblems(project: string): string[] {
 }
 
 /** The addresses the probe will try, found the way the conformance rig finds them, from the launcher's own image. */
-export function findTargets(): ProbeTargets {
-  const lookup = docker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
+export function findTargets(images: LabImages = launcherImages()): ProbeTargets {
+  const lookup = docker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', images.rig, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
   let found: Partial<ProbeTargets> = {}
   try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '{}') as Partial<ProbeTargets> } catch { /* nothing found: the probe reports those ways out as not tried, which fails */ }
   const text = (v: unknown): string => (typeof v === 'string' ? v : '')

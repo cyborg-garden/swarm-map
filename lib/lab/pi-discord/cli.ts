@@ -44,6 +44,7 @@ async function dryRun(): Promise<void> {
   const d = config.discord
   say('config')
   say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
+  say(`  ok    it introduces itself as "${config.persona.name}", and is told it has no tools`)
   say(`  ok    heard: ${d.adminUserIds.length} admin(s), ${d.allowedUserIds.length} other people, ${d.allowedRoleIds.length} role(s)${d.anyoneInChannel ? ', and anyone in the channel' : ''}`)
   say(`  ok    other bots: ${d.bots === 'none' ? 'ignored' : `heard when they write the mention, up to ${d.botLoopLimit} in a row`}; direct messages: refused; tools: none`)
   say(`  ok    budget $${config.budget.monthlyUsd} a month, then model calls are refused; model ${config.model.id}`)

@@ -27,8 +27,10 @@ Every id on this page is a placeholder. Keep your config, your token and your ke
 
 - Docker running on this machine, and Node 24.
 - The launcher's two images: `node lib/lab/pi-discord/cli.ts build`. Build them again after you
-  pull. The dry run tells you when they are missing or out of date. They are the lab's cell and
-  rig images under names of their own, so a test build cannot change what a real run starts.
+  pull or change the code. They are the lab's cell and rig images, named for the code they were
+  built from (`smlabpd-cell:...`, `smlabpd-rig:...`). The dry run and `start` compare every file
+  in them with the code on disk, and refuse to go on if they differ. Images of older code are
+  left where they are: remove them with `docker image rm` when you no longer want them.
 - A Discord account that can add a bot to the server.
 - A key for an OpenAI-compatible model provider (OpenRouter, for one), and that model's prices.
 
@@ -101,14 +103,16 @@ server, the channel or a person and choose **Copy ID**.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `persona.name` | the `agentId` | What the agent calls itself. One line, up to 40 characters |
+| `persona.description` | empty | One line about what it is for, up to 600 characters. It cannot give the agent an ability |
 | `discord.guildId` | none | The one server |
-| `discord.channelId` | none | The one channel. Its threads count as part of it |
+| `discord.channelId` | none | The one channel. Its threads count as part of it, private ones included, and share its conversation |
 | `discord.adminUserIds` | none | Admins of this agent. At least one. They are also heard |
 | `discord.allowedUserIds` | `[]` | Other people who are heard |
 | `discord.allowedRoleIds` | `[]` | Holders of these roles are heard |
 | `discord.anyoneInChannel` | `false` | Hear anyone who can post in the channel |
 | `discord.mentionRequired` | `true` | Answer only when the bot is mentioned |
-| `discord.bots` | `"none"` | Other bots: `"none"`, or `"mentions"` to hear one that writes the bot's mention |
+| `discord.bots` | `"none"` | Other bots: `"none"`, or `"mentions"` to hear any bot or webhook in the channel that writes the bot's mention. The lists of people do not apply to bots, and one bot cannot be named |
 | `discord.botLoopLimit` | `4` | Bot messages answered in a row before a person has to speak |
 | `discord.readAllMessages` | `false` | Ask Discord for the text of every message. Needed when `mentionRequired` is false |
 | `budget.monthlyUsd` | none | Model spend allowed in a calendar month (UTC). After it, model calls are refused |
@@ -118,6 +122,14 @@ server, the channel or a person and choose **Copy ID**.
 
 A setting the file does not know is refused. There is no setting for direct messages or tools:
 both are off.
+
+**What the agent is told about itself.** Pi's own introduction says it is a coding assistant that
+can run commands. Here that is not true, so the launcher replaces it. The agent is told its name
+and description, and then, in the launcher's words and not yours: that it can read the messages it
+is sent and answer in text, that it has no tools (no commands, files, web, links, images or
+attachments, no posting elsewhere, no direct messages), that a mention it writes pings nobody,
+that it forgets when it is restarted, and that it must say so when asked for something it cannot
+do. A changed persona takes effect on the next `start`.
 
 ## 6. Dry run
 
@@ -154,6 +166,8 @@ It stays in the foreground and prints one line per state change. In order: the c
 checked from outside, then the door connects to Discord, then the cell joins the door. If any step
 fails, everything is taken down again and nothing is left running. To keep it running after you
 close the terminal, start it under `nohup` or your own process manager.
+
+If the last run was killed before it could clean up, `start` removes the containers it left first.
 
 ## 8. Verify
 
@@ -204,9 +218,9 @@ If a run was killed some other way, `stop` still removes what it left.
 
 ## What this does not show
 
-1. **Nothing here has talked to the real Discord or a real model.** Every test uses a fake Discord
-   and a scripted model on loopback. The first real start is the first real test of the gateway
-   handshake, Discord's rate limits and the provider's replies.
+1. **No test talks to the real Discord or a real model.** Every test uses a fake Discord and a
+   scripted model on loopback. So the gateway handshake, Discord's rate limits, Discord's handling
+   of a repeated post and the provider's replies are shown only by running it for real.
 2. **`start` on the command line is covered in pieces.** The same code path runs end to end in
    `pi-discord.docker.test.ts` through the library. The command's own last steps (reading the two
    files from your environment, Ctrl-C) are not run by a test.
@@ -215,7 +229,12 @@ If a run was killed some other way, `stop` still removes what it left.
    machine. It carries two ports and holds nothing.
 4. **Conversations do not outlive a stop.** The cell's folder is removed with it.
 5. **One process, no supervisor.** If the cell stops, messages are dropped with a receipt saying
-   no harness is connected, until you stop and start again.
+   no harness is connected, until you stop and start again. If the door stops, the cell stays
+   up, sealed and silent, until `stop` or the next `start` removes it.
 6. **Text only.** Attachments are listed for the door and not passed to Pi. There are no slash
    commands and no reactions.
-7. **How Pi behaves as a chat partner is not tested.** It is a coding agent started with no tools.
+7. **How Pi behaves as a chat partner is not tested.** It is a coding agent started with no tools
+   and told so. That the model is given that text is tested. That a real model keeps to it is not.
+8. **The budget is counted with the prices you give.** They are not checked against the
+   provider's. One call can overshoot the cap, because the cap is checked before a call.
+9. **The bot-loop count is kept in memory.** It starts again from nothing when the door restarts.

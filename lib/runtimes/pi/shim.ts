@@ -12,7 +12,7 @@
 //   without one, and no turn is sent until the gate has announced itself.
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import type { Envelope } from '../../door/protocol.ts'
 import { connectShim, type ShimClient } from '../../door/shim-client.ts'
@@ -35,6 +35,8 @@ export interface PiShimOptions {
   /** The gate extension Pi loads. Always required: Pi is never started without one. */
   gate: { path: string }
   model?: string
+  /** What Pi is told it is, in place of its own "coding assistant" introduction. Left out, Pi keeps its own. */
+  systemPrompt?: string
   verdictTimeoutMs?: number
   gateTimeoutMs?: number
   /** How long a fresh Pi has for its gate to announce itself before its turn is refused. */
@@ -48,12 +50,26 @@ export interface PiShimOptions {
 
 export interface PiShim { close(): void }
 
-export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: string }; model: string; resume?: boolean }): string[] {
+/**
+ * Why a system prompt cannot be handed to Pi, or undefined if it can. Pi reads
+ * a prompt that names a file as that file's contents, so one that does is
+ * refused: the prompt is text, never a way to read something in the cell.
+ */
+export function systemPromptProblem(prompt: string, workDir: string): string | undefined {
+  if (prompt === '') return 'the system prompt is empty'
+  if (prompt.length > 4000) return 'the system prompt is too long'
+  if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(prompt)) return 'the system prompt is not plain text'
+  if (existsSync(path.resolve(workDir, prompt))) return 'the system prompt names a file'
+  return undefined
+}
+
+export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: string }; model: string; resume?: boolean; systemPrompt?: string }): string[] {
   return [
     '--mode', 'rpc',
     '--session-dir', o.sessionDir,
     ...(o.resume ? ['--continue'] : []),
     '--provider', 'swarm', '--model', o.model,
+    ...(o.systemPrompt !== undefined ? ['--system-prompt', o.systemPrompt] : []),
     ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-builtin-tools']),
     '--no-context-files', '--no-skills', '--no-mcp', '--no-extensions', '--no-prompt-templates',
     '-e', o.gate.path,
@@ -91,6 +107,8 @@ interface Slot { queue: Promise<void>; live?: Live }
 const toolsKey = (tools: string[]): string => [...new Set(tools)].sort().join(',')
 
 export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
+  const promptProblem = opts.systemPrompt === undefined ? undefined : systemPromptProblem(opts.systemPrompt, opts.workDir)
+  if (promptProblem) throw new Error(`pi shim: ${promptProblem}`)
   const client: ShimClient = await connectShim({
     host: opts.host, port: opts.port, token: opts.token, caps: PI_CAPS, verdictTimeoutMs: opts.verdictTimeoutMs,
   })
@@ -100,7 +118,7 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
     const sessionDir = sessionDirFor(opts.sessionsDir, env.sessionKey)
     mkdirSync(sessionDir, { recursive: true })
     const tools = toolsKey(env.tools)
-    const args = piArgs({ sessionDir, tools: tools === '' ? [] : tools.split(','), gate: opts.gate, model: opts.model ?? 'scripted', resume })
+    const args = piArgs({ sessionDir, tools: tools === '' ? [] : tools.split(','), gate: opts.gate, model: opts.model ?? 'scripted', resume, systemPrompt: opts.systemPrompt })
     const child = spawn(opts.piCommand[0], [...opts.piCommand.slice(1), ...args], {
       cwd: opts.workDir, env: piEnv(opts) as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'ignore'],
     })

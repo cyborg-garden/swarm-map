@@ -1,6 +1,7 @@
 {
   "$comment": "Copy this somewhere outside the repo and fill in the ids. Ids are numbers, kept in quotes. No token or key goes in this file.",
   "agentId": "pi-lab",
+  "persona": { "name": "Pi", "description": "" },
   "discord": {
     "guildId": "<server id>",
     "channelId": "<channel id>",
