@@ -18,6 +18,7 @@
 //                     which is all a mention-only room needs.
 // It never asks for direct messages, so none arrive. One that did would be
 // passed to the door as a DM like any other event.
+import { randomBytes } from 'node:crypto'
 import type { Facts, RoomRef } from '../../core/events.ts'
 import type { ConnectorInbound, InviteEvent, NoticeEvent, OutboundMessage, SendReceipt, SurfaceConnector } from '../connector.ts'
 
@@ -356,6 +357,9 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
       if (wait > 0) await sleep(wait)
       const { json, headers } = await rest('POST', `/channels/${encodeURIComponent(room.id)}/messages`, {
         content: piece,
+        // One name for this piece, kept across retries. If a post was made and only its answer
+        // was lost, Discord returns that post instead of making it a second time.
+        nonce: randomBytes(12).toString('hex'), enforce_nonce: true,
         // Nothing the model writes can ping a person, a role or everyone, and a reply pings nobody either.
         allowed_mentions: { parse: [], replied_user: false },
         // The first piece sits under the message it answers. If that message is gone, it is posted plainly.

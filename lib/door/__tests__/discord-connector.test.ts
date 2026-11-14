@@ -243,6 +243,17 @@ describe('Discord connector: posting', () => {
     await expect(b.connector.send(home, { text: 'SECRET-TEXT' })).rejects.toThrow('discord: POST failed with status 403')
   })
 
+  it('a post whose answer was lost is tried again, and is still posted once', async () => {
+    const b = await start()
+    b.fake.loseAnswers(1)
+    await b.connector.send(home, { text: 'said once' })
+    expect(b.fake.requests.filter((r) => r.startsWith('POST'))).toHaveLength(2)
+    expect(b.fake.posted.map((p) => p.content)).toEqual(['said once'])
+    // Each piece is a post of its own: the same words said twice on purpose are two posts.
+    await b.connector.send(home, { text: 'said once' })
+    expect(b.fake.posted).toHaveLength(2)
+  })
+
   it('the pieces of a long reply arrive in order, and a reply with nothing in it is not posted', async () => {
     const b = await start()
     const long = Array.from({ length: 900 }, (_, i) => `line ${i}`).join('\n')

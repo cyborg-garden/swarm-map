@@ -96,6 +96,8 @@ export interface FakeDiscord {
   rateLimit(count: number, retryAfterSec: number): void
   /** The next `count` posts are answered with this status. */
   failPosts(count: number, status: number): void
+  /** The next `count` posts are kept, and then answered 502: the post happened, the answer was lost. */
+  loseAnswers(count: number): void
   /** Close every gateway connection with this code. */
   drop(code: number): void
   /** Send a raw gateway payload to every connection. */
@@ -134,6 +136,9 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
   let nextId = 1000
   let limited = { count: 0, retryAfterSec: 0 }
   let failing = { count: 0, status: 500 }
+  let losing = 0
+  // As Discord does with `enforce_nonce`: a post that repeats a nonce in the same channel is not made again.
+  const byNonce = new Map<string, string>()
   let mute = false
   let refuse: number | undefined
   let hold = false
@@ -174,11 +179,18 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
           return reply(429, { message: 'You are being rate limited.', retry_after: limited.retryAfterSec, global: false })
         }
         if (failing.count > 0) { failing.count--; return reply(failing.status, { message: 'no' }) }
-        let body: { content?: string; allowed_mentions?: unknown; message_reference?: { message_id?: string } }
+        let body: { content?: string; allowed_mentions?: unknown; message_reference?: { message_id?: string }; nonce?: unknown; enforce_nonce?: unknown }
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { return reply(400, { message: 'bad json' }) }
         if (typeof body.content !== 'string' || body.content === '' || body.content.length > 2000) return reply(400, { message: 'Invalid Form Body' })
-        fake.posted.push({ channel: decodeURIComponent(msg[1]), content: body.content, allowedMentions: body.allowed_mentions, ...(body.message_reference?.message_id ? { replyTo: body.message_reference.message_id } : {}) })
-        return reply(200, { id: String(++nextId), timestamp: new Date().toISOString() })
+        const channel = decodeURIComponent(msg[1])
+        const once = body.enforce_nonce === true && typeof body.nonce === 'string' && body.nonce !== '' && body.nonce.length <= 25 ? `${channel} ${body.nonce}` : undefined
+        const made = once ? byNonce.get(once) : undefined
+        if (made) return reply(200, { id: made, timestamp: new Date().toISOString() })
+        fake.posted.push({ channel, content: body.content, allowedMentions: body.allowed_mentions, ...(body.message_reference?.message_id ? { replyTo: body.message_reference.message_id } : {}) })
+        const id = String(++nextId)
+        if (once) byNonce.set(once, id)
+        if (losing > 0) { losing--; return reply(502, { message: 'bad gateway' }) }
+        return reply(200, { id, timestamp: new Date().toISOString() })
       }
       reply(404, { message: '404: Not Found' })
     })
@@ -286,6 +298,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
     remove(id: string, channel: string) { dispatch('MESSAGE_DELETE', { id, channel_id: channel }) },
     rateLimit(count: number, retryAfterSec: number) { limited = { count, retryAfterSec } },
     failPosts(count: number, status: number) { failing = { count, status } },
+    loseAnswers(count: number) { losing = count },
     drop(code: number) { for (const c of [...conns]) c.close(code) },
     sendOp(op: number, d?: unknown) { for (const c of conns) c.send({ op, d }) },
     muteHeartbeats(m: boolean) { mute = m },
