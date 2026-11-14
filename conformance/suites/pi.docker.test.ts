@@ -123,9 +123,40 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
       expect(detail('S3')).toContain('a secret of this run is in the cell\'s environment')
       expect(detail('C8')).toContain('a secret of this run is readable at /proc/')
     }
-    if (name === 'writable') expect(detail('S2')).toContain('the gate could be written from inside')
-    if (name === 'host-mount') expect(detail('S3')).toContain('mounted in the cell: bind ')
-    if (name === 'blind-sink') expect(detail('S0')).toContain('the control reached the sink 0 times')
+    if (name === 'leaks-file') {
+      // The key is in no environment and no command line here, so only the search of the disk can have found it.
+      expect(detail('S3')).toContain('a secret of this run is readable at /tmp/leak-')
+      expect(detail('S3')).not.toContain('/proc/')
+      expect(detail('S3')).not.toContain('environment')
+      expect(detail('C8')).toContain('a secret of this run is readable at /tmp/leak-')
+      expect(detail('C8')).not.toContain('/proc/')
+    }
+    if (name === 'writable') {
+      expect(detail('S2')).toContain('the gate could be written from inside')
+      expect(detail('S2')).toContain('the container runs as root')
+      expect(detail('S2')).toContain('the container holds capabilities')
+      expect(detail('S2')).toContain('the cell\'s disk is not read-only')
+      expect(detail('S2')).toContain('the cell: capabilities were added (CAP_DAC_OVERRIDE)')
+    }
+    if (name === 'socket') {
+      expect(detail('S1')).toContain('a Docker socket is in the container')
+      expect(detail('S3')).toContain('a Docker socket is in the cell')
+    }
+    if (name === 'door-out') {
+      expect(detail('S1')).toContain('from the sidecar container: reached the sink, by address')
+      expect(detail('S1')).toContain('the sidecar container is on ')
+      expect(detail('S1')).toContain('the sink was reached from inside the rig')
+      // The cell itself is still sealed: nothing in S1 is the cell's own doing.
+      expect(detail('S1').split('; ').filter((problem) => problem.startsWith('reached '))).toEqual([])
+    }
+    if (name === 'host-mount') {
+      expect(detail('S3')).toContain('mounted in the cell: bind ')
+      expect(detail('S3')).toContain('the cell: a host path is bound (')
+    }
+    if (name === 'blind-sink') {
+      expect(detail('S0')).toContain('the control reached the sink 0 times')
+      expect(detail('C9')).toContain('the control reached the sink 0 times')
+    }
     if (name === 'gate-kept') expect(detail('C10')).toContain('this cell still has its gate')
   }, 900_000)
 })

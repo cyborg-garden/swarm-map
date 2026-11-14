@@ -2,8 +2,11 @@
 //
 // How a probe report is judged. The probe itself only runs in a container;
 // what counts as a problem is decided here and can be tested anywhere.
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { mountProblems, netProblems, parseReport, secretProblems, writeProblems, type ProbeReport } from '../report.ts'
+import { hostConfigProblems, mountProblems, netProblems, parseReport, readReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from '../report.ts'
 
 const closed = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`way out ${i}`, 'ENETUNREACH']))
 const sealed: ProbeReport = {
@@ -59,5 +62,66 @@ describe('judging a probe report', () => {
     expect(parseReport('Error: boom')).toBeUndefined()
     expect(parseReport('')).toBeUndefined()
     expect(parseReport(`noise\n${JSON.stringify(sealed)}\n`)?.who).toBe('cell')
+  })
+
+  it('[U:probe-report] a probe file is read only if it is a plain file: a link the cell left there is not followed', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'probe-report-'))
+    try {
+      writeFileSync(path.join(dir, 'real.json'), JSON.stringify(sealed) + '\n')
+      symlinkSync(path.join(dir, 'real.json'), path.join(dir, 'link.json'))
+      expect(readReport(path.join(dir, 'real.json'))?.who).toBe('cell')
+      expect(readReport(path.join(dir, 'link.json'))).toBeUndefined()
+      expect(readReport(path.join(dir, 'missing.json'))).toBeUndefined()
+      expect(readReport(dir)).toBeUndefined()
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// What Docker itself says it gave the container, read from outside with `docker inspect`.
+describe('judging what Docker says a container was given', () => {
+  const given: HostConfig = {
+    NetworkMode: 'smlab-deadbeef_cell', PidMode: '', IpcMode: 'private', UsernsMode: '', UTSMode: '', Privileged: false, PublishAllPorts: false,
+    PortBindings: {}, ExtraHosts: null, Dns: null, Links: null, VolumesFrom: null, Devices: null, CapAdd: null, CapDrop: ['ALL'],
+    SecurityOpt: ['no-new-privileges:true'], Binds: null,
+  }
+  const judge = (over: Partial<HostConfig>) => hostConfigProblems({ ...given, ...over }, 'smlab-deadbeef_cell')
+
+  it('[U:host-config] a sealed cell has no problems', () => {
+    expect(judge({})).toEqual({ net: [], privilege: [], mounts: [] })
+    // Docker reports "nothing" as null, as an empty list or as an empty map, depending on the field and the version.
+    expect(judge({ PortBindings: null, ExtraHosts: [], CapAdd: [], Devices: [] })).toEqual({ net: [], privilege: [], mounts: [] })
+  })
+
+  it('[U:host-config] a published port, another network mode, an added host name or resolver is a way out', () => {
+    expect(judge({ PortBindings: { '8080/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080' }] } }).net).toEqual(['a port is published (8080/tcp)'])
+    expect(judge({ PublishAllPorts: true }).net).toEqual(['every exposed port is published'])
+    expect(judge({ NetworkMode: 'host' }).net).toEqual(['the network mode is host'])
+    expect(judge({ NetworkMode: 'container:abc' }).net[0]).toContain('container:abc')
+    expect(judge({ ExtraHosts: ['h:192.0.2.1'] }).net).toEqual(['a host name was added (h:192.0.2.1)'])
+    expect(judge({ Dns: ['192.0.2.1'] }).net).toEqual(['a resolver was set (192.0.2.1)'])
+    expect(judge({ Links: ['/a:/b'] }).net[0]).toContain('linked')
+  })
+
+  it('[U:host-config] a shared namespace, an added capability, a lost hardening setting or a device is a privilege', () => {
+    expect(judge({ PidMode: 'host' }).privilege).toEqual(['the process namespace is shared (host)'])
+    expect(judge({ PidMode: 'container:abc' }).privilege[0]).toContain('container:abc')
+    expect(judge({ IpcMode: 'host' }).privilege).toEqual(['the IPC namespace is shared (host)'])
+    expect(judge({ IpcMode: 'shareable' }).privilege[0]).toContain('shareable')
+    expect(judge({ UsernsMode: 'host' }).privilege[0]).toContain('user namespace')
+    expect(judge({ UTSMode: 'host' }).privilege[0]).toContain('host name namespace')
+    expect(judge({ Privileged: true }).privilege).toEqual(['the container is privileged'])
+    expect(judge({ CapAdd: ['NET_RAW'] }).privilege).toEqual(['capabilities were added (NET_RAW)'])
+    expect(judge({ CapDrop: [] }).privilege).toEqual(['not every capability was dropped'])
+    expect(judge({ CapDrop: null }).privilege).toEqual(['not every capability was dropped'])
+    expect(judge({ SecurityOpt: null }).privilege).toEqual(['no-new-privileges is not set'])
+    expect(judge({ SecurityOpt: ['no-new-privileges:true', 'seccomp=unconfined'] }).privilege).toEqual(['a security option was changed (seccomp=unconfined)'])
+    expect(judge({ Devices: [{ PathOnHost: '/dev/kmsg' }] }).privilege[0]).toContain('device')
+  })
+
+  it('[U:host-config] a host folder or another container\'s volumes are mounts', () => {
+    expect(judge({ Binds: ['/home/x:/mnt/host:ro'] }).mounts).toEqual(['a host path is bound (/home/x:/mnt/host:ro)'])
+    expect(judge({ VolumesFrom: ['other'] }).mounts).toEqual(['volumes are taken from another container (other)'])
+    // The rig's own named volume is not a host path.
+    expect(judge({ Binds: ['smlab-deadbeef_lab:/tmp/smlab:rw'] }).mounts).toEqual([])
   })
 })
