@@ -83,6 +83,8 @@ export async function startDiscordRig(policy: PolicyRecord, opts: {
     async posts(n, timeoutMs = 2000) {
       const until = Date.now() + timeoutMs
       while (fake.posted.length < n && Date.now() < until) await sleep(5)
+      // The fake has the post before the door has written its receipt for it. Wait for the door too.
+      if (fake.posted.length >= n) await door.idle()
     },
     async settle() {
       // The gateway is a socket: give what was sent time to arrive before asking the door if it is done.
