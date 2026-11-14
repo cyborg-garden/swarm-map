@@ -4,7 +4,7 @@
 // Discord and a scripted model on this machine's loopback, and real Pi in the
 // sealed cell. Not part of the default test run (CI has no Docker). Run with:
 //
-//   npm run conformance:docker:build     (once)
+//   node lib/lab/pi-discord/cli.ts build     (once, and after a pull)
 //   npx vitest run --config vitest.docker.config.ts conformance/suites/pi-discord.docker.test.ts
 //
 // It refuses to start unless the Discord it is pointed at proves it is the
@@ -16,7 +16,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { IDS } from '../../lib/door/testing/discord-rig.ts'
 import { assertFakeDiscord, startFakeDiscord, type FakeDiscord } from '../../lib/door/testing/fake-discord.ts'
-import { docker } from '../../lib/lab/pi-discord/cell.ts'
+import { docker, dockerProblems } from '../../lib/lab/pi-discord/cell.ts'
 import { parseConfig, type LabConfig } from '../../lib/lab/pi-discord/config.ts'
 import { readRun, REPO_ROOT, sealChecks, start, stopRun, type Running } from '../../lib/lab/pi-discord/launch.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, TOKEN_FILE_ENV } from '../../lib/lab/pi-discord/secrets.ts'
@@ -29,6 +29,9 @@ const tmp = mkdtempSync(path.join(os.tmpdir(), 'smlab-pi-discord-'))
 const failed = (checks: { id: string; pass: boolean }[]): string[] => checks.filter((c) => !c.pass).map((c) => c.id)
 const containersOf = (project: string): string[] =>
   docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Names}}']).out.split('\n').filter(Boolean)
+
+// It refuses to run, rather than fail slowly, when the launcher's images are missing or out of date.
+beforeAll(() => { expect(dockerProblems()).toEqual([]) })
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true })

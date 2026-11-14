@@ -1,5 +1,6 @@
 // One Pi agent in one Discord channel: check it, start it, stop it.
 //
+//   node lib/lab/pi-discord/cli.ts build                         once, and again after you pull
 //   node lib/lab/pi-discord/cli.ts dry-run  --config <file>
 //   node lib/lab/pi-discord/cli.ts start    --config <file>
 //   node lib/lab/pi-discord/cli.ts stop     --config <file>      the kill switch
@@ -14,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parseConfig, policyFor, type LabConfig } from './config.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
-import { dockerProblems, docker } from './cell.ts'
+import { buildImages, dockerProblems, docker } from './cell.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, secretFileProblem, TOKEN_FILE_ENV } from './secrets.ts'
 import { monthOf } from '../../door/spend-ledger.ts'
 import type { Receipt } from '../../door/receipts.ts'
@@ -26,7 +27,7 @@ const fail = (line: string, code = 1): never => { console.error(line); process.e
 
 function loadConfig(): LabConfig {
   const file = flag('config')
-  if (!file) return fail('usage: cli.ts dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
+  if (!file) return fail('usage: cli.ts build | dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
   let raw: unknown
   try { raw = JSON.parse(readFileSync(path.resolve(file), 'utf8')) } catch { return fail(`config: ${file} is not there or is not JSON`) }
   const { config, errors } = parseConfig(raw)
@@ -135,10 +136,11 @@ function receipts(): void {
 }
 
 switch (command) {
+  case 'build': process.exit(buildImages() ? 0 : 1); break
   case 'dry-run': await dryRun(); process.exit(0); break
   case 'start': await run(); break
   case 'stop': process.exit(await stopRun(stateDirFor(loadConfig()), say) ? 0 : 1); break
   case 'status': await status(); break
   case 'receipts': receipts(); break
-  default: fail('usage: cli.ts dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
+  default: fail('usage: cli.ts build | dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
 }

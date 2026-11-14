@@ -26,8 +26,9 @@ Every id on this page is a placeholder. Keep your config, your token and your ke
 ## What you need
 
 - Docker running on this machine, and Node 24.
-- The lab's two images, built from this branch: `npm run conformance:docker:build`. Build them
-  again after you pull. The dry run tells you when they are out of date.
+- The launcher's two images: `node lib/lab/pi-discord/cli.ts build`. Build them again after you
+  pull. The dry run tells you when they are missing or out of date. They are the lab's cell and
+  rig images under names of their own, so a test build cannot change what a real run starts.
 - A Discord account that can add a bot to the server.
 - A key for an OpenAI-compatible model provider (OpenRouter, for one), and that model's prices.
 

@@ -13,9 +13,17 @@
 // the door on this machine. It carries bytes and holds nothing.
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { CELL_IMAGE, LAB_DIR, BRAIN_PORT, ROUTE_PORT, RIG_IMAGE, SWARM_ROOT, probeArgs, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
+import path from 'node:path'
+import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SWARM_ROOT, probeArgs, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
+import { PI_VERSION } from '../../runtimes/pi/caps.ts'
 import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig } from '../../../conformance/docker/report.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
+
+// The same two images the conformance rig uses, built from the same Dockerfile, under names of
+// their own. A test build on this machine replaces the rig's images whenever it likes; it must
+// not be able to change what a real run starts.
+export const CELL_IMAGE = `smlab-pi-discord-cell:pi-${PI_VERSION}`
+export const RIG_IMAGE = 'smlab-pi-discord-rig:local'
 
 export interface CellOptions {
   /** Eight hex digits. Names the compose project, and anyone on this machine can read it. */
@@ -136,6 +144,14 @@ const dockerAsync = (args: string[], timeoutMs = 120_000): Promise<string> => ne
   execFile('docker', args, { env: dockerEnv(), encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (_err, stdout, stderr) => resolve(`${stdout}${stderr}`))
 })
 
+/** Build the two images. The only step that uses the network to fetch anything, and never part of a start. */
+export function buildImages(): boolean {
+  const repo = path.resolve(import.meta.dirname, '..', '..', '..')
+  return ([['cell', CELL_IMAGE], ['rig', RIG_IMAGE]] as const).every(([target, tag]) =>
+    spawnSync('docker', ['build', '--target', target, '--tag', tag, '--file', path.join(repo, 'conformance', 'docker', 'Dockerfile'), repo],
+      { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 }).status === 0)
+}
+
 /** Docker is this machine's, both images are built, and they are new enough for a real run. */
 export function dockerProblems(): string[] {
   const endpoint = docker(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).out.trim()
@@ -143,7 +159,7 @@ export function dockerProblems(): string[] {
     assertLocalDocker({ dockerHost: process.env.DOCKER_HOST, contextEndpoint: process.env.DOCKER_HOST ? process.env.DOCKER_HOST : endpoint })
   } catch (err) { return [(err as Error).message] }
   if (!docker(['info', '--format', '{{.ServerVersion}}']).ok) return ['the Docker daemon is not answering']
-  const stale = 'is missing or out of date. Run: npm run conformance:docker:build'
+  const stale = 'is missing or out of date. Run: node lib/lab/pi-discord/cli.ts build'
   const has = (image: string, file: string, word: string): boolean =>
     docker(['run', '--rm', '--network', 'none', '--pull', 'never', '--name', `smlab-${randomBytes(4).toString('hex')}-check`, image, 'grep', '-q', word, `${SWARM_ROOT}/${file}`]).ok
   const p: string[] = []
@@ -197,6 +213,15 @@ export function runningCellProblems(project: string): string[] {
   const ours = c.Config.Env.map((e) => e.slice(0, e.indexOf('='))).filter((n) => /^(SMLAB_|SWARMLAB_)/.test(n) || /TOKEN|KEY|SECRET|PASS/i.test(n))
   if (ours.sort().join(',') !== CELL_ENV.join(',')) p.push('the cell\'s environment is not the list it was given')
   return p
+}
+
+/** The addresses the probe will try, found the way the conformance rig finds them, from the launcher's own image. */
+export function findTargets(): ProbeTargets {
+  const lookup = docker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
+  let found: Partial<ProbeTargets> = {}
+  try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '{}') as Partial<ProbeTargets> } catch { /* nothing found: the probe reports those ways out as not tried, which fails */ }
+  const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+  return { hostIp: text(found.hostIp), publicIp: text(found.publicIp), resolverIp: text(found.resolverIp), resolverIp6: text(found.resolverIp6) }
 }
 
 /** Run the lab's probe inside the cell: it tries every way out it knows and reports what happened. */
