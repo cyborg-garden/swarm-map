@@ -3,7 +3,7 @@
 // What the runner may remove. It needs no Docker: the lists Docker would print
 // are handed in.
 import { describe, expect, it } from 'vitest'
-import { ownedNames } from '../runner.ts'
+import { ownedNames, strayRunNames } from '../runner.ts'
 
 describe('the lab only removes what is its own, by label and by name', () => {
   it('[U:lab-objects] keeps a name that carries its lab project as a prefix', () => {
@@ -27,5 +27,12 @@ describe('the lab only removes what is its own, by label and by name', () => {
       'smlab-deadbeefx smlab-deadbeef',
       '',
     ])).toEqual([])
+  })
+
+  it('[U:lab-objects] also finds the one-off containers a run starts outside any rig, by their exact names', () => {
+    expect(strayRunNames([
+      'smlab-deadbeef-lookup', 'smlab-0badf00d-version', 'smlab-12345678-refuse',
+      'smlab-deadbeef-cell-1', 'smlab-deadbeef-lookup-2', 'xsmlab-deadbeef-lookup', 'smlab-DEADBEEF-lookup', 'smlab-lookup', 'some-postgres', '',
+    ])).toEqual(['smlab-deadbeef-lookup', 'smlab-0badf00d-version', 'smlab-12345678-refuse'])
   })
 })

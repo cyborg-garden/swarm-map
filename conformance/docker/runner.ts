@@ -96,6 +96,14 @@ export function ownedNames(lines: string[]): string[] {
   ).map(([name]) => name)
 }
 
+/**
+ * The one-off containers a run starts outside any rig (`smlab-<nonce>-version`, `-lookup`, `-refuse`).
+ * Each removes itself when it stops; one is only left behind if the run was killed while it was up.
+ */
+export function strayRunNames(names: string[]): string[] {
+  return names.map((name) => name.trim()).filter((name) => /^smlab-[0-9a-f]{8}-(version|lookup|refuse)$/.test(name))
+}
+
 /** Names of the lab's own containers, networks and volumes: anything that belongs to a compose project named like a rig, and is named for it. */
 export function labObjects(): { containers: string[]; networks: string[]; volumes: string[] } {
   const list = (args: string[]): string[] => ownedNames(docker(args).split('\n').filter((l) => l.trim() !== ''))
@@ -107,9 +115,10 @@ export function labObjects(): { containers: string[]; networks: string[]; volume
   }
 }
 
-/** Remove what a run left behind. By name, one at a time, and only what labObjects() lists. */
+/** Remove what a run left behind. By name, one at a time, and only what labObjects() lists, plus a run's own one-off containers. */
 export function cleanLab(): { containers: string[]; networks: string[]; volumes: string[] } {
   const left = labObjects()
+  left.containers.push(...strayRunNames(docker(['ps', '-a', '--format', '{{.Names}}']).split('\n')))
   for (const name of left.containers) tryDocker(['rm', '--force', name])
   for (const name of left.networks) tryDocker(['network', 'rm', name])
   for (const name of left.volumes) tryDocker(['volume', 'rm', name])
