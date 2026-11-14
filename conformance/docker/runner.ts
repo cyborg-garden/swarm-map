@@ -17,7 +17,7 @@ import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
 import { assertSealed, CELL_IMAGE, probeArgs, renderRig, RIG_IMAGE, SWARM_ROOT, type ProbeTargets, type RigOptions, type RigVariant } from './compose.ts'
-import { mountProblems, netProblems, parseReport, secretProblems, writeProblems, type ProbeReport } from './report.ts'
+import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from './report.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
 
@@ -64,24 +64,16 @@ export function preflight(): DockerFacts {
 /**
  * The addresses the probe will try, asked from a container on Docker's default
  * network: the one place this machine's Docker name resolves, and a place with
- * DNS. The container runs four lookups and is gone; no harness is in it. No
+ * DNS. The container runs lookup.ts and is gone; no harness is in it. No
  * address is written in this repo. One that cannot be found stays empty, and
  * the checks that need it then fail rather than pass untried.
  */
 export function findTargets(): ProbeTargets {
-  const script = [
-    'const dns=require("node:dns").promises;',
-    'const one=(p)=>p.then((a)=>a[0]??"",()=>"");',
-    'Promise.all([',
-    'dns.lookup("host.docker.internal",{family:4}).then((r)=>r.address,()=>""),',
-    'one(dns.resolve4("example.com")),one(dns.resolve4("one.one.one.one")),one(dns.resolve6("one.one.one.one"))',
-    ']).then((a)=>console.log(JSON.stringify(a)))',
-  ].join('')
-  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', '-e', script])
-  let found: string[] = []
-  try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '[]') as string[] } catch { /* nothing found */ }
-  const [hostIp = '', publicIp = '', resolverIp = '', resolverIp6 = ''] = found
-  return { hostIp, publicIp, resolverIp, resolverIp6 }
+  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
+  let found: Partial<ProbeTargets> = {}
+  try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '{}') as Partial<ProbeTargets> } catch { /* nothing found */ }
+  const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+  return { hostIp: text(found.hostIp), publicIp: text(found.publicIp), resolverIp: text(found.resolverIp), resolverIp6: text(found.resolverIp6) }
 }
 
 /** Build both images. The only step that uses the network, and never part of a test run. */
@@ -92,21 +84,41 @@ export function buildImages(): void {
   }
 }
 
-/** Names of the lab's own containers, networks and volumes: anything that belongs to a compose project named like a rig. */
+/**
+ * From lines of `<name> <compose project>`, the names that are the lab's own.
+ * Two things must both hold: the project is named like a rig, and the name
+ * starts with that project. A label alone is a claim anyone can make, so
+ * nothing is ever removed whose own name does not begin `smlab-`.
+ */
+export function ownedNames(lines: string[]): string[] {
+  return lines.map((line) => line.trim().split(' ')).filter(([name, project, ...rest]) =>
+    rest.length === 0 && PROJECT_NAME.test(project ?? '') && (name.startsWith(`${project}-`) || name.startsWith(`${project}_`)),
+  ).map(([name]) => name)
+}
+
+/**
+ * The one-off containers a run starts outside any rig (`smlab-<nonce>-version`, `-lookup`, `-refuse`).
+ * Each removes itself when it stops; one is only left behind if the run was killed while it was up.
+ */
+export function strayRunNames(names: string[]): string[] {
+  return names.map((name) => name.trim()).filter((name) => /^smlab-[0-9a-f]{8}-(version|lookup|refuse)$/.test(name))
+}
+
+/** Names of the lab's own containers, networks and volumes: anything that belongs to a compose project named like a rig, and is named for it. */
 export function labObjects(): { containers: string[]; networks: string[]; volumes: string[] } {
-  const list = (args: string[]): string[] => docker(args).split('\n').map((l) => l.trim()).filter(Boolean)
-  const ours = (line: string): boolean => PROJECT_NAME.test(line.split(' ')[1] ?? '')
+  const list = (args: string[]): string[] => ownedNames(docker(args).split('\n').filter((l) => l.trim() !== ''))
   const label = '{{.Name}} {{.Label "com.docker.compose.project"}}'
   return {
-    containers: list(['ps', '-a', '--format', '{{.Names}} {{.Label "com.docker.compose.project"}}']).filter(ours).map((l) => l.split(' ')[0]),
-    networks: list(['network', 'ls', '--format', label]).filter(ours).map((l) => l.split(' ')[0]),
-    volumes: list(['volume', 'ls', '--format', label]).filter(ours).map((l) => l.split(' ')[0]),
+    containers: list(['ps', '-a', '--format', '{{.Names}} {{.Label "com.docker.compose.project"}}']),
+    networks: list(['network', 'ls', '--format', label]),
+    volumes: list(['volume', 'ls', '--format', label]),
   }
 }
 
-/** Remove what a run left behind. By name, one at a time, and only what labObjects() lists. */
+/** Remove what a run left behind. By name, one at a time, and only what labObjects() lists, plus a run's own one-off containers. */
 export function cleanLab(): { containers: string[]; networks: string[]; volumes: string[] } {
   const left = labObjects()
+  left.containers.push(...strayRunNames(docker(['ps', '-a', '--format', '{{.Names}}']).split('\n')))
   for (const name of left.containers) tryDocker(['rm', '--force', name])
   for (const name of left.networks) tryDocker(['network', 'rm', name])
   for (const name of left.volumes) tryDocker(['volume', 'rm', name])
@@ -132,7 +144,7 @@ export interface LiveRig {
   logs(service: string): string
   /** Run a command in a container. Not blocking: this process must keep answering while the command runs. */
   exec(service: string, command: string[]): Promise<string>
-  inspect(service: string): { env: Record<string, string>; mounts: { Type: string; Name?: string; Source: string; Destination: string }[]; networks: string[]; readOnly: boolean; privileged: boolean }
+  inspect(service: string): { env: Record<string, string>; mounts: { Type: string; Name?: string; Source: string; Destination: string }[]; networks: string[]; readOnly: boolean; privileged: boolean; host: HostConfig }
   networkInternal(network: string): boolean
   sinkHits(): string[]
   /** Wait for a line starting with `marker` in the door's output. Undefined if the door stopped or time ran out. */
@@ -151,6 +163,8 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
   assertSafeWorkDir(dir, { home: os.homedir(), tmp: os.tmpdir() })
   // The one folder of this machine a broken rig may mount: this rig's own, which holds its compose file and nothing else.
   options.hostDir = realpathSync(dir)
+  // `socket` only: an empty file of the rig's own, to be mounted where a Docker socket would be.
+  if (request.variant === 'socket') writeFileSync(path.join(dir, 'docker.sock'), '')
   const first = renderRig(options)
   if (request.variant === 'good') assertSealed(first)
   const file = path.join(dir, 'compose.json')
@@ -182,12 +196,12 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
       inspect: (service) => {
         const [c] = JSON.parse(docker(['inspect', container(service)])) as [{
           Config: { Env: string[] }; Mounts: { Type: string; Name?: string; Source: string; Destination: string }[]
-          NetworkSettings: { Networks: Record<string, unknown> }; HostConfig: { ReadonlyRootfs: boolean; Privileged: boolean }
+          NetworkSettings: { Networks: Record<string, unknown> }; HostConfig: HostConfig & { ReadonlyRootfs: boolean }
         }]
         return {
           env: Object.fromEntries(c.Config.Env.map((e) => { const i = e.indexOf('='); return [e.slice(0, i), e.slice(i + 1)] })),
           mounts: c.Mounts, networks: Object.keys(c.NetworkSettings.Networks).sort(),
-          readOnly: c.HostConfig.ReadonlyRootfs, privileged: c.HostConfig.Privileged,
+          readOnly: c.HostConfig.ReadonlyRootfs, privileged: c.HostConfig.Privileged, host: c.HostConfig,
         }
       },
       networkInternal: (network) => docker(['network', 'inspect', '--format', '{{.Internal}}', network]).trim() === 'true',
@@ -275,11 +289,16 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
     if (door) s.S1.push(...netProblems(door).map((problem) => `from the sidecar container: ${problem}`))
     if (seen2.networks.join(',') !== `${rig.project}_cell`) s.S1.push(`the cell is on ${seen2.networks.join(' and ')}`)
     for (const network of seen2.networks) if (!rig.networkInternal(network)) s.S1.push(`network ${network} is not internal`)
+    // What Docker says it gave each side, whatever the compose file asked for.
+    const given = hostConfigProblems(seen2.host, `${rig.project}_cell`)
+    const sidecar = rig.inspect('door')
+    s.S1.push(...given.net, ...hostConfigProblems(sidecar.host, `${rig.project}_cell`).net.map((problem) => `the sidecar container: ${problem}`))
+    if (sidecar.networks.join(',') !== `${rig.project}_cell`) s.S1.push(`the sidecar container is on ${sidecar.networks.join(' and ')}`)
 
     // S2: nothing the cell runs can be changed from inside it.
     if (cell) s.S2.push(...writeProblems(cell))
     if (!seen2.readOnly) s.S2.push('the cell\'s disk is not read-only')
-    if (seen2.privileged) s.S2.push('the cell is privileged')
+    s.S2.push(...given.privilege.map((problem) => `the cell: ${problem}`))
 
     // S3: the environment Docker really gave the cell, the mounts it really has, and what can be read in there.
     try { assertNoCredentials(seen2.env, { nonce: rig.nonce }) } catch (err) { s.S3.push((err as Error).message) }
@@ -287,6 +306,7 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
     const foreign = seen2.mounts.filter((m) => m.Type !== 'volume' || m.Name !== `${rig.project}_lab`)
     for (const m of foreign) s.S3.push(`mounted in the cell: ${m.Type} ${m.Source} at ${m.Destination}`)
     if (seen2.mounts.length !== 1) s.S3.push(`the cell has ${seen2.mounts.length} mounts, not the one shared folder`)
+    s.S3.push(...given.mounts.map((problem) => `the cell: ${problem}`))
     if (cell) s.S3.push(...mountProblems(cell), ...secretProblems(cell))
     if (cell?.dockerSocket) s.S3.push('a Docker socket is in the cell')
 

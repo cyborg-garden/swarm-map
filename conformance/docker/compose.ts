@@ -19,7 +19,7 @@
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
 
-export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'writable', 'host-mount', 'blind-sink'] as const
+export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
 
 export const CELL_IMAGE = `smlab-cell:pi-${PI_VERSION}`
@@ -50,7 +50,7 @@ export interface RigOptions {
   hostPort?: number
   /** Addresses for the probe to try, found by the runner before any rig starts. */
   targets?: ProbeTargets
-  /** `host-mount` only: a folder on this machine to mount into the cell. The runner hands in the rig's own empty temp dir. */
+  /** `host-mount` and `socket` only: a folder on this machine to mount from. The runner hands in the rig's own temp dir, which holds nothing but the rig's own files. */
   hostDir?: string
   verdictTimeoutMs?: number
   vetoTimeoutMs?: number
@@ -118,9 +118,11 @@ export interface Rig { project: string; file: ComposeFile }
 
 const NO_IPV6 = { 'net.ipv6.conf.all.disable_ipv6': '1' }
 
+const entry = (script: string): string[] => ['node', `${SWARM_ROOT}/conformance/docker/${script}`]
+
 function service(image: string, script: string, networks: string[], environment: Record<string, string>): Service {
   return {
-    image, command: ['node', `${SWARM_ROOT}/conformance/docker/${script}`], networks: [...networks], environment: { ...environment },
+    image, command: entry(script), networks: [...networks], environment: { ...environment },
     pull_policy: 'never', restart: 'no', init: true, stop_grace_period: '1s',
     read_only: true, cap_drop: ['ALL'], security_opt: ['no-new-privileges:true'], user: 'node',
     tmpfs: ['/tmp'], sysctls: NO_IPV6,
@@ -180,6 +182,13 @@ export function renderRig(o: RigOptions): Rig {
   // The control is put where it cannot reach the sink, so the sink's log stays empty and proves nothing.
   if (o.variant === 'blind-sink') file.services.control.networks = ['cell']
   if (o.variant === 'leaks-env') cell.environment.SWARMLAB_LEAK = `UPSTREAM-${o.nonce}`
+  // The key is put in a file and nowhere else. It is written in two halves, so no environment
+  // and no command line holds it: only a search of the disk can find it.
+  if (o.variant === 'leaks-file') cell.command = ['sh', '-c', `printf '%s-%s' UPSTREAM ${o.nonce} > /tmp/leak-${o.nonce} && exec ${entry('cell-main.ts').join(' ')}`]
+  // Not a Docker socket: an empty file of the rig's own, put where one would be. It shows the probe looks there.
+  if (o.variant === 'socket') cell.volumes!.push(`${o.hostDir ?? '/nonexistent'}/docker.sock:/var/run/docker.sock:ro`)
+  // The sidecar's side is given a way to the sink. The cell is left as it was.
+  if (o.variant === 'door-out') door.networks.push('outside')
   // Root alone is not enough to write another user's folder once every capability is dropped,
   // so this one also gets back root's usual power over files.
   if (o.variant === 'writable') { cell.user = '0'; cell.read_only = false; cell.cap_add = ['DAC_OVERRIDE'] }
@@ -192,6 +201,12 @@ export function renderRig(o: RigOptions): Rig {
   }
   return { project, file }
 }
+
+// Compose settings that share something with the host or with another container. No service of a sealed rig sets one.
+const SHARING_KEYS = [
+  'ports', 'privileged', 'network_mode', 'pid', 'ipc', 'userns_mode', 'uts', 'cgroup', 'volumes_from', 'links', 'external_links',
+  'extra_hosts', 'dns', 'devices', 'cap_add', 'group_add', 'env_file', 'runtime', 'secrets', 'configs',
+]
 
 /**
  * Refuses a rig whose file does not describe a sealed cell. The Docker suite
@@ -206,6 +221,13 @@ export function assertSealed(rig: Rig): void {
   }
   const cell = file.services.cell
   if (cell.networks.join(',') !== 'cell') problems.push(`the cell is on ${cell.networks.join(' and ')}`)
+  const door = file.services.door
+  if (door.networks.join(',') !== 'cell') problems.push(`the sidecar is on ${door.networks.join(' and ')}`)
+  if (door.volumes?.join(',') !== `lab:${LAB_DIR}:ro`) problems.push('the sidecar can write the shared folder, or mounts something else')
+  if (cell.command.join(' ') !== entry('cell-main.ts').join(' ')) problems.push('the cell runs another command than its entry')
+  if (cell.cap_drop?.join(',') !== 'ALL') problems.push('the cell keeps capabilities')
+  if (cell.security_opt?.join(',') !== 'no-new-privileges:true') problems.push('the cell does not have no-new-privileges alone as its security option')
+  if (cell.sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1') problems.push('the cell does not have IPv6 switched off')
   if (cell.read_only !== true) problems.push('the cell can write its own disk')
   if (cell.user !== 'node') problems.push(`the cell runs as ${cell.user}`)
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) problems.push('the cell mounts something other than the shared folder')
@@ -213,7 +235,7 @@ export function assertSealed(rig: Rig): void {
   if (JSON.stringify(file).includes('docker.sock')) problems.push('a Docker socket is named')
   if (file.services.control.networks.join(',') !== 'outside' || file.services.sink.networks.join(',') !== 'outside') problems.push('the control cannot reach the sink')
   for (const [name, s] of Object.entries(file.services)) {
-    for (const key of ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices', 'dns']) {
+    for (const key of SHARING_KEYS) {
       if (key in s) problems.push(`service ${name} sets ${key}`)
     }
   }

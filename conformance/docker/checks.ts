@@ -7,12 +7,12 @@
 // What the probe says is one half. The other half is seen from outside the
 // rig, by whoever started it: the sink's own log, and a listener on the
 // machine itself. Both must agree.
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs'
+import { lstatSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Check } from '../suites/checks.ts'
 import type { Lab } from '../suites/lab.ts'
 import { SWARM_ROOT } from './compose.ts'
-import { netProblems, parseReport, secretProblems, type ProbeReport } from './report.ts'
+import { netProblems, readReport, secretProblems } from './report.ts'
 
 type Outcome = string[]
 const want = (problems: Outcome, ok: boolean, what: string): void => { if (!ok) problems.push(what) }
@@ -28,7 +28,8 @@ function probeScript(lab: Lab, name: string, before?: () => void): { canary: str
   lab.script({ match: canary, tool: lab.harness.shell.exec(command), text: 'done', before })
   return { canary, out }
 }
-const readProbe = (file: string): ProbeReport | undefined => (existsSync(file) ? parseReport(readFileSync(file, 'utf8')) : undefined)
+// The cell wrote this file. It is read as data, and only if it is a plain file.
+const readProbe = readReport
 const ask = (lab: Lab, text: string): string => lab.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text })
 const stamped = (lab: Lab): boolean => lab.fake.ledger.every((p) => p.text.includes(`FAKE-MODEL-${lab.nonce}`))
 
