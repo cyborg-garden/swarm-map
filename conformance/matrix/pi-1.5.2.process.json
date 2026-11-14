@@ -283,6 +283,11 @@
       "checks": []
     },
     {
+      "rule": "bots.loop",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "bots.no-self",
       "status": "shared",
       "checks": []
@@ -374,6 +379,16 @@
     },
     {
       "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "out.size",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "in.once",
       "status": "shared",
       "checks": []
     },

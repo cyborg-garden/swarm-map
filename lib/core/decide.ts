@@ -104,6 +104,20 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
       : drop('bots.mode', 'Bots are heard only when they address the agent.')
   }
 
+  // A bot that would be heard is counted first. The count is the door's: how
+  // many bot messages in a row it has already delivered in this room with no
+  // person speaking in between. No count is not read as "none yet".
+  if (e.sender.isBot) {
+    const run = facts.botTurnsInARow
+    if (typeof run !== 'number' || !Number.isInteger(run) || run < 0) {
+      return drop('bots.loop', 'How many bot messages in a row were answered is not known, so this one is not.')
+    }
+    if (run >= surface.bots.maxAlternatingTurns) {
+      return drop('bots.loop', 'Too many bot messages in a row were answered here. A person has to speak first.')
+    }
+    pass('bots.loop')
+  }
+
   const privilege = privilegeFor(admitted)
   const isThread = e.room.kind === 'thread'
   const needsMention = isThread ? surface.threadsRequireMention : mode === 'mention'

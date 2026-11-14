@@ -88,6 +88,9 @@ export const RULES: Rule[] = [
     klass: 'security', kind: 'wall', reads: [`${S}.bots.mode`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.mode/bot-ignored', 'D:bots.mode/bot-must-address'], checks: [] },
   { id: 'bots.inline-mention', statement: 'From a bot, a reply-ping is not a mention.',
     klass: 'security', kind: 'wall', reads: [`${S}.bots.inlineMentionOnly`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.inline-mention/reply-ping'], checks: [] },
+  // The count is the door's own, kept per room and handed to decide() as a fact.
+  { id: 'bots.loop', statement: 'After a set number of bot messages answered in a row, no bot is answered until a person speaks.',
+    klass: 'security', kind: 'wall', reads: [`${S}.bots.maxAlternatingTurns`], surfaces: 'all', enforcer: 'door', tests: ['D:bots.loop/over-limit', 'D:bots.loop/count-unknown', 'P:bot-loop'], checks: [] },
   { id: 'bots.no-self', statement: 'The agent never answers itself.',
     klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['D:bots.no-self/own-message'], checks: [] },
 
@@ -124,6 +127,10 @@ export const RULES: Rule[] = [
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.enabled`], surfaces: 'all', enforcer: 'door', tests: ['D:out.still-allowed/dm-closed', 'D:out.still-allowed/room-removed', 'D:out.still-allowed/turn-dead'], checks: [] },
 
+  { id: 'out.size', statement: 'A reply longer than the limit is cut before it is posted, after secrets are redacted.',
+    klass: 'behaviour', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:out-size'], checks: [] },
+  { id: 'in.once', statement: 'A message is read once: an edit is not read again, and a reply to a message deleted mid-turn is not posted.',
+    klass: 'behaviour', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:in-once'], checks: [] },
   { id: 'turn.one-reply', statement: 'A turn gets at most one reply, and only once the harness says it is finished.',
     klass: 'behaviour', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:one-reply'], checks: ['C1'] },
   { id: 'turn.known', statement: 'Anything the harness sends for a turn the door did not open is dropped.',
