@@ -5,6 +5,7 @@
 // Docker then does what the file says is what the Docker suite is for.
 import { describe, expect, it } from 'vitest'
 import { PROJECT_NAME, RefusingToRun } from '../../guards/preflight.ts'
+import { LETTA_CODE_CELL } from '../cells.ts'
 import { assertSealed, probeArgs, renderRig, rigEnv, RIG_VARIANTS, type RigOptions } from '../compose.ts'
 
 const nonce = 'deadbeef'
@@ -209,5 +210,26 @@ describe('F2 for a rig: what every container is handed', () => {
   it('[U:rig-compose] refuses a nonce or a cell token that is not shaped like one', () => {
     expect(() => rig({ nonce: 'DEADBEEF' })).toThrow(RefusingToRun)
     expect(() => rig({ brainToken: 'hunter2' })).toThrow(RefusingToRun)
+  })
+
+  it('[U:compose] a cell of another harness gets its own images and its own project names, and is sealed the same way', () => {
+    const o: RigOptions = { ...base, check: 'hold', cell: LETTA_CODE_CELL }
+    const rig = renderRig(o)
+    expect(rig.project).toBe('smlab-lc-deadbeef')
+    expect(rig.project).toMatch(PROJECT_NAME)
+    expect(Object.fromEntries(Object.entries(rig.file.services).map(([name, s]) => [name, s.image]))).toEqual({
+      door: 'smlab-lc-rig:local', sink: 'smlab-lc-rig:local', control: 'smlab-lc-rig:local', cell: LETTA_CODE_CELL.image,
+    })
+    expect(LETTA_CODE_CELL.image).toMatch(/^smlab-lc-cell:letta-code-\d/)
+    expect(rig.file.services.cell.command).toEqual(['node', '/opt/swarm/conformance/docker/letta-code/cell-main.ts'])
+    expect(rig.file.services.door.environment.SMLAB_HARNESS).toBe('letta-code')
+    expect(() => assertSealed(rig, LETTA_CODE_CELL)).not.toThrow()
+    // Held to the wrong harness, or built from the other lab's images, it is not a sealed rig of this lab.
+    expect(() => assertSealed(rig)).toThrow(/the cell runs another command than its entry.*the cell is not the image of its harness.*not this lab's rig image/)
+    expect(() => assertSealed(renderRig({ ...o, cell: undefined }), LETTA_CODE_CELL)).toThrow(/REFUSING TO RUN: S0/)
+    // The default is unchanged.
+    const first = renderRig({ ...o, cell: undefined })
+    expect(first.project).toBe('smlab-deadbeef')
+    expect(first.file.services.door.environment.SMLAB_HARNESS).toBe('pi')
   })
 })

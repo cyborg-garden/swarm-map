@@ -3,6 +3,7 @@
 // prints the result as a line the rig reads from outside. With `hold` it
 // starts the lab and waits, so the rig can probe the containers from outside.
 import { OPENAI_CHAT } from '../../lib/door/model-shapes.ts'
+import { LETTA_CODE_CHECKS, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks } from '../suites/checks.ts'
 import type { HarnessUnderTest } from '../suites/harness.ts'
@@ -18,7 +19,10 @@ const remote: RemoteCell = {
 // The harness as this side sees it: it is in another container and starts
 // itself. Nothing is started from here and no environment is handed over from
 // here; the rig did that, and checked it, before the containers came up.
-const local = piHarness(['/usr/local/bin/pi'], 'real')
+const second = process.env.SMLAB_HARNESS === 'letta-code'
+const local = second ? lettaCodeHarness(['/usr/local/bin/letta'], 'real') : piHarness(['/usr/local/bin/pi'], 'real')
+// A harness that takes seconds to start needs longer than the lab's default before a turn is given up on.
+const base = second ? { turnDeadlineMs: 60_000 } : {}
 const harness: HarnessUnderTest = {
   ...local, modelShape: OPENAI_CHAT,
   cellEnv: () => ({}),
@@ -31,11 +35,11 @@ const harness: HarnessUnderTest = {
 process.on('SIGTERM', () => process.exit(0))
 const check = process.env.SMLAB_CHECK ?? ''
 if (check === 'hold') {
-  await startLab({ harness, shim: 'good', remote, policy: { 'tools.allow': ['shell'] } })
+  await startLab({ ...base, harness, shim: 'good', remote, policy: { 'tools.allow': ['shell'] } })
   console.log('SMLAB-READY')
   setInterval(() => {}, 60_000)
 } else {
-  const [result] = await runChecks({ harness, shim: 'good', remote }, [check], [...CHECKS, ...DOCKER_CHECKS])
+  const [result] = await runChecks({ ...base, harness, shim: 'good', remote }, [check], [...CHECKS, ...DOCKER_CHECKS, ...(second ? LETTA_CODE_CHECKS : [])])
   console.log(`SMLAB-RESULT ${JSON.stringify(result ?? { id: check, title: check, pass: false, detail: 'no such check' })}`)
   process.exit(0)
 }

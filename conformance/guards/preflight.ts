@@ -86,8 +86,15 @@ export function assertLocalDocker(docker: { dockerHost?: string; contextEndpoint
 }
 
 // Every Docker object the lab makes carries this prefix, and the lab only ever
-// stops or removes objects that carry it.
-export const PROJECT_NAME = /^smlab-[0-9a-f]{8}$/
+// stops or removes objects that carry it. A lab for one harness may add a tag
+// of its own after the prefix (`smlab-lc-<nonce>`), so two labs on one machine
+// never share a name. A tag is two letters, the first of which cannot be part of a nonce.
+export const PROJECT_NAME = /^smlab-(?:[g-z][a-z]-)?[0-9a-f]{8}$/
+/** The project names of the lab with this tag, and of no other. `''` is the untagged lab. */
+export function projectNameFor(tag: string): RegExp {
+  if (!/^(?:[g-z][a-z]-)?$/.test(tag)) throw new RefusingToRun('F5', `not a lab tag: ${tag}`)
+  return new RegExp(`^smlab-${tag}[0-9a-f]{8}$`)
+}
 
 /** F5. Refuses a compose project or container that is not the lab's own. */
 export function assertOurProject(project: string, containerNames: string[]): void {

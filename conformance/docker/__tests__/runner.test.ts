@@ -35,4 +35,15 @@ describe('the lab only removes what is its own, by label and by name', () => {
       'smlab-deadbeef-cell-1', 'smlab-deadbeef-lookup-2', 'xsmlab-deadbeef-lookup', 'smlab-DEADBEEF-lookup', 'smlab-lookup', 'some-postgres', '',
     ])).toEqual(['smlab-deadbeef-lookup', 'smlab-0badf00d-version', 'smlab-12345678-refuse'])
   })
+
+  it('[U:lab-objects] a lab with a tag of its own lists only its own, and the untagged lab never lists a tagged one', () => {
+    const lines = ['smlab-deadbeef-cell-1 smlab-deadbeef', 'smlab-lc-deadbeef-cell-1 smlab-lc-deadbeef', 'smlab-lc-deadbeef_lab smlab-lc-deadbeef', 'smlab-zz-deadbeef-cell-1 smlab-zz-deadbeef']
+    expect(ownedNames(lines)).toEqual(['smlab-deadbeef-cell-1'])
+    expect(ownedNames(lines, 'lc-')).toEqual(['smlab-lc-deadbeef-cell-1', 'smlab-lc-deadbeef_lab'])
+    const strays = ['smlab-deadbeef-lookup', 'smlab-lc-deadbeef-lookup', 'smlab-lc-0badf00d-refuse', 'smlab-lc-deadbeef-cell-1']
+    expect(strayRunNames(strays)).toEqual(['smlab-deadbeef-lookup'])
+    expect(strayRunNames(strays, 'lc-')).toEqual(['smlab-lc-deadbeef-lookup', 'smlab-lc-0badf00d-refuse'])
+    // A tag is two letters, the first of them no part of a nonce, and a dash. Anything else is refused, not guessed at.
+    for (const tag of ['ab-', 'lc', 'LC-', 'lcx-', '.*', 'lc-lc-']) expect(() => ownedNames(lines, tag), tag).toThrow(/REFUSING TO RUN: F5 not a lab tag/)
+  })
 })

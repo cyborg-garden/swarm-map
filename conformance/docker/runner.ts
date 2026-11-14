@@ -13,10 +13,9 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
+import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, projectNameFor, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
-import { assertSealed, CELL_IMAGE, probeArgs, renderRig, RIG_IMAGE, SWARM_ROOT, type ProbeTargets, type RigOptions, type RigVariant } from './compose.ts'
+import { assertSealed, PI_CELL, probeArgs, renderRig, SWARM_ROOT, type CellKind, type ProbeTargets, type RigOptions, type RigVariant } from './compose.ts'
 import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from './report.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
@@ -44,21 +43,22 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; targets: ProbeTargets }
 
 /** S0, the part that needs no rig: Docker is local, both images are built, and the cell holds the pinned harness. */
-export function preflight(): DockerFacts {
+export function preflight(kind: CellKind = PI_CELL): DockerFacts {
   const endpoint = tryDocker(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).out.trim()
   assertLocalDocker({ dockerHost: process.env.DOCKER_HOST, contextEndpoint: process.env.DOCKER_HOST ? process.env.DOCKER_HOST : endpoint })
   const info = tryDocker(['info', '--format', '{{.ServerVersion}}|{{.OperatingSystem}}|{{.Architecture}}'])
   if (!info.ok) throw new RefusingToRun('S0', 'the Docker daemon is not answering')
-  for (const image of [CELL_IMAGE, RIG_IMAGE]) {
+  for (const image of [kind.image, kind.rigImage]) {
     if (!tryDocker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) {
-      throw new RefusingToRun('S0', `image ${image} is not built: run npm run conformance:docker:build`)
+      throw new RefusingToRun('S0', `image ${image} is not built: run npm run conformance:docker:build${kind === PI_CELL ? '' : ` -- ${kind.harness}`}`)
     }
   }
-  const name = `smlab-${randomBytes(4).toString('hex')}-version`
-  const version = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1', CELL_IMAGE, 'pi', '--version'])
-  if (version.out.trim() !== PI_VERSION) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
+  const name = `smlab-${kind.tag}${randomBytes(4).toString('hex')}-version`
+  const offline = Object.entries(kind.version.env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
+  const version = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', ...offline, kind.image, ...kind.version.command])
+  if (version.out.trim() !== kind.version.says) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
   const [server, system, arch] = info.out.trim().split('|')
-  return { endpoint, server, os: system, arch, targets: findTargets() }
+  return { endpoint, server, os: system, arch, targets: findTargets(kind) }
 }
 
 /**
@@ -68,17 +68,17 @@ export function preflight(): DockerFacts {
  * address is written in this repo. One that cannot be found stays empty, and
  * the checks that need it then fail rather than pass untried.
  */
-export function findTargets(): ProbeTargets {
-  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
+export function findTargets(kind: CellKind = PI_CELL): ProbeTargets {
+  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${kind.tag}${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', kind.rigImage, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
   let found: Partial<ProbeTargets> = {}
   try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '{}') as Partial<ProbeTargets> } catch { /* nothing found */ }
   const text = (v: unknown): string => (typeof v === 'string' ? v : '')
   return { hostIp: text(found.hostIp), publicIp: text(found.publicIp), resolverIp: text(found.resolverIp), resolverIp6: text(found.resolverIp6) }
 }
 
-/** Build both images. The only step that uses the network, and never part of a test run. */
-export function buildImages(): void {
-  for (const [target, tag] of [['cell', CELL_IMAGE], ['rig', RIG_IMAGE]] as const) {
+/** Build the cell image of one harness, and the rig image. The only step that uses the network, and never part of a test run. */
+export function buildImages(kind: CellKind = PI_CELL): void {
+  for (const [target, tag] of [[kind.target, kind.image], ['rig', kind.rigImage]] as const) {
     execFileSync('docker', ['build', '--target', target, '--tag', tag, '--file', path.join(REPO, 'conformance', 'docker', 'Dockerfile'), REPO],
       { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 })
   }
@@ -90,9 +90,11 @@ export function buildImages(): void {
  * starts with that project. A label alone is a claim anyone can make, so
  * nothing is ever removed whose own name does not begin `smlab-`.
  */
-export function ownedNames(lines: string[]): string[] {
+export function ownedNames(lines: string[], tag = ''): string[] {
+  // Only this lab's own: a lab with another tag, run from another checkout, is not ours to list or remove.
+  const ours = projectNameFor(tag)
   return lines.map((line) => line.trim().split(' ')).filter(([name, project, ...rest]) =>
-    rest.length === 0 && PROJECT_NAME.test(project ?? '') && (name.startsWith(`${project}-`) || name.startsWith(`${project}_`)),
+    rest.length === 0 && ours.test(project ?? '') && (name.startsWith(`${project}-`) || name.startsWith(`${project}_`)),
   ).map(([name]) => name)
 }
 
@@ -100,13 +102,17 @@ export function ownedNames(lines: string[]): string[] {
  * The one-off containers a run starts outside any rig (`smlab-<nonce>-version`, `-lookup`, `-refuse`).
  * Each removes itself when it stops; one is only left behind if the run was killed while it was up.
  */
-export function strayRunNames(names: string[]): string[] {
-  return names.map((name) => name.trim()).filter((name) => /^smlab-[0-9a-f]{8}-(version|lookup|refuse)$/.test(name))
+export function strayRunNames(names: string[], tag = ''): string[] {
+  const ours = projectNameFor(tag)
+  return names.map((name) => name.trim()).filter((name) => {
+    const m = /^(.*)-(version|lookup|refuse)$/.exec(name)
+    return m !== null && ours.test(m[1])
+  })
 }
 
 /** Names of the lab's own containers, networks and volumes: anything that belongs to a compose project named like a rig, and is named for it. */
-export function labObjects(): { containers: string[]; networks: string[]; volumes: string[] } {
-  const list = (args: string[]): string[] => ownedNames(docker(args).split('\n').filter((l) => l.trim() !== ''))
+export function labObjects(tag = ''): { containers: string[]; networks: string[]; volumes: string[] } {
+  const list = (args: string[]): string[] => ownedNames(docker(args).split('\n').filter((l) => l.trim() !== ''), tag)
   const label = '{{.Name}} {{.Label "com.docker.compose.project"}}'
   return {
     containers: list(['ps', '-a', '--format', '{{.Names}} {{.Label "com.docker.compose.project"}}']),
@@ -116,9 +122,9 @@ export function labObjects(): { containers: string[]; networks: string[]; volume
 }
 
 /** Remove what a run left behind. By name, one at a time, and only what labObjects() lists, plus a run's own one-off containers. */
-export function cleanLab(): { containers: string[]; networks: string[]; volumes: string[] } {
-  const left = labObjects()
-  left.containers.push(...strayRunNames(docker(['ps', '-a', '--format', '{{.Names}}']).split('\n')))
+export function cleanLab(tag = ''): { containers: string[]; networks: string[]; volumes: string[] } {
+  const left = labObjects(tag)
+  left.containers.push(...strayRunNames(docker(['ps', '-a', '--format', '{{.Names}}']).split('\n'), tag))
   for (const name of left.containers) tryDocker(['rm', '--force', name])
   for (const name of left.networks) tryDocker(['network', 'rm', name])
   for (const name of left.volumes) tryDocker(['volume', 'rm', name])
@@ -151,7 +157,7 @@ export interface LiveRig {
   doorLine(marker: string, timeoutMs: number): Promise<string | undefined>
 }
 
-export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
+export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv' | 'cell'>
 
 /** Start one rig, hand it to `body`, and take it down whatever happens. */
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
@@ -166,7 +172,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
   // `socket` only: an empty file of the rig's own, to be mounted where a Docker socket would be.
   if (request.variant === 'socket') writeFileSync(path.join(dir, 'docker.sock'), '')
   const first = renderRig(options)
-  if (request.variant === 'good') assertSealed(first)
+  if (request.variant === 'good') assertSealed(first, request.cell)
   const file = path.join(dir, 'compose.json')
   const compose = (args: string[], timeoutMs = 120_000): string => docker(['compose', '--project-name', project, '--file', file, ...args], { timeoutMs })
   const container = (service: string): string => `${project}-${service}-1`
@@ -177,7 +183,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
     const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, container('sink')]).trim()
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(sinkIp)) throw new Error(`the sink has no address (${sinkIp})`)
     const rig = renderRig({ ...options, sinkIp })
-    if (request.variant === 'good') assertSealed(rig)
+    if (request.variant === 'good') assertSealed(rig, request.cell)
     writeFileSync(file, JSON.stringify(rig.file, null, 2))
     // Only the two that are not up yet: naming the control again would send it to the sink a second time.
     compose(['up', '--detach', '--no-build', '--pull', 'never', 'door', 'cell'])
@@ -261,9 +267,9 @@ export const SEAL_CHECKS = [
 ] as const
 
 /** S0 to S3: start a rig that stays up, and look at its containers from outside. */
-export async function runSealChecks(variant: RigVariant, host: HostListener, targets: ProbeTargets, hostCanary: { name: string; value: string }): Promise<CheckResult[]> {
+export async function runSealChecks(variant: RigVariant, host: HostListener, targets: ProbeTargets, hostCanary: { name: string; value: string }, cell?: CellKind): Promise<CheckResult[]> {
   const seen = host.hits.length
-  return withRig({ check: 'hold', variant, hostPort: host.port, targets }, async (rig) => {
+  return withRig({ check: 'hold', variant, hostPort: host.port, targets, cell }, async (rig) => {
     const s: Record<string, string[]> = { S0: [], S1: [], S2: [], S3: [] }
     const ready = await rig.doorLine('SMLAB-READY', 60_000)
     const probe = async (service: string): Promise<ProbeReport | undefined> =>
@@ -319,19 +325,26 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
 }
 
 /** In a cell that starts on its own, the entry refuses an environment with anything shaped like a real credential. */
-export function cellRefuses(env: Record<string, string>): { code: number | null; out: string } {
-  const name = `smlab-${randomBytes(4).toString('hex')}-refuse`
+export function cellRefuses(env: Record<string, string>, kind: CellKind = PI_CELL): { code: number | null; out: string } {
+  const name = `smlab-${kind.tag}${randomBytes(4).toString('hex')}-refuse`
   const flags = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
-  const r = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '--read-only', '--tmpfs', '/tmp', ...flags, CELL_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/cell-main.ts`], { timeoutMs: 60_000 })
+  const r = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '--read-only', '--tmpfs', '/tmp', ...flags, kind.image, 'node', `${SWARM_ROOT}/conformance/docker/${kind.entry}`], { timeoutMs: 60_000 })
   return { code: r.code, out: r.out }
 }
 
-// `node conformance/docker/runner.ts build|clean`
+// `node conformance/docker/runner.ts build|clean [harness]`
 if (path.resolve(process.argv[1] ?? '') === import.meta.filename) {
   const command = process.argv[2]
-  if (command === 'build') { preflightDockerOnly(); buildImages() }
-  else if (command === 'clean') { preflightDockerOnly(); console.log(JSON.stringify(cleanLab())) }
-  else { console.error('usage: runner.ts build|clean'); process.exit(2) }
+  if (command === 'build' || command === 'clean') {
+    preflightDockerOnly()
+    // Imported here, not at the top: a cell kind lives with its harness, and this file names none.
+    const { CELL_KINDS } = await import('./cells.ts')
+    const kind = CELL_KINDS[process.argv[3] ?? PI_CELL.harness]
+    if (!kind) { console.error(`no cell for that harness; one of: ${Object.keys(CELL_KINDS).join(', ')}`); process.exit(2) }
+    if (command === 'build') buildImages(kind)
+    else console.log(JSON.stringify(cleanLab(kind.tag)))
+  }
+  else { console.error('usage: runner.ts build|clean [harness]'); process.exit(2) }
 }
 
 function preflightDockerOnly(): void {

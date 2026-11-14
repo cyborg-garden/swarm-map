@@ -4,12 +4,14 @@ import { describe, expect, it } from 'vitest'
 import { createLineDecoder } from '../../../door/framing.ts'
 import { createLettaCodeWire, DENIED, type GateCall, type LettaCodeProcess } from '../wire.ts'
 
+type Sent = { type?: string; response?: unknown; message?: unknown }
+
 /** A stand-in for the Letta Code child process: the test plays its side by hand. */
 function fakeProcess(o: { init?: boolean } = {}) {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
-  const sent: Record<string, any>[] = []
-  const decoder = createLineDecoder((r) => sent.push(r as Record<string, any>))
+  const sent: Sent[] = []
+  const decoder = createLineDecoder((r) => sent.push(r as Sent))
   stdin.on('data', (c) => decoder.push(c))
   let exit: (code: number | null) => void = () => {}
   const proc: LettaCodeProcess = { stdin, stdout, onExit: (cb) => { exit = cb }, kill: () => exit(null) }
@@ -25,7 +27,7 @@ const asks = (id: string, tool = 'Bash', input: unknown = { command: 'ls' }) =>
   ({ type: 'control_request', request_id: `perm-${id}`, request: { subtype: 'can_use_tool', tool_name: tool, input, tool_call_id: id } })
 const tick = (ms = 5) => new Promise((resolve) => setTimeout(resolve, ms))
 const never = () => new Promise<boolean>(() => {})
-const answers = (sent: Record<string, any>[]) => sent.filter((r) => r.type === 'control_response').map((r) => r.response)
+const answers = (sent: Sent[]) => sent.filter((r) => r.type === 'control_response').map((r) => r.response)
 
 describe('Letta Code pump', () => {
   it('[U:letta-code-wire] nothing is sent until Letta Code has said which agent it is', async () => {
@@ -97,6 +99,22 @@ describe('Letta Code pump', () => {
       { subtype: 'success', request_id: 'perm-a', response: { behavior: 'allow' } },
       ...['b', 'c', 'd', 'e'].map((id) => ({ subtype: 'success', request_id: `perm-${id}`, response: { behavior: 'deny', message: DENIED } })),
     ])
+  })
+
+  it('[U:letta-code-wire] a question that comes when no turn is open is answered no, and nobody is asked', async () => {
+    const lc = fakeProcess()
+    let asked = 0
+    const wire = createLettaCodeWire(lc.proc, { onGate: async () => { asked++; return true } })
+    lc.emit(asks('early'))
+    await tick()
+    const turn = wire.prompt('x')
+    await tick()
+    // The end of the turn and a late question, in one write: the turn is over by the time the question is read.
+    lc.proc.stdout.push(`${JSON.stringify(result())}\n${JSON.stringify(asks('late'))}\n`)
+    await turn
+    await tick()
+    expect(asked).toBe(0)
+    expect(answers(lc.sent)).toEqual(['early', 'late'].map((id) => ({ subtype: 'success', request_id: `perm-${id}`, response: { behavior: 'deny', message: DENIED } })))
   })
 
   it('[U:letta-code-wire] an error while asking is a no', async () => {

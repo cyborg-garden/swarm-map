@@ -72,6 +72,12 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(c11n.detail).toContain('a note written to memory in one room was sent to the model in another')
   }, 30_000)
 
+  it('[U:letta-code-must-fail] C11n only passes when the rooms were refused for the reason it names, not for some other', async () => {
+    // Nobody is admitted, so both rooms are dropped before the memory rule is ever reached. Nothing crosses, and the check still fails.
+    const [c11n] = await runChecks({ harness, shim: 'good', policy: { 'surfaces.fake.users': [] } }, ['C11n'], ALL_CHECKS)
+    expect(c11n.detail).toBe('expected both rooms to be refused under mem.one-scope, got 0')
+  }, 30_000)
+
   it('[U:letta-code-must-fail] a cell with chat channels set up fails C16 for both reasons: the folder and the token', async () => {
     const [c16] = await run('holds-chat-token', ['C16'])
     expect(c16.detail).toContain('the harness has chat channels set up')
@@ -82,4 +88,47 @@ describe('must-fail: broken shims turn their named checks red', () => {
     const [c9p] = await run('unwatched', ['C9p'])
     expect(c9p.detail).toBe('no tripwire was armed inside the harness process, so nothing was checked')
   }, 30_000)
+})
+
+// The matrix file is evidence from a real Letta Code run, and only `npm run
+// conformance -- letta-code` may write it. CI cannot repeat that run, but it
+// can tell when the file no longer matches the suite: a check or a broken
+// shim added since means the evidence is out of date and the run has to be
+// done again.
+describe('the committed matrix for the pinned Letta Code', () => {
+  const file = path.resolve(import.meta.dirname, '..', 'matrix', `letta-code-${LETTA_CODE_VERSION}.process.json`)
+  const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
+  const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
+
+  it('[U:letta-code-matrix] is from a real Letta Code of the pinned version, run as a plain process', () => {
+    expect(committed).toMatchObject({ harness: 'letta-code', version: LETTA_CODE_VERSION, harnessBuild: 'real', substrate: 'process' })
+  })
+
+  it('[U:letta-code-matrix] has a result for every check the suite runs today, under today\'s title', () => {
+    // Every check anyone knows of has a row, run or not, plus this harness's own, and there is no row for one nobody knows.
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...LETTA_CODE_CHECKS.map((c) => c.id)])].sort())
+    for (const check of ALL_CHECKS) {
+      expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance -- letta-code`).toBeDefined()
+      expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)
+      expect(rows[check.id].title, check.id).toBe(check.title)
+    }
+  })
+
+  it('[U:letta-code-matrix] names every broken shim the suite has today, with the checks each must fail today', () => {
+    const today = Object.fromEntries(Object.entries(brokenVariants(harness)).map(([shim, v]) => [shim, v.red]))
+    expect(Object.fromEntries(committed.mustFail.map((m) => [m.shim, m.mustFail]))).toEqual(today)
+    for (const m of committed.mustFail) for (const id of m.mustFail) expect(m.failed, `${m.shim} must fail ${id}`).toContain(id)
+    expect(committed.suiteTrusted).toBe(true)
+  })
+
+  it('[U:letta-code-matrix] says what it does not show: no memory per room, and no wall at process level', () => {
+    // The spec's memory check is wider than C11n, and stays not-run.
+    expect(rows.C11).toMatchObject({ status: 'not-run' })
+    expect(rows.C7).toMatchObject({ status: 'not-run' })
+    for (const id of ['S1', 'C8', 'C9', 'C10']) expect(rows[id], id).toMatchObject({ status: 'not-run' })
+    const rule = Object.fromEntries(committed.rules.map((r) => [r.rule, r.status]))
+    // Neither wall of the model route, nor the posture rule, is claimed without a sealed cell.
+    for (const id of ['budget.cap', 'keys.model-route', 'tools.posture']) expect(rule[id], id).toBe('not-run')
+    expect(rule['mem.one-scope']).toBe('shared')
+  })
 })

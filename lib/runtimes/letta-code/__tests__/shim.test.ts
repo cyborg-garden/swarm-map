@@ -34,6 +34,8 @@ process.stdin.on('data', (chunk) => {
     if (r.type === 'control_response' && --pending === 0) {
       out({ type: 'message', message_type: 'assistant_message', id: 'm1', content: [{ type: 'text', text: 'done' }] })
       out({ type: 'result', subtype: 'success' })
+      // The turn is over. Asking about a tool now is asking with no turn live.
+      out({ type: 'control_request', request_id: 'perm-late', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' }, tool_call_id: '3' } })
     }
   }
 })
@@ -89,9 +91,21 @@ describe('the Letta Code shim', () => {
     expect(request).toMatchObject({ turnId: 'turn-1', tool: 'Bash', input: { command: 'ls' } })
     link.send({ t: 'tool_verdict', callId: request.callId, allow: true })
     await until(() => got.some((m) => m.t === 'settled'))
+    await until(() => stubLog().some((l) => l.includes('perm-late')))
     const answers = stubLog().filter((l) => l.startsWith('IN ')).map((l) => JSON.parse(l.slice(3))).filter((r) => r.type === 'control_response').map((r) => [r.response.request_id, r.response.response.behavior])
-    expect(answers).toEqual([['perm-1', 'deny'], ['perm-2', 'allow']])
+    expect(answers).toEqual([['perm-1', 'deny'], ['perm-2', 'allow'], ['perm-late', 'deny']])
     expect(got.filter((m) => m.t === 'reply')).toEqual([{ t: 'reply', turnId: 'turn-1', text: 'done', attachments: [] }])
+  })
+
+  it('[U:letta-code-offered] once the turn is over, a tool it was offered is refused too, and the sidecar is not asked', async () => {
+    link.send({ t: 'turn', env: envelope({ tools: ['Bash'] }) })
+    await until(() => got.some((m) => m.t === 'tool_request'))
+    const request = got.find((m) => m.t === 'tool_request') as Extract<FromShim, { t: 'tool_request' }>
+    link.send({ t: 'tool_verdict', callId: request.callId, allow: true })
+    await until(() => stubLog().some((l) => l.includes('perm-late')))
+    const late = stubLog().filter((l) => l.startsWith('IN ') && l.includes('perm-late')).map((l) => JSON.parse(l.slice(3)).response.response.behavior)
+    expect(late).toEqual(['deny'])
+    expect(got.filter((m) => m.t === 'tool_request')).toHaveLength(1)
   })
 
   it('[U:letta-code-preamble] who is speaking is written into the prompt in a frame the sender cannot forge', async () => {
@@ -113,7 +127,7 @@ describe('the Letta Code shim', () => {
 
   it('[U:letta-code-offered] a turn that was offered no tools gets a no for everything, and the sidecar is never asked', async () => {
     link.send({ t: 'turn', env: envelope({ tools: [] }) })
-    await until(() => stubLog().filter((l) => l.includes('"control_response"')).length === 2)
+    await until(() => stubLog().filter((l) => l.includes('"control_response"')).length === 3)
     expect(got.filter((m) => m.t === 'tool_request')).toEqual([])
     expect(stubLog().filter((l) => l.includes('"control_response"')).every((l) => l.includes('"deny"'))).toBe(true)
   })

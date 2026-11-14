@@ -17,13 +17,41 @@
 // A variant other than `good` breaks the rig in one named way. Those exist so
 // the checks can be shown to go red.
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
+import { assertNoCredentials, PROJECT_NAME, projectNameFor, RefusingToRun } from '../guards/preflight.ts'
 
 export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
 
 export const CELL_IMAGE = `smlab-cell:pi-${PI_VERSION}`
 export const RIG_IMAGE = 'smlab-rig:local'
+
+/**
+ * Which harness a cell holds. The rig is the same for every harness; what
+ * differs is the cell's image, the script it starts with, and how to ask the
+ * image which version of the harness is in it.
+ */
+export interface CellKind {
+  harness: string
+  /**
+   * What sets this lab's names apart: '' or two letters and a dash. It goes into the
+   * names of its images and of every project it starts, so a lab for another harness,
+   * built from another checkout on the same machine, cannot be mistaken for this one.
+   */
+  tag: string
+  image: string
+  /** The image of the sidecar's side, the sink and the control. */
+  rigImage: string
+  /** The Dockerfile stage the image is built from. */
+  target: string
+  /** The cell's entry script, under conformance/docker/. */
+  entry: string
+  /** How to ask the image for the harness version, with what environment, and what it must say. */
+  version: { command: string[]; env: Record<string, string>; says: string }
+}
+export const PI_CELL: CellKind = {
+  harness: 'pi', tag: '', image: CELL_IMAGE, rigImage: RIG_IMAGE, target: 'cell', entry: 'cell-main.ts',
+  version: { command: ['pi', '--version'], env: { PI_OFFLINE: '1', PI_TELEMETRY: '0', PI_SKIP_VERSION_CHECK: '1' }, says: PI_VERSION },
+}
 /** Where both containers mount the shared volume. Under the temp dir, so the lab's work-dir guard holds inside too. */
 export const LAB_DIR = '/tmp/smlab'
 export const BRAIN_PORT = 7801
@@ -56,6 +84,8 @@ export interface RigOptions {
   vetoTimeoutMs?: number
   /** Negative controls only: more environment for the cell. It goes through the same F2 guard. */
   extraCellEnv?: Record<string, string>
+  /** Which harness the cell holds. Default: Pi. */
+  cell?: CellKind
 }
 
 /**
@@ -135,13 +165,14 @@ export function rigEnv(file: ComposeFile): Record<string, Record<string, string>
 }
 
 export function renderRig(o: RigOptions): Rig {
-  const project = `smlab-${o.nonce}`
-  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
+  const kind = o.cell ?? PI_CELL
+  const project = `smlab-${kind.tag}${o.nonce}`
+  if (!projectNameFor(kind.tag).test(project) || !PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!RIG_VARIANTS.includes(o.variant)) throw new RefusingToRun('F5', `not a rig variant: ${o.variant}`)
 
   const run = { SWARMLAB_NONCE: o.nonce, SWARMLAB_BRAIN: o.brainToken }
   const cell: Service = {
-    ...service(CELL_IMAGE, 'cell-main.ts', ['cell'], {
+    ...service(kind.image, kind.entry, ['cell'], {
       ...run,
       SMLAB_GATE: o.gate ?? 'real',
       SMLAB_VERDICT_MS: String(o.verdictTimeoutMs ?? 400),
@@ -151,8 +182,8 @@ export function renderRig(o: RigOptions): Rig {
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'], pids_limit: 256, mem_limit: '1g', cpus: 1,
   }
   const door: Service = {
-    ...service(RIG_IMAGE, 'rig-main.ts', ['cell'], {
-      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', 
+    ...service(kind.rigImage, 'rig-main.ts', ['cell'], {
+      ...run, SMLAB_CHECK: o.check, SMLAB_VARIANT: o.variant, SMLAB_GATE: o.gate ?? 'real', SMLAB_HARNESS: kind.harness,
       // What the harness will be asked to hand the probe. Addresses and a port, checked above all else to be only that.
       SMLAB_PROBE_ARGS: probeArgs(o.nonce, o.sinkIp ?? '', o.hostPort ?? 0, o.targets).join(' '),
     }),
@@ -162,8 +193,8 @@ export function renderRig(o: RigOptions): Rig {
     name: project,
     services: {
       door, cell,
-      sink: service(RIG_IMAGE, 'sink.ts', ['outside'], {}),
-      control: { ...service(RIG_IMAGE, 'control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] },
+      sink: service(kind.rigImage, 'sink.ts', ['outside'], {}),
+      control: { ...service(kind.rigImage, 'control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] },
     },
     networks: {
       cell: { internal: true, enable_ipv6: false },
@@ -184,7 +215,7 @@ export function renderRig(o: RigOptions): Rig {
   if (o.variant === 'leaks-env') cell.environment.SWARMLAB_LEAK = `UPSTREAM-${o.nonce}`
   // The key is put in a file and nowhere else. It is written in two halves, so no environment
   // and no command line holds it: only a search of the disk can find it.
-  if (o.variant === 'leaks-file') cell.command = ['sh', '-c', `printf '%s-%s' UPSTREAM ${o.nonce} > /tmp/leak-${o.nonce} && exec ${entry('cell-main.ts').join(' ')}`]
+  if (o.variant === 'leaks-file') cell.command = ['sh', '-c', `printf '%s-%s' UPSTREAM ${o.nonce} > /tmp/leak-${o.nonce} && exec ${entry(kind.entry).join(' ')}`]
   // Not a Docker socket: an empty file of the rig's own, put where one would be. It shows the probe looks there.
   if (o.variant === 'socket') cell.volumes!.push(`${o.hostDir ?? '/nonexistent'}/docker.sock:/var/run/docker.sock:ro`)
   // The sidecar's side is given a way to the sink. The cell is left as it was.
@@ -213,7 +244,7 @@ const SHARING_KEYS = [
  * calls this on every rig it expects to be sealed, so a change to this file
  * that opens the cell cannot pass as "good".
  */
-export function assertSealed(rig: Rig): void {
+export function assertSealed(rig: Rig, kind: CellKind = PI_CELL): void {
   const problems: string[] = []
   const { file } = rig
   for (const [name, network] of Object.entries(file.networks)) {
@@ -224,7 +255,9 @@ export function assertSealed(rig: Rig): void {
   const door = file.services.door
   if (door.networks.join(',') !== 'cell') problems.push(`the sidecar is on ${door.networks.join(' and ')}`)
   if (door.volumes?.join(',') !== `lab:${LAB_DIR}:ro`) problems.push('the sidecar can write the shared folder, or mounts something else')
-  if (cell.command.join(' ') !== entry('cell-main.ts').join(' ')) problems.push('the cell runs another command than its entry')
+  if (cell.command.join(' ') !== entry(kind.entry).join(' ')) problems.push('the cell runs another command than its entry')
+  if (cell.image !== kind.image) problems.push('the cell is not the image of its harness')
+  for (const name of ['door', 'sink', 'control'] as const) if (file.services[name].image !== kind.rigImage) problems.push(`service ${name} is not this lab's rig image`)
   if (cell.cap_drop?.join(',') !== 'ALL') problems.push('the cell keeps capabilities')
   if (cell.security_opt?.join(',') !== 'no-new-privileges:true') problems.push('the cell does not have no-new-privileges alone as its security option')
   if (cell.sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1') problems.push('the cell does not have IPv6 switched off')

@@ -12,7 +12,8 @@
 //   `control_request` of subtype `can_use_tool`. It then waits for as long as
 //   it takes. It has no timeout of its own, so the veto's timeout is here:
 //   whoever is asked gets `vetoTimeoutMs`, and after that the answer is no.
-//   Only the exact answer `true` lets the tool run.
+//   Only the exact answer `true` lets the tool run. A question that comes
+//   when no turn is open is answered no without asking anyone.
 import type { Readable, Writable } from 'node:stream'
 import { createLineDecoder, encodeLine } from '../../door/framing.ts'
 
@@ -71,6 +72,8 @@ export function createLettaCodeWire(proc: LettaCodeProcess, opts: LettaCodeWireO
     let allow = false
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      // Asked outside a turn: nobody is asked, and the answer is no.
+      if (!current) throw new Error('no turn is open')
       const call: GateCall = { tool: String(request.tool_name ?? ''), input: request.input, callId: String(request.tool_call_id ?? '') }
       const late = new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), opts.vetoTimeoutMs ?? 30_000) })
       allow = (await Promise.race([opts.onGate(call), late])) === true

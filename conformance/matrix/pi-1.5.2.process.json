@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "process",
-  "date": "2026-11-13",
+  "date": "2026-11-14",
   "model": "scripted",
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
@@ -413,6 +413,11 @@
     },
     {
       "rule": "mem.dm-isolated",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "mem.one-scope",
       "status": "shared",
       "checks": []
     },
