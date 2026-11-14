@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HARNESSES } from '../../lib/door/protocol.ts'
+import { fakeLettaCodeCommand, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
 import { CHECKS } from '../suites/checks.ts'
 import { brokenVariants } from '../suites/harness.ts'
@@ -28,10 +29,11 @@ describe('the shared shim suite names no harness', () => {
 
   it.each(SHARED)('[U:harness-blind] %s holds no harness name and no native tool name', (file) => {
     const literals = [...code(file).matchAll(/'([^'\n]*)'/g)].map((m) => m[1])
-    const nativeTools = Object.keys(piHarness(fakePiCommand(), 'fake').caps.toolMap)
+    const nativeTools = [piHarness(fakePiCommand(), 'fake'), lettaCodeHarness(fakeLettaCodeCommand(), 'fake')].flatMap((h) => Object.keys(h.caps.toolMap))
     const named = literals.filter((l) => (HARNESSES as string[]).includes(l) || nativeTools.includes(l))
     expect(named).toEqual([])
     expect(code(file)).not.toMatch(/\bpi[A-Z]\w*|\bPi\b|\bPI_/)
+    expect(code(file)).not.toMatch(/Letta/i)
   })
 
   it('[U:harness-blind] a second harness can be put through the checks by writing an adapter and nothing else', () => {
@@ -40,5 +42,8 @@ describe('the shared shim suite names no harness', () => {
     expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
     const ids = CHECKS.map((c) => c.id)
     for (const v of Object.values(brokenVariants(pi))) for (const id of [...v.red, ...v.green]) expect(ids).toContain(id)
+    // The second one did it: one more optional key (a patch to the lab's starting policy), and nothing else.
+    const second = lettaCodeHarness(fakeLettaCodeCommand(), 'fake')
+    expect(Object.keys(second).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'policy', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
   })
 })

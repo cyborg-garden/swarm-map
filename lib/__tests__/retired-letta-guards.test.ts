@@ -136,7 +136,8 @@ const REMOVED_NAMES: [string, RegExp][] = [
   ['an env var or constant', /\bLETTA_(?!CODE(_|\b))[A-Z0-9_]*/],
   // letta-compose, letta-agent-provider, letta-server, letta-db, letta-pgdata, letta-client. Not letta-code.
   // Lower case only: these are names. "Letta-style" in a sentence is not one.
-  ['a module, service, volume or package', /\bletta-(?!code\b)[a-z0-9]/],
+  // Nor the npm name of Letta Code itself, whose scope happens to start the same way: @letta-ai/letta-code.
+  ['a module, service, volume or package', /\bletta-(?!code\b|ai\/letta-code\b)[a-z0-9]/],
   // letta_agent, letta_brain, h_letta_server. Not letta_code.
   ['a row id or snake-case name', /(?<![A-Za-z0-9])letta_(?!code(_|\b))[a-z0-9]/],
   // The retired runtime tag, as a quoted value: runtime: 'letta', 'hermes' | 'letta'.
@@ -147,6 +148,10 @@ const REMOVED_NAMES: [string, RegExp][] = [
   ['a file of the old client', /services\/letta(?![\w-])|\/letta\.(ts|tsx|js|mjs|py|ya?ml|json)\b/],
 ]
 const REMOVED = { test: (line: string): boolean => REMOVED_NAMES.some(([, re]) => re.test(line)) }
+
+// The lock file the lab's Letta Code cell image is built from. It is Letta
+// Code's own dependency tree, not Swarm Map's: nothing here imports from it.
+const CELL_LOCK = 'conformance/docker/letta-code/package-lock.json'
 
 // Files that may hold one of those names. Each entry is a reason, not a
 // convenience. Adding one is a decision.
@@ -161,6 +166,7 @@ const MAY_NAME_THE_REMOVED: Record<string, string> = {
   'lib/services/surface-admins.ts': 'one comment; this file is left to a separate change',
   'lib/services/__tests__/surface-admins.test.ts': 'id fixtures; this file is left to a separate change',
   'docs/runtimes.md': 'names the two retired runtime tags',
+  [CELL_LOCK]: 'the lock file of Letta Code itself, for the lab\'s cell image: it lists every package Letta Code depends on, by name',
 }
 
 const removedPathAllowed = (f: string) => f === SELF || TRANSLATED(f)
@@ -197,6 +203,7 @@ describe('what counts as a name of the removed integration', () => {
     ['an env var the old code never had', 'LETTA_API_URL=http://localhost:1'],
     ['a module the old code never had', "import { x } from './letta-memory'"],
     ['the old file, by path', "const file = 'lib/services/letta.ts'"],
+    ['another package of the same npm scope', '"@letta-ai/letta-agent-sdk": "0.8.38"'],
   ])('%s is caught', (_what, line) => {
     expect(REMOVED.test(line), line).toBe(true)
   })
@@ -216,6 +223,8 @@ describe('what counts as a name of the removed integration', () => {
     ['a snake-case name of the planned adapter', 'letta_code_caps = {}'],
     ['a sentence that hyphenates the product name', 'Letta-style ids are id-shaped.'],
     ['a possessive', "Letta's self-hosted server was retired."],
+    ['the npm name of the planned adapter', '"dependencies": { "@letta-ai/letta-code": "0.34.60" }'],
+    ['the same, in an install command', 'npm install --ignore-scripts @letta-ai/letta-code@0.34.60'],
   ])('%s is let through', (_what, line) => {
     expect(REMOVED.test(line), line).toBe(false)
   })
@@ -249,7 +258,10 @@ describe('the old Letta server client stays deleted', () => {
 
   it('no package of the retired server is a dependency', () => {
     const lock = (f: string) => /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml)$/.test(f)
-    expect(hits(/letta-client|["'/]letta["']?\s*:/i, (f) => !lock(f))).toEqual([])
+    // Letta Code brings that client along for its cloud mode, which the lab never starts.
+    expect(hits(/letta-client|["'/]letta["']?\s*:/i, (f) => !lock(f) || f === CELL_LOCK)).toEqual([])
+    // Swarm Map's own lock files are still read: the one exception is not the whole rule.
+    expect(repoFiles().filter((f) => lock(f) && f !== CELL_LOCK)).toEqual(expect.arrayContaining(['package.json', 'package-lock.json']))
   })
 
   it('the files of the old integration are gone', () => {
