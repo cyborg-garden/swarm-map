@@ -21,7 +21,9 @@ talks to Letta Code, a different program, in a different way.
   its tool veto switched off. This is shown for one machine and one Docker, and for nothing wider.
 - **It needs no account and makes no call home**, started the way the shim starts it.
 - **It keeps one memory per agent, not per room.** So the door gives it one room, or one person's
-  direct messages, and refuses a policy that opens more. This is the main thing it cannot do.
+  direct messages, and refuses a policy that opens more. The first conversation it is given is
+  the only one it is given for as long as that door runs: moving the one room does not give it
+  the new one. This is the main thing it cannot do.
 - **Two shared contracts changed**, because they had been written around Pi. See "What changed in
   the shared contracts".
 
@@ -143,8 +145,11 @@ cell.
    was in the model request of the next. The spec's memory check (C11) therefore cannot be met as
    written. What holds instead is rule `mem.one-scope`: a harness that declares such a memory is
    given one room, or one person's direct messages, and a policy that opens more is refused for
-   it. C11n shows the rule with real Letta Code in the loop, and the `hides-memory` shim shows
-   what happens without it.
+   it. A policy is checked one at a time, so the door also remembers the first conversation it
+   gave such a harness and gives it no other: a policy that moves the one room fits, and the
+   new room is still refused, because what was learned in the old one would go with it. C11n
+   shows both with real Letta Code in the loop, and the `hides-memory` shim shows what happens
+   without the rule.
 2. **Direct messages, for now.** Its sessions share one home and one work folder on disk, so it
    declares `sessionIsolation: 'none'`, and the door delivers no direct message to such a harness
    (rule `mem.dm-isolated`, the same as for Pi). A policy with one person's direct messages is
@@ -164,6 +169,9 @@ Each of these was run or read on Letta Code 0.34.60 from npm, not taken from not
 | Licence | Apache-2.0 |
 | Account | None needed on the local backend (`--backend local`). The cloud backend is the default and does need one |
 | Does it call home | With no flags it asks the npm registry for a newer version at start. With `DISABLE_AUTOUPDATER=1`, `LETTA_CODE_TELEM=0` and `DO_NOT_TRACK=1`, a tripwire inside it recorded no attempt to reach anything off this machine across the whole suite |
+| What it sends in the sealed cell | A packet capture in the cell's network, attached by hand and not part of the suite. In the fifteen in-cell checks that run no probe, every connection that left the cell went to the door's model route. In three of them (C1, C4+, C16) the names it looked up were read as well: only the door's. The capture was attached just after each cell started, so the first moments of the shim are not in it; Letta Code itself starts later, at the first turn |
+| Local model servers | At the first turn it tries three ports on its own loopback (1234, 11434 and 8080), where local model servers usually listen. Nothing listens there in the cell. Run as a plain process on a machine that has one, it would reach it: the tripwire counts loopback as this machine |
+| What the package brings | 382 packages in the cell's lock file, each pinned to a version and an integrity hash from the npm registry. Five have an install script (Letta Code itself, `@google/genai`, `@scarf/scarf`, `node-pty`, `protobufjs`); the image is built with `--ignore-scripts`, so none runs. Most are MIT or Apache-2.0. The tree also holds prebuilt `libvips` binaries under LGPL-3.0-or-later and the Cursor SDK under its own licence. `npm audit` reports four moderate advisories, in `glob` and `minimatch`. Nothing of it is copied into this repo or pushed: the lock file names it, and the local test image holds it |
 | Sending and reading | JSON lines on stdin and stdout in headless mode. There is also a server with one WebSocket. The shim uses the first: it needs no listening port |
 | Tool approval | `--permission-mode strict` makes every tool ask. The default mode is `unrestricted`. It waits for the answer with no timeout of its own, so the timeout is the shim's |
 | A tool it was not started with | It still asks about it, then fails the call as not found whatever the answer. The shim refuses those itself |
@@ -183,7 +191,10 @@ Each of these was a place where the contract had been written around Pi.
    one thing a harness says about itself, for direct messages. It now also reads
    `nativeMemory`, which was declared and never used.
 3. **A harness can patch the lab's starting policy** (`HarnessUnderTest.policy`). The lab's
-   fixture opens two rooms and a category, which no one-room harness can be given.
+   fixture opens two rooms and a category, which no one-room harness can be given. The patch
+   may only take rooms away. A lab refuses to start for one that allows a tool, admits a
+   sender, changes the posture or names a room the fixture does not open
+   (`narrowingProblems`, `harness-policy.test.ts`).
 4. **The Docker rig takes the cell's harness as a part** (`CellKind`): the name of its image, its
    entry, and how to ask it for its version. The rig file, the runner and the probe had Pi's
    written in. A suite says which harness its cells hold with `setCell()`.
@@ -224,7 +235,13 @@ names the conversation alone when it picks a session back up.
    Code agent per room; its server mode; its Anthropic provider; MCP; cancel and steer (C14);
    approvals by an admin (C6).
 9. **The agent's id is kept in the shim's memory only.** A shim that restarts makes a new agent.
+   Which conversation the harness was given is kept in the door's memory only, in the same
+   way. A door that restarts over a home that still holds the old memory would give it a room
+   again, and it could be another one. Nothing clears the home but removing the cell.
 10. **Not every line of every check has a broken shim behind it**, as for Pi.
+    And two files of the Docker rig still name the second harness by hand: the probe finds
+    which files must not be writable by looking for Letta Code's folder, and the rig's entry
+    picks the adapter by name. `CellKind` does not carry those yet.
 11. **Mutation checks were run by hand, not committed.** Forty changes were made to the new code,
     one at a time: the veto saying yes on a timeout, on an error and on any truthy answer; strict
     mode dropped; each offline flag; the version pin; the preamble; the restart on a changed tool
@@ -234,6 +251,12 @@ names the conversation alone when it picks a session back up.
     rooms were refused for some other reason. The first of those was a real gap: a question
     arriving in the same write as the end of a turn was still passed to the door. The door says no
     to it, but the pump now says no first.
+    A second pass by another reader made twenty-five more, across the shim, the one-room rule,
+    the model list, the removal guard and the lab. Twenty-three turned a test red. Two did not,
+    both in the removal guard: letting the whole npm scope through, and skipping every lock
+    file. Each now has a test. That pass also found the two gaps in the one-room rule that
+    are closed above (a moved room, and a room under the listed one that is not a thread)
+    and that a harness's patch to the starting policy could loosen it.
 
 ## Choices made where the plan was open
 

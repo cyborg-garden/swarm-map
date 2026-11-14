@@ -495,6 +495,7 @@
         "C12",
         "C15",
         "C15t",
+        "C11n",
         "C16"
       ],
       "suiteCaughtIt": true
@@ -515,6 +516,7 @@
         "C12",
         "C15",
         "C15t",
+        "C11n",
         "C16"
       ],
       "failed": [
@@ -531,6 +533,7 @@
         "C12",
         "C15",
         "C15t",
+        "C11n",
         "C16"
       ],
       "suiteCaughtIt": true
@@ -586,6 +589,7 @@
         "C12",
         "C15",
         "C15t",
+        "C11n",
         "C16"
       ],
       "suiteCaughtIt": true
