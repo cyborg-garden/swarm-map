@@ -62,4 +62,13 @@ describe('what cleaning up may touch is what this worktree wrote down', () => {
       'image smlab-other:0123456789ab', 'image registry.example/smlab-rig:0123456789ab',
     ].join('\n'))).toEqual({ runs: [], images: [] })
   })
+
+  it('[U:lab-ledger] an image of another harness\'s cell, built here, is on the ledger too', () => {
+    const line = 'image smlab-cell:letta-code-0.34.60-0123456789ab'
+    expect(parseLedger(`${line}\n`).images).toEqual(['smlab-cell:letta-code-0.34.60-0123456789ab'])
+    // Still only names shaped like a lab image: a harness name is letters and dashes, then a version, then the source.
+    for (const bad of ['image smlab-cell:Letta-1.0-0123456789ab', 'image smlab-cell:letta-code-0123456789ab', 'image smlab-cell:../x-1.0-0123456789ab']) {
+      expect(parseLedger(`${bad}\n`).images, bad).toEqual([])
+    }
+  })
 })

@@ -128,8 +128,23 @@ function tryWrite(file: string): string {
   } catch (err) { return (err as NodeJS.ErrnoException).code ?? 'error' }
 }
 
-function piBinary(): string {
-  try { return execFileSync('sh', ['-c', 'readlink -f "$(command -v pi)"']).toString().trim() } catch { return '/usr/local/bin/pi' }
+function binary(name: string): string {
+  try { return execFileSync('sh', ['-c', `readlink -f "$(command -v ${name})"`]).toString().trim() } catch { return `/usr/local/bin/${name}` }
+}
+
+/**
+ * What a cell must not be able to change: the code that says no to a tool, the shim, the
+ * cell's entry and the harness itself. A cell image holds one harness, and this is told
+ * which by what is in it.
+ */
+function sealedFiles(): { gate: string; shim: string; entry: string; folder: string; binary: string } {
+  const second = `${SWARM_ROOT}/lib/runtimes/letta-code`
+  if (existsSync(`${second}/shim.ts`)) {
+    // Its veto is not a file of its own: the answer to "may this tool run?" is given in the pump.
+    return { gate: `${second}/wire.ts`, shim: `${second}/shim.ts`, entry: `${SWARM_ROOT}/conformance/docker/letta-code/cell-main.ts`, folder: second, binary: binary(path.basename('/usr/local/bin/letta')) }
+  }
+  const first = `${SWARM_ROOT}/lib/runtimes/pi`
+  return { gate: `${first}/cell/gate.ts`, shim: `${first}/shim.ts`, entry: `${SWARM_ROOT}/conformance/docker/cell-main.ts`, folder: first, binary: binary('pi') }
 }
 
 async function main(): Promise<void> {
@@ -157,6 +172,7 @@ async function main(): Promise<void> {
   const status = readFileSync('/proc/self/status', 'utf8')
   const field = (name: string): string => status.match(new RegExp(`^${name}:\\s*(\\S+)`, 'm'))?.[1] ?? '?'
   const secrets = findSecrets()
+  const sealed = sealedFiles()
   const report: ProbeReport = {
     who: os.hostname(),
     uid: process.getuid?.() ?? -1,
@@ -167,11 +183,11 @@ async function main(): Promise<void> {
     secrets: secrets.found,
     searched: { files: secrets.files, procs: secrets.procs },
     writes: {
-      'the gate': tryWrite(`${SWARM_ROOT}/lib/runtimes/pi/cell/gate.ts`),
-      'the shim': tryWrite(`${SWARM_ROOT}/lib/runtimes/pi/shim.ts`),
-      'the cell entry': tryWrite(`${SWARM_ROOT}/conformance/docker/cell-main.ts`),
-      'the folder the shim is in': tryWrite(`${SWARM_ROOT}/lib/runtimes/pi`),
-      'the harness binary': tryWrite(piBinary()),
+      'the gate': tryWrite(sealed.gate),
+      'the shim': tryWrite(sealed.shim),
+      'the cell entry': tryWrite(sealed.entry),
+      'the folder the shim is in': tryWrite(sealed.folder),
+      'the harness binary': tryWrite(sealed.binary),
       'the root of the disk': tryWrite('/'),
     },
     dockerSocket: ['/var/run/docker.sock', '/run/docker.sock'].some((p) => existsSync(p)),

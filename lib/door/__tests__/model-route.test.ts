@@ -196,6 +196,29 @@ describe('model route', () => {
     expect(route!.meter().requests).toBe(0)
   })
 
+  it('[U:model-list] the route answers "which models are there?" itself: no call goes to the provider and the key is not used', async () => {
+    // Some harnesses ask their endpoint for its models before the first call and refuse a model that is not listed.
+    await start()
+    const res = await fetch(`${route!.baseUrl}/models`, { headers: { authorization: `Bearer ${PLACEHOLDER}` } })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ object: 'list', data: [{ id: 'scripted', object: 'model' }] })
+    expect(model!.requests).toEqual([])
+    expect(model!.refused).toBe(0)
+    expect(route!.meter().requests).toBe(0)
+    expect(route!.presented).toEqual([])
+    // Only for this cell's placeholder, only as a GET, and only at that path.
+    expect((await fetch(`${route!.baseUrl}/models`, { headers: { authorization: 'Bearer something-else' } })).status).toBe(401)
+    expect((await fetch(`${route!.baseUrl}/models`, { method: 'POST', headers: { authorization: `Bearer ${PLACEHOLDER}` } })).status).toBe(404)
+    expect((await fetch(`${route!.baseUrl}/models/scripted`, { headers: { authorization: `Bearer ${PLACEHOLDER}` } })).status).toBe(404)
+    expect(route!.refused).toBe(1)
+  })
+
+  it('[U:model-list] a wire format that names no model list gets none', async () => {
+    const { modelsPath: _none, ...bare } = OPENAI_CHAT
+    await start(policy(), undefined, { shape: bare })
+    expect((await fetch(`${route!.baseUrl}/models`, { headers: { authorization: `Bearer ${PLACEHOLDER}` } })).status).toBe(404)
+  })
+
   it('[U:model-shape] the wire format is a part that can be swapped, not something the route assumes', async () => {
     // A made-up format: another path, the placeholder in another header, usage under other names.
     const toy: ModelShape = {

@@ -14,12 +14,11 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, DEFAULT_PREFIX, labPrefix, projectPattern, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
 import {
-  assertSealed, labImages, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT,
-  type LabImages, type ProbeTargets, type RigOptions, type RigVariant, type Source,
+  assertSealed, labImages, PI_CELL, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT,
+  type CellKind, type LabImages, type ProbeTargets, type RigOptions, type RigVariant, type Source,
 } from './compose.ts'
 import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from './report.ts'
 
@@ -34,7 +33,7 @@ export const RUN_ID = randomBytes(8).toString('hex')
 // started after a run was killed. This file is how it knows what was that
 // run's and what was not.
 const LEDGER = path.join(REPO, 'conformance', 'out', 'docker-ledger')
-const LAB_IMAGE = /^[a-z][a-z0-9]{1,15}-(cell:pi-[0-9.]+-|rig:)[0-9a-f]{12}$/
+const LAB_IMAGE = /^[a-z][a-z0-9]{1,15}-(cell:[a-z]+(-[a-z]+)*-[0-9.]+-|rig:)[0-9a-f]{12}$/
 
 export interface LabRun { prefix: string; id: string }
 export interface Ledger { runs: LabRun[]; images: string[] }
@@ -68,6 +67,14 @@ function noteRun(): void {
 
 // The images preflight() checked against the code under test. No rig starts from any other.
 let checked: LabImages | undefined
+
+// Which harness this process's cells hold. Pi, unless a suite says otherwise before its preflight.
+let cellKind: CellKind = PI_CELL
+/** Run this process's rigs with another harness in the cell. Anything checked for the last one is forgotten. */
+export function setCell(kind: CellKind): void {
+  cellKind = kind
+  checked = undefined
+}
 function checkedImages(): LabImages {
   if (!checked) throw new RefusingToRun('S0', 'the images were not compared with the code under test: preflight() comes first')
   return checked
@@ -113,7 +120,7 @@ export function seeImage(image: string): { label: string; listing: string } {
 /** Why these two images are not the code in `expected`. Empty when they are. */
 export function imageProblems(images: LabImages, expected: Source): string[] {
   return [
-    ...sourceProblems('cell', images.cell, seeImage(images.cell), expected),
+    ...sourceProblems('cell', images.cell, seeImage(images.cell), expected, cellKind.entry),
     ...sourceProblems('rig', images.rig, seeImage(images.rig), expected),
   ]
 }
@@ -129,18 +136,19 @@ export function preflight(): DockerFacts {
   if (!info.ok) throw new RefusingToRun('S0', 'the Docker daemon is not answering')
   // Read once, here. Every rig of this run is started from these two names.
   const source = readSource()
-  const images = labImages()
+  const images = labImages(undefined, undefined, cellKind)
   if (images.source !== source.hash) throw new RefusingToRun('S0', 'the code under test changed while it was being read')
   for (const image of [images.cell, images.rig]) {
     if (!tryDocker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) {
-      throw new RefusingToRun('S0', `image ${image} is not built for this code: run npm run conformance:docker:build`)
+      throw new RefusingToRun('S0', `image ${image} is not built for this code: run npm run conformance:docker:build${cellKind === PI_CELL ? '' : ` -- ${cellKind.harness}`}`)
     }
   }
   // Before anything is run from them: they hold this code, and say so.
   const problems = imageProblems(images, source)
   if (problems.length > 0) throw new RefusingToRun('S0', problems.join('; '))
-  const version = oneOff('version', ['--network', 'none', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1'], images.cell, ['pi', '--version'])
-  if (version.out.trim() !== PI_VERSION) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
+  const offline = Object.entries(cellKind.version.env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
+  const version = oneOff('version', ['--network', 'none', ...offline], images.cell, cellKind.version.command)
+  if (version.out.trim() !== cellKind.version.says) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
   const [server, system, arch] = info.out.trim().split('|')
   checked = images
   return { endpoint, server, os: system, arch, targets: findTargets(), images }
@@ -166,15 +174,15 @@ export function findTargets(): ProbeTargets {
  * its hash. The only step that uses the network, and never part of a test run.
  */
 export function buildImages(opts: { noCache?: boolean } = {}): LabImages {
-  const images = labImages()
-  for (const [target, tag] of [['cell', images.cell], ['rig', images.rig]] as const) {
+  const images = labImages(undefined, undefined, cellKind)
+  for (const [target, tag] of [[cellKind.target, images.cell], ['rig', images.rig]] as const) {
     note(`image ${tag}`)
     execFileSync('docker', ['build', ...(opts.noCache ? ['--no-cache'] : []), '--target', target, '--tag', tag, '--label', `${SOURCE_LABEL}=${images.source}`,
       '--file', path.join(REPO, 'conformance', 'docker', 'Dockerfile'), REPO],
     { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 })
   }
   // The source is read again: a file saved during the build would leave images that are not what their name says.
-  if (labImages().source !== images.source) throw new RefusingToRun('S0', 'the code changed during the build: build again')
+  if (labImages(undefined, undefined, cellKind).source !== images.source) throw new RefusingToRun('S0', 'the code changed during the build: build again')
   return images
 }
 
@@ -282,7 +290,7 @@ export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPo
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
   const nonce = randomBytes(4).toString('hex')
   const prefix = labPrefix()
-  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`, prefix, runId: RUN_ID, images: checkedImages() }
+  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`, prefix, runId: RUN_ID, images: checkedImages(), cell: cellKind }
   // F2 and F5 happen in here, before Docker is asked for anything.
   const project = renderRig(options).project
   const dir = mkdtempSync(path.join(os.tmpdir(), `${project}-`))
@@ -292,7 +300,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
   // `socket` only: an empty file of the rig's own, to be mounted where a Docker socket would be.
   if (request.variant === 'socket') writeFileSync(path.join(dir, 'docker.sock'), '')
   const first = renderRig(options)
-  if (request.variant === 'good') assertSealed(first)
+  if (request.variant === 'good') assertSealed(first, cellKind)
   const file = path.join(dir, 'compose.json')
   const compose = (args: string[], timeoutMs = 120_000): string => docker(['compose', '--project-name', project, '--file', file, ...args], { timeoutMs })
   const container = (service: string): string => `${project}-${service}-1`
@@ -304,7 +312,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
     const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, container('sink')]).trim()
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(sinkIp)) throw new Error(`the sink has no address (${sinkIp})`)
     const rig = renderRig({ ...options, sinkIp })
-    if (request.variant === 'good') assertSealed(rig)
+    if (request.variant === 'good') assertSealed(rig, cellKind)
     writeFileSync(file, JSON.stringify(rig.file, null, 2))
     // Only the two that are not up yet: naming the control again would send it to the sink a second time.
     compose(['up', '--detach', '--no-build', '--pull', 'never', 'door', 'cell'])
@@ -448,16 +456,25 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
 /** In a cell that starts on its own, the entry refuses an environment with anything shaped like a real credential. */
 export function cellRefuses(env: Record<string, string>): { code: number | null; out: string } {
   const flags = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
-  const r = oneOff('refuse', ['--network', 'none', '--read-only', '--tmpfs', '/tmp', ...flags], checkedImages().cell, ['node', `${SWARM_ROOT}/conformance/docker/cell-main.ts`], 60_000)
+  const r = oneOff('refuse', ['--network', 'none', '--read-only', '--tmpfs', '/tmp', ...flags], checkedImages().cell, ['node', `${SWARM_ROOT}/conformance/docker/${cellKind.entry}`], 60_000)
   return { code: r.code, out: r.out }
 }
 
-// `node conformance/docker/runner.ts build [--no-cache] | clean [--images]`
+// `node conformance/docker/runner.ts build [--no-cache] [harness] | clean [--images]`
 if (path.resolve(process.argv[1] ?? '') === import.meta.filename) {
-  const [command, flag, ...rest] = process.argv.slice(2)
+  const [command, ...args] = process.argv.slice(2)
+  // A harness may be named last, for `build`: its cell is built in place of Pi's.
+  const named = command === 'build' && args.length > 0 && !args[args.length - 1].startsWith('--') ? args.pop() : undefined
+  const [flag, ...rest] = args
+  if (named !== undefined) {
+    // Imported here, not at the top: a cell kind lives with its harness, and this file names none.
+    const { CELL_KINDS } = await import('./cells.ts')
+    if (!Object.hasOwn(CELL_KINDS, named)) { console.error(`no cell for that harness; one of: ${Object.keys(CELL_KINDS).join(', ')}`); process.exit(2) }
+    setCell(CELL_KINDS[named])
+  }
   if (command === 'build' && rest.length === 0 && (flag === undefined || flag === '--no-cache')) { preflightDockerOnly(); console.log(JSON.stringify(buildImages({ noCache: flag === '--no-cache' }))) }
   else if (command === 'clean' && rest.length === 0 && (flag === undefined || flag === '--images')) { preflightDockerOnly(); console.log(JSON.stringify(cleanLab({ images: flag === '--images' }))) }
-  else { console.error('usage: runner.ts build [--no-cache] | clean [--images]'); process.exit(2) }
+  else { console.error('usage: runner.ts build [--no-cache] [harness] | clean [--images]'); process.exit(2) }
 }
 
 function preflightDockerOnly(): void {

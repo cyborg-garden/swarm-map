@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { PROJECT_NAME, RefusingToRun } from '../../guards/preflight.ts'
+import { LETTA_CODE_CELL } from '../cells.ts'
 import {
   assertSealed, contextFiles, labImages, probeArgs, readSource, renderRig, rigEnv, RIG_VARIANTS, RUN_LABEL, sourceProblems,
   type RigOptions,
@@ -341,5 +342,26 @@ describe('an image is only used if it holds the code under test', () => {
     for (const text of ['', 'sh: not found\n', 'docker: Error response from daemon\n']) {
       expect(sourceProblems('rig', 'i', { label: expected.hash, listing: text }, expected).join('; '), text).toContain('its files could not be read')
     }
+  })
+
+  it('[U:compose] a cell of another harness has its own image name and entry, and is sealed the same way', () => {
+    const first = renderRig({ ...base, check: 'hold' })
+    const second = renderRig({ ...base, check: 'hold', cell: LETTA_CODE_CELL })
+    // Same code, same rig image; the cell image says which harness and version it holds.
+    expect(second.file.services.door.image).toBe(first.file.services.door.image)
+    expect(first.file.services.cell.image).toMatch(/-cell:pi-[0-9.]+-[0-9a-f]{12}$/)
+    expect(second.file.services.cell.image).toMatch(/-cell:letta-code-[0-9.]+-[0-9a-f]{12}$/)
+    expect(second.file.services.cell.command).toEqual(['node', '/opt/swarm/conformance/docker/letta-code/cell-main.ts'])
+    expect(first.file.services.door.environment.SMLAB_HARNESS).toBe('pi')
+    expect(second.file.services.door.environment.SMLAB_HARNESS).toBe('letta-code')
+    expect(() => assertSealed(second, LETTA_CODE_CELL)).not.toThrow()
+    // Held to the other harness, it is not that harness's sealed rig.
+    expect(() => assertSealed(second)).toThrow(/the cell runs another command than its entry/)
+    expect(() => assertSealed(first, LETTA_CODE_CELL)).toThrow(/the cell runs another command than its entry/)
+    // The file a cell image must hold to be this code's is its own entry.
+    const source = readSource()
+    const listing = Object.entries(source.files).filter(([rel]) => rel !== 'conformance/docker/letta-code/cell-main.ts').map(([rel, sum]) => `${sum}  ./${rel}`).join('\n')
+    expect(sourceProblems('cell', 'x', { label: source.hash, listing }, source)).toEqual([])
+    expect(sourceProblems('cell', 'x', { label: source.hash, listing }, source, LETTA_CODE_CELL.entry).join(' ')).toContain('conformance/docker/letta-code/cell-main.ts is missing')
   })
 })

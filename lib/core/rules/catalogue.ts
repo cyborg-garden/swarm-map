@@ -143,6 +143,14 @@ export const RULES: Rule[] = [
   { id: 'mem.dm-isolated', statement: 'A direct message is only delivered to a harness that keeps each session\'s files apart.',
     klass: 'security', kind: 'wall', reads: ['memory.dmIsolated'], surfaces: 'all', enforcer: 'door', tests: ['P:dm-isolated'], checks: [] },
 
+  // What the harness says about its own memory decides this (Capabilities.nativeMemory), so the
+  // rule names no shim check: the door keeps it for any harness that declares such a memory.
+  // That is also why it is a guardrail: the declaration comes from the shim, which sits in the
+  // cell. A shim that says it keeps no memory is given every room. Whoever deploys a harness
+  // knows which one it is, and can hold the policy to it with fitProblems() before a save.
+  { id: 'mem.one-scope', statement: 'A harness that keeps one memory for the whole agent is given one room, or one person\'s direct messages, and no more.',
+    klass: 'security', kind: 'guardrail', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.dm.users`], surfaces: 'all', enforcer: 'door', tests: ['U:one-scope', 'P:one-scope'], checks: [] },
+
   { id: 'san.in', statement: 'Pasted secrets are scrubbed before the harness sees them.',
     klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:scrub-in'], checks: [] },
   { id: 'san.out', statement: 'Secrets are redacted before a reply is posted, and a failed check posts nothing.',
