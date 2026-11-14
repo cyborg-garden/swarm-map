@@ -77,10 +77,45 @@ describe('the sealed rig', () => {
 
   it('[U:rig-compose] passes its own seal check, and so does no broken variant', () => {
     expect(() => assertSealed(rig())).not.toThrow()
-    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'writable', 'host-mount', 'blind-sink'])
+    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'])
     for (const variant of RIG_VARIANTS.filter((v) => v !== 'good')) {
       expect(() => assertSealed(rig({ variant })), variant).toThrow(RefusingToRun)
     }
+  })
+
+  it('[U:rig-compose] the seal check refuses every setting that shares something with the host or another container', () => {
+    const settings: Record<string, unknown> = {
+      ports: ['8080:8080'], privileged: true, network_mode: 'host', pid: 'host', ipc: 'host', userns_mode: 'host', uts: 'host', cgroup: 'host',
+      volumes_from: ['door'], links: ['sink'], external_links: ['x'], extra_hosts: ['h:192.0.2.1'], dns: ['192.0.2.1'], devices: ['/dev/null:/dev/x'],
+      cap_add: ['NET_RAW'], group_add: ['0'], env_file: ['x'], runtime: 'x', secrets: ['x'], configs: ['x'],
+    }
+    for (const [key, value] of Object.entries(settings)) {
+      for (const service of ['cell', 'door'] as const) {
+        const broken = rig()
+        Object.assign(broken.file.services[service], { [key]: value })
+        expect(() => assertSealed(broken), `${service} ${key}`).toThrow(new RegExp(`service ${service} sets ${key}`))
+      }
+    }
+  })
+
+  it('[U:rig-compose] the seal check refuses a cell that lost a hardening setting, or runs another command', () => {
+    const edits: [string, (cell: Record<string, unknown>) => void][] = [
+      ['capabilities', (cell) => { cell.cap_drop = [] }],
+      ['no-new-privileges', (cell) => { cell.security_opt = ['seccomp:unconfined'] }],
+      ['no-new-privileges', (cell) => { cell.security_opt = ['no-new-privileges:true', 'seccomp:unconfined'] }],
+      ['IPv6', (cell) => { cell.sysctls = {} }],
+      ['command', (cell) => { cell.command = ['sh', '-c', 'true'] }],
+    ]
+    for (const [what, edit] of edits) {
+      const broken = rig()
+      edit(broken.file.services.cell as unknown as Record<string, unknown>)
+      expect(() => assertSealed(broken), what).toThrow(new RegExp(what))
+    }
+    // The sidecar's side has no route out in the rig either, and only reads the shared folder.
+    const out = rig(); out.file.services.door.networks.push('outside')
+    expect(() => assertSealed(out)).toThrow(/the sidecar is on cell and outside/)
+    const rw = rig(); rw.file.services.door.volumes = ['lab:/tmp/smlab']
+    expect(() => assertSealed(rw)).toThrow(/the sidecar can write the shared folder/)
   })
 })
 
@@ -109,6 +144,27 @@ describe('each broken rig is broken in one named way', () => {
 
   it('[U:rig-compose] host-mount: a folder of this machine is mounted into the cell', () => {
     expect(rig({ variant: 'host-mount', hostDir: '/tmp/x' }).file.services.cell.volumes).toEqual(['lab:/tmp/smlab', '/tmp/x:/mnt/host:ro'])
+  })
+
+  it('[U:rig-compose] leaks-file: the model key is written to a file in the cell, and is in no environment and no command line', () => {
+    const { file } = rig({ variant: 'leaks-file' })
+    const cell = file.services.cell
+    expect(cell.command[0]).toBe('sh')
+    expect(cell.command.join(' ')).toContain(`> /tmp/leak-${nonce}`)
+    // Written in two halves, so the key is not in the command line of any process: only the file holds it.
+    expect(JSON.stringify(file)).not.toContain(`UPSTREAM-${nonce}`)
+    expect(cell.environment).toEqual(rig().file.services.cell.environment)
+    expect(cell.command.join(' ')).toContain('exec node /opt/swarm/conformance/docker/cell-main.ts')
+  })
+
+  it('[U:rig-compose] socket: something is mounted where a Docker socket would be', () => {
+    expect(rig({ variant: 'socket', hostDir: '/tmp/x' }).file.services.cell.volumes).toEqual(['lab:/tmp/smlab', '/tmp/x/docker.sock:/var/run/docker.sock:ro'])
+  })
+
+  it('[U:rig-compose] door-out: the sidecar is also put on the network the sink is on, and the cell is not', () => {
+    const { file } = rig({ variant: 'door-out' })
+    expect(file.services.door.networks).toEqual(['cell', 'outside'])
+    expect(file.services.cell).toEqual(rig().file.services.cell)
   })
 
   it('[U:rig-compose] blind-sink: the control is put where it cannot reach the sink', () => {

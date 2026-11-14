@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "docker",
-  "date": "2026-11-13",
+  "date": "2026-11-14",
   "runner": {
     "kind": "docker",
     "server": "29.5.2",
@@ -466,6 +466,18 @@
       "suiteCaughtIt": true
     },
     {
+      "shim": "leaks-file",
+      "mustFail": [
+        "S3",
+        "C8"
+      ],
+      "failed": [
+        "S3",
+        "C8"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
       "shim": "writable",
       "mustFail": [
         "S2"
@@ -482,6 +494,28 @@
       ],
       "failed": [
         "S3"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "socket",
+      "mustFail": [
+        "S1",
+        "S3"
+      ],
+      "failed": [
+        "S1",
+        "S3"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "door-out",
+      "mustFail": [
+        "S1"
+      ],
+      "failed": [
+        "S1"
       ],
       "suiteCaughtIt": true
     },

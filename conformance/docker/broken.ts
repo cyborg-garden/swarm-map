@@ -27,6 +27,10 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
     what: 'The model key of the run is planted in the cell container\'s environment',
     variant: 'leaks-env', seal: true, checks: ['C8', 'C9'], red: ['S3', 'C8'], green: ['S0', 'S1', 'S2', 'C9'],
   },
+  'leaks-file': {
+    what: 'The model key of the run is written to a file in the cell, and is in no environment and no command line',
+    variant: 'leaks-file', seal: true, checks: ['C8'], red: ['S3', 'C8'], green: ['S0', 'S1', 'S2'],
+  },
   'writable': {
     what: 'The cell runs as root on a disk it can write',
     variant: 'writable', seal: true, checks: [], red: ['S2'], green: ['S0', 'S1', 'S3'],
@@ -34,6 +38,14 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
   'host-mount': {
     what: 'A folder of this machine is mounted into the cell',
     variant: 'host-mount', seal: true, checks: [], red: ['S3'], green: ['S0', 'S1', 'S2'],
+  },
+  'socket': {
+    what: 'A file of the rig\'s own is mounted where a Docker socket would be',
+    variant: 'socket', seal: true, checks: [], red: ['S1', 'S3'], green: ['S0', 'S2'],
+  },
+  'door-out': {
+    what: 'The sidecar\'s container is also put on the network the sink is on',
+    variant: 'door-out', seal: true, checks: [], red: ['S1'], green: ['S0', 'S2', 'S3'],
   },
   'blind-sink': {
     what: 'The control is put where it cannot reach the sink, so the sink\'s log proves nothing',
