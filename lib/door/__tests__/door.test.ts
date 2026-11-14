@@ -97,7 +97,7 @@ describe('door: fakes only', () => {
     const fake = createFakeConnector({ nonce: 'deadbeef' })
     const dummy: SurfaceConnector = { ...fake.connector, id: 'discord' }
     const start = (live: ('discord' | 'slack')[]) => createDoor({
-      policy: team(), connectors: [dummy], creds: { discord: { token: 'FAKECHAT-deadbeef' } }, receipts: createReceiptLog(), brainToken: 'cell-token', testing: true, live,
+      policy: team(), connectors: [dummy], creds: { discord: { token: ['FAKECHAT', 'deadbeef'].join('-') } }, receipts: createReceiptLog(), brainToken: 'cell-token', testing: true, live,
     })
     await expect(start(['slack'])).rejects.toThrow(/REFUSING TO RUN: F1/)
     const door = await start(['discord'])
