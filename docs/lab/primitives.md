@@ -131,7 +131,7 @@ interface SurfacePolicy {
   rooms: RoomRule[];                     // first match wins; 'ignore' beats everything
   dm: { mode: 'closed' | 'allowlist' | 'pairing' | 'open'; users: PrincipalRef[] };
   bots: { mode: 'none' | 'mentions' | 'all'; inlineMentionOnly: boolean;
-          roles: string[]; maxAlternatingTurns: number };
+          roles: string[]; ids?: string[]; maxAlternatingTurns: number };
   invites: { mode: 'closed' | 'admins' | 'allowlisted' | 'open' };
   // Behaviour
   threadsRequireMention: boolean;
@@ -464,7 +464,7 @@ each gap they name is closed.
 | `addr.threads` | Threads need a mention too | Door | Wall | No | D |
 | `addr.free-rooms` | Named rooms need no mention | Door | Wall | No | D |
 | `addr.observe` | Unmentioned text is kept as context, never answered | Door verdict `observe` + buffer | Wall | No | D, C2 |
-| `bots.mode` | Other bots: none / mentions / all | Door | Wall | No | D |
+| `bots.mode` | Other bots: none / mentions / all, and only the named ones where any is named | Door | Wall | No | D |
 | `bots.inline-mention` | A reply-ping is not a mention | Door | Wall | No | D |
 | `bots.roles` | Bot sender must hold a role | Door, roles from `facts` | Wall | No | D |
 | `bots.loop` | At most N alternating bot turns | Door counter | Wall | No | D, P |

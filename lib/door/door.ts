@@ -12,7 +12,7 @@ import type { Decision, Event, Facts } from '../core/events.ts'
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId } from '../core/policy/types.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
-import type { ConnectorInbound, SurfaceConnector, SurfaceCreds } from './connector.ts'
+import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
 import type { Capabilities, Envelope, FromShim, Usage } from './protocol.ts'
 import type { Receipt, ReceiptLog } from './receipts.ts'
@@ -33,6 +33,15 @@ export interface DoorOptions {
   /** A turn with no `settled` by then is dead, and a late reply is dropped. */
   turnDeadlineMs?: number
   observeLimit?: number
+  /**
+   * Surfaces whose connector may be something other than the fake one. Empty
+   * by default, so a real connector has to be named here, on purpose, by
+   * whoever starts the door. Nothing in a test rig sets it without first
+   * proving the connector is pointed at a fake (see testing/fake-discord.ts).
+   */
+  live?: SurfaceId[]
+  /** A reply longer than this many characters is cut before it is posted. */
+  maxReplyChars?: number
   /** Allows the test-only fake surface in the policy. */
   testing?: boolean
   /** Test hook: never answer a tool request, to prove silence means no. */
@@ -56,14 +65,18 @@ interface Turn {
   turnId: string
   event: ConnectorInbound
   connector: SurfaceConnector
+  /** The bot-run count this turn was admitted under, so the re-check before posting asks the same question. */
+  botRun: number
   reply?: string
   timer: ReturnType<typeof setTimeout>
 }
 
 export async function createDoor(opts: DoorOptions): Promise<Door> {
-  // F1. No real connector exists in this slice, and none may be slipped in.
+  // F1. A connector that is not the fake one is refused unless its surface was named in `live`.
   for (const c of opts.connectors) {
-    if (c.id !== 'fake') throw new Error(`REFUSING TO RUN: F1 connector '${c.id}' is not the fake connector`)
+    if (c.id !== 'fake' && !(opts.live ?? []).includes(c.id)) {
+      throw new Error(`REFUSING TO RUN: F1 connector '${c.id}' is not the fake connector`)
+    }
   }
   const check = (p: PolicyRecord): void => {
     const errors = validatePolicy(p, { testing: opts.testing })
@@ -77,6 +90,15 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const observed = createObserveBuffer(opts.observeLimit)
   const turns = new Map<string, Turn>()
   const deadlineMs = opts.turnDeadlineMs ?? 120_000
+  const maxReplyChars = opts.maxReplyChars ?? 6000
+  // bots.loop: bot messages delivered in a row, per room, since a person was last delivered there.
+  // A thread counts with its parent, so a loop cannot carry on by moving into one.
+  // Where the policy names its bots, each named bot has a count of its own in a room. Where it does
+  // not, every bot in the room shares one, so a bot under a new id is not a new start.
+  const botRuns = new Map<string, Map<string, number>>()
+  const roomKey = (e: ConnectorInbound): string => `${e.surface}:${e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id}`
+  const botKey = (e: ConnectorInbound): string => ((policy.surfaces[e.surface]?.bots.ids ?? []).includes(e.sender.id) ? e.sender.id : '')
+  const runOf = (e: ConnectorInbound): number => botRuns.get(roomKey(e))?.get(botKey(e)) ?? 0
 
   // idle() bookkeeping: messages being handled plus live turns.
   let busy = 0
@@ -99,8 +121,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     kind, surface: e.surface, room: e.room.id, sender: e.sender.id, messageId: e.messageId,
     ...(turnId ? { turnId } : {}), ...(kind === 'inbound' ? { bytes: Buffer.byteLength(e.text) } : {}),
   })
-  const factsFor = (connector: SurfaceConnector, e: ConnectorInbound): Promise<Facts> =>
-    connector.facts({ principal: e.sender, room: e.room })
+  // The connector's facts, plus the one the door keeps itself. A connector cannot set the bot-run count.
+  const factsFor = async (connector: SurfaceConnector, e: ConnectorInbound, botRun = runOf(e)): Promise<Facts> =>
+    ({ ...await connector.facts({ principal: e.sender, room: e.room }), botTurnsInARow: botRun })
 
   const closeTurn = (turn: Turn): void => {
     if (!turns.delete(turn.turnId)) return
@@ -109,10 +132,20 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   }
 
   async function inbound(connector: SurfaceConnector, e: ConnectorInbound): Promise<void> {
-    const facts = await factsFor(connector, e)
+    // The lookup comes first. From the count being read to the count being written nothing waits,
+    // so messages that arrive together are counted one by one, not all against the same figure.
+    const looked = await connector.facts({ principal: e.sender, room: e.room })
+    const botRun = runOf(e)
+    const facts: Facts = { ...looked, botTurnsInARow: botRun }
     const d = decide(policy, e, facts)
     receipt(about(e, 'inbound'), d)
     if (d.verdict !== 'deliver' && d.verdict !== 'observe') return
+    // Counted when the message is admitted, not when it is answered, so a slow harness cannot let a burst through.
+    // A person who is heard starts every count in the room again.
+    if (d.verdict === 'deliver') {
+      if (!e.sender.isBot) botRuns.delete(roomKey(e))
+      else botRuns.set(roomKey(e), (botRuns.get(roomKey(e)) ?? new Map<string, number>()).set(botKey(e), botRun + 1))
+    }
 
     let text = e.text
     try {
@@ -162,7 +195,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       tools, whenBusy: 'queue', deadlineMs,
     }
     const turn: Turn = {
-      turnId, event: e, connector,
+      turnId, event: e, connector, botRun,
       timer: setTimeout(() => {
         receipt(about(e, 'outbound', turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness did not finish the turn in time.' })
         closeTurn(turn)
@@ -177,7 +210,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const e = turn.event
     const tag = about(e, 'outbound', turn.turnId)
     // Would this message still be delivered, and may this room still be answered, under the policy as it is now?
-    const facts = await factsFor(turn.connector, e)
+    const facts = await factsFor(turn.connector, e, turn.botRun)
     const again = decide(policy, e, facts)
     if (again.verdict !== 'deliver') {
       receipt(tag, { verdict: 'drop', rule: 'out.still-allowed', why: `The policy changed mid-turn: ${again.why}` })
@@ -193,9 +226,30 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       receipt(tag, { verdict: 'drop', rule: 'san.out', why: 'The outbound check failed, so nothing was posted.' })
       return
     }
-    await turn.connector.send(e.room, { text: clean.text, turnId: turn.turnId })
-    receipt({ ...tag, bytes: Buffer.byteLength(clean.text) }, out,
-      clean.findings.length > 0 ? clean.findings.map((f) => `${f.pattern} x${f.count}`).join(', ') : undefined)
+    // Cut after the redaction, so a secret cannot be split across the cut and survive it.
+    const chars = [...clean.text]
+    const cut = chars.length > maxReplyChars
+    const body = cut ? `${chars.slice(0, maxReplyChars).join('')}\n[cut: the reply was longer than this room allows]` : clean.text
+    await turn.connector.send(e.room, { text: body, turnId: turn.turnId, inReplyTo: e.messageId })
+    const notes = clean.findings.map((f) => `${f.pattern} x${f.count}`)
+    receipt({ ...tag, bytes: Buffer.byteLength(body) }, out, notes.length > 0 ? notes.join(', ') : undefined)
+    if (cut) receipt({ ...tag, bytes: Buffer.byteLength(body) }, { verdict: 'allow', rule: 'out.size', why: 'The reply was longer than the limit, so it was cut before it was posted.' }, `chars=${chars.length} limit=${maxReplyChars}`)
+  }
+
+  // in.once: a message is read once. An edit is not read again, and a reply to a message
+  // that was deleted while its turn ran is not posted.
+  function notice(n: NoticeEvent): void {
+    const tag = { kind: 'inbound' as const, surface: n.surface, room: n.room, messageId: n.messageId }
+    if (n.what === 'edit') {
+      receipt(tag, { verdict: 'drop', rule: 'in.once', why: 'An edited message is not read again.' })
+      return
+    }
+    for (const turn of [...turns.values()]) {
+      if (turn.event.surface !== n.surface || turn.event.messageId !== n.messageId) continue
+      receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'in.once', why: 'The message was deleted before it was answered, so nothing is posted.' })
+      shim?.link.send({ t: 'cancel', turnId: turn.turnId })
+      closeTurn(turn)
+    }
   }
 
   function fromShim(link: ShimLink, caps: Capabilities, msg: FromShim): void {
@@ -290,6 +344,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     if (!creds) throw new Error(`no credentials given for the ${connector.id} connector`)
     await connector.connect(creds)
     connector.onEvent((e) => {
+      if (e.kind === 'notice') return notice(e)
       if (e.kind !== 'inbound') return // invites are not built in this slice
       begin()
       void inbound(connector, e).catch((err) => {

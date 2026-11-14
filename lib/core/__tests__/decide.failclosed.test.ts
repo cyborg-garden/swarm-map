@@ -50,6 +50,15 @@ describe('decide() fails closed on a value it does not recognise', () => {
     expect(decide(p, bot, {})).toMatchObject({ verdict: 'drop', rule: 'ctl.valid' })
   })
 
+  it('[U:fail-closed] a list of named bots that is not a list of ids names no bot', () => {
+    const bot = say({ room: 'r-lounge', sender: { id: 'b-1', isBot: true } })
+    expect(decide(team({ [F + 'bots.mode']: 'all', [F + 'bots.ids']: ['b-1'] }), bot, { botTurnsInARow: 0 }).verdict).toBe('deliver')
+    // Text is searched by part, so text in place of a list would name every bot whose id is inside it.
+    for (const ids of ['b-1 and b-2', [7], [''], { 0: 'b-1' }]) {
+      expect(decide(team({ [F + 'bots.mode']: 'all', [F + 'bots.ids']: ids }), bot, { botTurnsInARow: 0 })).toMatchObject({ verdict: 'drop', rule: 'ctl.valid' })
+    }
+  })
+
   it('[U:fail-closed] a truthy string is not a yes', () => {
     const p = team({ [F + 'anyoneInAllowedRoom']: 'false' })
     expect(decide(p, say({ room: 'r-lounge', sender: 'u-stranger' }), {})).toMatchObject({ verdict: 'drop', rule: 'ctl.valid' })

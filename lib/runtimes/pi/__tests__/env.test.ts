@@ -6,7 +6,7 @@
 // missing, so they are pinned here.
 import { describe, expect, it } from 'vitest'
 import path from 'node:path'
-import { piArgs, piEnv, sessionDirFor } from '../shim.ts'
+import { piArgs, piEnv, sessionDirFor, systemPromptProblem } from '../shim.ts'
 
 const base = { agentDir: '/cell/agent', homeDir: '/cell/home' }
 
@@ -67,6 +67,22 @@ describe('the flags the shim gives Pi', () => {
     const args = piArgs({ ...o, tools: [] })
     expect(args).toContain('--no-builtin-tools')
     expect(args).not.toContain('--tools')
+  })
+
+  it('[U:pi-env] a system prompt is passed on as text, and Pi keeps its own when none is given', () => {
+    const args = piArgs({ ...o, tools: [], systemPrompt: 'You are Fern. You have no tools.' })
+    expect(args.slice(args.indexOf('--system-prompt'), args.indexOf('--system-prompt') + 2)).toEqual(['--system-prompt', 'You are Fern. You have no tools.'])
+    expect(piArgs({ ...o, tools: [] })).not.toContain('--system-prompt')
+  })
+
+  it('[U:pi-env] a system prompt that Pi would read as a file, or that is not plain text, is refused', () => {
+    // Pi reads a prompt that names a file as that file's contents.
+    expect(systemPromptProblem('package.json', process.cwd())).toMatch(/names a file/)
+    expect(systemPromptProblem(import.meta.filename, '/')).toMatch(/names a file/)
+    expect(systemPromptProblem('', '/')).toMatch(/empty/)
+    expect(systemPromptProblem('x'.repeat(4001), '/')).toMatch(/too long/)
+    expect(systemPromptProblem('You are\u0000 Fern', '/')).toMatch(/plain text/)
+    expect(systemPromptProblem('You are Fern.\nYou have no tools.', '/')).toBeUndefined()
   })
 
   it('[U:pi-env] a session that is picked up again says so, and only then', () => {

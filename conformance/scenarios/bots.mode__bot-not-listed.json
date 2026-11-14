@@ -1,0 +1,48 @@
+{
+  "id": "bots.mode/bot-not-listed",
+  "rule": "bots.mode",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "mentions",
+    "surfaces.fake.bots.ids": ["b-friend"]
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hi {{canary}}",
+        "room": "r-general",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        },
+        "mention": true,
+        "inlineMention": true
+      }
+    }
+  ],
+  "facts": {
+    "botTurnsInARow": 0
+  },
+  "expect": {
+    "heard": false,
+    "answered": false,
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.mode"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.bots.ids": ["b-friend", "b-other"]
+    },
+    "expect": {
+      "heard": true,
+      "answered": true,
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.mention"
+      },
+      "privilege": "guest"
+    }
+  }
+}

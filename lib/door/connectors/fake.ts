@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Facts, RoomRef } from '../../core/events.ts'
 import { toPrincipal, toRoom, type RoomInput, type SenderInput } from '../../core/normalise.ts'
-import type { ConnectorInbound, InviteEvent, SurfaceConnector } from '../connector.ts'
+import type { ConnectorInbound, InviteEvent, NoticeEvent, SurfaceConnector } from '../connector.ts'
 
 export interface SayInput {
   room: RoomInput
@@ -23,6 +23,8 @@ export interface FakeConnector {
   connector: SurfaceConnector
   /** Script one message into the room. Returns its message id. */
   say(input: SayInput): string
+  /** Script an edit or a delete of a message that was said. */
+  notice(what: NoticeEvent['what'], messageId: string, room: string): void
   /** Every post the door made. This is `answered`. */
   ledger: LedgerEntry[]
   /** Live facts the door will be given, by principal id. `delayMs` makes the lookup slow; `fail` makes it throw. */
@@ -30,7 +32,7 @@ export interface FakeConnector {
 }
 
 export function createFakeConnector(opts: { nonce: string }): FakeConnector {
-  const listeners: ((e: ConnectorInbound | InviteEvent) => void)[] = []
+  const listeners: ((e: ConnectorInbound | InviteEvent | NoticeEvent) => void)[] = []
   const ledger: LedgerEntry[] = []
   const facts: FakeConnector['facts'] = { rolesOf: {} }
   let connected = false
@@ -61,6 +63,9 @@ export function createFakeConnector(opts: { nonce: string }): FakeConnector {
 
   return {
     connector, ledger, facts,
+    notice(what, messageId, room) {
+      for (const cb of listeners) cb({ kind: 'notice', what, surface: 'fake', room, messageId })
+    },
     say(input) {
       const messageId = randomUUID()
       const event: ConnectorInbound = {

@@ -25,7 +25,6 @@ export const DEFERRED_FIELDS: DeferredField[] = [
   { path: 'surfaces.*.account', rule: 'keys.chat-token', atRest: label },
   { path: 'surfaces.*.dm.mode', rule: 'dm.pairing', atRest: (v) => v !== 'pairing' },
   { path: 'surfaces.*.bots.roles', rule: 'bots.roles', atRest: empty },
-  { path: 'surfaces.*.bots.maxAlternatingTurns', rule: 'bots.loop', atRest: is(4) },
   { path: 'surfaces.*.invites.mode', rule: 'invite.policy', atRest: is('closed') },
   { path: 'surfaces.*.approverRoles', rule: 'priv.approver-roles', atRest: empty },
   { path: 'tools.ask', rule: 'priv.approval', atRest: empty },
@@ -48,7 +47,7 @@ export const DEFERRED_FIELDS: DeferredField[] = [
 ]
 
 /** Committed count. May only go down. */
-export const DEFERRED_COUNT_CEILING = 23
+export const DEFERRED_COUNT_CEILING = 22
 
 export class UnrenderedError extends Error {
   readonly path: string

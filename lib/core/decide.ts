@@ -46,6 +46,9 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
   if (e.sender.isSelf) return drop('bots.no-self', 'The agent never answers itself.')
   if (e.sender.isBot) {
     if (surface.bots.mode === 'none') return drop('bots.mode', 'Other bots are ignored here.')
+    // Where bots are named, only those are heard. The id is the surface's own for the sender, never anything it wrote.
+    const named = surface.bots.ids ?? []
+    if (named.length > 0 && !named.includes(e.sender.id)) return drop('bots.mode', 'This bot is not one of the bots that are heard here.')
     pass('bots.mode')
   }
 
@@ -102,6 +105,20 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
     return pinged
       ? drop('bots.inline-mention', 'From a bot, a reply-ping is not a mention.')
       : drop('bots.mode', 'Bots are heard only when they address the agent.')
+  }
+
+  // A bot that would be heard is counted first. The count is the door's: how
+  // many bot messages in a row it has already delivered in this room with no
+  // person speaking in between. No count is not read as "none yet".
+  if (e.sender.isBot) {
+    const run = facts.botTurnsInARow
+    if (typeof run !== 'number' || !Number.isInteger(run) || run < 0) {
+      return drop('bots.loop', 'How many bot messages in a row were answered is not known, so this one is not.')
+    }
+    if (run >= surface.bots.maxAlternatingTurns) {
+      return drop('bots.loop', 'Too many bot messages in a row were answered here. A person has to speak first.')
+    }
+    pass('bots.loop')
   }
 
   const privilege = privilegeFor(admitted)

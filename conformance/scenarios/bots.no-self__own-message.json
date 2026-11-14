@@ -18,6 +18,9 @@
       }
     }
   ],
+  "facts": {
+    "botTurnsInARow": 0
+  },
   "expect": {
     "heard": false,
     "answered": false,

@@ -109,7 +109,6 @@ describe('decide() properties', () => {
       'mode': 'native',
       'surfaces.*.dm.mode': 'pairing',
       'surfaces.*.bots.roles': ['role-bots'],
-      'surfaces.*.bots.maxAlternatingTurns': 9,
       'surfaces.*.invites.mode': 'open',
       'surfaces.*.approverRoles': ['role-mod'],
       'tools.ask': ['shell'],

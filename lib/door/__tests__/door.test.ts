@@ -9,6 +9,7 @@ import {
   applyPatch, loadFixturePolicy, loadScenarios, scenarioPolicy, scenarioSteps, type Scenario,
 } from '../../../conformance/scenarios/load.ts'
 import { decide } from '../../core/decide.ts'
+import { toPrincipal, toRoom } from '../../core/normalise.ts'
 import { withHash } from '../../core/policy/canonical.ts'
 import type { PolicyRecord } from '../../core/policy/types.ts'
 import type { SurfaceConnector } from '../connector.ts'
@@ -92,6 +93,17 @@ describe('door: fakes only', () => {
     })).rejects.toThrow("REFUSING TO RUN: F1 connector 'discord' is not the fake connector")
   })
 
+  it('[P:fake-only] a connector that is not the fake one starts only when its surface is named as live', async () => {
+    const fake = createFakeConnector({ nonce: 'deadbeef' })
+    const dummy: SurfaceConnector = { ...fake.connector, id: 'discord' }
+    const start = (live: ('discord' | 'slack')[]) => createDoor({
+      policy: team(), connectors: [dummy], creds: { discord: { token: ['FAKECHAT', 'deadbeef'].join('-') } }, receipts: createReceiptLog(), brainToken: 'cell-token', testing: true, live,
+    })
+    await expect(start(['slack'])).rejects.toThrow(/REFUSING TO RUN: F1/)
+    const door = await start(['discord'])
+    await door.close()
+  })
+
   it('[P:fake-only] the fake connector refuses a token that is not from this run', async () => {
     const fake = createFakeConnector({ nonce: 'deadbeef' })
     // Built here, not written down, so the repo's secret scanner has nothing to stop on.
@@ -151,6 +163,7 @@ describe('door: properties', () => {
     rig = await startRig(genPolicy(rng(1)))
     const r = rng(2024)
     const seen = { deliver: 0, observe: 0, drop: 0 }
+    const botRuns = new Map<string, number>()
     for (let i = 0; i < 300; i++) {
       const policy = genPolicy(r)
       const canary = `CANARY-${i}-`
@@ -160,7 +173,11 @@ describe('door: properties', () => {
       const postsBefore = rig.fake.ledger.length
       rig.fake.say(event)
       await rig.door.idle()
-      const verdict = decide(policy, event, {}).verdict as keyof typeof seen
+      // The test's own count of bot messages delivered in a row, per room, kept apart from the door's.
+      const room = toRoom(event.room, event.isDm)
+      const key = room.kind === 'thread' ? (room.parentId ?? room.id) : room.id
+      const verdict = decide(policy, event, { botTurnsInARow: botRuns.get(key) ?? 0 }).verdict as keyof typeof seen
+      if (verdict === 'deliver') botRuns.set(key, toPrincipal(event.sender).isBot ? (botRuns.get(key) ?? 0) + 1 : 0)
       seen[verdict]++
       const heard = rig.shim.heard.length - heardBefore
       const posts = rig.fake.ledger.length - postsBefore
@@ -617,5 +634,152 @@ describe('door: receipts and heartbeat', () => {
     expect(() => rig!.door.setPolicy(stale)).toThrow(/hash: does not match/)
     expect(() => rig!.door.setPolicy(team({ agentId: 'someone-else' }))).toThrow(/agentId: belongs to another agent/)
     expect(rig.door.heartbeat().policyHash).toBe(team().hash)
+  })
+})
+
+describe('door: bot loops', () => {
+  const bot = { id: 'b-other', isBot: true }
+  const loopy = (max: number) => team({ [F + 'bots.mode']: 'all', [F + 'bots.maxAlternatingTurns']: max })
+  const verdicts = (r: Rig) => r.receipts.all().filter((x) => x.event.kind === 'inbound').map((x) => `${x.verdict}/${x.rule}`)
+
+  it('[P:bot-loop] after the limit, a bot is not heard again until a person is', async () => {
+    rig = await startRig(loopy(2))
+    for (let i = 0; i < 4; i++) { rig.fake.say({ room: 'r-lounge', sender: bot, text: `bot ${i}` }); await rig.door.idle() }
+    expect(verdicts(rig)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop', 'drop/bots.loop'])
+    expect(rig.shim.heard.map((e) => e.text)).toEqual(['bot 0', 'bot 1'])
+    expect(rig.fake.ledger).toHaveLength(2)
+
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'carry on' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'bot again' })
+    await rig.door.idle()
+    expect(verdicts(rig).slice(4)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms'])
+  })
+
+  it('[P:bot-loop] a person who is not heard does not reset the count, and a thread counts with its room', async () => {
+    rig = await startRig(loopy(1))
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'one' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: 'u-stranger', text: 'let it talk' })
+    await rig.door.idle()
+    rig.fake.say({ room: { id: 't-1', kind: 'thread', parentId: 'r-lounge' }, sender: bot, mention: true, inlineMention: true, text: 'two, in a thread' })
+    await rig.door.idle()
+    expect(verdicts(rig)).toEqual(['deliver/addr.free-rooms', 'drop/adm.users', 'drop/bots.loop'])
+  })
+
+  it('[P:bot-loop] the last bot turn under the limit is still answered: the re-check before posting uses the count it was admitted under', async () => {
+    rig = await startRig(loopy(1))
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'only one' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: only one'])
+  })
+
+  it('[P:bot-loop] a burst of bot messages that arrive together is still counted one by one', async () => {
+    rig = await startRig(loopy(2))
+    // A slow lookup holds every message of the burst at the same point before it is decided.
+    rig.fake.facts.delayMs = 50
+    for (let i = 0; i < 5; i++) rig.fake.say({ room: 'r-lounge', sender: bot, text: `burst ${i}` })
+    await rig.door.idle()
+    expect(verdicts(rig).sort()).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop', 'drop/bots.loop', 'drop/bots.loop'])
+    expect(rig.shim.heard).toHaveLength(2)
+  })
+
+  it('[P:bot-loop] each bot that is named has a count of its own, a burst from one is still counted, and only a person who is heard starts them again', async () => {
+    const friend = { id: 'b-friend', isBot: true }
+    rig = await startRig(team({ [F + 'bots.mode']: 'all', [F + 'bots.maxAlternatingTurns']: 2, [F + 'bots.ids']: ['b-other', 'b-friend'] }))
+    rig.fake.facts.delayMs = 30
+    for (let i = 0; i < 4; i++) rig.fake.say({ room: 'r-lounge', sender: bot, text: `other ${i}` })
+    await rig.door.idle()
+    expect(verdicts(rig).sort()).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop', 'drop/bots.loop'])
+    // The second bot has not used its own turns, in the room or in a thread of it.
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend 0' })
+    await rig.door.idle()
+    rig.fake.say({ room: { id: 't-1', kind: 'thread', parentId: 'r-lounge' }, sender: friend, mention: true, inlineMention: true, text: 'friend 1' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend 2' })
+    await rig.door.idle()
+    expect(verdicts(rig).slice(4)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.threads', 'drop/bots.loop'])
+    // A person who is not heard changes nothing. One who is heard starts both counts again.
+    rig.fake.say({ room: 'r-lounge', sender: 'u-stranger', text: 'go on' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'still stopped' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'go on' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'other again' })
+    rig.fake.say({ room: 'r-lounge', sender: friend, text: 'friend again' })
+    await rig.door.idle()
+    expect(verdicts(rig).slice(7)).toEqual(['drop/adm.users', 'drop/bots.loop', 'deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'deliver/addr.free-rooms'])
+  })
+
+  it('[P:bot-loop] with no bot named, every bot in a room shares one count, so a new bot is not a new start', async () => {
+    rig = await startRig(loopy(2))
+    for (const id of ['b-1', 'b-2', 'b-3']) { rig.fake.say({ room: 'r-lounge', sender: { id, isBot: true }, text: `from ${id}` }); await rig.door.idle() }
+    expect(verdicts(rig)).toEqual(['deliver/addr.free-rooms', 'deliver/addr.free-rooms', 'drop/bots.loop'])
+  })
+
+  it('[P:bot-loop] a limit of none answers no bot at all', async () => {
+    rig = await startRig(loopy(0))
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'hello' })
+    await rig.door.idle()
+    expect(verdicts(rig)).toEqual(['drop/bots.loop'])
+    expect(rig.shim.heard).toEqual([])
+  })
+})
+
+describe('door: reply size', () => {
+  it('[P:out-size] a reply over the limit is cut, after redaction, and the receipt says so', async () => {
+    rig = await startRig(team(), { door: { maxReplyChars: 40 } })
+    const secret = fakeSecret()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `x ${secret} ${'y'.repeat(200)}` })
+    await rig.door.idle()
+    const [post] = rig.fake.ledger
+    expect(post.text.startsWith('echo: x [redacted:github-token] yyy')).toBe(true)
+    expect([...post.text.split('\n')[0]]).toHaveLength(40)
+    expect(post.text).toContain('[cut:')
+    expect(post.text).not.toContain(secret.slice(0, 12))
+    expect(rig.receipts.all().map((x) => x.rule)).toContain('out.size')
+  })
+
+  it('[P:out-size] a reply at the limit is posted whole', async () => {
+    rig = await startRig(team(), { door: { maxReplyChars: 12 } })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'abcdef' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: abcdef'])
+    expect(rig.receipts.all().map((x) => x.rule)).not.toContain('out.size')
+  })
+})
+
+describe('door: a message is read once', () => {
+  it('[P:in-once] an edit is not read again, and leaves a receipt', async () => {
+    rig = await startRig(team())
+    const id = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'first' })
+    await rig.door.idle()
+    rig.fake.notice('edit', id, 'r-general')
+    await rig.door.idle()
+    expect(rig.shim.heard).toHaveLength(1)
+    expect(rig.fake.ledger).toHaveLength(1)
+    expect(explain(rig.receipts.all(), id).at(-1)).toContain('in.once')
+  })
+
+  it('[P:in-once] a reply to a message deleted mid-turn is not posted', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    const id = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'never mind' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    rig.fake.notice('delete', id, 'r-general')
+    await rig.door.idle()
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().map((x) => `${x.verdict}/${x.rule}`)).toEqual(['deliver/addr.mention', 'drop/in.once', 'drop/turn.known'])
+  })
+
+  it('[P:in-once] positive control: the same turn with no delete is posted', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'still here' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toHaveLength(1)
   })
 })

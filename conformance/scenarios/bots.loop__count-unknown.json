@@ -1,0 +1,37 @@
+{
+  "id": "bots.loop/count-unknown",
+  "rule": "bots.loop",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "all"
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "hello {{canary}}",
+        "room": "r-lounge",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.loop"
+    }
+  },
+  "twin": {
+    "facts": {
+      "botTurnsInARow": 0
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.free-rooms"
+      }
+    }
+  }
+}

@@ -84,6 +84,7 @@ export function shapeErrors(policy: unknown): string[] {
           oneOf(`${at}.bots.mode`, bots.mode, BOT_MODES)
           bool(`${at}.bots.inlineMentionOnly`, bots.inlineMentionOnly)
           texts(`${at}.bots.roles`, bots.roles)
+          if (bots.ids !== undefined) texts(`${at}.bots.ids`, bots.ids)
           if (!Number.isInteger(bots.maxAlternatingTurns) || (bots.maxAlternatingTurns as number) < 0) {
             bad(`${at}.bots.maxAlternatingTurns`, 'a whole number, 0 or more')
           }

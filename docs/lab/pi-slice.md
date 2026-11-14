@@ -4,6 +4,10 @@ This is the first slice of the harness-agnostic lab described in [`primitives.md
 built by following [`plan-pi.md`](plan-pi.md). Nothing here is wired into the Swarm Map app, the UI
 or any running agent. It is a library, a test rig and one command.
 
+One thing has been added since: a Discord connector and a launcher for one Pi agent in one
+channel. It is described in [`pi-discord.md`](pi-discord.md). Everything below about fakes still
+holds for every test: the connector is only ever tested against a fake Discord on loopback.
+
 ## In short
 
 - **One place decides.** `decide()` in `lib/core/` evaluates every "who may it hear and answer"
@@ -92,11 +96,13 @@ evidence.
 | Part | Where | Tested by |
 |---|---|---|
 | Policy record, hash, validation of every closed set | `lib/core/policy/` (`shape.ts` lists the sets) | `validate.test.ts`, `schema-coverage.test.ts` |
-| Rule catalogue (35 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
+| Rule catalogue (38 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
 | Pi's own rules (4) | `lib/runtimes/pi/rules.ts` | `rules.test.ts` |
-| `decide()` | `lib/core/decide.ts` | 38 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
+| `decide()` | `lib/core/decide.ts` | 41 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
 | Brain protocol, framing, shim client | `lib/door/protocol.ts`, `framing.ts`, `brain-server.ts`, `shim-client.ts` | `framing.test.ts`, `brain-server.test.ts` |
 | The door, fake connector, sanitizer, receipts, observe buffer | `lib/door/` | `door.test.ts` |
+| Discord connector, and the fake Discord it is tested against | `lib/door/connectors/discord.ts`, `lib/door/testing/fake-discord.ts` | `discord-connector.test.ts` |
+| Launcher for one Pi agent in one Discord channel | `lib/lab/pi-discord/` | `shared-channel.test.ts`, `launcher.test.ts` in CI; `pi-discord.docker.test.ts` on a machine with Docker |
 | Model route: key swap, token meter, budget | `lib/door/model-route.ts` | `model-route.test.ts` |
 | Spend ledger, by calendar month | `lib/door/spend-ledger.ts` | `spend-ledger.test.ts`, `model-route.test.ts` `[U:budget-ledger]` |
 | Model wire formats (one: OpenAI chat) | `lib/door/model-shapes.ts` | `model-route.test.ts` `[U:model-shape]` |
@@ -224,7 +230,7 @@ with that harness in the loop. Each matrix file ends with one line per rule, bui
 | Shown at process level (5) | `ctl.applied`, `addr.observe`, `tools.lists`, `tools.no-verdict`, `turn.one-reply` |
 | Shown only with Pi in the Docker cell (3) | `budget.cap` and `keys.model-route` (the route does its part at process level; that Pi has no other way to a model or a key is C9 and C8), `tools.posture` (C4p, with C10 behind it) |
 | Not claimed for Pi yet (2) | `priv.no-forged-identity` (waits on C13), `tools.unknown` (waits on C7) |
-| Need nothing from the harness (25) | Every "who may it hear and answer" rule, receipts, the sanitizer |
+| Need nothing from the harness (28) | Every "who may it hear and answer" rule, receipts, the sanitizer |
 
 A second harness starts with nothing in the first three rows until its own runs put it there.
 
@@ -245,7 +251,8 @@ or names a harness again.
 
 | Guard | What it does | Negative control |
 |---|---|---|
-| F1 | `createDoor()` refuses any connector that is not the fake one | A connector with id `discord` must be refused |
+| F1 | `createDoor()` refuses any connector that is not the fake one, unless whoever starts the door names that surface as live | A connector with id `discord` must be refused, and still refused when a different surface is named |
+| F7 | The fake Discord's rig refuses to start unless both Discord addresses are loopback, the bot token is the fake minted for that run, and the environment holds no Discord token, no token-shaped value and no pointer to a real secret file | The real REST and gateway hosts, a token from another run, a real-looking token and each kind of environment must be refused |
 | F2 | The exact environment each shim, broken ones included, is about to hand to Pi is checked against a list of credential names and shapes. It is a list: a credential it has not been taught goes through, which is why Pi's environment is also listed by hand | `DISCORD_BOT_TOKEN=x` must be refused, by the guard and by a lab handed a harness that carries it |
 | F4 | A reply only counts if it carries the scripted model's stamp for this run | The `chatty` shim's unstamped replies fail C1 |
 | F5 | Work dirs must really be under the temp dir (links are followed), outside the home directory and nowhere near an agent's home. The Docker runner refuses a Docker that is not a local socket, and a container that is not named for its own rig. It removes only what carries a lab project's label and is named for that project | A `~/.hermes-x` path and `DOCKER_HOST=ssh://...` must be refused, and a lab handed either kind of work dir must not start. A container of another rig must be refused. A container that carries a lab label under another name must be left alone |
@@ -442,10 +449,10 @@ build a matrix from it.
      receipt that says why;
    - **two rooms with different members still share files.** Nothing stops that yet. It belongs
      to `mem.scope`, which is not built.
-8. **Rules in the spec that are not built, and what happens instead.** `bots.roles`, `bots.loop`,
+8. **Rules in the spec that are not built, and what happens instead.** `bots.roles`,
    `dm.pairing` and `invite.policy` have no rule here. A policy that sets any of them away from its
-   resting value is refused outright. One resting value is not harmless: the bot loop limit rests
-   at 4 and nothing counts turns, so with bots allowed, two bots can answer each other without end.
+   resting value is refused outright. (`bots.loop` is built now: the door counts bot messages
+   delivered in a row in a room, and `decide()` stops at the limit.)
    A bot is admitted by the bots rules alone and is not checked against the user list. One model
    call can overshoot the cap, because the cap is checked before a call, not during it. A usage
    figure that is false but could be true (one token for a long reply) is believed. So is a

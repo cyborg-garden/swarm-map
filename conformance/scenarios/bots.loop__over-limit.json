@@ -1,0 +1,41 @@
+{
+  "id": "bots.loop/over-limit",
+  "rule": "bots.loop",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.bots.mode": "all",
+    "surfaces.fake.bots.maxAlternatingTurns": 2
+  },
+  "steps": [
+    {
+      "say": {
+        "text": "and another thing {{canary}}",
+        "room": "r-lounge",
+        "sender": {
+          "id": "b-other",
+          "isBot": true
+        }
+      }
+    }
+  ],
+  "facts": {
+    "botTurnsInARow": 2
+  },
+  "expect": {
+    "receipt": {
+      "verdict": "drop",
+      "rule": "bots.loop"
+    }
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.bots.maxAlternatingTurns": 3
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "deliver",
+        "rule": "addr.free-rooms"
+      }
+    }
+  }
+}
