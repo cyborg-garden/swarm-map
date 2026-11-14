@@ -9,6 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { decide } from '../core/decide.ts'
 import type { Decision, Event, Facts } from '../core/events.ts'
+import { fitProblems } from '../core/policy/fit.ts'
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId } from '../core/policy/types.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
@@ -135,6 +136,14 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     }
     if (!shim) {
       receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'turn.no-harness', why: 'No harness is connected, so the message was not delivered.' })
+      return
+    }
+    // A harness that keeps one memory for the whole agent is given one conversation. A policy
+    // that opens more is refused for it when it is set; this is the same check at the last
+    // moment, for a harness that connected under a policy already in place.
+    const misfit = fitProblems(policy, shim.caps)
+    if (misfit.length > 0) {
+      receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'mem.one-scope', why: misfit[0] })
       return
     }
     // A DM must not land where a room's turn can read it back. The session key
@@ -305,6 +314,8 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     setPolicy(next) {
       check(next)
       if (next.agentId !== policy.agentId) throw new Error('policy refused: agentId: belongs to another agent')
+      const misfit = shim ? fitProblems(next, shim.caps) : []
+      if (misfit.length > 0) throw new Error(`policy refused: ${misfit.join('; ')}`)
       policy = next
     },
     heartbeat: () => ({ agentId: policy.agentId, policyHash: policy.hash, caps: shim?.caps, ts: new Date().toISOString() }),

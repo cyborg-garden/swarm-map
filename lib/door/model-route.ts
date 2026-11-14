@@ -148,6 +148,12 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       return fail(res, 401, 'model route: not the placeholder for this cell')
     }
     const url = new URL(req.url ?? '/', 'http://local')
+    // "Which models are there?" is answered here, from the price list. No call is made for it.
+    if (req.method === 'GET' && shape.modelsPath !== undefined && url.pathname === shape.modelsPath) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ object: 'list', data: Object.keys(opts.prices).map((id) => ({ id, object: 'model' })) }))
+      return
+    }
     if (req.method !== 'POST' || url.pathname !== shape.path) {
       return fail(res, 404, `model route: only ${shape.id} calls (POST ${shape.path}) are forwarded`)
     }

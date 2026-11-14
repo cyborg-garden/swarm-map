@@ -105,7 +105,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
   const listen = o.remote ? '0.0.0.0' : undefined
   const placeholder = `PLACEHOLDER-${nonce}`
   const policy = (patch: Record<string, unknown> = {}): PolicyRecord =>
-    withHash(applyPatch(loadFixturePolicy('policy-team.json'), { ...o.policy, ...patch }))
+    withHash(applyPatch(loadFixturePolicy('policy-team.json'), { ...o.harness.policy, ...o.policy, ...patch }))
 
   const hostCanary = { name: `LABHOST_CANARY_${nonce.toUpperCase()}`, value: `host-env-${randomBytes(6).toString('hex')}` }
   const closers: (() => Promise<void> | void)[] = [

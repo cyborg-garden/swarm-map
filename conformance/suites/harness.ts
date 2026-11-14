@@ -44,6 +44,12 @@ export interface HarnessUnderTest {
   build: 'real' | 'fake'
   /** The wire format it speaks to the model route. */
   modelShape: ModelShape
+  /**
+   * A patch to the lab's starting policy, for a harness the door would otherwise give
+   * nothing: the lab's fixture opens several rooms, and a harness with one memory for
+   * the whole agent may be given one. A check's own patch still goes on top.
+   */
+  policy?: Record<string, unknown>
   /** Native calls of class `shell` that touch a file, dump the environment to a file, and run one command line. */
   shell: { touch(file: string): NativeToolCall; dumpEnv(file: string): NativeToolCall; exec(command: string): NativeToolCall }
   /** Where a tool started by this harness would write `name` so the lab can see it. */

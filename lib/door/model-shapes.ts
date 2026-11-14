@@ -30,6 +30,13 @@ export interface ModelShape {
   path: string
   /** The same call on the provider, relative to its base URL. */
   upstreamPath: string
+  /**
+   * Where a harness asks which models exist, if this format has such a call. Always GET.
+   * Some harnesses ask before their first call and refuse a model that is not listed. The
+   * route answers it itself, from the models it has a price for: nothing is forwarded,
+   * the real key is not used, and nothing is charged.
+   */
+  modelsPath?: string
   /** What the cell presented where a key would go, or undefined if nothing was. */
   presented(headers: IncomingHttpHeaders): string | undefined
   /** The headers that carry the real key to the provider. */
@@ -58,6 +65,7 @@ export const OPENAI_CHAT: ModelShape = {
   id: 'openai-chat',
   path: '/v1/chat/completions',
   upstreamPath: '/chat/completions',
+  modelsPath: '/v1/models',
   presented(headers) {
     const m = /^Bearer (.+)$/.exec(headers.authorization ?? '')
     return m?.[1]

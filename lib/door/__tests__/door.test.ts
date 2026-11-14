@@ -273,6 +273,59 @@ describe('door: a DM needs a harness that keeps sessions apart', () => {
   })
 })
 
+describe('door: a harness with one memory for the whole agent is given one conversation', () => {
+  const brainToken = 'cell-test-token'
+  const oneMemory = { nativeMemory: 'always-on' as const }
+  const oneRoom = () => team({ [F + 'rooms']: [{ match: { room: 'r-general' }, mode: 'free' }] })
+
+  it('[P:one-scope] under a policy that opens more, nothing is delivered to it, and the receipt says why', async () => {
+    // The team fixture opens two rooms and a category.
+    rig = await startRig(team(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, oneMemory)
+    const first = rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'in the lounge' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'in general' })
+    await rig.door.idle()
+    expect(shim.heard).toEqual([])
+    expect(rig.fake.ledger).toEqual([])
+    expect(explain(rig.receipts.all(), first).at(-1)).toMatch(/^inbound  drop  mem\.one-scope  mem\.one-scope: this harness keeps one memory for the whole agent/)
+    shim.client.close()
+  })
+
+  it('[P:one-scope] positive control: under a policy that opens one room, it is given that room', async () => {
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, oneMemory)
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', text: 'in general' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-general'])
+    expect(rig.fake.ledger.map((p) => p.room)).toEqual(['r-general'])
+    shim.client.close()
+  })
+
+  it('[P:one-scope] positive control: a harness with no memory of its own is given every room of the same policy', async () => {
+    rig = await startRig(team(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, { nativeMemory: 'none' })
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'in the lounge' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'in general' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey).sort()).toEqual(['fake:room:r-general', 'fake:room:r-lounge'])
+    shim.client.close()
+  })
+
+  it('[P:one-scope] a change of policy that would open a second room is refused while that harness is connected, and the old policy stays', async () => {
+    rig = await startRig(oneRoom(), { noShim: true, door: { brainToken } })
+    const shim = await bareShim(rig, brainToken, oneMemory)
+    const before = rig.door.policy().hash
+    expect(() => rig!.door.setPolicy(team({ version: 2 }))).toThrow(/^policy refused: mem\.one-scope/)
+    expect(rig.door.policy().hash).toBe(before)
+    // Moving the one room is not opening a second.
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    rig.fake.say({ room: 'r-lounge', sender: 'u-alice', text: 'moved' })
+    await rig.door.idle()
+    expect(shim.heard.map((e) => e.sessionKey)).toEqual(['fake:room:r-lounge'])
+    shim.client.close()
+  })
+})
+
 describe('door: sanitizer', () => {
   const outboundOnly = (): Sanitizer => {
     const real = createSanitizer()
