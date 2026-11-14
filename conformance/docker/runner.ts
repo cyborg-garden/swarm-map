@@ -2,24 +2,83 @@
 // reads the result from outside, and takes the rig down again.
 //
 // It only ever touches what it made. Every object carries the rig's project
-// name (smlab-<nonce>), every stop and removal names that project, and
-// nothing here prunes. It refuses a Docker that is not a local socket, an
-// image that is not built, and a rig whose environment holds anything shaped
-// like a real credential, before a container exists.
+// name (<prefix>-<nonce>) and the id of the run that made it, every stop and
+// removal names that project, and nothing here prunes. It refuses a Docker
+// that is not a local socket, an image that was not built from the code under
+// test, and a rig whose environment holds anything shaped like a real
+// credential, before a rig exists.
 import { execFile, execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, PROJECT_NAME, RefusingToRun } from '../guards/preflight.ts'
+import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, DEFAULT_PREFIX, labPrefix, projectPattern, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
-import { assertSealed, CELL_IMAGE, probeArgs, renderRig, RIG_IMAGE, SWARM_ROOT, type ProbeTargets, type RigOptions, type RigVariant } from './compose.ts'
+import {
+  assertSealed, labImages, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT,
+  type LabImages, type ProbeTargets, type RigOptions, type RigVariant, type Source,
+} from './compose.ts'
 import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from './report.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
+
+/** This process's run. Everything it makes is labelled with it, and it removes nothing that is not. */
+export const RUN_ID = randomBytes(8).toString('hex')
+
+// What this worktree has made, written down as it is made: one
+// `run <prefix> <id>` line for each run that started a container, one
+// `image <name>` line for each image built here. `clean` is another process,
+// started after a run was killed. This file is how it knows what was that
+// run's and what was not.
+const LEDGER = path.join(REPO, 'conformance', 'out', 'docker-ledger')
+const LAB_IMAGE = /^[a-z][a-z0-9]{1,15}-(cell:pi-[0-9.]+-|rig:)[0-9a-f]{12}$/
+
+export interface LabRun { prefix: string; id: string }
+export interface Ledger { runs: LabRun[]; images: string[] }
+
+/** The ledger's runs and images. A line that is not exactly a run or a per-source lab image is dropped. */
+export function parseLedger(text: string): Ledger {
+  const runs = new Map<string, LabRun>()
+  const images = new Set<string>()
+  for (const line of text.split('\n')) {
+    const run = /^run ([a-z][a-z0-9]{1,15}) ([0-9a-f]{16})$/.exec(line)
+    if (run) runs.set(`${run[1]} ${run[2]}`, { prefix: run[1], id: run[2] })
+    const image = /^image (\S+)$/.exec(line)
+    if (image && LAB_IMAGE.test(image[1])) images.add(image[1])
+  }
+  return { runs: [...runs.values()], images: [...images] }
+}
+function readLedger(): Ledger {
+  try { return parseLedger(readFileSync(LEDGER, 'utf8')) } catch { return { runs: [], images: [] } }
+}
+function note(line: string): void {
+  mkdirSync(path.dirname(LEDGER), { recursive: true })
+  appendFileSync(LEDGER, `${line}\n`)
+}
+let noted = false
+/** Called before this process starts its first container. */
+function noteRun(): void {
+  if (noted) return
+  note(`run ${labPrefix()} ${RUN_ID}`)
+  noted = true
+}
+
+// The images preflight() checked against the code under test. No rig starts from any other.
+let checked: LabImages | undefined
+function checkedImages(): LabImages {
+  if (!checked) throw new RefusingToRun('S0', 'the images were not compared with the code under test: preflight() comes first')
+  return checked
+}
+
+/** A one-off container of this run, outside any rig. It removes itself when it stops. */
+function oneOff(kind: 'version' | 'lookup' | 'refuse' | 'source', flags: string[], image: string, command: string[], timeoutMs?: number): { ok: boolean; out: string; code: number | null } {
+  noteRun()
+  const name = `${labPrefix()}-${randomBytes(4).toString('hex')}-${kind}`
+  return tryDocker(['run', '--rm', '--name', name, '--label', `${RUN_LABEL}=${RUN_ID}`, '--pull', 'never', ...flags, image, ...command], { timeoutMs })
+}
 
 /** The environment the docker CLI gets: listed by hand, nothing else passed down. */
 function dockerEnv(): NodeJS.ProcessEnv {
@@ -41,24 +100,50 @@ function tryDocker(args: string[], opts: { timeoutMs?: number } = {}): { ok: boo
 }
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; targets: ProbeTargets }
+export interface DockerFacts { endpoint: string; server: string; os: string; arch: string; targets: ProbeTargets; images: LabImages }
 
-/** S0, the part that needs no rig: Docker is local, both images are built, and the cell holds the pinned harness. */
+/** What an image says it was built from, and the hash of every file it really holds under the lab's folder. */
+export function seeImage(image: string): { label: string; listing: string } {
+  const label = tryDocker(['image', 'inspect', '--format', `{{index .Config.Labels "${SOURCE_LABEL}"}}`, image])
+  const listing = oneOff('source', ['--network', 'none', '--read-only', '--entrypoint', 'sh'], image,
+    ['-c', `cd ${SWARM_ROOT} && find . -type f -print0 | xargs -0 sha256sum`], 60_000)
+  return { label: label.ok ? label.out.trim() : '', listing: listing.ok ? listing.out : '' }
+}
+
+/** Why these two images are not the code in `expected`. Empty when they are. */
+export function imageProblems(images: LabImages, expected: Source): string[] {
+  return [
+    ...sourceProblems('cell', images.cell, seeImage(images.cell), expected),
+    ...sourceProblems('rig', images.rig, seeImage(images.rig), expected),
+  ]
+}
+
+/**
+ * S0, the part that needs no rig: Docker is local, both images were built
+ * from the code under test, and the cell holds the pinned harness.
+ */
 export function preflight(): DockerFacts {
   const endpoint = tryDocker(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).out.trim()
   assertLocalDocker({ dockerHost: process.env.DOCKER_HOST, contextEndpoint: process.env.DOCKER_HOST ? process.env.DOCKER_HOST : endpoint })
   const info = tryDocker(['info', '--format', '{{.ServerVersion}}|{{.OperatingSystem}}|{{.Architecture}}'])
   if (!info.ok) throw new RefusingToRun('S0', 'the Docker daemon is not answering')
-  for (const image of [CELL_IMAGE, RIG_IMAGE]) {
+  // Read once, here. Every rig of this run is started from these two names.
+  const source = readSource()
+  const images = labImages()
+  if (images.source !== source.hash) throw new RefusingToRun('S0', 'the code under test changed while it was being read')
+  for (const image of [images.cell, images.rig]) {
     if (!tryDocker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) {
-      throw new RefusingToRun('S0', `image ${image} is not built: run npm run conformance:docker:build`)
+      throw new RefusingToRun('S0', `image ${image} is not built for this code: run npm run conformance:docker:build`)
     }
   }
-  const name = `smlab-${randomBytes(4).toString('hex')}-version`
-  const version = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1', CELL_IMAGE, 'pi', '--version'])
+  // Before anything is run from them: they hold this code, and say so.
+  const problems = imageProblems(images, source)
+  if (problems.length > 0) throw new RefusingToRun('S0', problems.join('; '))
+  const version = oneOff('version', ['--network', 'none', '-e', 'PI_OFFLINE=1', '-e', 'PI_TELEMETRY=0', '-e', 'PI_SKIP_VERSION_CHECK=1'], images.cell, ['pi', '--version'])
   if (version.out.trim() !== PI_VERSION) throw new RefusingToRun('S0', `the cell image does not hold the pinned harness version (${version.out.trim().slice(0, 40) || 'no answer'})`)
   const [server, system, arch] = info.out.trim().split('|')
-  return { endpoint, server, os: system, arch, targets: findTargets() }
+  checked = images
+  return { endpoint, server, os: system, arch, targets: findTargets(), images }
 }
 
 /**
@@ -69,60 +154,100 @@ export function preflight(): DockerFacts {
  * the checks that need it then fail rather than pass untried.
  */
 export function findTargets(): ProbeTargets {
-  const lookup = tryDocker(['run', '--rm', '--name', `smlab-${randomBytes(4).toString('hex')}-lookup`, '--pull', 'never', RIG_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
+  const lookup = oneOff('lookup', [], checkedImages().rig, ['node', `${SWARM_ROOT}/conformance/docker/lookup.ts`])
   let found: Partial<ProbeTargets> = {}
   try { found = JSON.parse(lookup.out.trim().split('\n').pop() ?? '{}') as Partial<ProbeTargets> } catch { /* nothing found */ }
   const text = (v: unknown): string => (typeof v === 'string' ? v : '')
   return { hostIp: text(found.hostIp), publicIp: text(found.publicIp), resolverIp: text(found.resolverIp), resolverIp6: text(found.resolverIp6) }
 }
 
-/** Build both images. The only step that uses the network, and never part of a test run. */
-export function buildImages(): void {
-  for (const [target, tag] of [['cell', CELL_IMAGE], ['rig', RIG_IMAGE]] as const) {
-    execFileSync('docker', ['build', '--target', target, '--tag', tag, '--file', path.join(REPO, 'conformance', 'docker', 'Dockerfile'), REPO],
-      { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 })
+/**
+ * Build both images, named for the code they are built from and labelled with
+ * its hash. The only step that uses the network, and never part of a test run.
+ */
+export function buildImages(opts: { noCache?: boolean } = {}): LabImages {
+  const images = labImages()
+  for (const [target, tag] of [['cell', images.cell], ['rig', images.rig]] as const) {
+    note(`image ${tag}`)
+    execFileSync('docker', ['build', ...(opts.noCache ? ['--no-cache'] : []), '--target', target, '--tag', tag, '--label', `${SOURCE_LABEL}=${images.source}`,
+      '--file', path.join(REPO, 'conformance', 'docker', 'Dockerfile'), REPO],
+    { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 })
   }
+  // The source is read again: a file saved during the build would leave images that are not what their name says.
+  if (labImages().source !== images.source) throw new RefusingToRun('S0', 'the code changed during the build: build again')
+  return images
 }
 
 /**
  * From lines of `<name> <compose project>`, the names that are the lab's own.
  * Two things must both hold: the project is named like a rig, and the name
  * starts with that project. A label alone is a claim anyone can make, so
- * nothing is ever removed whose own name does not begin `smlab-`.
+ * nothing is ever removed whose own name does not begin with the lab's prefix.
  */
-export function ownedNames(lines: string[]): string[] {
+export function ownedNames(lines: string[], prefix: string = DEFAULT_PREFIX): string[] {
+  const rig = projectPattern(prefix)
   return lines.map((line) => line.trim().split(' ')).filter(([name, project, ...rest]) =>
-    rest.length === 0 && PROJECT_NAME.test(project ?? '') && (name.startsWith(`${project}-`) || name.startsWith(`${project}_`)),
+    rest.length === 0 && rig.test(project ?? '') && (name.startsWith(`${project}-`) || name.startsWith(`${project}_`)),
   ).map(([name]) => name)
 }
 
 /**
- * The one-off containers a run starts outside any rig (`smlab-<nonce>-version`, `-lookup`, `-refuse`).
+ * The one-off containers a run starts outside any rig (`<prefix>-<nonce>-version`, `-lookup`, `-refuse`, `-source`).
  * Each removes itself when it stops; one is only left behind if the run was killed while it was up.
  */
-export function strayRunNames(names: string[]): string[] {
-  return names.map((name) => name.trim()).filter((name) => /^smlab-[0-9a-f]{8}-(version|lookup|refuse)$/.test(name))
+export function strayRunNames(names: string[], prefix: string = DEFAULT_PREFIX): string[] {
+  const stray = new RegExp(`^${prefix}-[0-9a-f]{8}-(version|lookup|refuse|source)$`)
+  return names.map((name) => name.trim()).filter((name) => stray.test(name))
 }
 
-/** Names of the lab's own containers, networks and volumes: anything that belongs to a compose project named like a rig, and is named for it. */
-export function labObjects(): { containers: string[]; networks: string[]; volumes: string[] } {
-  const list = (args: string[]): string[] => ownedNames(docker(args).split('\n').filter((l) => l.trim() !== ''))
-  const label = '{{.Name}} {{.Label "com.docker.compose.project"}}'
-  return {
-    containers: list(['ps', '-a', '--format', '{{.Names}} {{.Label "com.docker.compose.project"}}']),
-    networks: list(['network', 'ls', '--format', label]),
-    volumes: list(['volume', 'ls', '--format', label]),
+export interface LabObjects { containers: string[]; networks: string[]; volumes: string[] }
+
+/**
+ * Names of the containers, networks and volumes made by the given runs: by
+ * default, this process's own. Three things must all hold: the object carries
+ * that run's label, it belongs to a compose project named like a rig of this
+ * prefix (or is a one-off container named like one), and it is named for it.
+ * Another run's objects are never listed, whatever they are called.
+ */
+export function labObjects(runs: LabRun[] = [{ prefix: labPrefix(), id: RUN_ID }]): LabObjects {
+  const found: LabObjects = { containers: [], networks: [], volumes: [] }
+  const lines = (args: string[]): string[] => docker(args).split('\n').filter((l) => l.trim() !== '')
+  for (const { prefix, id } of runs) {
+    if (!/^[0-9a-f]{16}$/.test(id) || !/^[a-z][a-z0-9]{1,15}$/.test(prefix)) continue
+    const mine = ['--filter', `label=${RUN_LABEL}=${id}`]
+    const label = '{{.Name}} {{.Label "com.docker.compose.project"}}'
+    found.containers.push(...ownedNames(lines(['ps', '-a', ...mine, '--format', '{{.Names}} {{.Label "com.docker.compose.project"}}']), prefix))
+    found.containers.push(...strayRunNames(lines(['ps', '-a', ...mine, '--format', '{{.Names}}']), prefix))
+    found.networks.push(...ownedNames(lines(['network', 'ls', ...mine, '--format', label]), prefix))
+    found.volumes.push(...ownedNames(lines(['volume', 'ls', ...mine, '--format', label]), prefix))
   }
+  return found
 }
 
-/** Remove what a run left behind. By name, one at a time, and only what labObjects() lists, plus a run's own one-off containers. */
-export function cleanLab(): { containers: string[]; networks: string[]; volumes: string[] } {
-  const left = labObjects()
-  left.containers.push(...strayRunNames(docker(['ps', '-a', '--format', '{{.Names}}']).split('\n')))
+/**
+ * Remove what this worktree's runs left behind: by name, one at a time, and
+ * only what labObjects() lists for the runs in the ledger. With `images`, also
+ * the images this worktree built, by their exact names and without force, so
+ * one that a container still uses stays. Images built anywhere else, and the
+ * runs of any other worktree, are not touched.
+ */
+export function cleanLab(opts: { images?: boolean } = {}): LabObjects & { images: string[] } {
+  const ledger = readLedger()
+  const left = labObjects(ledger.runs)
   for (const name of left.containers) tryDocker(['rm', '--force', name])
   for (const name of left.networks) tryDocker(['network', 'rm', name])
   for (const name of left.volumes) tryDocker(['volume', 'rm', name])
-  return left
+  const removed: string[] = []
+  const kept: string[] = []
+  for (const image of ledger.images) {
+    if (!opts.images) { kept.push(image); continue }
+    if (!tryDocker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) continue
+    if (tryDocker(['image', 'rm', image]).ok) removed.push(image)
+    else kept.push(image)
+  }
+  // The runs are dealt with. What is still written down is the images that are still there.
+  try { writeFileSync(LEDGER, kept.map((image) => `image ${image}\n`).join('')) } catch { /* nothing was ever written down */ }
+  return { ...left, images: removed }
 }
 
 /** A listener on this machine's loopback. A sealed cell must not be able to reach it. */
@@ -156,7 +281,8 @@ export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPo
 /** Start one rig, hand it to `body`, and take it down whatever happens. */
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
   const nonce = randomBytes(4).toString('hex')
-  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}` }
+  const prefix = labPrefix()
+  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`, prefix, runId: RUN_ID, images: checkedImages() }
   // F2 and F5 happen in here, before Docker is asked for anything.
   const project = renderRig(options).project
   const dir = mkdtempSync(path.join(os.tmpdir(), `${project}-`))
@@ -173,6 +299,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
   try {
     // The sink first, so its address is known before the door is told what to have the cell try.
     writeFileSync(file, JSON.stringify(first.file, null, 2))
+    noteRun()
     compose(['up', '--detach', '--no-build', '--pull', 'never', 'sink', 'control'])
     const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, container('sink')]).trim()
     if (!/^\d+\.\d+\.\d+\.\d+$/.test(sinkIp)) throw new Error(`the sink has no address (${sinkIp})`)
@@ -183,7 +310,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
     compose(['up', '--detach', '--no-build', '--pull', 'never', 'door', 'cell'])
     // F5: everything that came up is this rig's, by name.
     const names = docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Names}}']).split('\n').filter(Boolean)
-    assertOurProject(project, names)
+    assertOurProject(project, names, prefix)
     if (names.length !== 4) throw new Error(`expected 4 containers in ${project}, found ${names.length}`)
 
     const live: LiveRig = {
@@ -320,18 +447,17 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
 
 /** In a cell that starts on its own, the entry refuses an environment with anything shaped like a real credential. */
 export function cellRefuses(env: Record<string, string>): { code: number | null; out: string } {
-  const name = `smlab-${randomBytes(4).toString('hex')}-refuse`
   const flags = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
-  const r = tryDocker(['run', '--rm', '--name', name, '--network', 'none', '--pull', 'never', '--read-only', '--tmpfs', '/tmp', ...flags, CELL_IMAGE, 'node', `${SWARM_ROOT}/conformance/docker/cell-main.ts`], { timeoutMs: 60_000 })
+  const r = oneOff('refuse', ['--network', 'none', '--read-only', '--tmpfs', '/tmp', ...flags], checkedImages().cell, ['node', `${SWARM_ROOT}/conformance/docker/cell-main.ts`], 60_000)
   return { code: r.code, out: r.out }
 }
 
-// `node conformance/docker/runner.ts build|clean`
+// `node conformance/docker/runner.ts build [--no-cache] | clean [--images]`
 if (path.resolve(process.argv[1] ?? '') === import.meta.filename) {
-  const command = process.argv[2]
-  if (command === 'build') { preflightDockerOnly(); buildImages() }
-  else if (command === 'clean') { preflightDockerOnly(); console.log(JSON.stringify(cleanLab())) }
-  else { console.error('usage: runner.ts build|clean'); process.exit(2) }
+  const [command, flag, ...rest] = process.argv.slice(2)
+  if (command === 'build' && rest.length === 0 && (flag === undefined || flag === '--no-cache')) { preflightDockerOnly(); console.log(JSON.stringify(buildImages({ noCache: flag === '--no-cache' }))) }
+  else if (command === 'clean' && rest.length === 0 && (flag === undefined || flag === '--images')) { preflightDockerOnly(); console.log(JSON.stringify(cleanLab({ images: flag === '--images' }))) }
+  else { console.error('usage: runner.ts build [--no-cache] | clean [--images]'); process.exit(2) }
 }
 
 function preflightDockerOnly(): void {
