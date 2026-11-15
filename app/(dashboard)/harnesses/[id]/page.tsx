@@ -267,6 +267,8 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
       // retry when the server's own recreate failed.)
       const restart = await requestRestart(id, 'recreate')
       refetch()
+      // The Keys tab lists from /api/keys, a separate fetch from the agent's.
+      refetchKeys()
       if (!restart.ok) {
         // Stay on the page: a reload would drop the only notice that the key
         // is saved but not yet loaded.
@@ -312,6 +314,8 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
       // would appear assigned but never reach the running process (D3).
       const restart = await requestRestart(id, 'recreate')
       refetch()
+      // The Keys tab lists from /api/keys, a separate fetch from the agent's.
+      refetchKeys()
       if (!restart.ok) {
         toast.error(`Key assigned, but the restart failed: ${restart.error}. Restart the agent to apply it.`)
         return
@@ -1580,7 +1584,9 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
       // Never say "removed" for the non-destructive path — name the scope so the
       // operator knows the key survived (issue #191).
       const remaining = newAssigned.length
-      toast.success(
+      const restartWarning = restartFailureMessage('Key unassigned', failedRestarts(await res.json().catch(() => null)), () => harnessName)
+      if (restartWarning) toast.error(restartWarning)
+      else toast.success(
         `${keyData.provider} key unassigned from ${harnessName}` +
         (remaining > 0
           ? ` — still assigned to ${remaining} other agent${remaining === 1 ? '' : 's'}`
@@ -1597,7 +1603,11 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
     try {
       const res = await fetch(`/api/keys/${keyData.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      toast.success(`${keyData.provider} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
+      // A failed restart leaves the old value loaded in a running agent, so
+      // "deleted everywhere" would be untrue.
+      const restartWarning = restartFailureMessage('Key deleted', failedRestarts(await res.json().catch(() => null)), (h) => (h === harnessId ? harnessName : h))
+      if (restartWarning) toast.error(restartWarning)
+      else toast.success(`${keyData.provider} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
       onUpdate()
     } catch { toast.error('Failed to delete key') }
     finally { setSaving(false); setConfirmDelete(false) }

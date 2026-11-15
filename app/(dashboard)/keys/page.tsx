@@ -195,7 +195,11 @@ function KeysPageContent() {
         toast.error('Failed to delete key')
         return
       }
-      toast.success(`${key?.provider ?? 'Key'} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
+      // A failed restart leaves the old value loaded in a running agent, so
+      // "deleted everywhere" would be untrue.
+      const deleteWarning = restartFailureMessage('Key deleted', failedRestarts(await res.json().catch(() => null)), (h) => harnessNames([h]))
+      if (deleteWarning) toast.error(deleteWarning)
+      else toast.success(`${key?.provider ?? 'Key'} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
       setConfirmDeleteId(null)
       refetch()
     } catch {

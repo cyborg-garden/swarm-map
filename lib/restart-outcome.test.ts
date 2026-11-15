@@ -44,7 +44,7 @@ describe('restartFailureMessage', () => {
 
   it('says the save went through and names the agent and the reason', () => {
     const msg = restartFailureMessage('Key rotated', [{ harnessId: 'h_a', ok: false, error: 'boom' }], () => 'alpha')
-    expect(msg).toBe('Key rotated, but the restart of alpha failed: boom. Restart it to apply the change.')
+    expect(msg).toBe('Key rotated, but the restart of alpha failed: boom. Restart it to apply the change; until then the running agent is unchanged.')
   })
 
   it('counts several failures', () => {
@@ -52,7 +52,7 @@ describe('restartFailureMessage', () => {
       { harnessId: 'h_a', ok: false, error: 'boom' },
       { harnessId: 'h_b', ok: false, error: 'other' },
     ])
-    expect(msg).toBe('Key rotated, but 2 restarts failed (h_a, h_b): boom. Restart them to apply the change.')
+    expect(msg).toBe('Key rotated, but 2 restarts failed (h_a, h_b): boom. Restart them to apply the change; until then the running agents are unchanged.')
   })
 })
 

@@ -47,10 +47,10 @@ export function restartFailureMessage(
   if (failed.length === 0) return null
   const reason = failed[0].error ?? 'Restart failed'
   if (failed.length === 1) {
-    return `${saved}, but the restart of ${nameOf(failed[0].harnessId)} failed: ${reason}. Restart it to apply the change.`
+    return `${saved}, but the restart of ${nameOf(failed[0].harnessId)} failed: ${reason}. Restart it to apply the change; until then the running agent is unchanged.`
   }
   const names = failed.map((f) => nameOf(f.harnessId)).join(', ')
-  return `${saved}, but ${failed.length} restarts failed (${names}): ${reason}. Restart them to apply the change.`
+  return `${saved}, but ${failed.length} restarts failed (${names}): ${reason}. Restart them to apply the change; until then the running agents are unchanged.`
 }
 
 /**

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 
 type Props = {
   open: boolean
@@ -17,6 +17,7 @@ type Props = {
  */
 export function ConfirmDialog({ open, title, description, confirmLabel, onConfirm, onCancel }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const titleId = useId()
 
   useEffect(() => {
     if (open) dialogRef.current?.showModal()
@@ -27,11 +28,12 @@ export function ConfirmDialog({ open, title, description, confirmLabel, onConfir
     <dialog
       ref={dialogRef}
       onClose={() => { if (open) onCancel() }}
+      aria-labelledby={open ? titleId : undefined}
       className="backdrop:bg-black/50 rounded-xl border border-[var(--border)] bg-[var(--background)] p-6 w-full max-w-md shadow-xl"
     >
       {open && (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold">{title}</h2>
+          <h2 id={titleId} className="text-lg font-semibold">{title}</h2>
           <p className="text-sm text-muted-foreground">{description}</p>
           <div className="flex justify-end gap-2">
             <button

@@ -23,6 +23,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('wizard heading', () => {
+  it('does not show first-run wording before the agent list has loaded', () => {
+    fleet = [{ id: 'h_alpha', name: 'alpha' }]
+    render(<WizardPage />)
+    expect(screen.getByRole('heading', { name: 'Create an agent' })).toBeInTheDocument()
+    expect(screen.queryByText('Create Your First Agent')).toBeNull()
+    expect(screen.getByRole('button', { name: /Back to/, hidden: true })).toBeDisabled()
+  })
+
   it('is the first-agent setup step when there are no agents', async () => {
     fleet = []
     render(<WizardPage />)

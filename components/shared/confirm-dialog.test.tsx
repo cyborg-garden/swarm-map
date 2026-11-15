@@ -33,6 +33,7 @@ describe('ConfirmDialog', () => {
     expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1)
     expect(screen.getByText('Stop alpha?')).toBeInTheDocument()
     expect(screen.getByText('It goes offline.')).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Stop alpha?', hidden: true })).toBeInTheDocument()
   })
 
   it('confirms only from the confirm button', () => {
