@@ -28,7 +28,7 @@ Swarm Map is the management plane for multi-tenant agent swarms. It configures, 
 - [x] Model name discovery (integrated into cascade suggest)
 - [x] Keys management UI (add/edit/delete/reassign from main keys page + per-harness)
 - [x] Live cost/invocations on harnesses list (queries state.db per poll)
-- [x] Budget enforcement (soft) — pre_llm_call hook via policy endpoint, 80%/100% thresholds
+- [x] Budget tracking — monthly budget per key, and a policy endpoint that reports spend against it. Agents are not throttled yet (see Hard budget enforcement in V2).
 - [x] Signal-cli health check (JSON-RPC POST to `/api/v1/rpc`, works in both daemon modes)
 - [x] Container hardening defaults, first pass: dropped capabilities and resource limits on every generated agent, read-only root filesystem on wizard-created agents. The rest is tracked under [V3 → Sealed by default](#sealed-by-default).
 - [x] Sane policy defaults on wizard deploy (memory scope, HSM URL, agent name)
@@ -141,7 +141,7 @@ HSM writes the allowed capability list to the agent's config. Hermes reads it an
 
 ### Planned
 
-- [ ] **Hard budget enforcement** — pre_message hook in Hermes to block LLM calls entirely when budget exceeded (requires new hook type in gateway). Currently soft-deny via context injection.
+- [ ] **Hard budget enforcement** — pre_message hook in Hermes to block LLM calls entirely when budget exceeded (requires new hook type in gateway). Nothing calls the budget check today.
 - [ ] **Budget cascade** — when budget hits configurable threshold (e.g., 80%), auto-reorder model cascade to prefer cheaper models. Restore original cascade when new budget period starts.
 - [ ] **Per-harness budget (not per-key)** — move budget ownership from keys to harnesses for cleaner enforcement. Key-level budget becomes "total across all uses."
 - [ ] **Budget alerts via notification** — Telegram/Slack notification to admin when budget thresholds hit.
