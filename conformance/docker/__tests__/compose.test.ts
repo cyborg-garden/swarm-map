@@ -13,9 +13,13 @@ import {
   assertSealed, contextFiles, labImages, probeArgs, readSource, renderRig, rigEnv, RIG_VARIANTS, RUN_LABEL, sourceProblems,
   type RigOptions,
 } from '../compose.ts'
+import { DEFAULT_SUBNET_BASE, labSubnetBase, pickSubnets, subnetsOverlap } from '../subnets.ts'
 
 const nonce = 'deadbeef'
-const base: RigOptions = { nonce, brainToken: `BRAIN-${nonce}-0123456789abcdef`, check: 'C1', variant: 'good', sinkIp: '10.0.0.9', hostPort: 4444 }
+// Three blocks of whatever range this run takes its networks from, the first three in it.
+const [cellBlock, outsideBlock, spareBlock] = pickSubnets(3, [], labSubnetBase(), 0)
+const subnets = { cell: cellBlock, outside: outsideBlock, spare: spareBlock }
+const base: RigOptions = { nonce, brainToken: `BRAIN-${nonce}-0123456789abcdef`, check: 'C1', variant: 'good', sinkIp: '10.0.0.9', hostPort: 4444, subnets }
 const rig = (over: Partial<RigOptions> = {}) => renderRig({ ...base, ...over })
 
 describe('the sealed rig', () => {
@@ -42,6 +46,25 @@ describe('the sealed rig', () => {
     // The sink stands in for the internet. Only the control can reach it.
     expect(file.services.sink.networks).toEqual(['outside'])
     expect(file.services.control.networks).toEqual(['outside'])
+  })
+
+  it('[U:rig-compose] every network names a block of its own, outside Docker\'s pools, and nothing else about its addresses', () => {
+    // Left to Docker, a network takes a block from Docker's own pools, and a machine with many networks has none left.
+    expect(file.networks.cell).toEqual({ internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.cell }] } })
+    expect(file.networks.outside).toEqual({ internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.outside }] } })
+    if (labSubnetBase() === DEFAULT_SUBNET_BASE) expect(subnets).toEqual({ cell: '10.213.0.0/28', outside: '10.213.0.16/28', spare: '10.213.0.32/28' })
+    for (const pool of ['172.16.0.0/12', '192.168.0.0/16']) for (const block of Object.values(subnets)) expect(subnetsOverlap(block, pool), `${block} ${pool}`).toBe(false)
+    expect(JSON.stringify(file.networks)).not.toMatch(/gateway|driver|ip_range|aux/)
+    // What the rig is held to afterwards is what the file says.
+    expect(rig().written).toEqual({ cell: { internal: true, subnet: subnets.cell }, outside: { internal: true, subnet: subnets.outside } })
+  })
+
+  it('[U:rig-compose] is not rendered without three blocks of the lab\'s range that share no address', () => {
+    const bad: unknown[] = [
+      undefined, {}, { ...subnets, cell: undefined }, { ...subnets, cell: '172.20.0.0/28' }, { ...subnets, outside: '192.168.0.0/28' }, { ...subnets, cell: '10.213.0.0/24' },
+      { ...subnets, outside: subnets.cell }, { ...subnets, spare: subnets.outside }, { ...subnets, cell: '10.213.0.0/28; x' },
+    ]
+    for (const given of bad) expect(() => rig({ subnets: given as RigOptions['subnets'] }), JSON.stringify(given)).toThrow(/^REFUSING TO RUN: F5 not three blocks/)
   })
 
   it('[U:rig-compose] publishes no port, mounts nothing from the host, and names no Docker socket', () => {
@@ -84,7 +107,7 @@ describe('the sealed rig', () => {
 
   it('[U:rig-compose] passes its own seal check, and so does no broken variant', () => {
     expect(() => assertSealed(rig())).not.toThrow()
-    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'])
+    expect(RIG_VARIANTS).toEqual(['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out', 'other-subnet'])
     for (const variant of RIG_VARIANTS.filter((v) => v !== 'good')) {
       expect(() => assertSealed(rig({ variant })), variant).toThrow(RefusingToRun)
     }
@@ -124,6 +147,26 @@ describe('the sealed rig', () => {
     const rw = rig(); rw.file.services.door.volumes = ['lab:/tmp/smlab']
     expect(() => assertSealed(rw)).toThrow(/the sidecar can write the shared folder/)
   })
+
+  it('[U:rig-compose] the seal check refuses a network that names no block, another block, or anything more than a block', () => {
+    const edits: [RegExp, (networks: Record<string, Record<string, unknown>>) => void][] = [
+      [/network cell does not name one block of its own/, (n) => { delete n.cell.ipam }],
+      [/network outside does not name one block of its own/, (n) => { n.outside.ipam = { config: [] } }],
+      [/network cell does not name one block of its own/, (n) => { n.cell.ipam = { config: [{ subnet: subnets.cell, gateway: '10.213.0.1' }] } }],
+      [/network cell is on 172\.20\.0\.0\/16, which is not a \/28 of /, (n) => { n.cell.ipam = { config: [{ subnet: '172.20.0.0/16' }] } }],
+      [/networks cell and outside share addresses/, (n) => { n.outside.ipam = { config: [{ subnet: subnets.cell }] } }],
+      [/a network is not on the block written down for it/, (n) => { n.cell.ipam = { config: [{ subnet: subnets.spare }] } }],
+      [/network cell sets driver_opts/, (n) => { n.cell.driver_opts = { 'com.docker.network.bridge.enable_ip_masquerade': 'true' } }],
+      [/network cell sets external/, (n) => { n.cell.external = true }],
+      [/network cell does not have IPv6 switched off/, (n) => { n.cell.enable_ipv6 = true }],
+      [/network outside is not internal/, (n) => { n.outside.internal = false }],
+    ]
+    for (const [why, edit] of edits) {
+      const broken = rig()
+      edit(broken.file.networks as unknown as Record<string, Record<string, unknown>>)
+      expect(() => assertSealed(broken), String(why)).toThrow(why)
+    }
+  })
 })
 
 describe('each broken rig is broken in one named way', () => {
@@ -134,7 +177,8 @@ describe('each broken rig is broken in one named way', () => {
   it('[U:rig-compose] open: the cell is also put on an ordinary network, the only one that is not internal', () => {
     const { file } = rig({ variant: 'open' })
     expect(file.services.cell.networks).toEqual(['cell', 'open'])
-    expect(file.networks.open.internal).toBe(false)
+    expect(file.networks.open).toEqual({ internal: false, enable_ipv6: false, ipam: { config: [{ subnet: subnets.spare }] } })
+    expect(file.networks.cell.ipam.config[0].subnet).toBe(subnets.cell)
     expect(file.services.door.networks).toEqual(['cell'])
   })
 
@@ -174,6 +218,24 @@ describe('each broken rig is broken in one named way', () => {
     expect(file.services.cell).toEqual(rig().file.services.cell)
   })
 
+  it('[U:rig-compose] other-subnet: the two networks are made on each other\'s blocks, and nothing else differs', () => {
+    const broken = rig({ variant: 'other-subnet' })
+    expect(broken.file.networks.cell).toEqual({ internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.outside }] } })
+    expect(broken.file.networks.outside).toEqual({ internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.cell }] } })
+    // What it is held to is what a sealed rig is held to.
+    expect(broken.written).toEqual(rig().written)
+    for (const name of ['cell', 'door', 'sink', 'control'] as const) {
+      expect({ ...broken.file.services[name], environment: {} }, name).toEqual({ ...rig().file.services[name], environment: {} })
+    }
+    expect(() => assertSealed(broken)).toThrow(/a network is not on the block written down for it/)
+    // No other broken rig touches the blocks.
+    for (const variant of RIG_VARIANTS.filter((v) => v !== 'other-subnet')) {
+      const { file, written } = rig({ variant })
+      expect(Object.fromEntries(Object.entries(file.networks).map(([name, n]) => [name, { internal: n.internal, subnet: n.ipam.config[0].subnet }])), variant).toEqual(written)
+      expect(written.cell, variant).toEqual({ internal: true, subnet: subnets.cell })
+    }
+  })
+
   it('[U:rig-compose] blind-sink: the control is put where it cannot reach the sink', () => {
     expect(rig({ variant: 'blind-sink' }).file.services.control.networks).toEqual(['cell'])
   })
@@ -184,7 +246,7 @@ describe('each broken rig is broken in one named way', () => {
     expect(file.services.cell.environment.SMLAB_GATE).toBe('allows-all')
     expect({ ...file.services.cell, environment: {} }).toEqual({ ...rig().file.services.cell, environment: {} })
     expect(file.networks).toEqual(rig().file.networks)
-    expect(() => assertSealed({ project: 'x', file })).not.toThrow()
+    expect(() => assertSealed({ project: 'x', file, written: rig().written })).not.toThrow()
   })
 })
 

@@ -19,7 +19,8 @@ import { OPENAI_CHAT } from '../../door/model-shapes.ts'
 import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
-import { cellDown, cellUp, docker, dockerProblems, findTargets, launcherImages, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
+import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
+import { cellDown, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
 import { policyFor, systemPromptFor, type LabConfig } from './config.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -60,6 +61,10 @@ function freePort(): Promise<number> {
     })
   })
 }
+
+const cellSubnets = ([cell, egress, outside]: string[]): CellOptions['subnets'] => ({ cell, egress, outside })
+/** Every block in use on this Docker and this machine, asked each time a cell is about to be started. */
+const blocksInUse = (): string[] => usedSubnets(docker)
 
 const withTimeout = <T>(work: Promise<T>, ms: number, what: string): Promise<T> => Promise.race([
   work, new Promise<T>((_resolve, reject) => { const t = setTimeout(() => reject(new Error(what)), ms); t.unref?.() }),
@@ -105,9 +110,9 @@ export async function start(o: StartOptions): Promise<Running> {
   // What the cell holds is no use off this machine, but none of it belongs in a channel either.
   const cellHeld = [brainToken, `PLACEHOLDER-${cellNonce}`, cellNonce]
 
-  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images }
-  const file = renderCell(cellOptions)
-  const problems = sealProblems(file, secrets)
+  // Rendered here on three blocks of the lab's range, to be judged before anything is started. It is started on blocks that are free then.
+  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])) }
+  const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
 
   let door: Door | undefined
@@ -137,9 +142,17 @@ export async function start(o: StartOptions): Promise<Running> {
 
     // The cell comes up, and is looked at from outside, before anything is connected to Discord.
     const composePath = path.join(stateDir, 'compose.json')
-    writeFileSync(composePath, JSON.stringify(file, null, 2), { mode: 0o600 })
-    cellUp(file, composePath)
-    const running = runningCellProblems(project)
+    // Its networks are made on blocks that are free now. If another start takes one in between,
+    // Docker says so: what was made is removed, and the cell is started on others.
+    const file = onFreeSubnets({ count: 3, used: blocksInUse }, (picked) => {
+      const onThese = renderCell({ ...cellOptions, subnets: cellSubnets(picked) })
+      const unsealed = sealProblems(onThese, secrets)
+      if (unsealed.length > 0) throw new Error(`the cell is not sealed: ${unsealed.join('; ')}`)
+      writeFileSync(composePath, JSON.stringify(onThese, null, 2), { mode: 0o600 })
+      cellUp(onThese, composePath)
+      return onThese
+    }, () => { cellDown(project) })
+    const running = runningCellProblems(project, networksWritten(file))
     if (running.length > 0) throw new Error(`the cell is not sealed: ${running.join('; ')}`)
     o.log(`cell up and sealed (${project})`)
 
@@ -175,11 +188,9 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
   const cellNonce = randomBytes(16).toString('hex')
   const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken }
-  const file = renderCell(options)
+  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken, subnets: cellSubnets(pickSubnets(3, [])) }
   const checks: Check[] = []
   const add = (id: string, title: string, problems: string[]): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok' }) }
-  add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file))
 
   const targets = findTargets(images)
   const host = await startHostListener()
@@ -192,14 +203,22 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
   })
   const composePath = path.join(o.workDir, `compose-${nonce}.json`)
   try {
-    writeFileSync(composePath, JSON.stringify(file, null, 2), { mode: 0o600 })
-    cellUp(file, composePath, ['sink', 'control'])
-    const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, `${project}-sink-1`]).out.trim()
-    cellUp(file, composePath, ['door', 'cell'])
+    // Started the way a real run starts it: on blocks that are free on this Docker now, and on others if one is taken in between.
+    const { file, written, sinkIp } = onFreeSubnets({ count: 3, used: blocksInUse }, (picked) => {
+      const subnets = cellSubnets(picked)
+      const file = renderCell({ ...options, subnets })
+      writeFileSync(composePath, JSON.stringify(file, null, 2), { mode: 0o600 })
+      cellUp(file, composePath, ['sink', 'control'])
+      const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, `${project}-sink-1`]).out.trim()
+      cellUp(file, composePath, ['door', 'cell'])
+      // What the networks were meant to be. A cell broken on purpose may have been written otherwise.
+      return { file, written: networksWritten(renderCell({ ...options, subnets, broken: undefined })), sinkIp }
+    }, () => { cellDown(project) })
+    add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file))
     o.log(`cell up for the dry run (${project})`)
     const reached = await withTimeout(door.shimConnected().then(() => true), 60_000, '').catch(() => false)
     add('S0r', 'the cell reaches the door through the relay, with its own cell token', reached ? [] : ['the cell never reached the door, so nothing else was checked'])
-    add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project))
+    add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project, written))
     if (reached) {
       const seen = host.hits.length
       const probed = await probeCell(project, cellNonce, sinkIp, host.port, targets)

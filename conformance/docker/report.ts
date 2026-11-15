@@ -3,6 +3,7 @@
 // sidecar's container (which have the harness run it as a tool).
 import { lstatSync, readFileSync } from 'node:fs'
 import { LAB_DIR } from './compose.ts'
+import { inSubnet } from './subnets.ts'
 
 export interface ProbeReport {
   who: string
@@ -26,6 +27,8 @@ export interface ProbeReport {
   noNewPrivs: string
   capEff: string
   ipv6: string[]
+  /** Every route the kernel has that leads anywhere at all, as `via <gateway> on <interface>`. Must be empty: the cell's only network has no way out. */
+  defaultRoutes: string[]
 }
 
 export function parseReport(text: string): ProbeReport | undefined {
@@ -58,6 +61,8 @@ export function netProblems(r: ProbeReport): string[] {
   }
   if (r.wrongToken !== 'refused') p.push(`the door did not hang up on a wrong cell token (${r.wrongToken})`)
   if (r.ipv6.length > 0) p.push('the container has an IPv6 address')
+  if (!Array.isArray(r.defaultRoutes)) p.push('the probe did not read the container\'s routes')
+  else for (const route of r.defaultRoutes) p.push(`the container has a route off its own network (${route})`)
   if (r.dockerSocket) p.push('a Docker socket is in the container')
   return p
 }
@@ -85,6 +90,45 @@ export function writeProblems(r: ProbeReport): string[] {
 export function mountProblems(r: ProbeReport): string[] {
   const places = r.mounts.map((m) => m.split(' ')[0])
   return places.length === 1 && places[0] === LAB_DIR ? [] : [`mounted in the container: ${places.join(', ') || 'nothing, not even the shared folder'}`]
+}
+
+/** What `docker network inspect` says a network is. */
+export interface DockerNetwork {
+  Driver: string
+  Internal: boolean
+  EnableIPv6: boolean
+  IPAM: { Config: { Subnet?: string; Gateway?: string; IPRange?: string; AuxiliaryAddresses?: Record<string, string> }[] | null } | null
+  Options: Record<string, string> | null
+}
+
+// What Docker writes on a network it was given no option for.
+const PLAIN_OPTIONS: Record<string, string> = { 'com.docker.network.enable_ipv4': 'true', 'com.docker.network.enable_ipv6': 'false' }
+
+/**
+ * Judges the network Docker really made against what was written down for
+ * it: the same block and no other, a way out only if one was written, no
+ * IPv6, and no driver or option that was not asked for. `given` is undefined
+ * when Docker has no such network.
+ */
+export function networkProblems(name: string, written: { internal: boolean; subnet: string }, given: DockerNetwork | undefined): string[] {
+  if (!given) return [`network ${name} is not there, so it was not compared with what was written`]
+  const p: string[] = []
+  const blocks = given.IPAM?.Config ?? []
+  const made = blocks.map((b) => b.Subnet ?? '?').join(' and ') || 'no block'
+  if (blocks.length !== 1 || blocks[0].Subnet !== written.subnet) p.push(`network ${name} was made on ${made}, not on ${written.subnet} as written`)
+  // Docker's own side of the network sits in the block. An address from anywhere else would be a way to somewhere else.
+  for (const b of blocks) {
+    if (b.Gateway !== undefined && b.Gateway !== '' && !inSubnet(b.Gateway, written.subnet)) p.push(`network ${name} has a gateway outside its block (${b.Gateway})`)
+    if (b.IPRange !== undefined && b.IPRange !== '') p.push(`network ${name} hands out addresses from a range of its own (${b.IPRange})`)
+    if (Object.keys(b.AuxiliaryAddresses ?? {}).length > 0) p.push(`network ${name} sets aside addresses`)
+  }
+  if (given.Internal !== written.internal) p.push(written.internal ? `network ${name} is not internal` : `network ${name} is internal, and was written with a way out`)
+  if (given.EnableIPv6 !== false) p.push(`network ${name} has IPv6 switched on`)
+  if (given.Driver !== 'bridge') p.push(`network ${name} is made by another driver (${given.Driver})`)
+  for (const [key, value] of Object.entries(given.Options ?? {})) {
+    if (PLAIN_OPTIONS[key] !== value) p.push(`network ${name} was given an option (${key}=${value})`)
+  }
+  return p
 }
 
 /** What `docker inspect` says a container was given: the settings that share something with the host or another container. */

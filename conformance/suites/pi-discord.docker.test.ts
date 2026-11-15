@@ -17,7 +17,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { IDS } from '../../lib/door/testing/discord-rig.ts'
 import { assertFakeDiscord, startFakeDiscord, type FakeDiscord } from '../../lib/door/testing/fake-discord.ts'
-import { docker, dockerProblems, runningCellProblems } from '../../lib/lab/pi-discord/cell.ts'
+import { docker, dockerProblems, networksWritten, runningCellProblems, type LiveFile } from '../../lib/lab/pi-discord/cell.ts'
 import { parseConfig, type LabConfig } from '../../lib/lab/pi-discord/config.ts'
 import { readRun, REPO_ROOT, runFile, sealChecks, start, stopRun, type Running } from '../../lib/lab/pi-discord/launch.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, TOKEN_FILE_ENV } from '../../lib/lab/pi-discord/secrets.ts'
@@ -51,6 +51,18 @@ describe('pi-discord dry run: the containment checks', () => {
     expect(failed(checks)).toEqual(['S0', 'S0d', 'S1'])
     // The probe really got out, so the probes can tell a sealed cell from an open one.
     expect(checks.find((c) => c.id === 'S1')?.detail).toMatch(/reached a public address/)
+    // And the cell has what a sealed one never has: a route off its own network.
+    expect(checks.find((c) => c.id === 'S1')?.detail).toMatch(/the container has a route off its own network/)
+  }, 180_000)
+
+  it('must-fail: a cell whose networks Docker made on other blocks than the ones written for them is caught', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-other-subnet' })
+    // As written it is a sealed cell, and it is one: nothing gets out. Only what Docker made differs from what was meant.
+    expect(failed(checks)).toEqual(['S0d'])
+    const detail = checks.find((c) => c.id === 'S0d')?.detail ?? ''
+    expect(detail).toMatch(/network smlab-[0-9a-f]{8}_cell was made on 10\.\d+\.\d+\.\d+\/28, not on 10\.\d+\.\d+\.\d+\/28 as written/)
+    expect(detail).toMatch(/network smlab-[0-9a-f]{8}_egress was made on /)
+    expect(detail).toMatch(/the cell has the address 10\.\d+\.\d+\.\d+, which is not in the block written for its network/)
   }, 180_000)
 
   it('must-fail: a cell whose disk is not read-only is caught as written and as Docker made it', async () => {
@@ -245,7 +257,9 @@ describe('pi-discord: one message, end to end, through real Pi in the sealed cel
     writeFileSync(runFile(stateDir), JSON.stringify({ ...readRun(stateDir)!, pid: dead }))
     expect(containersOf(left)).toHaveLength(2)
     // What Docker gave that cell has not changed: one network with no way out, no host folder, no secret.
-    expect(runningCellProblems(left).filter((p) => p !== 'the cell is not running')).toEqual([])
+    const written = networksWritten(JSON.parse(readFileSync(path.join(stateDir, 'compose.json'), 'utf8')) as LiveFile)
+    expect(Object.keys(written)).toEqual(['cell', 'egress'])
+    expect(runningCellProblems(left, written).filter((p) => p !== 'the cell is not running')).toEqual([])
     say('CANARY-no-door')
     await new Promise((resolve) => setTimeout(resolve, 1500))
     expect(fake.posted).toHaveLength(posts)

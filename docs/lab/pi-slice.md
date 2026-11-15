@@ -83,6 +83,17 @@ checkout's rigs and images are never touched, whatever they are named.
 Two runs can also be kept apart by name: `SWARMLAB_DOCKER_PREFIX=mylab` puts `mylab` in place of
 `smlab` in every image, project and container name (2 to 16 lower-case letters and digits).
 
+**Each network names its own addresses.** A network that names none is given a block from Docker's
+own pools (172.17 to 172.31 and 192.168), and a machine with many networks has none left: every
+start then fails with `all predefined address pools have been fully subnetted`. So each lab network
+names a /28 of `10.213.0.0/16`, a range those pools do not use. Before a rig starts, the run reads
+the blocks every network on this Docker already has and picks free ones, starting from a random
+place. If another run takes one first, Docker says the pool overlaps: the rig is taken down and
+started on others, up to five times. `SWARMLAB_SUBNET_BASE` names another range (a block of
+`10.0.0.0/8`, /8 to /24). The file names a block and nothing else: no gateway, no driver, no
+option. S1 then reads what Docker made and compares it with what was written, and the probe reads
+the cell's own routes: a route off its network fails the check.
+
 The run needs an internet connection, for its controls. Before any rig starts, a one-off container
 on Docker's default network asks DNS where `example.com` and one public resolver are, so no public
 address has to be written in this repo. One of the broken cells (`open`) is then put on an ordinary
@@ -211,6 +222,7 @@ named checks red, for the reason it names, and left the others green.
 | `host-mount` | A folder of the laptop is mounted into the cell | S3 |
 | `socket` | An empty file is mounted where a Docker socket would be | S1, S3: the probe looks there |
 | `door-out` | The door's container is also on the sink's network | S1: the door's side reached the sink, the cell still did not |
+| `other-subnet` | The cell's network is made on another block of addresses than the one written down for it | S1: what Docker made is not what was written. Nothing got out |
 | `blind-sink` | The control cannot reach the sink, so its log is empty | S0, C9: an empty log is not a pass |
 | `gate-kept` | C10 run in a cell that still has its gate | C10: the denied tool never ran, so the wall was not tested on its own |
 

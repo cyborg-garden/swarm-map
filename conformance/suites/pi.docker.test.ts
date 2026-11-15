@@ -121,6 +121,15 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
       expect(detail('S1')).toContain('reached a public resolver, asked directly over UDP')
       expect(detail('S1')).toContain('reached a listener on this machine, by address')
       expect(detail('C9')).toContain('reached a public address')
+      // And the cell has what a sealed one never has: a route off its own network.
+      expect(detail('S1')).toContain('the container has a route off its own network')
+    }
+    if (name === 'other-subnet') {
+      expect(detail('S1')).toMatch(/network \S+_cell was made on 10\.\d+\.\d+\.\d+\/28, not on 10\.\d+\.\d+\.\d+\/28 as written/)
+      expect(detail('S1')).toMatch(/network \S+_outside was made on /)
+      expect(detail('S1')).toMatch(/the cell has the address 10\.\d+\.\d+\.\d+, which is not in the block written for its network/)
+      // Nothing got out: the rig is as sealed as a good one, on other addresses than it was meant to have.
+      expect(detail('S1')).not.toContain('reached ')
     }
     if (name === 'leaks-env') {
       expect(detail('S3')).toContain('a secret of this run is in the cell\'s environment')

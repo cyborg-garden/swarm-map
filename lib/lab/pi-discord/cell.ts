@@ -12,11 +12,16 @@
 //
 // The relay is the one container with a route out, because it has to reach
 // the door on this machine. It carries bytes and holds nothing.
+//
+// Each network names a small block of addresses of its own, picked from what
+// is free on this Docker when the cell is started, so a start does not depend
+// on what Docker's own pools have left (conformance/docker/subnets.ts).
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, probeArgs, readSource, sourceProblems, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
-import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig } from '../../../conformance/docker/report.ts'
+import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig } from '../../../conformance/docker/report.ts'
+import { inSubnet, labNetwork, writtenNetworkProblems, type LabNetwork } from '../../../conformance/docker/subnets.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
 
 // The same two images the conformance rig uses, built from the same Dockerfile and named the
@@ -43,20 +48,26 @@ export interface CellOptions {
   model: string
   /** What the harness is told it is. Text the launcher wrote; not a secret. */
   systemPrompt: string
+  /** The block of addresses each network is made on. `outside` is the dry run's, for its sink. */
+  subnets: { cell: string; egress: string; outside: string }
   /** The images to start. Left out, they are the ones named for the code on disk. */
   images?: LabImages
   /** Dry run only: add the sink and its control, so "nothing got out" can be read from outside. */
   withSink?: boolean
   /** Tests only: break the seal in one named way, to show the checks go red. */
-  broken?: 'cell-on-egress' | 'cell-writable'
+  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet'
 }
 
 export interface LiveFile {
   name: string
   services: Record<string, Service>
-  networks: Record<string, { internal: boolean; enable_ipv6: false }>
+  networks: Record<string, LabNetwork>
   volumes: { lab: Record<string, never> }
 }
+
+/** What each network of a file is written down as: whether it has a way out, and its block. */
+export const networksWritten = (file: Pick<LiveFile, 'networks'>): Record<string, { internal: boolean; subnet: string }> =>
+  Object.fromEntries(Object.entries(file.networks).map(([name, n]) => [name, { internal: n.internal, subnet: n.ipam.config[0].subnet }]))
 
 /** Every name the cell's environment may hold. Listed by hand; nothing is inherited. */
 export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_SYSTEM_PROMPT', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
@@ -93,16 +104,21 @@ export function renderCell(o: CellOptions): LiveFile {
     name,
     // The relay takes the name the cell dials: `door`.
     services: { door: relay, cell },
-    networks: { cell: { internal: true, enable_ipv6: false }, egress: { internal: false, enable_ipv6: false } },
+    networks: { cell: labNetwork(true, o.subnets?.cell), egress: labNetwork(false, o.subnets?.egress) },
     volumes: { lab: {} },
   }
   if (o.withSink) {
-    file.networks.outside = { internal: true, enable_ipv6: false }
+    file.networks.outside = labNetwork(true, o.subnets?.outside)
     file.services.sink = service(RIG_IMAGE, 'conformance/docker/sink.ts', ['outside'], {})
     file.services.control = { ...service(RIG_IMAGE, 'conformance/docker/control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] }
   }
   if (o.broken === 'cell-on-egress') cell.networks = ['cell', 'egress']
   if (o.broken === 'cell-writable') cell.read_only = false
+  // The two networks are made on each other's blocks. As written this is still a sealed cell: only Docker can show the difference.
+  if (o.broken === 'cell-other-subnet') {
+    file.networks.cell = labNetwork(true, o.subnets.egress)
+    file.networks.egress = labNetwork(false, o.subnets.cell)
+  }
   return file
 }
 
@@ -115,6 +131,8 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
     if (network.internal !== true && name !== 'egress') p.push(`network ${name} is not internal`)
   }
   if (file.networks.cell?.internal !== true) p.push('the cell network has a way out')
+  // Each network names one block of the lab's own and nothing else: no gateway, no driver, no option.
+  p.push(...writtenNetworkProblems(file.networks))
   if (cell.networks.join(',') !== 'cell') p.push(`the cell is on ${cell.networks.join(' and ')}`)
   if (cell.read_only !== true) p.push('the cell can write its own disk')
   if (cell.user !== 'node') p.push(`the cell runs as ${cell.user}`)
@@ -199,7 +217,8 @@ const compose = (project: string, args: string[], timeoutMs = 120_000): { ok: bo
 
 export function cellUp(file: LiveFile, composePath: string, services: string[] = []): void {
   const r = compose(file.name, ['--file', composePath, 'up', '--detach', '--no-build', '--pull', 'never', ...services])
-  if (!r.ok) throw new Error(`the cell did not start: ${r.out.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`)
+  // All of what Docker said goes along, so a caller can tell a block that was taken from any other failure.
+  if (!r.ok) throw Object.assign(new Error(`the cell did not start: ${r.out.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`), { stderr: r.out })
 }
 
 /** Stop and remove one run's containers, networks and volume. By project name, and nothing else. */
@@ -208,8 +227,8 @@ export function cellDown(project: string): string[] {
   return docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Names}}']).out.split('\n').filter(Boolean)
 }
 
-/** What Docker really gave the cell, read from outside it. */
-export function runningCellProblems(project: string): string[] {
+/** What Docker really gave the cell, read from outside it, against the networks that were written down for it. */
+export function runningCellProblems(project: string, written: Record<string, { internal: boolean; subnet: string }>): string[] {
   const p: string[] = []
   const name = `${project}-cell-1`
   const r = docker(['inspect', name])
@@ -218,7 +237,7 @@ export function runningCellProblems(project: string): string[] {
     State: { Running: boolean }
     Config: { Env: string[]; User: string }
     Mounts: { Type: string; Name?: string; Destination: string }[]
-    NetworkSettings: { Networks: Record<string, unknown>; Ports?: Record<string, unknown> }
+    NetworkSettings: { Networks: Record<string, { IPAddress?: string }>; Ports?: Record<string, unknown> }
     HostConfig: HostConfig & { ReadonlyRootfs: boolean }
   }]
   if (!c.State.Running) p.push('the cell is not running')
@@ -227,6 +246,17 @@ export function runningCellProblems(project: string): string[] {
   for (const network of networks) {
     if (docker(['network', 'inspect', '--format', '{{.Internal}}', network]).out.trim() !== 'true') p.push(`network ${network} is not internal`)
   }
+  // Every network Docker made is the one written down for it: the same block, and a way out only where one was written.
+  if (written.cell?.internal !== true) p.push('no network with no way out was written down for the cell')
+  for (const [name, w] of Object.entries(written)) {
+    const seen = docker(['network', 'inspect', `${project}_${name}`])
+    let given: DockerNetwork | undefined
+    try { given = seen.ok ? (JSON.parse(seen.out) as DockerNetwork[])[0] : undefined } catch { /* not there */ }
+    p.push(...networkProblems(`${project}_${name}`, w, given))
+  }
+  const address = c.NetworkSettings.Networks[`${project}_cell`]?.IPAddress ?? ''
+  // A cell that has stopped has no address, and that is said above.
+  if (c.State.Running && !inSubnet(address, written.cell?.subnet ?? '')) p.push(`the cell has the address ${address || 'none'}, which is not in the block written for its network`)
   if (!c.HostConfig.ReadonlyRootfs) p.push('the cell\'s disk is not read-only')
   // The lab's own reading of what Docker says it gave a container: ports, namespaces, capabilities, host paths.
   const given = hostConfigProblems(c.HostConfig, `${project}_cell`)

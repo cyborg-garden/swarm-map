@@ -47,6 +47,10 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
     what: 'The sidecar\'s container is also put on the network the sink is on',
     variant: 'door-out', seal: true, checks: [], red: ['S1'], green: ['S0', 'S2', 'S3'],
   },
+  'other-subnet': {
+    what: 'The cell\'s network is made on another block of addresses than the one written down for it',
+    variant: 'other-subnet', seal: true, checks: [], red: ['S1'], green: ['S0', 'S2', 'S3'],
+  },
   'blind-sink': {
     what: 'The control is put where it cannot reach the sink, so the sink\'s log proves nothing',
     variant: 'blind-sink', seal: true, checks: ['C9'], red: ['S0', 'C9'], green: ['S1', 'S2', 'S3'],

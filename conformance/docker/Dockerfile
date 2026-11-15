@@ -27,7 +27,7 @@ COPY lib/door/framing.ts lib/door/protocol.ts lib/door/shim-client.ts /opt/swarm
 COPY lib/runtimes/pi /opt/swarm/lib/runtimes/pi
 COPY conformance/guards/preflight.ts /opt/swarm/conformance/guards/
 COPY conformance/broken/gate-allows-all.ts /opt/swarm/conformance/broken/
-COPY conformance/docker/cell-main.ts conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts /opt/swarm/conformance/docker/
+COPY conformance/docker/cell-main.ts conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
 # Owned by root and not writable by anyone. The cell also runs on a read-only disk.
 RUN chmod -R a-w /opt/swarm /opt/pi
 USER node
@@ -52,7 +52,7 @@ COPY lib/runtimes/letta-code /opt/swarm/lib/runtimes/letta-code
 COPY lib/runtimes/pi/preamble.ts lib/runtimes/pi/caps.ts /opt/swarm/lib/runtimes/pi/
 COPY conformance/guards/preflight.ts /opt/swarm/conformance/guards/
 COPY conformance/broken/letta-code-wrapped.ts /opt/swarm/conformance/broken/
-COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts /opt/swarm/conformance/docker/
+COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
 COPY conformance/docker/letta-code/cell-main.ts /opt/swarm/conformance/docker/letta-code/
 RUN chmod -R a-w /opt/swarm /opt/letta-code
 USER node
