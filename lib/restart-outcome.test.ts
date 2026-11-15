@@ -62,13 +62,13 @@ describe('requestRestart', () => {
 
   it('reports a started restart', async () => {
     respond(200, { ok: true })
-    expect(await requestRestart('h_a', 'quick')).toEqual({ ok: true })
+    expect(await requestRestart('h_a', 'quick')).toEqual({ ok: true, alreadyRestarting: false })
     expect(fetch).toHaveBeenCalledWith('/api/harnesses/h_a/restart', expect.objectContaining({ method: 'POST', body: '{"mode":"quick"}' }))
   })
 
-  it('treats "already restarting" as started', async () => {
+  it('reports a restart that was already under way', async () => {
     respond(409, { error: 'Restart already in progress' })
-    expect(await requestRestart('h_a', 'recreate')).toEqual({ ok: true })
+    expect(await requestRestart('h_a', 'recreate')).toEqual({ ok: true, alreadyRestarting: true })
   })
 
   it('reports the server error when the restart fails', async () => {

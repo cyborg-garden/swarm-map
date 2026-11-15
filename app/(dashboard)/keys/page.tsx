@@ -10,6 +10,8 @@ import { toast } from 'sonner'
 import { filterKeys } from '@/lib/keys-filter'
 import { parseKeyRequestParams } from '@/lib/keys-request'
 import { providerOptions } from '@/lib/key-providers'
+import { BUDGET_HINT, BUDGET_LABEL } from '@/lib/budget-copy'
+import { failedRestarts, restartFailureMessage } from '@/lib/restart-outcome'
 import type { Key, Harness } from '@/lib/types'
 import type { HabitatTier, HarnessStatus } from '@/lib/types'
 
@@ -118,7 +120,9 @@ function KeysPageContent() {
         toast.error(err.error ?? 'Failed to add key')
         return
       }
-      toast.success(`${newProvider} key added`)
+      const addWarning = restartFailureMessage('Key added', failedRestarts(await res.json().catch(() => null)), (h) => harnessNames([h]))
+      if (addWarning) toast.error(addWarning)
+      else toast.success(`${newProvider} key added`)
       resetAddForm()
       // Drop prefill params so a refresh doesn't re-open the form.
       if (searchParams.has('request')) router.replace(pathname)
@@ -169,7 +173,9 @@ function KeysPageContent() {
         toast.error(err.error ?? 'Failed to update key')
         return
       }
-      toast.success(payload.value ? 'Key rotated & updated across all harnesses' : 'Key updated')
+      const editWarning = restartFailureMessage(payload.value ? 'Key rotated' : 'Key updated', failedRestarts(await res.json().catch(() => null)), (h) => harnessNames([h]))
+      if (editWarning) toast.error(editWarning)
+      else toast.success(payload.value ? 'Key rotated & updated across all harnesses' : 'Key updated')
       cancelEdit()
       refetch()
     } catch {
@@ -306,7 +312,7 @@ function KeysPageContent() {
               />
             </div>
             <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Budget ($/mo)</label>
+              <label className="text-xs text-muted-foreground mb-1 block" title={BUDGET_HINT}>{BUDGET_LABEL}</label>
               <input
                 type="number"
                 value={newBudget}
@@ -354,7 +360,7 @@ function KeysPageContent() {
                 <th className="text-left px-4 py-3">Key</th>
                 <th className="text-left px-4 py-3">Assigned To</th>
                 <th className="text-left px-4 py-3">Tier Mix</th>
-                <th className="text-right px-4 py-3" title="Informational only — not enforced">Budget ($/mo)</th>
+                <th className="text-right px-4 py-3" title={BUDGET_HINT}>{BUDGET_LABEL}</th>
                 <th className="text-left px-4 py-3">Health</th>
                 <th className="text-right px-4 py-3">Actions</th>
               </tr>

@@ -55,19 +55,21 @@ export function restartFailureMessage(
 
 /**
  * Client side: ask for a restart and report whether it started. A 409 means a
- * restart of this agent is already under way, which is what the caller wanted.
+ * restart of this agent was already under way: `alreadyRestarting` is set, and
+ * the caller decides whether that restart can have picked up its change.
  */
 export async function requestRestart(
   harnessId: string,
   mode: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; alreadyRestarting: boolean } | { ok: false; error: string }> {
   try {
     const res = await fetch(`/api/harnesses/${harnessId}/restart`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode }),
     })
-    if (res.ok || res.status === 409) return { ok: true }
+    if (res.ok) return { ok: true, alreadyRestarting: false }
+    if (res.status === 409) return { ok: true, alreadyRestarting: true }
     const body = await res.json().catch(() => null)
     return { ok: false, error: (body as { error?: string } | null)?.error ?? `Restart failed (${res.status})` }
   } catch (err) {
