@@ -108,17 +108,28 @@ export function toHarnessSlug(name: string): string {
 // running containers) so a STOPPED agent's published port is still counted —
 // a stopped agent is still "using" that host port the moment it's restarted, and
 // reassigning it would make the restart fail with "port is already allocated".
-// The `0.0.0.0:(\d+)->` binding format is emitted for created/exited containers
-// too, so stopped agents are caught here; the .env scan (source 3) is the
-// belt-and-suspenders catch-all for anything docker doesn't surface.
+// Stopped (created/exited) containers still list their bindings, so stopped
+// agents are caught here; the .env scan (source 3) is the belt-and-suspenders
+// catch-all for anything docker doesn't surface.
 function dockerPublishedPorts(): number[] {
-  const ports: number[] = []
   try {
-    const output = execSync('docker ps -a --format "{{.Ports}}"', { timeout: 5000 }).toString()
-    for (const match of output.matchAll(/0\.0\.0\.0:(\d+)->/g)) {
-      ports.push(parseInt(match[1], 10))
-    }
-  } catch {}
+    return parseDockerPublishedPorts(execSync('docker ps -a --format "{{.Ports}}"', { timeout: 5000 }).toString())
+  } catch {
+    return []
+  }
+}
+
+// Host ports out of `docker ps --format '{{.Ports}}'` output. A binding reads
+// `<host address>:<host port>-><container port>/<proto>`; the address is
+// 0.0.0.0 or [::] for a port published on every interface and one address
+// (127.0.0.1, a tailnet address, [::1]) for a port bound with `host_ip`. All of
+// them hold the host port. An exposed-but-unpublished port (`8642/tcp`) has no
+// `->` and is not counted.
+export function parseDockerPublishedPorts(output: string): number[] {
+  const ports: number[] = []
+  for (const match of output.matchAll(/(?:\d{1,3}(?:\.\d{1,3}){3}|\[[0-9a-fA-F:]*\]):(\d+)->/g)) {
+    ports.push(parseInt(match[1], 10))
+  }
   return ports
 }
 
