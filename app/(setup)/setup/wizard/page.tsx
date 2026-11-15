@@ -159,6 +159,7 @@ export default function WizardPage() {
   const [dockerError, setDockerError] = useState<string | null>(null)
   const [availableKeys, setAvailableKeys] = useState<Key[]>([])
   const [templates, setTemplates] = useState<UseCaseTemplateInfo[]>([])
+  const [hasAgents, setHasAgents] = useState(false)
   const [signalDialogOpen, setSignalDialogOpen] = useState(false)
   const [signalCaptured, setSignalCaptured] = useState<SignalCapturedConfig | null>(null)
   const [signalConnectFailed, setSignalConnectFailed] = useState(false)
@@ -195,6 +196,12 @@ export default function WizardPage() {
       .then((res) => (res.ok ? res.json() : []))
       .then((t: UseCaseTemplateInfo[]) => setTemplates(Array.isArray(t) ? t : []))
       .catch(() => setTemplates([]))
+    // The wizard is also the "Create New" path from the fleet page, where
+    // "first agent" and "back to setup" are both wrong.
+    fetch('/api/harnesses')
+      .then((res) => (res.ok ? res.json() : []))
+      .then((h: unknown) => setHasAgents(Array.isArray(h) && h.length > 0))
+      .catch(() => setHasAgents(false))
   }, [])
 
   // Select a use-case package: records the id and prefills the recommended
@@ -315,12 +322,12 @@ export default function WizardPage() {
       {/* Header */}
       <div className="space-y-1">
         <button
-          onClick={() => router.push('/setup')}
+          onClick={() => router.push(hasAgents ? '/harnesses' : '/setup')}
           className="text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
-          ← Back to setup
+          {hasAgents ? '← Back to harnesses' : '← Back to setup'}
         </button>
-        <h1 className="text-2xl font-bold tracking-tight">Create Your First Agent</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{hasAgents ? 'Create an agent' : 'Create Your First Agent'}</h1>
       </div>
 
       {/* Step indicator */}
