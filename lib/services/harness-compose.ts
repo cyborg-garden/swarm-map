@@ -569,13 +569,41 @@ export function assertSharedVpnCompatible(opts: { vpnEnabled?: boolean; bundledO
   }
 }
 
-/** Render the hermes service's `deploy.resources.limits` block (8-space indented). */
+/**
+ * Most processes and threads the agent container may hold at once. Without one, a runaway loop that keeps spawning — a fork
+ * bomb, by accident or not — fills the host's process table and takes every
+ * other container on the machine down with it; the memory limit does not stop
+ * that soon enough.
+ *
+ * The number counts threads as well as processes. An agent is a Python gateway
+ * under s6 that starts shells and subprocesses and sometimes a headless
+ * browser, which alone can hold a few hundred threads. The sealed lab cell
+ * (lib/lab/pi-discord/cell.ts, conformance/docker/compose.ts) runs one small
+ * Node process and is capped at 256. 2048 is eight times that: several times
+ * what a busy agent holds, so normal work never reaches it, and far below the
+ * tens of thousands a host allows, so a runaway stops while the host still has
+ * room. Both compose generators use this one value.
+ */
+export const AGENT_PIDS_LIMIT = 2048
+
+/**
+ * Render the hermes service's `deploy.resources.limits` block (4-space
+ * indented): memory, cpus and the process-count limit.
+ *
+ * The pid limit is written as `deploy.resources.limits.pids`, NOT as a
+ * service-level `pids_limit`. `docker compose` refuses a service that has a
+ * `deploy.resources.limits` block and a `pids_limit` beside it ("can't set
+ * distinct values on 'pids_limit' and 'deploy.resources.limits.pids'"): it
+ * reads the absent `pids` as 0. Compose applies `limits.pids` to a plain
+ * container the same way it applies `limits.memory`.
+ */
 function resourcesBlock(memory?: string, cpus?: string): string {
   return `    deploy:
       resources:
         limits:
           memory: ${memory ?? '2G'}
-          cpus: '${cpus ?? '2.0'}'`
+          cpus: '${cpus ?? '2.0'}'
+          pids: ${AGENT_PIDS_LIMIT}`
 }
 
 /**

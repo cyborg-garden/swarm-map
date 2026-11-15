@@ -6,7 +6,7 @@
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { AGENT_PIDS_LIMIT, assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
 import { applySharedVpnToCompose } from './shared-vpn'
 import { assertNoNewline } from '@/lib/env-helpers'
 
@@ -346,6 +346,9 @@ ${googleMcpVolumes}    command: gateway
         limits:
           memory: ${memory ?? '2G'}
           cpus: '${cpus ?? '2.0'}'
+          # Process-count cap. It has to live in this block: see
+          # AGENT_PIDS_LIMIT and resourcesBlock in harness-compose.ts.
+          pids: ${AGENT_PIDS_LIMIT}
 
 networks:
   default:

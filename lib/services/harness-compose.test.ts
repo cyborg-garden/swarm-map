@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE } from './harness-compose'
+import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT } from './harness-compose'
 
 describe('generateStandaloneCompose', () => {
   const agentName = 'test-agent'
@@ -414,6 +414,44 @@ describe('generateStandaloneCompose', () => {
       const cpuOnly = generateStandaloneCompose(agentName, port, dataDir, { cpus: '3.0' })
       expect(cpuOnly).toContain('memory: 2G')
       expect(cpuOnly).toContain("cpus: '3.0'")
+    })
+  })
+
+  describe('process-count limit', () => {
+    // The agent service's own block: from its key to the next 2-space key or
+    // top-level key.
+    const agentBlock = (compose: string): string => {
+      const lines = compose.split('\n')
+      const start = lines.indexOf(`  hermes-${agentName}:`)
+      expect(start).toBeGreaterThan(-1)
+      let end = start + 1
+      while (end < lines.length && (lines[end].trim() === '' || /^ {3,}/.test(lines[end]))) end++
+      return lines.slice(start, end).join('\n')
+    }
+
+    it('is a generous whole number, well above the sealed lab cell', () => {
+      expect(Number.isInteger(AGENT_PIDS_LIMIT)).toBe(true)
+      expect(AGENT_PIDS_LIMIT).toBeGreaterThanOrEqual(1024)
+      expect(AGENT_PIDS_LIMIT).toBeLessThanOrEqual(4096)
+    })
+
+    for (const [label, opts] of [['non-VPN', {}], ['VPN', { vpnEnabled: true }]] as const) {
+      it(`${label}: the agent service carries the limit once, under deploy.resources.limits`, () => {
+        const result = generateStandaloneCompose(agentName, port, dataDir, opts)
+        expect(agentBlock(result)).toMatch(
+          new RegExp(`^ {4}deploy:\\n {6}resources:\\n {8}limits:\\n(?: {10}.*\\n)*? {10}pids: ${AGENT_PIDS_LIMIT}$`, 'm'),
+        )
+        expect(result.match(/^\s+pids:/gm)).toHaveLength(1)
+        // `docker compose` rejects a service that has a deploy.resources.limits
+        // block and a service-level pids_limit beside it, so that form is
+        // never emitted.
+        expect(result).not.toContain('pids_limit')
+      })
+    }
+
+    it('does not change with the memory and cpu settings', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { memory: '6G', cpus: '4.0' })
+      expect(result).toContain(`          pids: ${AGENT_PIDS_LIMIT}\n`)
     })
   })
 

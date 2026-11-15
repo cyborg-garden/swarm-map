@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { generateEnvContent, generateAgentCompose } from '../agent-deploy-templates'
+import { AGENT_PIDS_LIMIT, generateStandaloneCompose } from '../harness-compose'
 
 describe('generateEnvContent', () => {
   const base = { name: 'matilde', port: 8642, provider: 'anthropic', primaryModel: 'claude-opus-4-6' }
@@ -199,6 +200,16 @@ describe('generateEnvContent', () => {
 
 describe('generateAgentCompose', () => {
   const args = { slug: 'sci', port: 8642, agentDataDir: '/home/u/.hermes-sci', imageOrBuild: { image: 'ghcr.io/x:latest' } as const }
+
+  it('caps the agent service at the shared process-count limit', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
+    expect(c).toMatch(new RegExp(`^ {8}limits:\\n(?: {10}.*\\n)*? {10}pids: ${AGENT_PIDS_LIMIT}$`, 'm'))
+    expect(c.match(/^\s+pids:/gm)).toHaveLength(1)
+    // Compose rejects a service-level pids_limit beside deploy.resources.limits.
+    expect(c).not.toContain('pids_limit')
+    // Same line as the standalone generator writes.
+    expect(generateStandaloneCompose(args.slug, args.port, args.agentDataDir)).toContain(`          pids: ${AGENT_PIDS_LIMIT}\n`)
+  })
 
   it('omits the ollama sidecar by default', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
