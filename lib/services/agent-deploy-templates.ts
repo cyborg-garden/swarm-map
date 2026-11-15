@@ -322,7 +322,7 @@ ${hermesDepends}    extra_hosts:
     env_file:
       - ${agentDataDir}/.env
     ports:
-      - host_ip: ${resolveApiBindHost(apiBindHost)}
+      - host_ip: "${resolveApiBindHost(apiBindHost)}"
         published: ${port}
         target: 8642
 ${googleMcpPorts}    volumes:

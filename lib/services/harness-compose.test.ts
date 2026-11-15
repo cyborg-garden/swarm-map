@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { applySharedVpnToCompose, removeSharedVpnFromCompose, readServicePublishedPort } from './shared-vpn'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -218,13 +219,13 @@ describe('generateStandaloneCompose', () => {
 
     it('non-VPN: publishes the API port on loopback only', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir)
-      expect(result).toMatch(new RegExp(`^ {6}- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
+      expect(result).toMatch(new RegExp(`^ {6}- host_ip: "127\\.0\\.0\\.1"\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
       expect(result.match(/published:/g)).toHaveLength(1)
     })
 
     it('VPN: publishes the API port on loopback only', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
-      expect(result).toMatch(new RegExp(`^ {6}- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
+      expect(result).toMatch(new RegExp(`^ {6}- host_ip: "127\\.0\\.0\\.1"\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
     })
 
     it('VPN: the VNC and control bind hosts do not move the API port', () => {
@@ -233,24 +234,24 @@ describe('generateStandaloneCompose', () => {
         vncBindHost: '100.64.0.5',
         controlBindHost: '100.64.0.7',
       })
-      expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642`))
+      expect(result).toMatch(new RegExp(`- host_ip: "127\\.0\\.0\\.1"\\n {8}published: ${port}\\n {8}target: 8642`))
     })
 
     for (const [label, opts] of [['non-VPN', {}], ['VPN', { vpnEnabled: true }], ['shared VPN', { sharedVpn: 'private' }]] as const) {
       it(`${label}: an explicit apiBindHost is the address the API port is published on`, () => {
         const result = generateStandaloneCompose(agentName, port, dataDir, { ...opts, apiBindHost: '100.64.0.9' })
-        expect(result).toMatch(new RegExp(`host_ip: 100\\.64\\.0\\.9\\n.*published: ${port}\\n.*target: 8642`))
-        expect(result).not.toMatch(new RegExp(`host_ip: 127\\.0\\.0\\.1\\n.*published: ${port}\\n`))
+        expect(result).toMatch(new RegExp(`host_ip: "100\\.64\\.0\\.9"\\n.*published: ${port}\\n.*target: 8642`))
+        expect(result).not.toMatch(new RegExp(`host_ip: "127\\.0\\.0\\.1"\\n.*published: ${port}\\n`))
       })
     }
 
     it('an empty apiBindHost falls back to loopback, never to every interface', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: '' })
-      expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n`))
+      expect(result).toMatch(new RegExp(`- host_ip: "127\\.0\\.0\\.1"\\n {8}published: ${port}\\n`))
     })
 
     it('resolveApiBindHost passes an IP address through and turns anything else into loopback', () => {
-      for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1']) {
+      for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1', '::', '1::', 'fe80::', '2001:db8::']) {
         expect(resolveApiBindHost(ok)).toBe(ok)
       }
       for (const bad of [undefined, '', ' ', '[::1]', 'a: b', '{a: b}', 'localhost', '127.0.0.1, target: 22', '127.0.0.1\n        published: 22']) {
@@ -262,15 +263,51 @@ describe('generateStandaloneCompose', () => {
       it(`${label}: a stored value that is not an IP address is never written; loopback is`, () => {
         for (const bad of ['[::1]', 'a: b', 'localhost', '127.0.0.1, target: 22']) {
           const result = generateStandaloneCompose(agentName, port, dataDir, { ...opts, apiBindHost: bad })
+          expect(result).not.toContain(`host_ip: "${bad}`)
           expect(result).not.toContain(`host_ip: ${bad}`)
-          expect(result).toMatch(new RegExp(`host_ip: 127\\.0\\.0\\.1\\n.*published: ${port}\\n`))
+          expect(result).toMatch(new RegExp(`host_ip: "127\\.0\\.0\\.1"\\n.*published: ${port}\\n`))
         }
       })
     }
 
     it('an IPv6 apiBindHost is written as given', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: 'fd7a:115c:a1e0::1' })
-      expect(result).toContain(`      - host_ip: fd7a:115c:a1e0::1\n        published: ${port}\n`)
+      expect(result).toContain(`      - host_ip: "fd7a:115c:a1e0::1"\n        published: ${port}\n`)
+    })
+
+    // Unquoted, an address ending in a colon is read by YAML as a mapping key
+    // ("mapping values are not allowed in this context"), so the value is
+    // always written as a quoted string.
+    for (const [label, opts] of [['non-VPN', {}], ['VPN', { vpnEnabled: true }], ['shared VPN', { sharedVpn: 'private' }]] as const) {
+      it(`${label}: an IPv6 address ending in a colon is written quoted`, () => {
+        for (const addr of ['::', '1::', 'fe80::', '2001:db8::']) {
+          const result = generateStandaloneCompose(agentName, port, dataDir, { ...opts, apiBindHost: addr })
+          expect(result, addr).toMatch(new RegExp(`- host_ip: "${addr}"\\n.*published: ${port}\\n`))
+        }
+      })
+
+      it(`${label}: the default is written quoted too`, () => {
+        const result = generateStandaloneCompose(agentName, port, dataDir, opts)
+        expect(result).toMatch(new RegExp(`- host_ip: "127\\.0\\.0\\.1"\\n.*published: ${port}\\n`))
+      })
+    }
+
+    it('an address with a zone id is not an address here: loopback is written', () => {
+      expect(resolveApiBindHost('fe80::1%en0')).toBe('127.0.0.1')
+      const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: 'fe80::1%en0' })
+      expect(result).not.toContain('%en0')
+      expect(result).toContain(`      - host_ip: "127.0.0.1"\n        published: ${port}\n`)
+    })
+
+    it('the shared-VPN stash and restore keep the quoted line byte for byte', () => {
+      for (const addr of [undefined, '::', '2001:db8::', '100.64.0.9']) {
+        const plain = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: addr })
+        const on = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: addr, sharedVpn: 'private' })
+        expect(on).toBe(applySharedVpnToCompose(plain, agentName, port, 'private'))
+        expect(removeSharedVpnFromCompose(on, agentName)).toBe(plain)
+        expect(readServicePublishedPort(on, agentName)).toBe(port)
+        expect(readServicePublishedPort(plain, agentName)).toBe(port)
+      }
     })
 
     it('VPN: apiBindHost does not move the VNC or control port', () => {

@@ -134,12 +134,12 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
 
     const a = await deploy({ name: 'bind-a', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
     expect((await a.json()).ok).toBe(true)
-    expect(read('bind-a')).toMatch(/- host_ip: 127\.0\.0\.1\n {8}published: \d+\n {8}target: 8642/)
+    expect(read('bind-a')).toMatch(/- host_ip: "127\.0\.0\.1"\n {8}published: \d+\n {8}target: 8642/)
 
     h.settings = { ...h.settings, apiBindHost: '100.64.0.9' }
     const b = await deploy({ name: 'bind-b', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
     expect((await b.json()).ok).toBe(true)
-    expect(read('bind-b')).toMatch(/- host_ip: 100\.64\.0\.9\n {8}published: \d+\n {8}target: 8642/)
+    expect(read('bind-b')).toMatch(/- host_ip: "100\.64\.0\.9"\n {8}published: \d+\n {8}target: 8642/)
   })
 
   // ── Base package (v1) ─────────────────────────────────────────────────────

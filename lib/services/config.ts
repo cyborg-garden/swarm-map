@@ -10,11 +10,12 @@ import { isCatalogRetired } from '@/lib/model-catalog'
 /**
  * True when `value` is a bare IPv4 or IPv6 address (Node's net.isIP): the only
  * shape a compose `host_ip` is given for the agent API port. No brackets, no
- * hostname, no surrounding space. The settings check below and the compose
+ * hostname, no surrounding space, and no zone id: net.isIP accepts
+ * `fe80::1%en0`, docker answers "invalid ip address" to it. The settings check below and the compose
  * generators (resolveApiBindHost) both go through this one function.
  */
 export function isIpAddress(value: unknown): value is string {
-  return typeof value === 'string' && net.isIP(value) !== 0
+  return typeof value === 'string' && !value.includes('%') && net.isIP(value) !== 0
 }
 
 /**

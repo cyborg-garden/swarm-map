@@ -604,6 +604,12 @@ export const AGENT_API_BIND_HOST = '127.0.0.1'
  * that check, and a value docker refuses would turn a regenerate into a compose
  * file that no longer starts. Unset, empty and malformed all mean loopback,
  * never "every interface". Both generators call this.
+ *
+ * Callers write the result as a QUOTED YAML string (`host_ip: "<address>"`).
+ * An IPv6 address may end in a colon (`::`, `fe80::`, `2001:db8::`), and
+ * unquoted that reads as a mapping key: "mapping values are not allowed in
+ * this context". An IP address holds no quote or backslash, so plain double
+ * quotes are enough.
  */
 export function resolveApiBindHost(configured?: string): string {
   return isIpAddress(configured) ? configured : AGENT_API_BIND_HOST
@@ -730,7 +736,7 @@ ${hermesDepends}    extra_hosts:
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
 ${extraEnvLines}    ports:
-      - host_ip: ${resolveApiBindHost(apiBindHost)}
+      - host_ip: "${resolveApiBindHost(apiBindHost)}"
         published: ${port}
         target: 8642
     volumes:
@@ -810,7 +816,7 @@ ${initBlock}  wireguard:
       - ${agentDataDir}/wg-config:/config
     ports:
       # Agent API: host-local callers only by default (see AGENT_API_BIND_HOST).
-      - host_ip: ${resolveApiBindHost(apiBindHost)}
+      - host_ip: "${resolveApiBindHost(apiBindHost)}"
         published: ${port}
         target: 8642
       # Camofox control port (9377) is UNAUTHENTICATED remote browser control. The

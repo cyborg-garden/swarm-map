@@ -213,22 +213,35 @@ describe('generateAgentCompose', () => {
 
   it('publishes the agent API port on loopback only', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
-    expect(c).toMatch(/^ {6}- host_ip: 127\.0\.0\.1\n {8}published: 8642\n {8}target: 8642$/m)
+    expect(c).toMatch(/^ {6}- host_ip: "127\.0\.0\.1"\n {8}published: 8642\n {8}target: 8642$/m)
     // Port allocation and the settings route read the first published: line.
     expect(c.match(/published:\s*(\d+)/)?.[1]).toBe('8642')
   })
 
   it('publishes the agent API port on an explicit apiBindHost', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: '100.64.0.9' })
-    expect(c).toMatch(/^ {6}- host_ip: 100\.64\.0\.9\n {8}published: 8642\n {8}target: 8642$/m)
-    expect(c).not.toContain('host_ip: 127.0.0.1')
+    expect(c).toMatch(/^ {6}- host_ip: "100\.64\.0\.9"\n {8}published: 8642\n {8}target: 8642$/m)
+    expect(c).not.toContain('127.0.0.1')
     const empty = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: '' })
-    expect(empty).toContain('      - host_ip: 127.0.0.1\n')
+    expect(empty).toContain('      - host_ip: "127.0.0.1"\n')
     for (const bad of ['[::1]', 'a: b', 'localhost', '127.0.0.1, target: 22']) {
       const c2 = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: bad })
+      expect(c2).not.toContain(`host_ip: "${bad}`)
       expect(c2).not.toContain(`host_ip: ${bad}`)
-      expect(c2).toContain('      - host_ip: 127.0.0.1\n        published: 8642\n')
+      expect(c2).toContain('      - host_ip: "127.0.0.1"\n        published: 8642\n')
     }
+  })
+
+  it('writes the API bind address quoted, so an IPv6 address ending in a colon stays a string', () => {
+    for (const addr of ['::', '1::', 'fe80::', '2001:db8::']) {
+      for (const extra of [{}, { googleMcpDir: '/src/google-mcp' }, { sharedVpn: 'private' }]) {
+        const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { ...extra, apiBindHost: addr })
+        expect(c, addr).toMatch(new RegExp(`- host_ip: "${addr}"\\n.*published: 8642\\n`))
+      }
+    }
+    const zone = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: 'fe80::1%en0' })
+    expect(zone).not.toContain('%en0')
+    expect(zone).toContain('      - host_ip: "127.0.0.1"\n')
   })
 
   it('omits the ollama sidecar by default', () => {

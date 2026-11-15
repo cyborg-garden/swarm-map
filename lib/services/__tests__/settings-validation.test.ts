@@ -35,14 +35,14 @@ describe('validateSettingsPatch (P3/F6)', () => {
   })
 
   it('accepts an apiBindHost that is an IP address, or empty for the default', () => {
-    for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1', '']) {
+    for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1', '', '::', '1::', 'fe80::', '2001:db8::']) {
       expect(validateSettingsPatch({ apiBindHost: ok })).toEqual({ apiBindHost: ok })
     }
   })
 
   it('refuses an apiBindHost that docker would refuse as a host address', () => {
     // Each of these would be written into a compose file that then fails at `up`.
-    for (const bad of ['[::1]', 'a: b', '{a: b}', ' ', 'localhost', '127.0.0.1, target: 22', ' 127.0.0.1', '127.0.0.1 ']) {
+    for (const bad of ['[::1]', 'a: b', '{a: b}', ' ', 'localhost', '127.0.0.1, target: 22', ' 127.0.0.1', '127.0.0.1 ', 'fe80::1%en0', 'fe80::1%25en0', '::1%lo0']) {
       expect(() => validateSettingsPatch({ apiBindHost: bad }), JSON.stringify(bad)).toThrow(/apiBindHost must be an IP address/)
     }
   })
