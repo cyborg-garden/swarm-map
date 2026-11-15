@@ -18,9 +18,10 @@ import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWor
 import type { CheckResult } from '../suites/checks.ts'
 import {
   assertSealed, labImages, PI_CELL, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT,
-  type CellKind, type LabImages, type ProbeTargets, type RigOptions, type RigVariant, type Source,
+  type CellKind, type LabImages, type ProbeTargets, type Rig, type RigOptions, type RigVariant, type Source,
 } from './compose.ts'
-import { hostConfigProblems, mountProblems, netProblems, parseReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from './report.ts'
+import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from './report.ts'
+import { inSubnet, onFreeSubnets, pickSubnets, usedSubnets } from './subnets.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
 
@@ -277,8 +278,12 @@ export interface LiveRig {
   logs(service: string): string
   /** Run a command in a container. Not blocking: this process must keep answering while the command runs. */
   exec(service: string, command: string[]): Promise<string>
-  inspect(service: string): { env: Record<string, string>; mounts: { Type: string; Name?: string; Source: string; Destination: string }[]; networks: string[]; readOnly: boolean; privileged: boolean; host: HostConfig }
+  inspect(service: string): { env: Record<string, string>; mounts: { Type: string; Name?: string; Source: string; Destination: string }[]; networks: string[]; addresses: Record<string, string>; readOnly: boolean; privileged: boolean; host: HostConfig }
   networkInternal(network: string): boolean
+  /** What each network of this rig was written down as, by its name in the compose file. */
+  written: Rig['written']
+  /** What Docker says a network is. Undefined if it has none by that name. */
+  network(network: string): DockerNetwork | undefined
   sinkHits(): string[]
   /** Wait for a line starting with `marker` in the door's output. Undefined if the door stopped or time ran out. */
   doorLine(marker: string, timeoutMs: number): Promise<string | undefined>
@@ -286,11 +291,14 @@ export interface LiveRig {
 
 export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
 
+const rigSubnets = ([cell, outside, spare]: string[]): RigOptions['subnets'] => ({ cell, outside, spare })
+
 /** Start one rig, hand it to `body`, and take it down whatever happens. */
 export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Promise<T>): Promise<T> {
   const nonce = randomBytes(4).toString('hex')
   const prefix = labPrefix()
-  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`, prefix, runId: RUN_ID, images: checkedImages(), cell: cellKind }
+  // Three blocks of the lab's range, to render with before Docker is asked which are free. The rig is started on others.
+  const options: RigOptions = { ...request, nonce, brainToken: `BRAIN-${nonce}-${randomBytes(8).toString('hex')}`, prefix, runId: RUN_ID, images: checkedImages(), cell: cellKind, subnets: rigSubnets(pickSubnets(3, [])) }
   // F2 and F5 happen in here, before Docker is asked for anything.
   const project = renderRig(options).project
   const dir = mkdtempSync(path.join(os.tmpdir(), `${project}-`))
@@ -299,23 +307,30 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
   options.hostDir = realpathSync(dir)
   // `socket` only: an empty file of the rig's own, to be mounted where a Docker socket would be.
   if (request.variant === 'socket') writeFileSync(path.join(dir, 'docker.sock'), '')
-  const first = renderRig(options)
-  if (request.variant === 'good') assertSealed(first, cellKind)
   const file = path.join(dir, 'compose.json')
   const compose = (args: string[], timeoutMs = 120_000): string => docker(['compose', '--project-name', project, '--file', file, ...args], { timeoutMs })
   const container = (service: string): string => `${project}-${service}-1`
+  const down = (): void => { tryDocker(['compose', '--project-name', project, '--file', file, 'down', '--volumes', '--remove-orphans', '--timeout', '1'], { timeoutMs: 120_000 }) }
   try {
-    // The sink first, so its address is known before the door is told what to have the cell try.
-    writeFileSync(file, JSON.stringify(first.file, null, 2))
     noteRun()
-    compose(['up', '--detach', '--no-build', '--pull', 'never', 'sink', 'control'])
-    const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, container('sink')]).trim()
-    if (!/^\d+\.\d+\.\d+\.\d+$/.test(sinkIp)) throw new Error(`the sink has no address (${sinkIp})`)
-    const rig = renderRig({ ...options, sinkIp })
-    if (request.variant === 'good') assertSealed(rig, cellKind)
-    writeFileSync(file, JSON.stringify(rig.file, null, 2))
-    // Only the two that are not up yet: naming the control again would send it to the sink a second time.
-    compose(['up', '--detach', '--no-build', '--pull', 'never', 'door', 'cell'])
+    // The rig's networks are made on blocks that are free on this Docker now. If another run takes
+    // one in between, Docker says so: what was made is taken down, and it is started on others.
+    const { rig, sinkIp } = onFreeSubnets({ count: 3, used: () => usedSubnets(tryDocker) }, (picked) => {
+      const onThese: RigOptions = { ...options, subnets: rigSubnets(picked) }
+      const first = renderRig(onThese)
+      if (request.variant === 'good') assertSealed(first, cellKind)
+      // The sink first, so its address is known before the door is told what to have the cell try.
+      writeFileSync(file, JSON.stringify(first.file, null, 2))
+      compose(['up', '--detach', '--no-build', '--pull', 'never', 'sink', 'control'])
+      const sinkIp = docker(['inspect', '--format', `{{(index .NetworkSettings.Networks "${project}_outside").IPAddress}}`, container('sink')]).trim()
+      if (!/^\d+\.\d+\.\d+\.\d+$/.test(sinkIp)) throw new Error(`the sink has no address (${sinkIp})`)
+      const rig = renderRig({ ...onThese, sinkIp })
+      if (request.variant === 'good') assertSealed(rig, cellKind)
+      writeFileSync(file, JSON.stringify(rig.file, null, 2))
+      // Only the two that are not up yet: naming the control again would send it to the sink a second time.
+      compose(['up', '--detach', '--no-build', '--pull', 'never', 'door', 'cell'])
+      return { rig, sinkIp }
+    }, down)
     // F5: everything that came up is this rig's, by name.
     const names = docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Names}}']).split('\n').filter(Boolean)
     assertOurProject(project, names, prefix)
@@ -331,15 +346,21 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
       inspect: (service) => {
         const [c] = JSON.parse(docker(['inspect', container(service)])) as [{
           Config: { Env: string[] }; Mounts: { Type: string; Name?: string; Source: string; Destination: string }[]
-          NetworkSettings: { Networks: Record<string, unknown> }; HostConfig: HostConfig & { ReadonlyRootfs: boolean }
+          NetworkSettings: { Networks: Record<string, { IPAddress?: string }> }; HostConfig: HostConfig & { ReadonlyRootfs: boolean }
         }]
         return {
           env: Object.fromEntries(c.Config.Env.map((e) => { const i = e.indexOf('='); return [e.slice(0, i), e.slice(i + 1)] })),
           mounts: c.Mounts, networks: Object.keys(c.NetworkSettings.Networks).sort(),
+          addresses: Object.fromEntries(Object.entries(c.NetworkSettings.Networks).map(([name, n]) => [name, n?.IPAddress ?? ''])),
           readOnly: c.HostConfig.ReadonlyRootfs, privileged: c.HostConfig.Privileged, host: c.HostConfig,
         }
       },
       networkInternal: (network) => docker(['network', 'inspect', '--format', '{{.Internal}}', network]).trim() === 'true',
+      written: rig.written,
+      network: (network) => {
+        const r = tryDocker(['network', 'inspect', network])
+        try { return r.ok ? (JSON.parse(r.out) as DockerNetwork[])[0] : undefined } catch { return undefined }
+      },
       sinkHits: () => live.logs('sink').split('\n').filter((line) => line.startsWith('SINK-HIT ')),
       doorLine: async (marker, timeoutMs) => {
         const deadline = Date.now() + timeoutMs
@@ -354,7 +375,7 @@ export async function withRig<T>(request: RigRequest, body: (rig: LiveRig) => Pr
     }
     return await body(live)
   } finally {
-    tryDocker(['compose', '--project-name', project, '--file', file, 'down', '--volumes', '--remove-orphans', '--timeout', '1'], { timeoutMs: 120_000 })
+    down()
     rmSync(dir, { recursive: true, force: true })
   }
 }
@@ -429,6 +450,12 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
     const sidecar = rig.inspect('door')
     s.S1.push(...given.net, ...hostConfigProblems(sidecar.host, `${rig.project}_cell`).net.map((problem) => `the sidecar container: ${problem}`))
     if (sidecar.networks.join(',') !== `${rig.project}_cell`) s.S1.push(`the sidecar container is on ${sidecar.networks.join(' and ')}`)
+    // Every network Docker made for this rig is the one written down for it: the same block, and a way out only where one was written.
+    for (const [name, written] of Object.entries(rig.written)) s.S1.push(...networkProblems(`${rig.project}_${name}`, written, rig.network(`${rig.project}_${name}`)))
+    for (const [who, at] of [['the cell', seen2.addresses], ['the sidecar container', sidecar.addresses]] as const) {
+      const address = at[`${rig.project}_cell`] ?? ''
+      if (!inSubnet(address, rig.written.cell.subnet)) s.S1.push(`${who} has the address ${address || 'none'}, which is not in the block written for its network (${rig.written.cell.subnet})`)
+    }
 
     // S2: nothing the cell runs can be changed from inside it.
     if (cell) s.S2.push(...writeProblems(cell))

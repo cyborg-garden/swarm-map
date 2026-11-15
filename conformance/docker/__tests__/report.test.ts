@@ -6,14 +6,14 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hostConfigProblems, mountProblems, netProblems, parseReport, readReport, secretProblems, writeProblems, type HostConfig, type ProbeReport } from '../report.ts'
+import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, readReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from '../report.ts'
 
 const closed = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`way out ${i}`, 'ENETUNREACH']))
 const sealed: ProbeReport = {
   who: 'cell', uid: 1000, door: 'open', doorRoute: 'open', net: closed, wrongToken: 'refused',
   secrets: [], searched: { files: 20000, procs: 4 },
   writes: { a: 'EROFS', b: 'EACCES', c: 'EACCES', d: 'EROFS', e: 'EACCES', f: 'EROFS' },
-  dockerSocket: false, mounts: ['/tmp/smlab ext4'], noNewPrivs: '1', capEff: '0000000000000000', ipv6: [],
+  dockerSocket: false, mounts: ['/tmp/smlab ext4'], noNewPrivs: '1', capEff: '0000000000000000', ipv6: [], defaultRoutes: [],
 }
 
 describe('judging a probe report', () => {
@@ -37,6 +37,14 @@ describe('judging a probe report', () => {
     expect(netProblems({ ...sealed, wrongToken: 'kept-open' })[0]).toContain('wrong cell token')
     expect(netProblems({ ...sealed, ipv6: ['2001:db8::2'] })).toEqual(['the container has an IPv6 address'])
     expect(netProblems({ ...sealed, dockerSocket: true })).toEqual(['a Docker socket is in the container'])
+  })
+
+  it('[U:probe-report] a route off the container\'s own network is a problem, and so is a probe that did not read the routes', () => {
+    expect(netProblems({ ...sealed, defaultRoutes: ['to 0.0.0.0 via 10.213.0.1 on eth0'] })).toEqual(['the container has a route off its own network (to 0.0.0.0 via 10.213.0.1 on eth0)'])
+    expect(netProblems({ ...sealed, defaultRoutes: ['the routes could not be read'] })).toHaveLength(1)
+    const older: Partial<ProbeReport> = { ...sealed }
+    delete older.defaultRoutes
+    expect(netProblems(older as ProbeReport)).toEqual(['the probe did not read the container\'s routes'])
   })
 
   it('[U:probe-report] a secret found anywhere is a problem, and a search that covered almost nothing is not a pass', () => {
@@ -74,6 +82,48 @@ describe('judging a probe report', () => {
       expect(readReport(path.join(dir, 'missing.json'))).toBeUndefined()
       expect(readReport(dir)).toBeUndefined()
     } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+})
+
+// What Docker itself says a network is, read from outside with `docker network inspect`.
+describe('judging the network Docker made against the one written down', () => {
+  const written = { internal: true, subnet: '10.213.0.16/28' }
+  // As Docker 29 reports a network that compose made from a file naming one block.
+  const made: DockerNetwork = {
+    Driver: 'bridge', Internal: true, EnableIPv6: false, IPAM: { Config: [{ Subnet: '10.213.0.16/28', Gateway: '10.213.0.17' }] },
+    Options: { 'com.docker.network.enable_ipv4': 'true' },
+  }
+  const judge = (over: Partial<DockerNetwork>, w = written): string[] => networkProblems('smlab-deadbeef_cell', w, { ...made, ...over })
+
+  it('[U:docker-network] the network that was written has no problems', () => {
+    expect(judge({})).toEqual([])
+    expect(judge({ Options: null })).toEqual([])
+    expect(judge({ Options: { 'com.docker.network.enable_ipv4': 'true', 'com.docker.network.enable_ipv6': 'false' } })).toEqual([])
+    expect(judge({ Internal: false }, { internal: false, subnet: written.subnet })).toEqual([])
+  })
+
+  it('[U:docker-network] a network on another block, on two, or on none is not the one written', () => {
+    expect(judge({ IPAM: { Config: [{ Subnet: '172.22.0.0/16', Gateway: '172.22.0.1' }] } })).toEqual([
+      'network smlab-deadbeef_cell was made on 172.22.0.0/16, not on 10.213.0.16/28 as written',
+      'network smlab-deadbeef_cell has a gateway outside its block (172.22.0.1)',
+    ])
+    expect(judge({ IPAM: { Config: [{ Subnet: '10.213.0.32/28', Gateway: '10.213.0.33' }] } })[0]).toContain('was made on 10.213.0.32/28, not on 10.213.0.16/28')
+    expect(judge({ IPAM: { Config: [{ Subnet: '10.213.0.16/28' }, { Subnet: '10.213.0.64/28' }] } })[0]).toContain('was made on 10.213.0.16/28 and 10.213.0.64/28')
+    expect(judge({ IPAM: { Config: null } })[0]).toContain('was made on no block')
+    expect(judge({ IPAM: null })[0]).toContain('was made on no block')
+    expect(networkProblems('smlab-deadbeef_cell', written, undefined)).toEqual(['network smlab-deadbeef_cell is not there, so it was not compared with what was written'])
+  })
+
+  it('[U:docker-network] a way out that was not written, a gateway from elsewhere, IPv6, another driver or an option is a problem', () => {
+    expect(judge({ Internal: false })).toEqual(['network smlab-deadbeef_cell is not internal'])
+    expect(judge({}, { internal: false, subnet: written.subnet })).toEqual(['network smlab-deadbeef_cell is internal, and was written with a way out'])
+    expect(judge({ IPAM: { Config: [{ Subnet: '10.213.0.16/28', Gateway: '192.168.65.1' }] } })).toEqual(['network smlab-deadbeef_cell has a gateway outside its block (192.168.65.1)'])
+    expect(judge({ IPAM: { Config: [{ Subnet: '10.213.0.16/28', IPRange: '10.213.0.24/29' }] } })[0]).toContain('a range of its own')
+    expect(judge({ IPAM: { Config: [{ Subnet: '10.213.0.16/28', AuxiliaryAddresses: { host: '10.213.0.20' } }] } })[0]).toContain('sets aside addresses')
+    expect(judge({ EnableIPv6: true })).toEqual(['network smlab-deadbeef_cell has IPv6 switched on'])
+    expect(judge({ Driver: 'macvlan' })).toEqual(['network smlab-deadbeef_cell is made by another driver (macvlan)'])
+    expect(judge({ Options: { 'com.docker.network.bridge.gateway_mode_ipv4': 'routed' } })).toEqual(['network smlab-deadbeef_cell was given an option (com.docker.network.bridge.gateway_mode_ipv4=routed)'])
+    expect(judge({ Options: { 'com.docker.network.enable_ipv6': 'true' } })[0]).toContain('was given an option')
   })
 })
 

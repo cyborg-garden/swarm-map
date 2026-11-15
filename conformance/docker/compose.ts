@@ -3,6 +3,9 @@
 //   cell     (internal)   door <-> cell          the only way out of the cell is the door
 //   outside  (internal)   sink, control          the sink stands in for "the internet"
 //
+// Each network names a small block of addresses of its own (see subnets.ts),
+// so starting a rig does not depend on what Docker's own pools have left.
+//
 // The door container is the sidecar's side: the door, the model route, the
 // scripted model and the fake connector, in one process. The cell container
 // holds the shim and the harness. The sink logs every connection it gets, and
@@ -21,8 +24,9 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { assertNoCredentials, labPrefix, projectPattern, RefusingToRun } from '../guards/preflight.ts'
+import { labNetwork, writtenNetworkProblems, type LabNetwork } from './subnets.ts'
 
-export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out'] as const
+export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out', 'other-subnet'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
@@ -149,9 +153,17 @@ export const SINK_PORT = 8080
 /** Where the lab's files sit in both images. */
 export const SWARM_ROOT = '/opt/swarm'
 
+/**
+ * The block of addresses each network of a rig is made on. `spare` is for the
+ * one more network a rig broken on purpose makes. All three are picked for the
+ * rig from what is free on this Docker (subnets.ts).
+ */
+export interface RigSubnets { cell: string; outside: string; spare: string }
+
 export interface RigOptions {
   /** Eight hex digits. Names the project and stamps every fake of this run. */
   nonce: string
+  subnets: RigSubnets
   brainToken: string
   /** The check the door container runs, or `hold` to stay up for probes from outside. */
   check: string
@@ -236,11 +248,20 @@ export interface Service {
 export interface ComposeFile {
   name: string
   services: Record<'door' | 'cell' | 'sink' | 'control', Service>
-  networks: Record<string, { internal: boolean; enable_ipv6: false; labels?: Record<string, string> }>
+  networks: Record<string, LabNetwork>
   volumes: { lab: { labels?: Record<string, string> } }
 }
 
-export interface Rig { project: string; file: ComposeFile }
+export interface Rig {
+  project: string
+  file: ComposeFile
+  /**
+   * What each network of this rig is meant to be: whether it has a way out,
+   * and its block. In every rig but `other-subnet` this is what the file says.
+   * What Docker really made is compared with it.
+   */
+  written: Record<string, { internal: boolean; subnet: string }>
+}
 
 const NO_IPV6 = { 'net.ipv6.conf.all.disable_ipv6': '1' }
 
@@ -266,6 +287,8 @@ export function renderRig(o: RigOptions): Rig {
   if (!projectPattern(prefix).test(project)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!RIG_VARIANTS.includes(o.variant)) throw new RefusingToRun('F5', `not a rig variant: ${o.variant}`)
   if (o.runId !== undefined && !/^[0-9a-f]{16}$/.test(o.runId)) throw new RefusingToRun('F5', 'not a run id')
+  const blocks = writtenNetworkProblems({ cell: labNetwork(true, o.subnets?.cell), outside: labNetwork(true, o.subnets?.outside), spare: labNetwork(true, o.subnets?.spare) })
+  if (blocks.length > 0) throw new RefusingToRun('F5', `not three blocks for a rig's networks: ${blocks.join('; ')}`)
   const kind = o.cell ?? PI_CELL
   const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? labImages(undefined, undefined, kind)
 
@@ -296,8 +319,8 @@ export function renderRig(o: RigOptions): Rig {
       control: { ...service(RIG_IMAGE, 'control.ts', ['outside'], { SWARMLAB_NONCE: o.nonce }), depends_on: ['sink'] },
     },
     networks: {
-      cell: { internal: true, enable_ipv6: false },
-      outside: { internal: true, enable_ipv6: false },
+      cell: labNetwork(true, o.subnets.cell),
+      outside: labNetwork(true, o.subnets.outside),
     },
     volumes: { lab: {} },
   }
@@ -306,7 +329,7 @@ export function renderRig(o: RigOptions): Rig {
   if (o.variant === 'route-out') cell.networks.push('outside')
   if (o.variant === 'open') {
     cell.networks.push('open')
-    file.networks.open = { internal: false, enable_ipv6: false }
+    file.networks.open = labNetwork(false, o.subnets.spare)
   }
   if (o.variant === 'host-mount') cell.volumes!.push(`${o.hostDir ?? '/nonexistent'}:/mnt/host:ro`)
   // The control is put where it cannot reach the sink, so the sink's log stays empty and proves nothing.
@@ -323,6 +346,13 @@ export function renderRig(o: RigOptions): Rig {
   // so this one also gets back root's usual power over files.
   if (o.variant === 'writable') { cell.user = '0'; cell.read_only = false; cell.cap_add = ['DAC_OVERRIDE'] }
 
+  const written = Object.fromEntries(Object.entries(file.networks).map(([name, n]) => [name, { internal: n.internal, subnet: n.ipam.config[0].subnet }]))
+  // The two networks are made on each other's blocks. Nothing else differs: each still has no way out.
+  if (o.variant === 'other-subnet') {
+    file.networks.cell = labNetwork(true, o.subnets.outside)
+    file.networks.outside = labNetwork(true, o.subnets.cell)
+  }
+
   // Last, so a network added by a broken rig carries it too.
   if (o.runId !== undefined) {
     const labels = { [RUN_LABEL]: o.runId }
@@ -335,7 +365,7 @@ export function renderRig(o: RigOptions): Rig {
       throw new RefusingToRun('F2', `(service ${name}) ${(err as Error).message.replace(/^REFUSING TO RUN: F2 /, '')}`)
     }
   }
-  return { project, file }
+  return { project, file, written }
 }
 
 // Compose settings that share something with the host or with another container. No service of a sealed rig sets one.
@@ -355,6 +385,10 @@ export function assertSealed(rig: Rig, kind: CellKind = PI_CELL): void {
   for (const [name, network] of Object.entries(file.networks)) {
     if (network.internal !== true) problems.push(`network ${name} is not internal`)
   }
+  // Each network names one block of the lab's own and nothing else: no gateway, no driver, no option.
+  problems.push(...writtenNetworkProblems(file.networks))
+  const says = Object.fromEntries(Object.entries(file.networks).map(([name, n]) => [name, { internal: n.internal, subnet: n.ipam?.config?.[0]?.subnet }]))
+  if (JSON.stringify(says) !== JSON.stringify(rig.written)) problems.push('a network is not on the block written down for it')
   const cell = file.services.cell
   if (cell.networks.join(',') !== 'cell') problems.push(`the cell is on ${cell.networks.join(' and ')}`)
   const door = file.services.door

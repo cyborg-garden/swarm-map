@@ -3,7 +3,7 @@
   "version": "0.34.60",
   "harnessBuild": "real",
   "substrate": "docker",
-  "date": "2026-11-14",
+  "date": "2026-11-15",
   "runner": {
     "kind": "docker",
     "server": "29.5.2",
@@ -286,6 +286,11 @@
       "checks": []
     },
     {
+      "rule": "bots.loop",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "bots.no-self",
       "status": "shared",
       "checks": []
@@ -377,6 +382,16 @@
     },
     {
       "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "out.size",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "in.once",
       "status": "shared",
       "checks": []
     },
@@ -520,6 +535,16 @@
     },
     {
       "shim": "door-out",
+      "mustFail": [
+        "S1"
+      ],
+      "failed": [
+        "S1"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "other-subnet",
       "mustFail": [
         "S1"
       ],

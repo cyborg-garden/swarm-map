@@ -61,6 +61,17 @@ function gateways(): string[] {
       return [first >>> 24, (first >>> 16) & 255, (first >>> 8) & 255, first & 255].join('.')
     })
 }
+/**
+ * Routes that lead off the container's own networks: any line of the kernel's table that has a
+ * gateway, or that is for every address. A network with no way out has none. One that could not be read is reported as such, which fails.
+ */
+function defaultRoutes(): string[] {
+  let table: string
+  try { table = readFileSync('/proc/net/route', 'utf8') } catch { return ['the routes could not be read'] }
+  const hex = (word: string): string => (word.match(/../g) ?? []).reverse().map((byte) => parseInt(byte, 16)).join('.')
+  return table.split('\n').slice(1).map((line) => line.trim().split(/\s+/)).filter((f) => f.length >= 8 && (!/^0+$/.test(f[2]) || /^0+$/.test(f[7])))
+    .map((f) => `to ${hex(f[1])} via ${hex(f[2])} on ${f[0]}`)
+}
 const lookup = (name: string): Promise<string> =>
   new Promise((resolve) => {
     const timer = setTimeout(() => resolve('timeout'), WAIT * 2)
@@ -198,6 +209,7 @@ async function main(): Promise<void> {
     noNewPrivs: field('NoNewPrivs'),
     capEff: field('CapEff'),
     ipv6: Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv6' && !a.internal).map((a) => a!.address),
+    defaultRoutes: defaultRoutes(),
   }
   const line = JSON.stringify(report)
   if (args.out) writeFileSync(args.out, line + '\n')

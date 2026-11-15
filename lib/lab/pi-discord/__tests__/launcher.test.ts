@@ -8,7 +8,8 @@ import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { validatePolicy } from '../../../core/policy/validate.ts'
 import { labImages } from '../../../../conformance/docker/compose.ts'
-import { CELL_ENV, launcherImages, renderCell, sealProblems, type CellOptions } from '../cell.ts'
+import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subnets.ts'
+import { CELL_ENV, launcherImages, networksWritten, renderCell, sealProblems, type CellOptions } from '../cell.ts'
 import { botsLine, parseConfig, policyFor, systemPromptFor } from '../config.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
 import { readSecretFile, secretFileProblem } from '../secrets.ts'
@@ -192,7 +193,10 @@ describe('pi-discord secret files', () => {
 
 describe('pi-discord cell, as written', () => {
   const cellNonce = '0123456789abcdef'.repeat(2)
-  const options: CellOptions = { nonce: '0badf00d', cellNonce, brainToken: `BRAIN-${cellNonce}-0123456789abcdef`, brainPort: 50001, routePort: 50002, model: 'lab/model', systemPrompt: 'You are Fern. You have no tools.' }
+  // Three blocks of whatever range this run takes its networks from, the first three in it.
+  const [cellBlock, egressBlock, outsideBlock] = pickSubnets(3, [], labSubnetBase(), 0)
+  const subnets = { cell: cellBlock, egress: egressBlock, outside: outsideBlock }
+  const options: CellOptions = { nonce: '0badf00d', cellNonce, brainToken: `BRAIN-${cellNonce}-0123456789abcdef`, brainPort: 50001, routePort: 50002, model: 'lab/model', systemPrompt: 'You are Fern. You have no tools.', subnets }
 
   it('is sealed: one network with no way out, read-only, non-root, one folder of its own, no published port', () => {
     const file = renderCell(options)
@@ -205,6 +209,21 @@ describe('pi-discord cell, as written', () => {
     expect(cell.environment.SMLAB_SYSTEM_PROMPT).toBe('You are Fern. You have no tools.')
     expect(door.environment).toEqual({ SMLAB_RELAY: '7801=host.docker.internal:50001,7802=host.docker.internal:50002' })
     expect(JSON.stringify(file)).not.toMatch(/"ports"|docker\.sock|privileged/)
+  })
+
+  it('every network names a block of its own, so a start does not depend on what Docker\'s pools have left', () => {
+    const file = renderCell(options)
+    expect(file.networks).toEqual({
+      cell: { internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.cell }] } },
+      egress: { internal: false, enable_ipv6: false, ipam: { config: [{ subnet: subnets.egress }] } },
+    })
+    const dry = renderCell({ ...options, withSink: true })
+    expect(dry.networks.outside).toEqual({ internal: true, enable_ipv6: false, ipam: { config: [{ subnet: subnets.outside }] } })
+    expect(sealProblems(dry)).toEqual([])
+    expect(networksWritten(dry)).toEqual({ cell: { internal: true, subnet: subnets.cell }, egress: { internal: false, subnet: subnets.egress }, outside: { internal: true, subnet: subnets.outside } })
+    expect(JSON.stringify(dry.networks)).not.toMatch(/gateway|driver|ip_range|aux/)
+    // With no blocks handed in, the file names none, and that is not a sealed cell.
+    expect(sealProblems(renderCell({ ...options, subnets: undefined as unknown as CellOptions['subnets'] })).join('\n')).toMatch(/network cell does not name one block of its own/)
   })
 
   it('the images are named for the code they were built from, under the launcher\'s own prefix', () => {
@@ -241,6 +260,11 @@ describe('pi-discord cell, as written', () => {
     ['a capability handed back', (f) => { f.services.cell.cap_add = ['NET_ADMIN'] }, /sets cap_add/],
     ['a Docker socket for the relay', (f) => { f.services.door.volumes = ['/var/run/docker.sock:/var/run/docker.sock'] }, /Docker socket/],
     ['a relay handed more than its two ports', (f) => { f.services.door.environment.EXTRA = '1' }, /relay is handed/],
+    ['a network left to Docker\'s own pools', (f) => { delete (f.networks.cell as unknown as Record<string, unknown>).ipam }, /network cell does not name one block of its own/],
+    ['a network on one of Docker\'s own pools', (f) => { f.networks.egress.ipam.config[0].subnet = '172.20.0.0/16' }, /network egress is on 172\.20\.0\.0\/16, which is not a \/28 of /],
+    ['two networks on the same block', (f) => { f.networks.egress.ipam.config[0].subnet = f.networks.cell.ipam.config[0].subnet }, /networks cell and egress share addresses/],
+    ['a gateway of the file\'s own choosing', (f) => { Object.assign(f.networks.cell.ipam.config[0], { gateway: '10.213.0.1' }) }, /network cell does not name one block of its own/],
+    ['a network with driver options', (f) => { Object.assign(f.networks.cell, { driver_opts: { 'com.docker.network.bridge.enable_ip_masquerade': 'true' } }) }, /network cell sets driver_opts/],
   ] as [string, (f: ReturnType<typeof renderCell>) => void, RegExp][])('refuses %s', (_name, breakIt, why) => {
     const file = renderCell(options)
     breakIt(file)
@@ -250,6 +274,11 @@ describe('pi-discord cell, as written', () => {
   it('the two ways of breaking it on purpose are caught as written', () => {
     expect(sealProblems(renderCell({ ...options, broken: 'cell-on-egress' })).join()).toMatch(/the cell is on cell and egress/)
     expect(sealProblems(renderCell({ ...options, broken: 'cell-writable' })).join()).toMatch(/write its own disk/)
+    // The third is a sealed cell as written, on other blocks than the ones meant for it: only Docker can show that.
+    const swapped = renderCell({ ...options, broken: 'cell-other-subnet' })
+    expect(sealProblems(swapped)).toEqual([])
+    expect(networksWritten(swapped)).toEqual({ cell: { internal: true, subnet: subnets.egress }, egress: { internal: false, subnet: subnets.cell } })
+    expect(swapped.services).toEqual(renderCell(options).services)
   })
 
   it('refuses a nonce or a port that is not one', () => {
