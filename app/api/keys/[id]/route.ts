@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server'
 import { services } from '@/lib/services'
 import { refuseUnknownHarnesses } from '@/lib/harness-ref'
+import { restartEach, type RestartOutcome } from '@/lib/restart-outcome'
+
+// The save is done by the time a restart runs; `restarts` in each response says
+// whether the restart that applies it started.
+const recreate = (harnessIds: Iterable<string>): RestartOutcome[] =>
+  restartEach(harnessIds, 'recreate', (h, mode) => services.harness.restart(h, mode))
 
 export async function PUT(
   request: Request,
@@ -28,10 +34,7 @@ export async function PUT(
       ...(rotated.assignedTo ?? []),
       ...(currentKey?.assignedTo ?? []),
     ])
-    for (const harnessId of allAffected) {
-      try { services.harness.restart(harnessId, 'recreate') } catch {}
-    }
-    return NextResponse.json(rotated)
+    return NextResponse.json({ ...rotated, restarts: recreate(allAffected) })
   }
 
   if (!currentKey) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -39,18 +42,16 @@ export async function PUT(
   // Assignment change: setAssignment keeps keys.json and every affected agent's
   // .env in lockstep (write to newly-assigned, strip from dropped), then recreate
   // only the containers whose .env actually changed (env_file is read at creation).
+  let restarts: RestartOutcome[] = []
   if (body.assignedTo) {
-    const affected = services.keys.setAssignment(id, body.assignedTo)
-    for (const h of affected) {
-      try { services.harness.restart(h, 'recreate') } catch {}
-    }
+    restarts = recreate(services.keys.setAssignment(id, body.assignedTo))
   }
 
   // Any remaining metadata (budget/health/name).
   const { assignedTo: _assignedTo, value: _value, ...metadata } = body
   if (Object.keys(metadata).length) services.keys.update(id, metadata)
 
-  return NextResponse.json(services.keys.list().find((k) => k.id === id))
+  return NextResponse.json({ ...services.keys.list().find((k) => k.id === id), restarts })
 }
 
 export async function DELETE(
@@ -64,8 +65,5 @@ export async function DELETE(
   const affected = key?.assignedTo ?? []
   const removed = services.keys.remove(id)
   if (!removed) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  for (const harnessId of affected) {
-    try { services.harness.restart(harnessId, 'recreate') } catch {}
-  }
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, restarts: recreate(affected) })
 }
