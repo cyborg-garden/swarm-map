@@ -42,14 +42,3 @@ export const RISK_COLORS = [
   '#D58A5A', // 4 - high
   '#C46A6A', // 5 - critical
 ] as const
-
-export const SIDEBAR_ITEMS = [
-  { label: 'Dashboard', href: '/', icon: 'LayoutDashboard' },
-  { label: 'Harnesses', href: '/harnesses', icon: 'Bot' },
-  { label: 'Tools', href: '/tools', icon: 'Wrench' },
-  { label: 'Keys', href: '/keys', icon: 'KeyRound' },
-  { label: 'Memory', href: '/memory', icon: 'Brain' },
-  { label: 'Permissions', href: '/permissions', icon: 'Users' },
-  { label: 'Audit', href: '/audit', icon: 'ScrollText' },
-  { label: 'Settings', href: '/settings', icon: 'Settings' },
-] as const
