@@ -1,6 +1,6 @@
 # Swarm Map — Roadmap
 
-HSM is the management plane for multi-tenant Hermes. It configures, deploys, monitors, and controls agent harnesses. This roadmap works backward from what V1 must ship, then forward to V2.
+Swarm Map is the management plane for multi-tenant agent swarms. It configures, deploys, monitors, and controls agents. It began as a Hermes-only tool ("HSM" in older text below) and is becoming harness-agnostic. This roadmap works backward from what V1 shipped, forward to V2, then to the harness-agnostic work in V3.
 
 ---
 
@@ -30,7 +30,7 @@ HSM is the management plane for multi-tenant Hermes. It configures, deploys, mon
 - [x] Live cost/invocations on harnesses list (queries state.db per poll)
 - [x] Budget enforcement (soft) — pre_llm_call hook via policy endpoint, 80%/100% thresholds
 - [x] Signal-cli health check (JSON-RPC POST to `/api/v1/rpc`, works in both daemon modes)
-- [x] Container hardening defaults (cap_drop, no-new-privileges, read_only)
+- [x] Container hardening defaults, first pass: dropped capabilities and resource limits on every generated agent, read-only root filesystem on wizard-created agents. The rest is tracked under [V3 → Sealed by default](#sealed-by-default).
 - [x] Sane policy defaults on wizard deploy (memory scope, HSM URL, agent name)
 - [x] Platform setup improvements (admin fields, token validation, SOUL template)
 - [x] Stop/Start button on harness detail page + loading feedback on all actions
@@ -162,6 +162,63 @@ HSM writes the allowed capability list to the agent's config. Hermes reads it an
 
 ---
 
+## V3: Harness-Agnostic Swarm Map
+
+**Ship when:** An agent on a second harness is created, configured, and watched from the same dashboard as a Hermes agent, and every rule shown in the UI is one something actually enforces.
+
+The design is written up in [`docs/lab/primitives.md`](lab/primitives.md). The lab slices ([Pi](lab/pi-slice.md), [Pi in Discord](lab/pi-discord.md), [Letta Code](lab/letta-code.md)) prove it outside the dashboard. V3 brings it into the product.
+
+### The door
+
+A small guard process sits beside each agent and owns chat in, chat out, model traffic, tool approvals and keys. The harness runs in a sealed cell and is never asked to enforce a rule.
+
+- [x] Rule catalogue and conformance tests that every harness must pass
+- [x] Pi behind the door (lab)
+- [x] Letta Code behind the door (lab)
+- [ ] Door runs supervised next to the fleet, started and stopped by Swarm Map
+- [ ] Rules pushed from Swarm Map to each door, authenticated per agent
+- [ ] First door agent managed end to end from the dashboard
+- [ ] Claude Agent SDK as a harness
+- [ ] Hermes stays in native mode, with its rules rendered from the same record and each claim backed by a conformance test
+
+### One agent record
+
+Swarm Map owns a neutral record per agent: who it hears, who it answers, per-surface permissions, admins, keys, memory scope, resources. Each harness adapter renders that record into its own config and declares what it can honour.
+
+- [ ] Typed agent record as the source of truth (generated files are rendered from it, never patched)
+- [ ] One compose generator for every create path
+- [ ] Harness adapter owns lifecycle, logs, health, usage and key injection
+- [ ] Surface and key settings written through the adapter, not as harness-specific variables
+- [ ] Per-rule status in three states: enforced by the harness, enforced by the door, not enforced
+
+### Sealed by default
+
+- [ ] Every new agent gets the lab cell's defaults: non-root, read-only filesystem, no added privileges, process and memory limits
+- [ ] Outbound network closed by default, opened per agent
+- [ ] Keys held outside the agent; the agent sees short-lived or placeholder credentials
+- [ ] Each agent has its own identity when it calls the Swarm Map API
+- [ ] Dashboard listens on loopback by default, with a documented path for remote access
+- [ ] Named operators instead of one shared token, so the audit log records who
+
+### Substrate
+
+Agents ship as OCI images and that stays. What runs the image becomes a choice.
+
+- [ ] Substrate interface under the Docker service (create, start, stop, exec, logs, stats)
+- [ ] VM-per-agent option on macOS
+- [ ] WebAssembly is not planned for whole agents (they need a shell and subprocesses). It may suit small shared plugins later.
+
+### Dashboard
+
+- [ ] "Needs you" view: broken agents, stale builds, pending updates and budget alerts in one place, worst first
+- [ ] Harness shown on every agent; tabs and controls appear only when that harness supports them
+- [ ] One place to set who an agent hears and answers
+- [ ] Restarts report whether the agent came back, not only that the request was accepted
+- [ ] Shorter agent page, with advanced settings out of the way
+- [ ] Harness-neutral wording throughout
+
+---
+
 ## Dependencies on Hermes Fork (hermes-agent-mt)
 
 HSM configures; Hermes enforces. These items need fork/upstream changes before HSM can expose them:
@@ -205,7 +262,7 @@ HSM configures; Hermes enforces. These items need fork/upstream changes before H
 
 ## Architecture Principles
 
-1. **HSM configures, Hermes enforces.** No enforcement logic in HSM. It writes env vars and config; Hermes reads them.
+1. **Native mode: Swarm Map configures, the harness enforces.** This is how Hermes agents work today: Swarm Map writes env vars and config, Hermes reads them. **Door mode: the door enforces.** New harnesses run behind a guard that Swarm Map configures, so a rule never depends on the harness honouring it (see V3).
 2. **No permission matrix.** Flat per-surface admin lists managed via env vars. No groups × tiers × tools cross-product.
 3. **Tiers are labels.** They inform defaults but don't bind permissions programmatically.
 4. **Wizard produces secure agents.** Every agent created through HSM gets baseline security without manual config.
