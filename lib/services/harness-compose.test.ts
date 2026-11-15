@@ -236,6 +236,25 @@ describe('generateStandaloneCompose', () => {
       expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642`))
     })
 
+    for (const [label, opts] of [['non-VPN', {}], ['VPN', { vpnEnabled: true }], ['shared VPN', { sharedVpn: 'private' }]] as const) {
+      it(`${label}: an explicit apiBindHost is the address the API port is published on`, () => {
+        const result = generateStandaloneCompose(agentName, port, dataDir, { ...opts, apiBindHost: '100.64.0.9' })
+        expect(result).toMatch(new RegExp(`host_ip: 100\\.64\\.0\\.9\\n.*published: ${port}\\n.*target: 8642`))
+        expect(result).not.toMatch(new RegExp(`host_ip: 127\\.0\\.0\\.1\\n.*published: ${port}\\n`))
+      })
+    }
+
+    it('an empty apiBindHost falls back to loopback, never to every interface', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: '' })
+      expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n`))
+    })
+
+    it('VPN: apiBindHost does not move the VNC or control port', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true, apiBindHost: '100.64.0.9' })
+      expect(result).toMatch(/- host_ip: 127\.0\.0\.1\n {8}published: 9642\n {8}target: 9377/)
+      expect(result).toMatch(/- host_ip: 127\.0\.0\.1\n {8}published: 10642\n {8}target: 6080/)
+    })
+
     it('the first published: line is still the API port', () => {
       // Port allocation and the settings route read the first /published:\s*(\d+)/.
       for (const opts of [{}, { vpnEnabled: true }]) {

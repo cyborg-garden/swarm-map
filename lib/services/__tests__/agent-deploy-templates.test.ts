@@ -218,6 +218,14 @@ describe('generateAgentCompose', () => {
     expect(c.match(/published:\s*(\d+)/)?.[1]).toBe('8642')
   })
 
+  it('publishes the agent API port on an explicit apiBindHost', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: '100.64.0.9' })
+    expect(c).toMatch(/^ {6}- host_ip: 100\.64\.0\.9\n {8}published: 8642\n {8}target: 8642$/m)
+    expect(c).not.toContain('host_ip: 127.0.0.1')
+    const empty = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: '' })
+    expect(empty).toContain('      - host_ip: 127.0.0.1\n')
+  })
+
   it('omits the ollama sidecar by default', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
     expect(c).not.toContain('ollama-sci:')

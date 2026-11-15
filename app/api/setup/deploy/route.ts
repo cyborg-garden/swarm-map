@@ -521,7 +521,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
     const agentComposeDir = path.join(composeBaseDir, slug)
     fs.mkdirSync(agentComposeDir, { recursive: true })
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
-    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama }), 'utf-8')
+    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama, apiBindHost: settings.apiBindHost }), 'utf-8')
 
     // Start the container.
     //

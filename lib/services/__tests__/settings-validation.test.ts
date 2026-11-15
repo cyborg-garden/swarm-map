@@ -28,6 +28,20 @@ describe('validateSettingsPatch (P3/F6)', () => {
     expect(() => validateSettingsPatch({ composeFiles: ['/a.yml', 'b.yml\nrm -rf'] })).toThrow(/newline/i)
   })
 
+  it('accepts apiBindHost the same way as the other bind hosts', () => {
+    expect(validateSettingsPatch({ apiBindHost: '100.64.0.9', vncBindHost: '100.64.0.5', controlBindHost: '100.64.0.7' })).toEqual({
+      apiBindHost: '100.64.0.9', vncBindHost: '100.64.0.5', controlBindHost: '100.64.0.7',
+    })
+  })
+
+  it('refuses an apiBindHost the bind-host check refuses', () => {
+    for (const key of ['apiBindHost', 'vncBindHost', 'controlBindHost']) {
+      expect(() => validateSettingsPatch({ [key]: '127.0.0.1\n        published: 22' })).toThrow(/newline/i)
+      expect(() => validateSettingsPatch({ [key]: 8642 })).toThrow(/must be a string/)
+      expect(() => validateSettingsPatch({ [key]: null })).toThrow(/must be a string/)
+    }
+  })
+
   it('rejects an out-of-range localApiPort', () => {
     expect(() => validateSettingsPatch({ localApiPort: 70000 })).toThrow()
   })

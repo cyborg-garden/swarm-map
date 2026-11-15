@@ -24,6 +24,7 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
       case 'dataDir':
       case 'defaultImage':
       case 'vncBindHost':
+      case 'apiBindHost':
       case 'controlBindHost':
         if (typeof value !== 'string') throw new Error(`${key} must be a string`)
         assertNoNewline(value, key)
@@ -166,6 +167,7 @@ const DEFAULT_SETTINGS: Settings = {
   useLocalBuild: false,
   vncBindHost: '127.0.0.1',
   controlBindHost: '127.0.0.1',
+  apiBindHost: '127.0.0.1',
 }
 
 // Agent data directory mapping

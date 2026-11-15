@@ -303,6 +303,13 @@ export interface ComposeOptions {
    */
   controlBindHost?: string
   /**
+   * Host interface to publish the agent API port on. Defaults to
+   * AGENT_API_BIND_HOST (loopback); empty counts as unset. Set to another
+   * address of the host (e.g. a Tailscale IP) to reach the agent API from
+   * other machines. Comes from settings.apiBindHost, like the two above.
+   */
+  apiBindHost?: string
+  /**
    * Bundle an optional ollama sidecar that runs a tiny model on CPU, so a
    * brand-new agent can use a local model with zero host setup. OFF by default —
    * host-GPU ollama via host.docker.internal:11434 stays the default and is
@@ -527,7 +534,7 @@ export function generateStandaloneCompose(
   agentDataDir: string,
   options?: ComposeOptions,
 ): string {
-  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn } = options ?? {}
+  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, apiBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn } = options ?? {}
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -544,15 +551,15 @@ export function generateStandaloneCompose(
   if (sharedVpn !== undefined && sharedVpn !== null) {
     assertSharedVpnCompatible({ vpnEnabled, bundledOllama })
     return applySharedVpnToCompose(
-      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock),
+      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost),
       agentName, port, sharedVpn)
   }
 
   if (vpnEnabled) {
-    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
+    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost)
   }
 
-  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock)
+  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost)
 }
 
 /**
@@ -582,6 +589,10 @@ export function assertSharedVpnCompatible(opts: { vpnEnabled?: boolean; bundledO
  * Written long-form (`host_ip:`), the same way as the VNC and control ports.
  * A compose file already on disk keeps whatever it has; only a newly generated
  * or regenerated file gets this.
+ *
+ * This is the default. settings.apiBindHost (ComposeOptions.apiBindHost)
+ * replaces it for an install that wants agent APIs reachable on another
+ * address of the host; every place that writes a compose file passes it.
  */
 export const AGENT_API_BIND_HOST = '127.0.0.1'
 
@@ -673,6 +684,7 @@ function generatePlainCompose(
   extraMountLines: string = '',
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
+  apiBindHost?: string,
 ): string {
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
@@ -705,7 +717,7 @@ ${hermesDepends}    extra_hosts:
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
 ${extraEnvLines}    ports:
-      - host_ip: ${AGENT_API_BIND_HOST}
+      - host_ip: ${apiBindHost || AGENT_API_BIND_HOST}
         published: ${port}
         target: 8642
     volumes:
@@ -743,6 +755,7 @@ function generateVpnCompose(
   extraMountLines: string = '',
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
+  apiBindHost?: string,
 ): string {
   const camofoxPort = port + 1000
   const vncPort = port + 2000
@@ -783,8 +796,8 @@ ${initBlock}  wireguard:
     volumes:
       - ${agentDataDir}/wg-config:/config
     ports:
-      # Agent API: host-local callers only (see AGENT_API_BIND_HOST).
-      - host_ip: ${AGENT_API_BIND_HOST}
+      # Agent API: host-local callers only by default (see AGENT_API_BIND_HOST).
+      - host_ip: ${apiBindHost || AGENT_API_BIND_HOST}
         published: ${port}
         target: 8642
       # Camofox control port (9377) is UNAUTHENTICATED remote browser control. The

@@ -1113,6 +1113,26 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
     expect(options?.extraEnv).toEqual({ IRIS_INTAKE_DIR: '/opt/iris-intake' })
   })
 
+  it('a regenerate keeps the configured apiBindHost', async () => {
+    vi.mocked(services.config.getSettings).mockReturnValue({ apiBindHost: '100.64.0.9' } as never)
+    vi.mocked(services.harness.get).mockReturnValue({
+      name: 'iris',
+      runtime: 'hermes',
+      resources: { memory: '1G', cpus: '1.0' },
+      composeFile: '/tmp/iris.yml',
+    } as never)
+
+    const res = await PUT(makeRequest({
+      dmPolicy: 'approved-only',
+      resources: { memory: '2G', cpus: '2.0' },
+    }), makeParams('h_iris'))
+    expect(res.status).toBe(200)
+
+    expect(generateStandaloneCompose).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(generateStandaloneCompose).mock.calls[0][3]?.apiBindHost).toBe('100.64.0.9')
+    vi.mocked(services.config.getSettings).mockReturnValue({} as never)
+  })
+
   it('REFUSES (400, nothing written) when the saved mounts cannot render', async () => {
     // Before this guard the throw came from renderExtraMounts DURING the
     // regeneration — after the .env and the resources overlay had been written.
