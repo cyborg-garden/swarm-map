@@ -32,6 +32,7 @@ import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import type { DockerService } from './docker'
+import { isValidHarnessId } from './surface-admins'
 import type { Harness } from '@/lib/types'
 
 /**
@@ -360,7 +361,12 @@ export function harnessIdForName(name: string): string {
  *      which is overlays (harnesses.json) merged with live discovery;
  *   2. every compose dir under `<dataDir>/compose/*`, which is the only source
  *      that sees an agent with a compose file but no container and no overlay
- *      row — exactly the seraph-* case.
+ *      row — exactly the seraph-* case. Only a dir whose name could be an
+ *      agent's counts: the id it would be reported under has to be one the API
+ *      accepts (isValidHarnessId — letters, digits, '_' and '-'). A folder set
+ *      aside by hand (`<name>.removed-<date>`, `<name>.bak`) still holds a
+ *      compose file but is not an agent, and would otherwise be reported as one
+ *      for ever. The rule applies to this sweep only, never to registry rows.
  */
 export function driftTargets(opts: {
   harnesses: Harness[]
@@ -388,6 +394,7 @@ export function driftTargets(opts: {
 
   for (const d of dirs) {
     if (!d.isDirectory()) continue
+    if (!isValidHarnessId(harnessIdForName(d.name))) continue
     const composeFile = path.join(opts.composeBaseDir, d.name, 'docker-compose.yml')
     if (!fs.existsSync(composeFile)) continue
     const id = harnessIdForName(d.name)
