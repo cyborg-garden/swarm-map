@@ -97,6 +97,9 @@ After deployment, your agent appears on the dashboard.
 - Open the agent detail page for full configuration
 
 **Test via API:**
+
+The agent's API port is published on the host's loopback address (`127.0.0.1`) only, so run these on the machine the agent runs on.
+
 ```bash
 # Check agent health
 curl http://localhost:8642/health

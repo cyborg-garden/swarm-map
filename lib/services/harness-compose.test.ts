@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT } from './harness-compose'
+import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT, AGENT_API_BIND_HOST } from './harness-compose'
 
 describe('generateStandaloneCompose', () => {
   const agentName = 'test-agent'
@@ -199,18 +199,49 @@ describe('generateStandaloneCompose', () => {
       expect(result).toMatch(/- host_ip: 100\.64\.0\.5\n {8}published: 10642\n {8}target: 6080/)
     })
 
-    it('the VNC and control ports are bind-restricted — only the agent gateway stays broadly reachable', () => {
+    it('every published port is bind-restricted: VNC, control and the agent API', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
-      // Two host_ip restrictions: the human-only VNC port (6080) AND the
-      // unauthenticated camofox control port (9377). The agent gateway (8642)
-      // remains on the default bind so HSM can reach it.
+      // Three host_ip restrictions: the human-only VNC port (6080), the
+      // unauthenticated camofox control port (9377) and the agent API (8642).
       const matches = result.match(/host_ip:/g) || []
-      expect(matches).toHaveLength(2)
+      expect(matches).toHaveLength(3)
+      expect(result.match(/published:/g)).toHaveLength(3)
+    })
+  })
+
+  describe('agent API port bind', () => {
+    // The dashboard reaches the agent API from the host itself
+    // (http://localhost:<port>/health), so a loopback publish is enough.
+    it('is loopback', () => {
+      expect(AGENT_API_BIND_HOST).toBe('127.0.0.1')
     })
 
-    it('does not introduce host_ip in non-VPN compose', () => {
+    it('non-VPN: publishes the API port on loopback only', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir)
-      expect(result).not.toContain('host_ip')
+      expect(result).toMatch(new RegExp(`^ {6}- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
+      expect(result.match(/published:/g)).toHaveLength(1)
+    })
+
+    it('VPN: publishes the API port on loopback only', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
+      expect(result).toMatch(new RegExp(`^ {6}- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642$`, 'm'))
+    })
+
+    it('VPN: the VNC and control bind hosts do not move the API port', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, {
+        vpnEnabled: true,
+        vncBindHost: '100.64.0.5',
+        controlBindHost: '100.64.0.7',
+      })
+      expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n {8}target: 8642`))
+    })
+
+    it('the first published: line is still the API port', () => {
+      // Port allocation and the settings route read the first /published:\s*(\d+)/.
+      for (const opts of [{}, { vpnEnabled: true }]) {
+        const result = generateStandaloneCompose(agentName, port, dataDir, opts)
+        expect(result.match(/published:\s*(\d+)/)?.[1]).toBe(String(port))
+      }
     })
   })
 

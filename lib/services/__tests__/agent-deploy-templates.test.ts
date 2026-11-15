@@ -211,6 +211,13 @@ describe('generateAgentCompose', () => {
     expect(generateStandaloneCompose(args.slug, args.port, args.agentDataDir)).toContain(`          pids: ${AGENT_PIDS_LIMIT}\n`)
   })
 
+  it('publishes the agent API port on loopback only', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
+    expect(c).toMatch(/^ {6}- host_ip: 127\.0\.0\.1\n {8}published: 8642\n {8}target: 8642$/m)
+    // Port allocation and the settings route read the first published: line.
+    expect(c.match(/published:\s*(\d+)/)?.[1]).toBe('8642')
+  })
+
   it('omits the ollama sidecar by default', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild)
     expect(c).not.toContain('ollama-sci:')

@@ -570,6 +570,22 @@ export function assertSharedVpnCompatible(opts: { vpnEnabled?: boolean; bundledO
 }
 
 /**
+ * Host address the agent's API port is published on. Loopback: the port is
+ * reachable from the host itself and from nowhere else on the network.
+ *
+ * Everything that calls the agent API runs on the host. The dashboard's
+ * post-deploy health check curls http://localhost:<port>/health, and the docs'
+ * own examples are `curl http://localhost:<port>/...`. Agents do not call each
+ * other's API port, and chat platforms connect outbound. Published without a
+ * host address, the port listened on every interface of the host instead.
+ *
+ * Written long-form (`host_ip:`), the same way as the VNC and control ports.
+ * A compose file already on disk keeps whatever it has; only a newly generated
+ * or regenerated file gets this.
+ */
+export const AGENT_API_BIND_HOST = '127.0.0.1'
+
+/**
  * Most processes and threads the agent container may hold at once. Without one, a runaway loop that keeps spawning — a fork
  * bomb, by accident or not — fills the host's process table and takes every
  * other container on the machine down with it; the memory limit does not stop
@@ -689,7 +705,8 @@ ${hermesDepends}    extra_hosts:
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
 ${extraEnvLines}    ports:
-      - published: ${port}
+      - host_ip: ${AGENT_API_BIND_HOST}
+        published: ${port}
         target: 8642
     volumes:
       - ${agentDataDir}:/opt/data
@@ -766,7 +783,9 @@ ${initBlock}  wireguard:
     volumes:
       - ${agentDataDir}/wg-config:/config
     ports:
-      - published: ${port}
+      # Agent API: host-local callers only (see AGENT_API_BIND_HOST).
+      - host_ip: ${AGENT_API_BIND_HOST}
+        published: ${port}
         target: 8642
       # Camofox control port (9377) is UNAUTHENTICATED remote browser control. The
       # agent reaches Camofox in-namespace (localhost), so this host publish is for
