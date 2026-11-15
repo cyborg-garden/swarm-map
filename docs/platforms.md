@@ -160,7 +160,7 @@ All platforms share these conventions:
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `HERMES_DM_POLICY` | `approved-only` | Controls DM access across all platforms |
+| `HERMES_DM_POLICY` | `approved-only` | Stored for compatibility. It does not change who can DM; each platform's own allowlist does |
 | `HERMES_APPROVAL_ADMIN_ONLY` | `true` | Only admins can run `/approve` |
 
 - **Deny all by default.** Empty allowlists mean no access. You must explicitly approve users.

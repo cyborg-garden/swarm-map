@@ -115,7 +115,7 @@ If you connected Telegram or Signal, send a message to your bot. The agent will 
 Your agent is a Docker container with:
 - **Opinionated defaults** — compression, memory, session reset, voice transcription all configured
 - **Security hardening** — non-root user, dropped capabilities, read-only filesystem
-- **HSM integration** — policy plugin reports back to HSM for group approval and budget checks
+- **HSM integration** — policy plugin reports back to HSM for group approval
 - **Boot checklist** — on startup, the agent verifies its HSM connection, memory, and skills
 
 ## Already Have a Hermes Agent?
