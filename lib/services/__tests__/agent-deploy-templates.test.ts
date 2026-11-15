@@ -224,6 +224,11 @@ describe('generateAgentCompose', () => {
     expect(c).not.toContain('host_ip: 127.0.0.1')
     const empty = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: '' })
     expect(empty).toContain('      - host_ip: 127.0.0.1\n')
+    for (const bad of ['[::1]', 'a: b', 'localhost', '127.0.0.1, target: 22']) {
+      const c2 = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { apiBindHost: bad })
+      expect(c2).not.toContain(`host_ip: ${bad}`)
+      expect(c2).toContain('      - host_ip: 127.0.0.1\n        published: 8642\n')
+    }
   })
 
   it('omits the ollama sidecar by default', () => {

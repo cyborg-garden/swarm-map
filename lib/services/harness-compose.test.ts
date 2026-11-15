@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT, AGENT_API_BIND_HOST } from './harness-compose'
+import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT, AGENT_API_BIND_HOST, resolveApiBindHost } from './harness-compose'
 
 describe('generateStandaloneCompose', () => {
   const agentName = 'test-agent'
@@ -247,6 +247,30 @@ describe('generateStandaloneCompose', () => {
     it('an empty apiBindHost falls back to loopback, never to every interface', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: '' })
       expect(result).toMatch(new RegExp(`- host_ip: 127\\.0\\.0\\.1\\n {8}published: ${port}\\n`))
+    })
+
+    it('resolveApiBindHost passes an IP address through and turns anything else into loopback', () => {
+      for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1']) {
+        expect(resolveApiBindHost(ok)).toBe(ok)
+      }
+      for (const bad of [undefined, '', ' ', '[::1]', 'a: b', '{a: b}', 'localhost', '127.0.0.1, target: 22', '127.0.0.1\n        published: 22']) {
+        expect(resolveApiBindHost(bad), JSON.stringify(bad)).toBe('127.0.0.1')
+      }
+    })
+
+    for (const [label, opts] of [['non-VPN', {}], ['VPN', { vpnEnabled: true }], ['shared VPN', { sharedVpn: 'private' }]] as const) {
+      it(`${label}: a stored value that is not an IP address is never written; loopback is`, () => {
+        for (const bad of ['[::1]', 'a: b', 'localhost', '127.0.0.1, target: 22']) {
+          const result = generateStandaloneCompose(agentName, port, dataDir, { ...opts, apiBindHost: bad })
+          expect(result).not.toContain(`host_ip: ${bad}`)
+          expect(result).toMatch(new RegExp(`host_ip: 127\\.0\\.0\\.1\\n.*published: ${port}\\n`))
+        }
+      })
+    }
+
+    it('an IPv6 apiBindHost is written as given', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { apiBindHost: 'fd7a:115c:a1e0::1' })
+      expect(result).toContain(`      - host_ip: fd7a:115c:a1e0::1\n        published: ${port}\n`)
     })
 
     it('VPN: apiBindHost does not move the VNC or control port', () => {

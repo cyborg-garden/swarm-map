@@ -6,7 +6,7 @@
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { AGENT_API_BIND_HOST, AGENT_PIDS_LIMIT, assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { AGENT_PIDS_LIMIT, resolveApiBindHost, assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
 import { applySharedVpnToCompose } from './shared-vpn'
 import { assertNoNewline } from '@/lib/env-helpers'
 
@@ -264,7 +264,7 @@ export function generateAgentCompose(
     cpus?: string
     /** Join the shared gluetun VPN (lib/services/shared-vpn.ts). */
     sharedVpn?: string | null
-    /** Host address for the API port (settings.apiBindHost); loopback when unset or empty. */
+    /** Host address for the API port (settings.apiBindHost); loopback unless it is an IP address. */
     apiBindHost?: string
   },
 ): string {
@@ -322,7 +322,7 @@ ${hermesDepends}    extra_hosts:
     env_file:
       - ${agentDataDir}/.env
     ports:
-      - host_ip: ${apiBindHost || AGENT_API_BIND_HOST}
+      - host_ip: ${resolveApiBindHost(apiBindHost)}
         published: ${port}
         target: 8642
 ${googleMcpPorts}    volumes:

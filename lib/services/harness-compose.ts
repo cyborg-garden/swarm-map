@@ -11,6 +11,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { assertNoNewline } from '@/lib/env-helpers'
+import { isIpAddress } from './config'
 import { ALL_SURFACE_VARS } from '@/lib/surfaces/derive'
 import type { ExtraMount } from '@/lib/types'
 import { applySharedVpnToCompose } from './shared-vpn'
@@ -597,6 +598,18 @@ export function assertSharedVpnCompatible(opts: { vpnEnabled?: boolean; bundledO
 export const AGENT_API_BIND_HOST = '127.0.0.1'
 
 /**
+ * The address a generator writes as the API port's `host_ip`: the configured
+ * one when it is an IP address, else loopback. Settings validation already
+ * refuses anything else, but a settings file can be edited by hand or predate
+ * that check, and a value docker refuses would turn a regenerate into a compose
+ * file that no longer starts. Unset, empty and malformed all mean loopback,
+ * never "every interface". Both generators call this.
+ */
+export function resolveApiBindHost(configured?: string): string {
+  return isIpAddress(configured) ? configured : AGENT_API_BIND_HOST
+}
+
+/**
  * Most processes and threads the agent container may hold at once. Without one, a runaway loop that keeps spawning — a fork
  * bomb, by accident or not — fills the host's process table and takes every
  * other container on the machine down with it; the memory limit does not stop
@@ -717,7 +730,7 @@ ${hermesDepends}    extra_hosts:
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
 ${extraEnvLines}    ports:
-      - host_ip: ${apiBindHost || AGENT_API_BIND_HOST}
+      - host_ip: ${resolveApiBindHost(apiBindHost)}
         published: ${port}
         target: 8642
     volumes:
@@ -797,7 +810,7 @@ ${initBlock}  wireguard:
       - ${agentDataDir}/wg-config:/config
     ports:
       # Agent API: host-local callers only by default (see AGENT_API_BIND_HOST).
-      - host_ip: ${apiBindHost || AGENT_API_BIND_HOST}
+      - host_ip: ${resolveApiBindHost(apiBindHost)}
         published: ${port}
         target: 8642
       # Camofox control port (9377) is UNAUTHENTICATED remote browser control. The

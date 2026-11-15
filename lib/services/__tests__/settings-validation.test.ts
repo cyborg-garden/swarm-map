@@ -28,15 +28,34 @@ describe('validateSettingsPatch (P3/F6)', () => {
     expect(() => validateSettingsPatch({ composeFiles: ['/a.yml', 'b.yml\nrm -rf'] })).toThrow(/newline/i)
   })
 
-  it('accepts apiBindHost the same way as the other bind hosts', () => {
+  it('accepts apiBindHost beside the other bind hosts', () => {
     expect(validateSettingsPatch({ apiBindHost: '100.64.0.9', vncBindHost: '100.64.0.5', controlBindHost: '100.64.0.7' })).toEqual({
       apiBindHost: '100.64.0.9', vncBindHost: '100.64.0.5', controlBindHost: '100.64.0.7',
     })
   })
 
-  it('refuses an apiBindHost the bind-host check refuses', () => {
+  it('accepts an apiBindHost that is an IP address, or empty for the default', () => {
+    for (const ok of ['127.0.0.1', '0.0.0.0', '::1', 'fd7a:115c:a1e0::1', '100.64.0.1', '']) {
+      expect(validateSettingsPatch({ apiBindHost: ok })).toEqual({ apiBindHost: ok })
+    }
+  })
+
+  it('refuses an apiBindHost that docker would refuse as a host address', () => {
+    // Each of these would be written into a compose file that then fails at `up`.
+    for (const bad of ['[::1]', 'a: b', '{a: b}', ' ', 'localhost', '127.0.0.1, target: 22', ' 127.0.0.1', '127.0.0.1 ']) {
+      expect(() => validateSettingsPatch({ apiBindHost: bad }), JSON.stringify(bad)).toThrow(/apiBindHost must be an IP address/)
+    }
+  })
+
+  it('leaves the vnc and control bind hosts on their existing rule', () => {
+    expect(validateSettingsPatch({ vncBindHost: 'localhost', controlBindHost: 'my-host.example' })).toEqual({
+      vncBindHost: 'localhost', controlBindHost: 'my-host.example',
+    })
+  })
+
+  it('refuses, for every bind host, a non-string and a value carrying a newline', () => {
     for (const key of ['apiBindHost', 'vncBindHost', 'controlBindHost']) {
-      expect(() => validateSettingsPatch({ [key]: '127.0.0.1\n        published: 22' })).toThrow(/newline/i)
+      expect(() => validateSettingsPatch({ [key]: '127.0.0.1\n        published: 22' })).toThrow(/newline|IP address/i)
       expect(() => validateSettingsPatch({ [key]: 8642 })).toThrow(/must be a string/)
       expect(() => validateSettingsPatch({ [key]: null })).toThrow(/must be a string/)
     }

@@ -98,7 +98,7 @@ After deployment, your agent appears on the dashboard.
 
 **Test via API:**
 
-The agent's API port is published on the host's loopback address (`127.0.0.1`) by default, so run these on the machine the agent runs on. To publish it on another address of the host, set `apiBindHost` in settings (`PUT /api/settings`); it applies to compose files generated or regenerated after that.
+The agent's API port is published on the host's loopback address (`127.0.0.1`) by default, so run these on the machine the agent runs on. To publish it on another address of the host, set `apiBindHost` in settings (`PUT /api/settings`) to an IP address; it applies to compose files generated or regenerated after that.
 
 ```bash
 # Check agent health
