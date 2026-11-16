@@ -162,3 +162,51 @@ describe('the Claude Agent SDK pump: the veto', () => {
     expect(stub.sent).toHaveLength(1)
   })
 })
+
+// The veto is a callback the SDK chooses to call. The pinned version calls it for every tool it is told to
+// ask about, but nothing in the SDK makes that a promise. A tool result for a call the door was never asked
+// about means the SDK ran it on its own. The tool has run by then, so this cannot undo it: it stops the
+// session there, and the turn gives no reply.
+describe('the Claude Agent SDK pump: a call the SDK ran without asking', () => {
+  const use = (id: string, name: string) => ({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input: {} }] } })
+  const result = (id: string, isError = false) => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'done', is_error: isError }] } })
+
+  it('[U:claude-sdk-unasked] a result for a tool the session has, that the door was never asked about, stops the session and gives no reply', async () => {
+    const { session: s, stub } = session(function* (_text, o) { yield init(o); yield use('toolu_1', 'Bash'); yield result('toolu_1'); yield done('it ran') })
+    await expect(s.prompt('hello')).rejects.toThrow('the SDK ran a tool without asking the door')
+    expect(stub.closed).toEqual([0])
+    await expect(s.prompt('again')).rejects.toThrow('closed')
+  })
+
+  it('[U:claude-sdk-unasked] the same when the SDK names no call at all before the result', async () => {
+    const { session: s } = session(function* (_text, o) { yield init(o); yield result('toolu_9'); yield done('it ran') })
+    await expect(s.prompt('hello')).rejects.toThrow('the SDK ran a tool without asking the door')
+  })
+
+  it('[U:claude-sdk-unasked] positive control: a call the door was asked about passes, whatever it was told, and so does a tool the session does not have', async () => {
+    for (const allow of [true, false]) {
+      const { session: s } = session(async function* (_text, o) {
+        yield init(o)
+        yield use('toolu_1', 'Bash')
+        await o.canUseTool!('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 'toolu_1' })
+        yield result('toolu_1', !allow)
+        // A tool it was not started with fails as "no such tool", and nobody is asked.
+        yield use('toolu_2', 'WebFetch')
+        yield result('toolu_2', true)
+        yield done('fine')
+      }, { onGate: async () => allow })
+      expect(await s.prompt('hello'), String(allow)).toEqual({ text: 'fine' })
+    }
+  })
+
+  it('[U:claude-sdk-unasked] being asked about one call does not cover another call of the same tool', async () => {
+    const { session: s } = session(async function* (_text, o) {
+      yield init(o)
+      yield { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }, { type: 'tool_use', id: 'toolu_2', name: 'Bash', input: {} }] } }
+      await o.canUseTool!('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 'toolu_1' })
+      yield { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }, { type: 'tool_result', tool_use_id: 'toolu_2', content: 'y' }] } }
+      yield done('it ran')
+    }, { onGate: async () => true })
+    await expect(s.prompt('hello')).rejects.toThrow('the SDK ran a tool without asking the door')
+  })
+})

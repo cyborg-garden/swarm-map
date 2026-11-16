@@ -139,12 +139,12 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
     (name === 'Read' && inside(options.cwd, String(input.file_path ?? '')))
     || (name === 'Bash' && /^(ls|cat \S+)$/.test(String(input.command ?? '')))
 
-  async function mayRun(name: string, input: Record<string, unknown>): Promise<{ allow: boolean; message: string }> {
+  async function mayRun(name: string, input: Record<string, unknown>, toolUseID: string): Promise<{ allow: boolean; message: string }> {
     if (options.permissionMode === 'bypassPermissions' && options.allowDangerouslySkipPermissions === true) return { allow: true, message: '' }
     const mustAsk = options.settings?.permissions?.ask?.includes(name) === true
     if (!mustAsk && (runsUnasked(name, input) || options.allowedTools.includes(name))) return { allow: true, message: '' }
     if (!options.canUseTool) return { allow: false, message: 'This session has no approval surface.' }
-    const answer = await options.canUseTool(name, input, { signal })
+    const answer = await options.canUseTool(name, input, { signal, toolUseID })
     return answer.behavior === 'allow' ? { allow: true, message: '' } : { allow: false, message: answer.message }
   }
 
@@ -186,7 +186,8 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
       }
       const blocks = blocksOf(res.body)
       messages.push({ role: 'assistant', content: blocks })
-      yield { type: 'assistant' }
+      // Like the real one: the message the model sent, and then the results of its calls.
+      yield { type: 'assistant', message: { content: blocks } }
       const uses = blocks.filter((b) => b.type === 'tool_use')
       if (uses.length === 0) { text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join(''); break }
       const results: Block[] = []
@@ -196,14 +197,14 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
         let result: { text: string; isError: boolean }
         if (!tools.includes(name)) result = { text: `<tool_use_error>Error: No such tool available: ${name}.</tool_use_error>`, isError: true }
         else {
-          const may = await mayRun(name, input)
+          const may = await mayRun(name, input, use.id ?? '')
           if (closed()) return
           result = may.allow ? runTool(name, input) : { text: may.message, isError: true }
         }
         results.push({ type: 'tool_result', tool_use_id: use.id, content: result.text, is_error: result.isError })
       }
       messages.push({ role: 'user', content: results })
-      yield { type: 'user' }
+      yield { type: 'user', message: { content: results } }
     }
     save()
     // Like the real one: a failed model call is a `result` of subtype `success`, with the error where the reply would be.

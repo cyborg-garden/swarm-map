@@ -72,10 +72,11 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(broken.detail).toContain('a public agent ran a shell tool')
   }, 30_000)
 
-  it('[U:claude-sdk-must-fail] not told to ask about every tool, it runs a read the door said no to, and C4q says so for both reasons', async () => {
+  it('[U:claude-sdk-must-fail] not told to ask about every tool, it runs a read nobody asked the door about, and C4q says so', async () => {
     const [c4q] = await run('asks-sometimes', ['C4q'])
     expect(c4q.detail).toContain('expected the door to be asked once and to say no, got 0 answer(s)')
-    expect(c4q.detail).toContain('a call the door said no to ran: what it read was sent to the model')
+    // The read has run by the time the shim sees its result. The shim stops the session there, so what it read goes no further.
+    expect(c4q.detail).not.toContain('what it read was sent to the model')
   }, 30_000)
 
   it('[U:claude-sdk-must-fail] an SDK that keeps its tools on whatever it is offered fails C7n for what ran and for what the model was offered', async () => {
@@ -93,9 +94,9 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(c4m.detail).toContain('the shell tool did not make the file')
   }, 30_000)
 
-  it('[U:claude-sdk-must-fail] an SDK that has one tool fewer than it says answers every turn, and C4m says which tool did not run and what the model was really offered', async () => {
+  it('[U:claude-sdk-must-fail] an SDK that has one tool fewer than it says starts, and C4m says which tool did not run and what the model was really offered', async () => {
     const [c4m] = await run('lacks-a-tool', ['C4m'])
-    expect(c4m.detail).toBe('the edit tool did not run; the model was offered Bash, Read, and the shim maps Bash, Edit, Read')
+    expect(c4m.detail).toContain('the edit tool did not run; the model was offered Bash, Read, and the shim maps Bash, Edit, Read')
   }, 30_000)
 
   it('[U:claude-sdk-must-fail] a shim that goes on waiting for a turn nobody will read leaves the room\'s next message unanswered, and C1t says so', async () => {

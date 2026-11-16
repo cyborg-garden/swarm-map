@@ -22,13 +22,22 @@ export interface SdkMessage {
   /** On `result`: the reply. Also where the SDK writes an error, so `is_error` has to be read with it. */
   result?: string
   is_error?: boolean
+  /**
+   * On `assistant` and `user`: the message itself. The shim reads only its `tool_use` blocks
+   * (`id`, `name`) and its `tool_result` blocks (`tool_use_id`).
+   */
+  message?: { content?: unknown }
 }
 
 export type PermissionResult =
   | { behavior: 'allow'; updatedInput: Record<string, unknown> }
   | { behavior: 'deny'; message: string }
 
-export type CanUseTool = (toolName: string, input: Record<string, unknown>, options: { signal: AbortSignal }) => Promise<PermissionResult>
+export type CanUseTool = (toolName: string, input: Record<string, unknown>, options: {
+  signal: AbortSignal
+  /** Which call this is: the `id` of its `tool_use` block. The SDK 0.3.325 always sends it. */
+  toolUseID?: string
+}) => Promise<PermissionResult>
 
 export interface SdkOptions {
   cwd: string

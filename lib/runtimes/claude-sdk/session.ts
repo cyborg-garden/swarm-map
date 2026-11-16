@@ -16,8 +16,12 @@
 //   gets `vetoTimeoutMs`, and after that the answer is no. Only the exact
 //   answer `true` lets the tool run. A question that comes when no turn is
 //   open is answered no without asking anyone.
+// - Nothing in the SDK makes asking a promise. A result for a call to a tool
+//   the session has, that the door was never asked about, means the SDK ran
+//   it on its own. The tool has run by then; the session is stopped there and
+//   the turn gives no reply.
 import { CLAUDE_CODE_VERSION } from './caps.ts'
-import type { CanUseTool, ClaudeSdk, SdkOptions, SdkQuery, SdkUserMessage } from './sdk.ts'
+import type { CanUseTool, ClaudeSdk, SdkMessage, SdkOptions, SdkQuery, SdkUserMessage } from './sdk.ts'
 
 export interface GateCall { tool: string; input: unknown }
 export interface TurnResult { text: string }
@@ -41,6 +45,13 @@ export interface ClaudeSessionOptions {
 }
 
 export const DENIED = 'swarm gate: not allowed'
+export const UNASKED = 'the SDK ran a tool without asking the door'
+
+interface Block { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown }
+const blocksOf = (record: SdkMessage): Block[] => {
+  const content = record.message?.content
+  return Array.isArray(content) ? content.filter((b): b is Block => b !== null && typeof b === 'object') : []
+}
 
 /**
  * The SDK ended a turn without ever saying it had started. It does that when it is asked to
@@ -61,6 +72,9 @@ export function createClaudeSession(sdk: ClaudeSdk, options: Omit<SdkOptions, 'c
   let sessionId: string | undefined
   let closed = false
   const offered = Array.isArray(options.tools) ? options.tools : []
+  // Every call the door was asked about, by its id, and the tool each call the SDK made was for.
+  const asked = new Set<string>()
+  const called = new Map<string, string>()
 
   // The messages the SDK reads, handed over one at a time as turns are sent.
   const inbox: SdkUserMessage[] = []
@@ -73,7 +87,8 @@ export function createClaudeSession(sdk: ClaudeSdk, options: Omit<SdkOptions, 'c
     }
   }
 
-  const canUseTool: CanUseTool = async (tool, toolInput) => {
+  const canUseTool: CanUseTool = async (tool, toolInput, how) => {
+    if (typeof how?.toolUseID === 'string') asked.add(how.toolUseID)
     let allow = false
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -113,6 +128,16 @@ export function createClaudeSession(sdk: ClaudeSdk, options: Omit<SdkOptions, 'c
           if (record.claude_code_version !== CLAUDE_CODE_VERSION) throw new Error('the SDK started a Claude Code that is not the pinned version')
           if (!sameTools(record.tools ?? [], offered)) throw new Error('the SDK started with tools the turn was not offered')
           if (current) { current.started = true; clearTimeout(current.timer) }
+        } else if (record.type === 'assistant') {
+          for (const b of blocksOf(record)) if (b.type === 'tool_use' && typeof b.id === 'string') called.set(b.id, String(b.name))
+        } else if (record.type === 'user') {
+          // A tool it was not started with fails as "no such tool" and nobody is asked. Any other result needs a question first.
+          for (const b of blocksOf(record)) {
+            if (b.type !== 'tool_result') continue
+            const id = String(b.tool_use_id)
+            const tool = called.get(id)
+            if (!asked.has(id) && (tool === undefined || offered.includes(tool))) throw new Error(UNASKED)
+          }
         } else if (record.type === 'result' && current) {
           const turn = current
           current = undefined

@@ -322,17 +322,20 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
     },
     broken: {
       // C15t is red too: the added tool runs, but nobody was asked, so there is no receipt for it.
+      // C4+ and C4m are red as well: an allowed tool that runs unasked is seen by the shim, which stops the
+      // session, so the turn gives no reply.
       'ignores-verdicts': {
         what: 'The SDK started in the permission mode that asks nobody, so every tool it has runs unasked',
-        red: ['C4', 'C4p', 'C5', 'C5v', 'C15t', 'C4q'], green: allBut('C4', 'C4p', 'C5', 'C5v', 'C15t', 'C4q'),
+        red: ['C4', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C4+', 'C4m'], green: allBut('C4', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C4+', 'C4m'),
       },
+      // C4m is red too: the read it drives runs unasked, so the shim stops the session before what it read is sent on.
       'asks-sometimes': {
         what: 'The SDK started without being told to ask about every tool by name, so it asks about some calls and runs others',
-        red: ['C4q'], green: allBut('C4q'),
+        red: ['C4q', 'C4m'], green: allBut('C4q', 'C4m'),
       },
       'tools-always-on': {
         what: 'An SDK that starts with every tool the shim has a class for, whatever it was offered, asks nobody, and reports the tools it was given',
-        red: ['C4', 'C4a', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C7n'], green: allBut('C4', 'C4a', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C7n'),
+        red: ['C4', 'C4a', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C7n', 'C4+', 'C4m'], green: allBut('C4', 'C4a', 'C4p', 'C5', 'C5v', 'C15t', 'C4q', 'C7n', 'C4+', 'C4m'),
       },
       'leaks-env': {
         what: 'The real model key planted in the SDK\'s environment',
