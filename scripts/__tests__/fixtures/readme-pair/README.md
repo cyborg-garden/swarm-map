@@ -27,7 +27,7 @@ It also gets harder when your agents don't all run on the same harness, because 
 
 ## What People Build With It
 
-**The indie hacker** runs 3 agents: a customer support bot on Telegram, a research assistant on Signal, and a coding helper via API. Each has its own model cascade (Claude for complex tasks, Gemini Flash for quick ones), its own budget cap, and its own personality. SM manages all three from one dashboard.
+**The indie hacker** runs 3 agents: a customer support bot on Telegram, a research assistant on Signal, and a coding helper via API. Each has its own model cascade (Claude for complex tasks, Gemini Flash for quick ones), its own budget, and its own personality. SM manages all three from one dashboard.
 
 **The small team** gives each team member their own AI assistant on Mattermost. Memory is scoped per-channel — what the engineering channel discusses stays there. The team lead manages API keys, monitors costs, and approves new group connections from SM.
 
@@ -45,7 +45,7 @@ It also gets harder when your agents don't all run on the same harness, because 
 
 🔌 **Platform Connections** — Connect agents to Signal, Telegram, Mattermost, or expose them via API. Manage surfaces from the UI.
 
-💰 **Budget Enforcement** — Set monthly spend limits per API key. Agents self-throttle when budget is exceeded.
+💰 **Budget Tracking** — Set a monthly budget per API key and see spend against it. Budgets are not enforced yet; a hard cap is on the [roadmap](docs/ROADMAP.md).
 
 🧩 **One Runtime Seam** — Hermes (container-per-agent) is the supported runtime. More harnesses are planned behind the same rules; [Runtimes](docs/runtimes.md) has the current state.
 
@@ -62,7 +62,7 @@ Swarm Map drives one agent runtime today.
 | Start / stop / restart / rebuild | yes |
 | Messaging surfaces (Signal / Telegram / Mattermost / Discord) | yes, direct |
 | Group approval + audit | yes |
-| Budget enforcement | yes |
+| Budget tracking (not enforced yet) | yes |
 
 The old Letta integration (a client for Letta's retired self-hosted server, and a Hermes front that proxied to it) was removed. A stored row tagged with a retired or unknown runtime is listed separately, is never treated as Hermes, and can only be forgotten.
 

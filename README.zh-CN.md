@@ -1,5 +1,5 @@
-<!-- 译自 README.md @ fbe08cc；如有出入，以英文版为准。 -->
-<!-- Translated from README.md @ fbe08cc. The English README is authoritative. -->
+<!-- 译自 README.md @ 127071f；如有出入，以英文版为准。 -->
+<!-- Translated from README.md @ 127071f. The English README is authoritative. -->
 
 # Swarm Map
 
@@ -30,7 +30,7 @@ Swarm Map 就是这个控制平面。一个界面即可部署、配置和管理�
 
 ## 大家用它做什么
 
-**独立开发者**运行 3 个智能体：Telegram 上的客服机器人、Signal 上的研究助理，以及通过 API 调用的编程助手。每个都有自己的模型级联（复杂任务用 Claude，简单任务用 Gemini Flash）、自己的预算上限和自己的人格。SM 在一个控制台里管理这三个。
+**独立开发者**运行 3 个智能体：Telegram 上的客服机器人、Signal 上的研究助理，以及通过 API 调用的编程助手。每个都有自己的模型级联（复杂任务用 Claude，简单任务用 Gemini Flash）、自己的预算和自己的人格。SM 在一个控制台里管理这三个。
 
 **小团队**在 Mattermost 上给每位成员配一个专属 AI 助手。记忆按频道隔离——工程频道讨论的内容只留在工程频道。团队负责人在 SM 里管理 API 密钥、监控成本、审批新的群组接入。
 
@@ -48,7 +48,7 @@ Swarm Map 就是这个控制平面。一个界面即可部署、配置和管理�
 
 🔌 **平台连接** —— 将智能体连接到 Signal、Telegram、Mattermost，或通过 API 暴露。在界面上管理接入面。
 
-💰 **预算约束** —— 为每个 API 密钥设置月度花费上限。超出预算时智能体会自行限流。
+💰 **预算追踪** —— 为每个 API 密钥设置月度预算，并查看花费相对预算的情况。预算暂未强制执行；硬性上限已列入[路线图](docs/ROADMAP.md)（英文）。
 
 🧩 **一个运行时接口** —— Hermes（每个智能体一个容器）是受支持的运行时。更多 harness 计划在同一套规则下接入；最新状态见 [Runtimes](docs/runtimes.md)。
 
@@ -65,7 +65,7 @@ Swarm Map 目前只驱动一种智能体运行时。
 | 启动 / 停止 / 重启 / 重建 | 支持 |
 | 消息平台（Signal / Telegram / Mattermost / Discord） | 支持，直连 |
 | 群组审批 + 审计 | 支持 |
-| 预算约束 | 支持 |
+| 预算追踪（暂未强制执行） | 支持 |
 
 旧的 Letta 集成（Letta 已退役的自托管服务器的客户端，以及一个代理到该服务器的 Hermes 前端）已被移除。标记为已退役或未知运行时的已存储行会单独列出，永远不会被当作 Hermes 处理，只能被遗忘。
 
