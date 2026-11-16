@@ -377,3 +377,27 @@ describe('model route: what reaches the provider, and where', () => {
     }
   })
 })
+
+// The cap holds calls in line one at a time. In this format the usage of one call comes in two events,
+// and each call keeps its own half-figure: calls side by side must not mix theirs.
+describe('model route, Anthropic Messages: the cap under parallel calls', () => {
+  const five = () => Promise.all([1, 2, 3, 4, 5].map((n) => ask(user(`CANARY-p${n}`, { stream: true })).then(async (r) => ({ status: r.status, body: await r.text() }))))
+
+  it('[U:budget-parallel] streamed calls sent at once cannot all slip under the cap: only what the budget covers reaches the model', async () => {
+    await start([{ match: 'CANARY-p', text: 'slow', delayMs: 60 }], policy({ budget: { monthlyUsd: 2, onExceed: 'refuse' } }))
+    const got = await five()
+    expect(got.filter((r) => r.status === 200)).toHaveLength(2)
+    expect(got.filter((r) => r.status === 402)).toHaveLength(3)
+    expect(model!.requests).toHaveLength(2)
+    expect(model!.maxInFlight).toBe(1)
+    expect(route!.meter()).toMatchObject({ inTokens: 200, outTokens: 40, usd: 2 })
+  })
+
+  it('[U:budget-parallel] positive control: with no cap to hold, they run side by side, and each is metered from its own two events', async () => {
+    await start([{ match: 'CANARY-p', text: 'slow', delayMs: 200 }])
+    const got = await five()
+    expect(got.map((r) => r.status)).toEqual([200, 200, 200, 200, 200])
+    expect(model!.maxInFlight).toBeGreaterThan(1)
+    expect(route!.meter()).toMatchObject({ inTokens: 500, outTokens: 100, usd: 5 })
+  })
+})
