@@ -19,7 +19,9 @@
 // - Nothing in the SDK makes asking a promise. A result for a call to a tool
 //   the session has, that the door was never asked about, means the SDK ran
 //   it on its own. The tool has run by then; the session is stopped there and
-//   the turn gives no reply.
+//   the turn gives no reply. A call it turned down before it would ask (input
+//   it rejects, an edit of a file it has not read) comes back as an error
+//   that opens with `<tool_use_error>`, and is not a run.
 import { CLAUDE_CODE_VERSION } from './caps.ts'
 import type { CanUseTool, ClaudeSdk, SdkMessage, SdkOptions, SdkQuery, SdkUserMessage } from './sdk.ts'
 
@@ -47,7 +49,18 @@ export interface ClaudeSessionOptions {
 export const DENIED = 'swarm gate: not allowed'
 export const UNASKED = 'the SDK ran a tool without asking the door'
 
-interface Block { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown }
+interface Block { type?: unknown; id?: unknown; name?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }
+
+/**
+ * A call the SDK turned down before it would ask anyone: input it rejects, or an edit of a file
+ * it has not read. Nothing ran. It says so as an error whose text opens with `<tool_use_error>`.
+ */
+const refusedBeforeAsking = (b: Block): boolean => {
+  if (b.is_error !== true) return false
+  const text = typeof b.content === 'string' ? b.content
+    : Array.isArray(b.content) ? b.content.map((part: { text?: unknown }) => (typeof part?.text === 'string' ? part.text : '')).join('') : ''
+  return text.startsWith('<tool_use_error>')
+}
 const blocksOf = (record: SdkMessage): Block[] => {
   const content = record.message?.content
   return Array.isArray(content) ? content.filter((b): b is Block => b !== null && typeof b === 'object') : []
@@ -136,7 +149,7 @@ export function createClaudeSession(sdk: ClaudeSdk, options: Omit<SdkOptions, 'c
             if (b.type !== 'tool_result') continue
             const id = String(b.tool_use_id)
             const tool = called.get(id)
-            if (!asked.has(id) && (tool === undefined || offered.includes(tool))) throw new Error(UNASKED)
+            if (!asked.has(id) && (tool === undefined || offered.includes(tool)) && !refusedBeforeAsking(b)) throw new Error(UNASKED)
           }
         } else if (record.type === 'result' && current) {
           const turn = current

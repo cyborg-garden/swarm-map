@@ -199,6 +199,25 @@ describe('the Claude Agent SDK pump: a call the SDK ran without asking', () => {
     }
   })
 
+  // Seen on the real SDK 0.3.325: an edit of a file it has not read, or a shell call with a parameter its minimal
+  // mode lacks, is refused before anyone is asked, with the reason wrapped in <tool_use_error>. Nothing ran.
+  it('[U:claude-sdk-unasked] a call the SDK refused before asking, as a <tool_use_error>, is not a run: the turn goes on', async () => {
+    const refused = (content: unknown) => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content, is_error: true }] } })
+    for (const content of ['<tool_use_error>File has not been read yet. Read it first before writing to it.</tool_use_error>', [{ type: 'text', text: '<tool_use_error>InputValidationError: no</tool_use_error>' }]]) {
+      const { session: s } = session(function* (_text, o) { yield init(o); yield use('toolu_1', 'Bash'); yield refused(content); yield done('fine') })
+      expect(await s.prompt('hello'), JSON.stringify(content)).toEqual({ text: 'fine' })
+    }
+    // The same words without the error mark, or an error that does not start with it, are a run nobody asked about.
+    for (const [content, isError] of [['<tool_use_error>x</tool_use_error>', false], ['Exit code 1 <tool_use_error>', true]] as const) {
+      const { session: s } = session(function* (_text, o) {
+        yield init(o); yield use('toolu_1', 'Bash')
+        yield { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content, is_error: isError }] } }
+        yield done('it ran')
+      })
+      await expect(s.prompt('hello'), content).rejects.toThrow('the SDK ran a tool without asking the door')
+    }
+  })
+
   it('[U:claude-sdk-unasked] being asked about one call does not cover another call of the same tool', async () => {
     const { session: s } = session(async function* (_text, o) {
       yield init(o)
