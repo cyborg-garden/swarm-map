@@ -87,6 +87,18 @@ export function writeProblems(r: ProbeReport): string[] {
 }
 
 /** Nothing from this machine is mounted: only the shared folder. */
+/**
+ * The mounts a probe reports, from the lines of /proc/self/mountinfo, as `<where> <type>`: every one but
+ * those in memory and Docker's own, and the shared folder whatever it is. The launcher's cell keeps that
+ * folder in memory with a size, and it is still the one folder of its own a cell has.
+ */
+export function mountsSeen(mountinfo: string[]): string[] {
+  return mountinfo.filter(Boolean)
+    .map((line) => { const [left, right] = line.split(' - '); return `${left.split(' ')[4]} ${right.split(' ')[0]}` })
+    .filter((m) => m.split(' ')[0] === LAB_DIR || !/ (overlay|proc|sysfs|tmpfs|devpts|mqueue|cgroup2?|shm|devtmpfs)$/.test(m))
+    .filter((m) => !['/etc/resolv.conf', '/etc/hostname', '/etc/hosts'].includes(m.split(' ')[0]))
+}
+
 export function mountProblems(r: ProbeReport): string[] {
   const places = r.mounts.map((m) => m.split(' ')[0])
   return places.length === 1 && places[0] === LAB_DIR ? [] : [`mounted in the container: ${places.join(', ') || 'nothing, not even the shared folder'}`]

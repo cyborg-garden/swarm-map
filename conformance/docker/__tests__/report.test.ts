@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, readReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from '../report.ts'
+import { hostConfigProblems, mountProblems, mountsSeen, netProblems, networkProblems, parseReport, readReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from '../report.ts'
 
 const closed = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`way out ${i}`, 'ENETUNREACH']))
 const sealed: ProbeReport = {
@@ -64,6 +64,16 @@ describe('judging a probe report', () => {
   it('[U:probe-report] any mount but the shared folder is a problem, and so is no shared folder', () => {
     expect(mountProblems({ ...sealed, mounts: ['/tmp/smlab ext4', '/mnt/host fuse'] })[0]).toContain('/mnt/host')
     expect(mountProblems({ ...sealed, mounts: [] })[0]).toContain('not even the shared folder')
+  })
+
+  it('[U:probe-report] the mounts a probe reports: every one but those in memory or Docker\'s own, and the shared folder whatever it is', () => {
+    const line = (at: string, type: string): string => `36 25 0:1 / ${at} rw,relatime - ${type} ${type} rw`
+    const seen = mountsSeen([line('/', 'overlay'), line('/proc', 'proc'), line('/tmp', 'tmpfs'), line('/etc/hosts', 'ext4'), line('/tmp/smlab/work', 'tmpfs'), line('/mnt/host', 'fuse')])
+    expect(seen).toEqual(['/mnt/host fuse'])
+    // The shared folder is reported on Docker's disk, and in memory too: the launcher's cell keeps it in memory with a size.
+    expect(mountsSeen([line('/tmp/smlab', 'ext4')])).toEqual(['/tmp/smlab ext4'])
+    expect(mountsSeen([line('/tmp/smlab', 'tmpfs'), line('/tmp/smlab/work', 'tmpfs')])).toEqual(['/tmp/smlab tmpfs'])
+    expect(mountProblems({ ...sealed, mounts: mountsSeen([line('/tmp/smlab', 'tmpfs')]) })).toEqual([])
   })
 
   it('[U:probe-report] output that is not a report is no report', () => {

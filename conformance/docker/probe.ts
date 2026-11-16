@@ -19,7 +19,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { BRAIN_PORT, ROUTE_PORT, SINK_PORT, SWARM_ROOT } from './compose.ts'
-import type { ProbeReport } from './report.ts'
+import { mountsSeen, type ProbeReport } from './report.ts'
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const i = a.indexOf('='); return [a.slice(0, i), a.slice(i + 1)] }))
 const nonce = args.nonce ?? ''
@@ -202,10 +202,7 @@ async function main(): Promise<void> {
       'the root of the disk': tryWrite('/'),
     },
     dockerSocket: ['/var/run/docker.sock', '/run/docker.sock'].some((p) => existsSync(p)),
-    mounts: readFileSync('/proc/self/mountinfo', 'utf8').split('\n').filter(Boolean)
-      .map((line) => { const [left, right] = line.split(' - '); return `${left.split(' ')[4]} ${right.split(' ')[0]}` })
-      .filter((m) => !/ (overlay|proc|sysfs|tmpfs|devpts|mqueue|cgroup2?|shm|devtmpfs)$/.test(m))
-      .filter((m) => !['/etc/resolv.conf', '/etc/hostname', '/etc/hosts'].includes(m.split(' ')[0])),
+    mounts: mountsSeen(readFileSync('/proc/self/mountinfo', 'utf8').split('\n')),
     noNewPrivs: field('NoNewPrivs'),
     capEff: field('CapEff'),
     ipv6: Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv6' && !a.internal).map((a) => a!.address),
