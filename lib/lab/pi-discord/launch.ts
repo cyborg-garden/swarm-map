@@ -88,6 +88,44 @@ export interface StartOptions {
   redialCell?: boolean
 }
 
+/** What the last step of a start asks of the door, of Docker and of the clock. A test hands in all three. */
+export interface JoinDeps {
+  /** Whether a shim is connected to the door, now or within `ms`. */
+  ready(ms: number): Promise<boolean>
+  /** Stop the run's cell container, or start that same container again. False when Docker refused. */
+  stopStart(what: 'stop' | 'start'): boolean
+  /** What is wrong with the running cell, looked at from outside. Empty when it is the sealed cell that was written. */
+  sealProblems(): string[]
+  pause(ms: number): Promise<void>
+  now(): number
+  log(line: string): void
+}
+
+/**
+ * The cell joins the door. The cell was started before the door was listening, so that it could be
+ * looked at first. The relay takes the cell's dial whether or not the door is there yet, and a cell
+ * that said hello to nobody does not dial again. If it is not heard from `redialMs` after the door is
+ * up, it is started again, by name, once, and looked at again before it is waited for. It returns
+ * with a cell connected, or throws: it never calls a start live on the strength of a cell that is gone.
+ */
+export async function joinCell(d: JoinDeps, o: { redialMs: number; readyMs: number; force?: boolean }): Promise<void> {
+  const reached = await d.ready(o.redialMs)
+  if (reached && o.force !== true) return
+  if (!d.stopStart('stop')) throw new Error('the cell did not reach the door, and could not be stopped to be started again')
+  // The door takes one shim at a time. If the cell got through just as it was stopped, the door is given
+  // time to read what it sent and to see its link close, so the cell that starts next is not turned away.
+  await d.pause(300)
+  let held = await d.ready(0)
+  for (const until = d.now() + 5_000; held && d.now() < until;) { await d.pause(50); held = await d.ready(0) }
+  // A link that is still held would be taken for the cell that comes back, which the door would have turned away.
+  if (held) throw new Error('the door still holds the link of the cell that was stopped, so the cell was not started again')
+  if (!d.stopStart('start')) throw new Error('the cell did not reach the door, and could not be started again')
+  const again = d.sealProblems()
+  if (again.length > 0) throw new Error(`the cell is not sealed: ${again.join('; ')}`)
+  d.log(reached ? 'the cell was started again' : 'the cell had not reached the door, so it was started again')
+  if (!(await d.ready(o.readyMs))) throw new Error('the cell did not reach the door in time')
+}
+
 /** Bring one agent up. Either everything is up when this returns, or nothing is left running. */
 export async function start(o: StartOptions): Promise<Running> {
   const stateDir = prepareStateDir(o.stateDir)
@@ -172,25 +210,13 @@ export async function start(o: StartOptions): Promise<Running> {
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
       receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: 180_000,
     })
-    // The cell was started before the door was listening, so that it could be looked at first. The relay
-    // takes the cell's dial whether or not the door is there yet, and a cell that said hello to nobody
-    // does not dial again. If it is not heard from soon after the door is up, it is started again, by
-    // name, and looked at again before anything else.
-    const ready = (ms: number): Promise<boolean> => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false)
-    const reached = await ready(o.cellRedialMs ?? 3_000)
-    if (!reached || o.redialCell === true) {
-      if (!cellStopStart(project, 'stop')) throw new Error('the cell did not reach the door, and could not be stopped to be started again')
-      // The door takes one shim at a time. If the cell got through just as it was stopped, the door is given
-      // time to read what it sent and to see its link close, so the cell that starts next is not turned away.
-      const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
-      await pause(300)
-      for (const until = Date.now() + 5_000; Date.now() < until && await ready(0);) await pause(50)
-      if (!cellStopStart(project, 'start')) throw new Error('the cell did not reach the door, and could not be started again')
-      const again = runningCellProblems(project, networksWritten(file))
-      if (again.length > 0) throw new Error(`the cell is not sealed: ${again.join('; ')}`)
-      o.log(reached ? 'the cell was started again' : 'the cell had not reached the door, so it was started again')
-      if (!(await ready(o.cellReadyMs ?? 60_000))) throw new Error('the cell did not reach the door in time')
-    }
+    await joinCell({
+      ready: (ms) => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false),
+      stopStart: (what) => cellStopStart(project, what),
+      sealProblems: () => runningCellProblems(project, networksWritten(file)),
+      pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      now: Date.now, log: o.log,
+    }, { redialMs: o.cellRedialMs ?? 3_000, readyMs: o.cellReadyMs ?? 60_000, force: o.redialCell === true })
     o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)
     return { project, door, stop }
   } catch (err) {
