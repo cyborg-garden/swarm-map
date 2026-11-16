@@ -209,6 +209,16 @@ export function systemPromptFor(c: LabConfig): string {
   ].join('\n')
 }
 
+/** Which tools the agent has and how each is decided, in one plain line, for the dry run. */
+export function toolsLine(c: LabConfig): string {
+  const modes = toolModes(c)
+  const names: Record<SliceClass, string> = { file_read: 'read files', file_write: 'write files', shell: 'shell' }
+  const on = TOOL_SLICE_CLASSES.filter((k) => modes[k] !== 'never')
+  if (on.length === 0) return 'tools: none'
+  const wait = approvalSecondsOf(c)
+  return `tools, all inside the cell: ${on.map((k) => `${names[k]} (${modes[k] === 'ask' ? 'an admin has to say yes' : 'allowed'})`).join(', ')}${wait === undefined ? '' : `. An admin has ${wait} seconds to answer`}`
+}
+
 /** Which other bots are heard, in one plain line, for the dry run. */
 export function botsLine(c: LabConfig): string {
   const d = c.discord

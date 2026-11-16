@@ -8,7 +8,11 @@ import { shortHash } from '../core/tools/call.ts'
 
 export type Answer = 'approve' | 'deny'
 
-/** The longest request the door will post. Under one chat message on every surface it speaks. */
+/**
+ * The longest a request can be: one chat message on every surface the door speaks. A request is
+ * a fixed frame around a tool's name (64 characters at most) and a shown call (MAX_SHOWN_CHARS at
+ * most), and a test holds the longest one under this. Nothing checks it when a request is made.
+ */
 export const MAX_REQUEST_CHARS = 1900
 
 /** `tool` is a name from the map the shim declared at hello, so it is a plain name. `shown` is showInput()'s text. */

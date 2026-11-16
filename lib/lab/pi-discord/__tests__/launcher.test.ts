@@ -11,7 +11,7 @@ import { labImages } from '../../../../conformance/docker/compose.ts'
 import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subnets.ts'
 import { decide } from '../../../core/decide.ts'
 import { CELL_ENV, launcherImages, networksWritten, renderCell, sealProblems, type CellOptions } from '../cell.ts'
-import { approvalSecondsOf, botsLine, parseConfig, policyFor, systemPromptFor, toolModes } from '../config.ts'
+import { approvalSecondsOf, botsLine, parseConfig, policyFor, systemPromptFor, toolModes, toolsLine } from '../config.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
 import { readSecretFile, secretFileProblem } from '../secrets.ts'
 
@@ -132,6 +132,7 @@ describe('pi-discord config', () => {
       expect(policyFor(config).tools).toEqual({ allow: [], ask: [], deny: [], browserGuard: 'off' })
       expect(approvalSecondsOf(config)).toBeUndefined()
       expect(systemPromptFor(config)).toMatch(/You have no tools/)
+      expect(toolsLine(config)).toBe('tools: none')
     }
     // Only the three settings are kept: a note written beside them in the file is not carried into the record.
     expect(withTools({ $comment: 'a note', enabled: ['shell'] }).config!.tools).toEqual({ enabled: ['shell'], mode: {}, approvalSeconds: 120 })
@@ -145,6 +146,9 @@ describe('pi-discord config', () => {
     expect(policyFor(config).tools).toEqual({ allow: ['file_read', 'file_write'], ask: ['shell'], deny: [], browserGuard: 'off' })
     expect(approvalSecondsOf(config)).toBe(120)
     expect(validatePolicy(policyFor(config))).toEqual([])
+    // The dry run says so in one line, so nobody starts an agent with a tool they did not mean to give it.
+    expect(toolsLine(config)).toBe('tools, all inside the cell: read files (allowed), write files (allowed), shell (an admin has to say yes). An admin has 120 seconds to answer')
+    expect(toolsLine(withTools({ enabled: ['file_read'] }).config!)).toBe('tools, all inside the cell: read files (allowed)')
   })
 
   it('a mode is what the record says: ask, allow, or never for a class that is listed and switched off again', () => {

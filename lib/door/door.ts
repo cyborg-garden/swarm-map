@@ -13,7 +13,7 @@ import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.t
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
 import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
-import { MAX_REQUEST_CHARS, readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
+import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
 import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
@@ -430,7 +430,6 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           const shown = showInput(msg.input)
           if ('problem' in shown) return no(`It cannot be shown for approval: ${shown.problem}.`)
           const text = requestText(toolName, shown.text, hash, approvalMs)
-          if (text.length > MAX_REQUEST_CHARS) return no('It cannot be shown for approval: the call is too long to show in full.')
           // What is posted has to be what would run. A request the outbound check would change is not posted.
           let clean: ReturnType<Sanitizer['run']>
           try { clean = sanitizer.run('outbound', text, { posture: policy.posture, room: e.room }) } catch { return no('The outbound check failed, so the request was not posted.') }
