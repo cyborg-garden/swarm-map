@@ -108,7 +108,7 @@ runs the file as it was last written.
 - No secret entry. The two files are made by hand, as the runbook says.
 - No Letta Code launcher. The type and the badge have room for `letta-code`. Creating one is refused.
 - No adopting an agent that was started from the command line.
-- No keys page, surfaces page, analytics, tiers, tools, duplicate or restart-all for door agents.
+- No keys page, surfaces page, analytics, tiers, duplicate or restart-all for door agents.
 - No new compose generator. The cell is still built by the launcher.
 - The dashboard does not start `pm2` itself. Its Start button runs `start.sh` as a plain
   background process. The `pm2` command is shown for whoever wants a supervisor.
@@ -151,6 +151,18 @@ HOME="$TRY_HOME" HSM_OPERATOR_TOKEN=try npx next dev --port 3947
    a few seconds. If it does not end "ready to start", the page shows the checks that failed and
    nothing is started.
 5. **Receipts** and **Logs** fill in once the door is running.
+
+## Tools and approvals
+
+Added with [the tools slice](tools-slice.md).
+
+- **Rules** has a **Tools** card. Three classes (read files, write files, shell), each Off, Ask an
+  admin, or Allow. All Off by default. It edits the `tools` part of the same rules record, so the
+  launcher's parser decides whether a choice is sound. For an agent that hears anyone in the
+  channel the card is switched off, and says why.
+- **Receipts** has an **Approvals only** box. It shows each tool call that waited for an admin:
+  that it was asked, every answer and who gave it, and whether it ran. A receipt holds the tool's
+  name and the call's short hash, never the command.
 
 ## What the tests cover, and what they do not
 

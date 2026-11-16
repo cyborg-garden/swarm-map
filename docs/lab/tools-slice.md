@@ -204,4 +204,35 @@ Not built. The shape, so that nothing here has to change for it:
 
 ## What was run
 
-Nothing yet. This page was written before the code. The results go here.
+One machine: Docker Desktop for Mac, engine 29.5.2, Apple silicon. A scripted model and a fake chat
+room throughout. No real model, no real chat platform, no real credential.
+
+| Run | Result |
+|---|---|
+| Real Pi 1.5.2 as a process | 24 checks pass: the 14 shared ones and the 10 tool checks. 13 shims and rigs broken on purpose each turned its named checks red and left the others green |
+| Real Pi 1.5.2 in the sealed Docker cell | 30 checks pass: 4 on the seal, 13 shared, C8, C9, C10 and the 10 tool checks. 16 rigs broken on purpose each turned its named checks red, 5 of them cells with a broken gate |
+| The launcher's own cell, with a fake Discord | A shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
+| The scratch folder's size | 72 MB written to a 64 MB folder: no more than 64 MB landed. With the mount left out on purpose, all of it landed and three checks went red |
+| Hand mutations | 76 lines broken one at a time in `decide()`, the door, the gate, the shim, the connector, the launcher and the page. 75 turned a named test red. One changes nothing the code does |
+| Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
+
+The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
+"Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.
+
+What this does not show:
+
+- **Nothing here is a real model.** A scripted model asks for exactly the calls a check wants.
+  Whether a real model uses the tools well, or tries to talk an admin into a yes, is not tested.
+- **The approval text was read by tests, not by people.** That an admin understands a request at
+  a glance is not something a test shows.
+- **Real Discord was not used.** Replies and reactions were driven through a fake on loopback.
+- **Not every line of a check has something broken behind it.** Each tool check goes red for a
+  broken gate or a broken rig. The lines that read the door's receipts, and that the request names
+  the right tool and hash, are held by the door's own tests and not by a broken shim.
+- **The call limit per conversation has no check in the harness suite.** It is the door's alone
+  and is tested there.
+- **In the conformance rig the scratch folder is a shared volume**, so the suite can see what a
+  tool touched. The capped mount is the launcher's, and is checked in the launcher's own runs.
+- **The launcher's Docker runs were repeated until a start went through.** With other Docker
+  work going on at the same time, a start sometimes ended with "the cell did not reach the door in
+  time" and left nothing running. The same was seen on this machine without this change.

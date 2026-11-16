@@ -513,7 +513,7 @@ keyed by harness version, and committed. **?** = unverified, needs a run.
 | Turn in | `prompt` over RPC, sender in a preamble | `input` on the `/ws` socket | SDK session, streaming input | API server `/v1/runs`, or a platform plugin ? | ? |
 | Reply out / done | `message_end` / `agent_settled` | `stream_delta` / ? | SDK result | run event stream ? | ? |
 | `toolVeto` | pre-call: `gate.ts` on `tool_call` ? | pre-call: `control_request` | pre-call: `canUseTool` | pre-call: `pre_tool_call` hook | ? |
-| `approvalRoundTrip` | Yes via `extension_ui_request` ? | Yes via `approval_response` ? | Yes, callback can wait | `POST /v1/runs/{id}/approval` ? | ? |
+| `approvalRoundTrip` | Yes via `extension_ui_request`: run, see [`tools-slice.md`](tools-slice.md) | Yes via `approval_response` ? | Yes, callback can wait | `POST /v1/runs/{id}/approval` ? | ? |
 | `modelBaseUrl` | Yes (custom provider / gateway URL) ? | OpenAI-compatible yes; Anthropic ? | `ANTHROPIC_BASE_URL` | provider base URL in `config.yaml` | ? |
 | Accepts a scripted model | ? | ? | ? | ? | ? |
 | `mcpClient` | Yes (`.pi/mcp.json`) | Yes | Yes | Yes | ? |

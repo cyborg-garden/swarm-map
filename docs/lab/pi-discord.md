@@ -117,18 +117,23 @@ server, the channel or a person and choose **Copy ID**.
 | `discord.botLoopLimit` | `4` | Bot messages answered in a row before a listed person has to be answered. Each named bot has a count of its own; bots that are not named share one |
 | `discord.readAllMessages` | `false` | Ask Discord for the text of every message. Needed when `mentionRequired` is false |
 | `budget.monthlyUsd` | none | Model spend allowed in a calendar month (UTC). After it, model calls are refused |
+| `tools.enabled` | `[]` | Classes of tool that are switched on: `file_read`, `file_write`, `shell`. All run inside the cell. See [the tools slice](tools-slice.md) |
+| `tools.mode` | shell asks, files allowed | For a class that is switched on: `allow`, `ask` (an admin says yes in the channel first) or `never` |
+| `tools.approvalSeconds` | `120` | How long an admin has to answer, 10 to 600. No answer is a no |
 | `model.baseUrl` | none | An OpenAI-compatible base URL ending in `/v1`, over https |
 | `model.id` | none | The model's name at that provider |
 | `model.usdPerMTokIn`, `model.usdPerMTokOut` | none | The model's prices per million tokens. The budget is counted with them |
 
-A setting the file does not know is refused. There is no setting for direct messages or tools:
-both are off.
+A setting the file does not know is refused. There is no setting for direct messages: they are
+off. Tools are off until a class is switched on, and a config that hears anyone in the channel
+and switches a tool on is refused.
 
 **What the agent is told about itself.** Pi's own introduction says it is a coding assistant that
 can run commands. Here that is not true, so the launcher replaces it. The agent is told its name
 and description, and then, in the launcher's words and not yours: that it can read the messages it
 is sent and answer in text, that it has no tools (no commands, files, web, links, images or
-attachments, no posting elsewhere, no direct messages), that a mention it writes pings nobody,
+attachments, no posting elsewhere, no direct messages), or which tools it has, where they work
+and which wait for an admin, that a mention it writes pings nobody,
 that it forgets when it is restarted, and that it must say so when asked for something it cannot
 do. A changed persona takes effect on the next `start`.
 
