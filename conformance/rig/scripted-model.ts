@@ -1,6 +1,7 @@
-// The scripted model: a tiny local server that speaks the OpenAI
-// chat-completions shape and plays replies from a script. It stands in for
-// "the model" at the far edge of the rig.
+// The scripted model: a tiny local server that plays replies from a script.
+// It stands in for "the model" at the far edge of the rig. It speaks one of
+// two wire formats, as it is told when it starts: OpenAI chat-completions
+// (the default) or Anthropic Messages.
 //
 // It proves it is the fake three ways: it refuses any caller that does not
 // hold this run's upstream key, it stamps every text reply with this run's
@@ -52,8 +53,8 @@ export interface ScriptEntry {
 
 export interface ScriptedModel {
   baseUrl: string
-  /** Every accepted request, as sent. */
-  requests: { body: string; authorization: string }[]
+  /** Every accepted request, as sent. `key` is the key it came with, whichever header its format puts one in. */
+  requests: { body: string; authorization: string; key: string; path: string }[]
   refused: number
   /** The most requests it was ever answering at the same moment. */
   maxInFlight: number
@@ -67,6 +68,8 @@ const usageOf = (entry: ScriptEntry | undefined): unknown => (entry && 'usage' i
 
 export function startScriptedModel(opts: {
   nonce: string; script: ScriptEntry[]; host?: string; port?: number
+  /** The wire format to speak. Default: OpenAI chat-completions. */
+  shape?: 'openai-chat' | 'anthropic-messages'
   /** Characters per streamed text event. Default 12, which is shorter than the upstream key. */
   streamChunk?: number
 }): Promise<ScriptedModel> {
@@ -79,6 +82,7 @@ export function startScriptedModel(opts: {
     const chunks: Buffer[] = []
     req.on('data', (c: Buffer) => chunks.push(c))
     req.on('end', () => {
+      if (opts.shape === 'anthropic-messages') return anthropic(req, res, Buffer.concat(chunks).toString('utf8'))
       const authorization = req.headers.authorization ?? ''
       if (authorization !== `Bearer UPSTREAM-${opts.nonce}`) {
         state.refused++
@@ -92,7 +96,7 @@ export function startScriptedModel(opts: {
         return
       }
       const raw = Buffer.concat(chunks).toString('utf8')
-      requests.push({ body: raw, authorization })
+      requests.push({ body: raw, authorization, key: authorization.replace(/^Bearer /, ''), path: req.url ?? '' })
       let body: { model?: string; stream?: boolean; stream_options?: { include_usage?: boolean }; messages?: { role: string }[] }
       try { body = JSON.parse(raw) } catch { res.writeHead(400).end(); return }
 
@@ -162,6 +166,122 @@ export function startScriptedModel(opts: {
     if (body.stream_options?.include_usage && !entry?.noUsage && !entry?.usageFirstOnly) send({ ...base, object: 'chat.completion.chunk', choices: [], usage: usageOf(entry) })
     send('[DONE]')
     finishUp()
+  }
+
+  // --- the same script, spoken as Anthropic Messages --------------------------
+  //
+  // Checked against what the Claude Agent SDK 0.3.325 sends and reads: POST
+  // /v1/messages, the key in `x-api-key`, the reply as named stream events.
+  // Usage comes the way the real API sends it: the input count on
+  // `message_start`, the output count on `message_delta`, after the text.
+  //
+  // One difference from the OpenAI side, on purpose: the entry that plays is
+  // the one whose canary is in the LAST thing a person said, and its tool is
+  // asked for until that message has a tool result after it. A long session
+  // carries every earlier turn, and an earlier turn's canary or tool result
+  // must not answer for this one.
+
+  interface AnthropicBlock { type?: string; text?: string }
+  interface AnthropicMessage { role?: string; content?: string | AnthropicBlock[] }
+  interface AnthropicBody { model?: string; stream?: boolean; messages?: AnthropicMessage[] }
+
+  const blocksOf = (m: AnthropicMessage): AnthropicBlock[] =>
+    typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : Array.isArray(m.content) ? m.content : []
+
+  /** The last message a person wrote (not a tool result), and whether a tool result has come back since. */
+  function lastAsk(messages: AnthropicMessage[]): { text: string; answered: boolean } {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const blocks = blocksOf(messages[i])
+      if (messages[i].role !== 'user' || blocks.some((b) => b.type === 'tool_result')) continue
+      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
+      if (text === '') continue
+      return { text, answered: messages.slice(i + 1).some((m) => blocksOf(m).some((b) => b.type === 'tool_result')) }
+    }
+    return { text: '', answered: false }
+  }
+
+  function anthropic(req: http.IncomingMessage, res: http.ServerResponse, raw: string): void {
+    const key = typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'] : ''
+    const error = (status: number, type: string, message: string): void => {
+      res.writeHead(status, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'error', error: { type, message } }))
+    }
+    if (key !== `UPSTREAM-${opts.nonce}`) {
+      state.refused++
+      return error(401, 'authentication_error', 'scripted model: not the upstream key of this run')
+    }
+    const url = new URL(req.url ?? '/', 'http://local')
+    if (req.method !== 'POST' || url.pathname !== '/v1/messages') return error(404, 'not_found_error', 'scripted model: only POST /v1/messages exists here')
+    // The real API refuses a call that does not say which version of it is meant.
+    if (typeof req.headers['anthropic-version'] !== 'string') return error(400, 'invalid_request_error', 'scripted model: no anthropic-version header')
+    requests.push({ body: raw, authorization: req.headers.authorization ?? '', key, path: req.url ?? '' })
+    let body: AnthropicBody
+    try { body = JSON.parse(raw) } catch { return error(400, 'invalid_request_error', 'scripted model: body is not JSON') }
+
+    const asked = lastAsk(body.messages ?? [])
+    const entry = opts.script.find((e) => asked.text.includes(e.match))
+    state.maxInFlight = Math.max(state.maxInFlight, ++state.inFlight)
+    res.once('close', () => { state.inFlight-- })
+    if (entry?.hang) return
+    const play = (): void => {
+      if (entry?.status !== undefined) return error(entry.status, 'api_error', `scripted model: refused with ${entry.status}`)
+      if (entry?.rawBody !== undefined) {
+        res.writeHead(200, { 'content-type': entry.rawType ?? 'text/html' })
+        res.end(entry.rawBody)
+        return
+      }
+      const text = entry?.noStamp ? entry.text : `${entry?.text ?? 'ok'} ${stamp}`
+      entry?.before?.()
+      const tool = entry?.tool && !asked.answered
+        ? { type: 'tool_use', id: `toolu_${randomUUID().replace(/-/g, '').slice(0, 20)}`, name: entry.tool.name, input: entry.tool.args }
+        : undefined
+      const stop = tool ? 'tool_use' : 'end_turn'
+      const usage = usageOf(entry) === USAGE ? { input_tokens: USAGE.prompt_tokens, output_tokens: USAGE.completion_tokens } : usageOf(entry)
+      const message = { id: `msg_${randomUUID().replace(/-/g, '').slice(0, 20)}`, type: 'message', role: 'assistant', model: body.model ?? 'scripted' }
+
+      if (!body.stream) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          ...message, content: [tool ?? { type: 'text', text }], stop_reason: stop, stop_sequence: null,
+          ...(entry?.noUsage ? {} : { usage }),
+        }))
+        return
+      }
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+      const queue: string[] = []
+      const end = entry?.lineEnd ?? '\n'
+      const send = (data: { type: string } & Record<string, unknown>): void => {
+        const event = `event: ${data.type}${end}data:${entry?.tightData ? '' : ' '}${JSON.stringify(data)}${end.repeat(2)}`
+        if (entry?.splitLineEnds) queue.push(event.slice(0, -1), event.slice(-1))
+        else res.write(event)
+      }
+      const finishUp = (): void => {
+        const next = queue.shift()
+        if (next === undefined) { res.end(); return }
+        res.write(next, () => setTimeout(finishUp, 3))
+      }
+      // The opening event says how much went in, and one token out so far.
+      const opening = entry?.noUsage ? {} : { usage: usage !== null && typeof usage === 'object' ? { ...usage, output_tokens: 1 } : usage }
+      send({ type: 'message_start', message: { ...message, content: [], stop_reason: null, stop_sequence: null, ...opening } })
+      if (tool) {
+        send({ type: 'content_block_start', index: 0, content_block: { ...tool, input: {} } })
+        send({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(tool.input) } })
+      } else {
+        send({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
+        for (const piece of text.match(pieceOf) ?? []) send({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } })
+      }
+      // Dropped only once the text has really gone out, as a provider that dies mid-reply.
+      if (entry?.cutStream) { res.write(': cut\n\n', () => res.destroy()); return }
+      if (!entry?.noFinish) {
+        send({ type: 'content_block_stop', index: 0 })
+        const closing = usage !== null && typeof usage === 'object' ? { output_tokens: (usage as { output_tokens?: unknown }).output_tokens } : usage
+        send({ type: 'message_delta', delta: { stop_reason: stop, stop_sequence: null }, ...(entry?.noUsage ? {} : { usage: closing }) })
+        send({ type: 'message_stop' })
+      }
+      finishUp()
+    }
+    if (entry?.delayMs) setTimeout(play, entry.delayMs)
+    else play()
   }
 
   return new Promise((resolve, reject) => {

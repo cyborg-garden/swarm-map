@@ -132,14 +132,15 @@ export async function startLab(o: LabOptions): Promise<Lab> {
 
   const hostCanary = { name: `LABHOST_CANARY_${nonce.toUpperCase()}`, value: `host-env-${randomBytes(6).toString('hex')}` }
   const closers: (() => Promise<void> | void)[] = [
-    () => { if (!o.remote) rmSync(dir, { recursive: true, force: true }) },
+    // A harness that was just stopped may still be writing its last file: a folder that is not empty yet is tried again.
+    () => { if (!o.remote) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }) },
     () => { delete process.env[hostCanary.name] },
   ]
   const closeAll = async (): Promise<void> => { for (const close of closers.reverse()) await close() }
 
   try {
     const script: ScriptEntry[] = []
-    const model = await startScriptedModel({ nonce, script })
+    const model = await startScriptedModel({ nonce, script, shape: o.harness.modelShape.id })
     closers.push(() => model.close())
     const receipts = createReceiptLog()
     const fake = createFakeConnector({ nonce })
@@ -172,7 +173,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     } else {
       // F2: what this exact shim is about to give the harness must hold nothing
       // credential-shaped. The only exception is a fake stamped with this run's nonce.
-      assertNoCredentials(o.harness.cellEnv(cell, o.shim), { nonce })
+      assertNoCredentials(o.harness.cellEnv(cell, o.shim), { nonce, named: o.harness.namedEnv })
       shim = await o.harness.start(cell, o.shim)
     }
     closers.push(() => shim.close())

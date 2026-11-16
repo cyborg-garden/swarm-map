@@ -149,6 +149,11 @@ function binary(name: string): string {
  * which by what is in it.
  */
 function sealedFiles(): { gate: string; shim: string; entry: string; folder: string; binary: string } {
+  const third = `${SWARM_ROOT}/lib/runtimes/claude-sdk`
+  if (existsSync(`${third}/shim.ts`)) {
+    // Its veto is a callback in the pump too. The harness is the Claude Code program the SDK starts.
+    return { gate: `${third}/session.ts`, shim: `${third}/shim.ts`, entry: `${SWARM_ROOT}/conformance/docker/claude-sdk/cell-main.ts`, folder: third, binary: binary('claude') }
+  }
   const second = `${SWARM_ROOT}/lib/runtimes/letta-code`
   if (existsSync(`${second}/shim.ts`)) {
     // Its veto is not a file of its own: the answer to "may this tool run?" is given in the pump.

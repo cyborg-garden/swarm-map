@@ -1,6 +1,6 @@
 version: 2
 
-# This file holds one entry, and it turns Dependabot's update pull requests
+# This file holds two entries, and each turns Dependabot's update pull requests
 # OFF for one folder. Everything else in the repo keeps GitHub's defaults:
 # no entry here means no version updates, and security updates as set in the
 # repo settings.
@@ -24,9 +24,26 @@ version: 2
 # that folder and LETTA_CODE_VERSION in lib/runtimes/letta-code/caps.ts),
 # regenerate the lock file, and rerun the lab checks against the new version.
 # To lift this: delete the entry below, or the whole file.
+#
+# conformance/docker/claude-sdk is the same kind of folder, for the same
+# reason. It pins one third-party package, the Claude Agent SDK, for the
+# sealed test image of the third harness. Every other package in its lock
+# file is one the SDK asks for (Anthropic's API client, the MCP library, zod)
+# or one of theirs, so none can move without changing what is under test.
+# It had no open alert when it was added (2026-11-16). To clear one: bump the
+# pinned SDK version (package.json in that folder, and CLAUDE_SDK_VERSION and
+# CLAUDE_CODE_VERSION in lib/runtimes/claude-sdk/caps.ts), regenerate the
+# lock file, and rerun the lab checks against the new version.
 updates:
   - package-ecosystem: "npm"
     directory: "/conformance/docker/letta-code"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: "npm"
+    directory: "/conformance/docker/claude-sdk"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 0

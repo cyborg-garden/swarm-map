@@ -57,11 +57,30 @@ function isRunFake(name: string, value: string, nonce: string | undefined): bool
   return value.startsWith(`BRAIN-${nonce}-`) && /^[0-9a-f]{16}$/.test(value.slice(`BRAIN-${nonce}-`.length))
 }
 
+/**
+ * What a harness may hold under a name of its own choosing. Some harnesses only read their
+ * key and their model's address from variables with fixed names, and those names look like
+ * credentials. Whoever calls the guard says which names are meant; the guard decides what
+ * each may hold, and it is one thing only.
+ * - 'placeholder': this run's placeholder, exactly.
+ * - 'route': a plain http address with a port and nothing else, on this machine or at the door of a rig.
+ */
+export type NamedFake = 'placeholder' | 'route'
+
+function isNamedFake(kind: NamedFake, value: string, nonce: string | undefined): boolean {
+  if (kind === 'placeholder') return nonce !== undefined && nonce !== '' && value === `PLACEHOLDER-${nonce}`
+  return /^http:\/\/(127\.0\.0\.1|door):\d{1,5}$/.test(value)
+}
+
 /** F2. Refuses if the env names or holds anything shaped like a real credential. Never prints a value. */
-export function assertNoCredentials(env: Record<string, string | undefined>, opts: { nonce?: string } = {}): void {
+export function assertNoCredentials(env: Record<string, string | undefined>, opts: { nonce?: string; named?: Record<string, NamedFake> } = {}): void {
   const bad: string[] = []
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue
+    if (opts.named && Object.hasOwn(opts.named, name)) {
+      if (!isNamedFake(opts.named[name], value, opts.nonce)) bad.push(name)
+      continue
+    }
     if (name.startsWith('SWARMLAB_')) {
       if (!isRunFake(name, value, opts.nonce)) bad.push(name)
       continue
