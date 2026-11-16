@@ -8,10 +8,12 @@ import { fileURLToPath } from 'node:url'
 import { OPENAI_CHAT } from '../../lib/door/model-shapes.ts'
 import { PI_CAPS } from '../../lib/runtimes/pi/caps.ts'
 import { piEnv, startPiShim, type PiShimOptions } from '../../lib/runtimes/pi/shim.ts'
+import { startCoverFailures } from '../broken/covers-failures.ts'
 import { childTripwireEnv, readChildTripwire } from '../guards/child-tripwire.ts'
 import { assertNoCredentials } from '../guards/preflight.ts'
 import { CHECKS, type Check } from '../suites/checks.ts'
 import type { Cell, HarnessUnderTest } from '../suites/harness.ts'
+import { MODEL_FAILURE_CHECKS } from '../suites/failure-checks.ts'
 import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -22,16 +24,16 @@ export function fakePiCommand(): string[] {
   return [process.execPath, path.resolve(HERE, '..', 'rig', 'fake-pi.ts')]
 }
 
-/** Every check Pi is put through: the shared ones, and the tool checks, which its shim can run. */
-export const PI_CHECKS: Check[] = [...CHECKS, ...TOOL_CHECKS]
+/** Every check Pi is put through: the shared ones, the tool checks, which its shim can run, and the checks that a failed model call is told to the room. */
+export const PI_CHECKS: Check[] = [...CHECKS, ...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]
 const SHARED = CHECKS.map((c) => c.id)
-const TOOLS = TOOL_CHECKS.map((c) => c.id)
+const TOOLS = [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS].map((c) => c.id)
 /** Every check, but for the ones named. */
 const allBut = (...red: string[]): string[] => [...SHARED, ...TOOLS].filter((id) => !red.includes(id))
 /** The shared checks, but for the ones named: for a fault the tool checks have nothing to say about. */
 const sharedBut = (...red: string[]): string[] => SHARED.filter((id) => !red.includes(id))
 // What a gate that asks nobody turns red among the tool checks: every one that waits for an answer, the scratch folder, and both limits.
-const UNGATED = ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
+const UNGATED = ['C6', 'C6m', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
 function hostEnvSafeToHandOver(base: Record<string, string>): Record<string, string> {
@@ -73,6 +75,8 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       case 'runs-more': return { ...base, gate: { path: path.join(BROKEN, 'gate-runs-more.ts') } }
       case 'no-path-check': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-path-check.ts') } }
       case 'no-limits': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-limits.ts') } }
+      // The real shim and gate. What is broken is the link: see start().
+      case 'covers-failures': return base
       default: throw new Error(`the Pi harness has no shim variant '${variant}'`)
     }
   }
@@ -103,7 +107,11 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       writeFileSync(path.join(d.agent, 'models.json'), JSON.stringify({
         providers: { swarm: { baseUrl: cell.modelBaseUrl, api: 'openai-completions', apiKey: cell.placeholder, models: [{ id: 'scripted' }] } },
       }))
-      return startPiShim(options(cell, variant))
+      if (variant !== 'covers-failures') return startPiShim(options(cell, variant))
+      // The shim's messages go through a link that reports a failed turn as one that answered.
+      const link = await startCoverFailures(cell.link)
+      const shim = await startPiShim({ ...options(cell, variant), host: link.host, port: link.port })
+      return { close() { shim.close(); link.close() } }
     },
     broken: {
       'ignores-verdicts': {
@@ -129,6 +137,11 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
         red: ['L1', 'L2'], green: ['C4', 'C4+', 'C6', 'C6x', 'W1', 'W1+'], checks: ['C4', 'C4+', 'C6', 'C6x', 'L1', 'L2', 'W1', 'W1+'],
       },
       // Not a fault of the shim: the gate and the door are the real ones. The chat surface says the wrong person answered.
+      'covers-failures': {
+        what: 'A shim that reports a turn that failed, or ended with no reply, as one that answered "All done."',
+        // A turn that never ends is not covered up: it has nothing to cover until it ends, so C6s stays green.
+        red: ['C6m', 'C6b'], green: ['C1', 'C6', 'C6s'], checks: ['C1', 'C6', 'C6m', 'C6b', 'C6s'],
+      },
       'answers-as-admin': {
         what: 'A chat surface that reports every answer to a request as the admin\'s, whoever sent it',
         red: ['C6n'], green: TOOLS.filter((id) => id !== 'C6n'), checks: TOOLS, shim: 'good', lab: { rig: 'answers-as-admin' },

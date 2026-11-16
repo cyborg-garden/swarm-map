@@ -50,6 +50,14 @@ async function bareShim(r: Rig, brainToken: string, caps: Partial<Capabilities>)
   return { client, heard }
 }
 
+// What the door posts when a turn ends with nothing to post.
+const NOTICE = {
+  noReply: 'No answer this time: the agent finished without a reply.',
+  error: 'No answer this time: something went wrong inside the agent.',
+  timeout: 'No answer this time: the agent took too long, so it was stopped.',
+  failed: (why: string) => `No answer this time. ${why}`,
+}
+
 // A secret-shaped string, minted here so none is ever committed.
 const fakeSecret = (): string => 'ghp_' + 'q7W3'.repeat(9)
 
@@ -534,23 +542,103 @@ describe('door: one reply per turn, only after settled', () => {
     rig.shim.client.send({ t: 'reply', turnId: 'never-issued', text: 'surprise', attachments: [] })
     rig.shim.client.send({ t: 'settled', turnId: 'never-issued' })
     await expect.poll(() => rig!.receipts.all().filter((r) => r.rule === 'turn.known').length).toBe(3)
-    expect(rig.fake.ledger).toEqual([])
+    // The turn settled with nothing in it, so the room was told that, and nothing the harness sent later.
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.noReply])
   })
 
-  it('[P:one-reply] a turn that never settles dies at its deadline, and a late reply is dropped', async () => {
+  it('[P:one-reply] a turn that never settles dies at its deadline, the room is told, and a late reply is dropped', async () => {
     rig = await startRig(team(), { mode: 'never-settle', door: { turnDeadlineMs: 60 } })
     rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
     await rig.door.idle()
-    expect(rig.fake.ledger).toEqual([])
-    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'out.still-allowed' })
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.timeout])
+    expect(rig.fake.ledger[0]).toMatchObject({ room: 'r-general', turnId: rig.shim.heard[0].turnId })
+    expect(rig.receipts.all().map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deliver/addr.mention', 'drop/out.still-allowed', 'allow/out.still-allowed'])
     rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
     await expect.poll(() => rig!.receipts.all().at(-1)?.rule).toBe('turn.known')
-    expect(rig.fake.ledger).toEqual([])
+    expect(rig.fake.ledger).toHaveLength(1)
   })
 
-  it('[P:one-reply] a turn that settles with no reply posts nothing', async () => {
+  it('[P:no-silence] a turn that settles with no reply is not silent: the room is told there is no answer', async () => {
     rig = await startRig(team(), { mode: 'silent' })
     rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.noReply])
+    expect(rig.receipts.all().map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deliver/addr.mention', 'drop/turn.no-reply', 'allow/out.still-allowed'])
+  })
+})
+
+// A turn that ends with nothing to post is told to the room, in one short line,
+// with the reason when the door knows it. Before this, a model call that failed
+// left the room looking at an agent that was still thinking.
+describe('door: no turn ends in silence', () => {
+  const failure = { rule: 'model.provider', why: 'The model provider refused the call (status 400).' }
+
+  it('[P:no-silence] positive control: a turn that has a reply posts the reply, whatever failed on the way', async () => {
+    rig = await startRig(team(), { mode: 'never-settle' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.modelFailed(failure)
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    // A model call that failed and was tried again is not news when the turn has an answer.
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual(['echo: hi'])
+  })
+
+  it('[P:no-silence] a model call that failed, and a turn with no reply: the room is told why', async () => {
+    rig = await startRig(team(), { mode: 'silent-later' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.modelFailed(failure)
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.failed(failure.why)])
+    expect(rig.receipts.all().filter((r) => r.rule === 'model.provider')).toEqual([
+      expect.objectContaining({ verdict: 'drop', event: expect.objectContaining({ kind: 'outbound', turnId: rig.shim.heard[0].turnId }) }),
+    ])
+  })
+
+  it('[P:no-silence] the harness reports an error: the room is told, with the model failure if there was one', async () => {
+    rig = await startRig(team(), { mode: 'silent-later' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'one' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.shim.client.send({ t: 'error', turnId: rig.shim.heard[0].turnId, message: 'anything at all' })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'two' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(2)
+    rig.door.modelFailed({ rule: 'budget.cap', why: 'The monthly budget is spent.' })
+    rig.shim.client.send({ t: 'error', turnId: rig.shim.heard[1].turnId, message: 'anything at all' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.error, NOTICE.failed('The monthly budget is spent.')])
+    // What the harness said is never posted or written down.
+    expect(JSON.stringify(rig.receipts.all()) + JSON.stringify(rig.fake.ledger)).not.toContain('anything at all')
+  })
+
+  it('[P:no-silence] a failure from before the turn began is not blamed on it', async () => {
+    rig = await startRig(team(), { mode: 'silent' })
+    rig.door.modelFailed(failure)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await rig.door.idle()
+    expect(rig.fake.ledger.map((p) => p.text)).toEqual([NOTICE.noReply])
+  })
+
+  it('[P:no-silence] the notice is an outbound post like any other: a room removed mid-turn is not posted to', async () => {
+    rig = await startRig(team(), { mode: 'silent-later' })
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.door.setPolicy(team({ version: 2, [F + 'rooms']: [{ match: { room: 'r-lounge' }, mode: 'free' }] }))
+    rig.door.modelFailed(failure)
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', rule: 'out.still-allowed' })
+  })
+
+  it('[P:no-silence] a message deleted mid-turn gets no notice either', async () => {
+    rig = await startRig(team(), { mode: 'silent-later' })
+    const id = rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.fake.notice('delete', id, 'r-general')
     await rig.door.idle()
     expect(rig.fake.ledger).toEqual([])
   })

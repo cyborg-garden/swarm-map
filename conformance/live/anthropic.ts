@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { withHash } from '../../lib/core/policy/canonical.ts'
 import { createFakeConnector } from '../../lib/door/connectors/fake.ts'
-import { createDoor } from '../../lib/door/door.ts'
+import { createDoor, isNotice } from '../../lib/door/door.ts'
 import { startModelRoute, type Meter, type Price } from '../../lib/door/model-route.ts'
 import { ANTHROPIC_MESSAGES } from '../../lib/door/model-shapes.ts'
 import { createReceiptLog } from '../../lib/door/receipts.ts'
@@ -50,6 +50,8 @@ export interface LiveOptions {
 export interface LiveResult {
   /** What was posted to the room, if anything was. */
   reply: string | undefined
+  /** Lines the door posted because a turn had no answer, with the reason. */
+  notices: string[]
   meter: Meter
   /** Calls charged by size because the provider's usage could not be read. Zero means every call was metered from what the provider said. */
   unmetered: number
@@ -113,6 +115,7 @@ export async function liveTurn(o: LiveOptions): Promise<LiveResult> {
     const route = await startModelRoute({
       upstream: o.upstream, upstreamKey: key, placeholder, shape: ANTHROPIC_MESSAGES,
       policy: () => door.policy(), receipts, prices: { [o.model]: o.price }, ledger: createMemoryLedger(),
+      onFailure: (failure) => door.modelFailed(failure),
     })
     closers.push(() => route.close())
 
@@ -128,7 +131,8 @@ export async function liveTurn(o: LiveOptions): Promise<LiveResult> {
 
     fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: o.question })
     await door.idle()
-    const reply = fake.ledger[0]?.text
+    // What the model said, and apart from it, any line the door posted because a turn had no answer.
+    const reply = fake.ledger.find((post) => !isNotice(post.text))?.text
 
     // The cap, on the real meter: with the budget set below what was just spent, the next turn is refused.
     const spent = route.meter().usd
@@ -138,12 +142,12 @@ export async function liveTurn(o: LiveOptions): Promise<LiveResult> {
       const calls = route.meter().requests
       fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'and once more' })
       await door.idle()
-      capRefused = route.meter().requests === calls && fake.ledger.length <= 1
+      capRefused = route.meter().requests === calls && fake.ledger.filter((post) => !isNotice(post.text)).length <= 1
         && receipts.all().some((r) => r.rule === 'budget.cap' && r.verdict === 'deny')
     }
 
     return {
-      reply, meter: route.meter(), unmetered: route.unmetered, presented: [...route.presented], placeholder,
+      reply, notices: fake.ledger.filter((post) => isNotice(post.text)).map((post) => post.text), meter: route.meter(), unmetered: route.unmetered, presented: [...route.presented], placeholder,
       keyInCell: filesHolding(dir, key), capRefused, attempts: mark?.attempts(),
       receipts: receipts.all().map((r) => ({ rule: r.rule, verdict: r.verdict })),
     }

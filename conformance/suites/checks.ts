@@ -12,6 +12,7 @@
 // The checks name no harness. Which native tool is a shell, and what the
 // harness is called, come from the HarnessUnderTest the lab was started with.
 import { existsSync, readFileSync } from 'node:fs'
+import { NOTICES } from '../../lib/door/door.ts'
 import { startLab, type Lab, type LabOptions } from './lab.ts'
 
 export interface CheckResult { id: string; title: string; pass: boolean; detail: string }
@@ -249,7 +250,9 @@ export const CHECKS: Check[] = [
       const m = lab.route.meter()
       want(p, m.requests === 2 && m.inTokens === 200 && m.outTokens === 40 && m.usd === 2, `meter is off: ${JSON.stringify(m)}`)
       want(p, lab.receipts.all().some((r) => r.rule === 'budget.cap' && r.verdict === 'deny'), 'no budget refusal receipt')
-      want(p, lab.fake.ledger.length === 2, `expected 2 posts, got ${lab.fake.ledger.length}`)
+      // The two answers, and for the refused turn one line from the door saying why there is none.
+      want(p, lab.fake.ledger.length === 3, `expected 3 posts, got ${lab.fake.ledger.length}`)
+      want(p, lab.fake.ledger[2]?.text === NOTICES.failed('The monthly budget is spent.'), 'the refused turn was not told to the room')
       return p
     },
   },

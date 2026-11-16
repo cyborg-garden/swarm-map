@@ -187,6 +187,8 @@ export async function start(o: StartOptions): Promise<Running> {
       prices: { [o.config.model.id]: { inPerMTok: o.config.model.usdPerMTokIn, outPerMTok: o.config.model.usdPerMTokOut } },
       ledger: createFileLedger(path.join(stateDir, 'spend.json')),
       host: '127.0.0.1', port: routePort,
+      // A call that is refused or fails is told to the room by the door, so the agent is never just silent.
+      onFailure: (failure) => door?.modelFailed(failure),
     })
 
     // The cell comes up, and is looked at from outside, before anything is connected to Discord.

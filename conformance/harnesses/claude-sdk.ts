@@ -4,6 +4,7 @@
 // catch, the checks only it needs, and which spec checks do not apply.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { NOTICES } from '../../lib/door/door.ts'
 import { ANTHROPIC_MESSAGES } from '../../lib/door/model-shapes.ts'
 import { CLAUDE_SDK_CAPS } from '../../lib/runtimes/claude-sdk/caps.ts'
 import type { ClaudeSdk } from '../../lib/runtimes/claude-sdk/sdk.ts'
@@ -139,7 +140,8 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       say(lab, `wait for ${stuck}`)
       await lab.door.idle()
       want(p, lab.model.heard(stuck), 'the turn never reached the model, so nothing was checked')
-      want(p, lab.fake.ledger.length === 0, 'a turn the model never answered was answered')
+      // The one line in the room is the door's, saying the turn was stopped: nothing from the model.
+      want(p, lab.fake.ledger.map((post) => post.text).join() === NOTICES.timeout, 'a turn the model never answered was answered, or the room was not told it was stopped')
       const gaveUp = lab.receipts.all().filter((r) => r.event.kind === 'outbound' && r.verdict === 'drop').length
       want(p, gaveUp === 1, `expected one receipt for the turn that was given up on, got ${gaveUp}`)
       // From here the model answers. The next message of the same room must not be left waiting behind the first.
@@ -147,7 +149,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       say(lab, `and now ${next}`)
       await lab.door.idle()
       want(p, lab.model.heard(next), 'the next turn never reached the model: the harness is still waiting on the one before')
-      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      want(p, lab.fake.ledger.length === 2, `expected 2 posts, got ${lab.fake.ledger.length}`)
       // The room kept its thread: what was said in the turn that hung is in what the model is sent now.
       want(p, lab.model.requests.some((r) => r.body.includes(next) && r.body.includes(stuck)), 'the room lost its thread when the turn was given up on')
       return p

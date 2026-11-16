@@ -173,6 +173,21 @@
       "status": "pass"
     },
     {
+      "id": "C6m",
+      "title": "tools on: a model call the provider refuses, after a tool ran, leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6b",
+      "title": "tools on: a model call refused because the budget is spent leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6s",
+      "title": "tools on: a model call slower than the turn is allowed tells the room the turn was stopped",
+      "status": "pass"
+    },
+    {
       "id": "C11",
       "title": "memory scope isolation",
       "status": "not-run",
@@ -677,11 +692,13 @@
       "shim": "gate-asks-nobody",
       "mustFail": [
         "C6",
-        "C6d"
+        "C6d",
+        "C6m"
       ],
       "failed": [
         "C6",
-        "C6d"
+        "C6d",
+        "C6m"
       ],
       "suiteCaughtIt": true
     },

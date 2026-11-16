@@ -132,6 +132,21 @@
       "status": "pass"
     },
     {
+      "id": "C6m",
+      "title": "tools on: a model call the provider refuses, after a tool ran, leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6b",
+      "title": "tools on: a model call refused because the budget is spent leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6s",
+      "title": "tools on: a model call slower than the turn is allowed tells the room the turn was stopped",
+      "status": "pass"
+    },
+    {
       "id": "S0",
       "title": "fake-proof preflight for the Docker rig",
       "status": "not-run",
@@ -559,6 +574,7 @@
         "C5v",
         "C15t",
         "C6",
+        "C6m",
         "C6n",
         "C6d",
         "C6t",
@@ -582,7 +598,8 @@
         "C6r",
         "W1",
         "L1",
-        "L2"
+        "L2",
+        "C6m"
       ],
       "suiteCaughtIt": true
     },
@@ -625,6 +642,18 @@
       "failed": [
         "L1",
         "L2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "covers-failures",
+      "mustFail": [
+        "C6m",
+        "C6b"
+      ],
+      "failed": [
+        "C6m",
+        "C6b"
       ],
       "suiteCaughtIt": true
     },
@@ -778,7 +807,10 @@
         "W1",
         "W1+",
         "L1",
-        "L2"
+        "L2",
+        "C6m",
+        "C6b",
+        "C6s"
       ],
       "suiteCaughtIt": true
     }
