@@ -3,7 +3,7 @@
   "version": "0.34.60",
   "harnessBuild": "real",
   "substrate": "process",
-  "date": "2026-11-14",
+  "date": "2026-11-16",
   "model": "scripted",
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
@@ -287,6 +287,11 @@
       "checks": []
     },
     {
+      "rule": "bots.loop",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "bots.no-self",
       "status": "shared",
       "checks": []
@@ -378,6 +383,16 @@
     },
     {
       "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "out.size",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "in.once",
       "status": "shared",
       "checks": []
     },
