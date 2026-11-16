@@ -9,6 +9,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, RefusingToRun,
 } from '../preflight.ts'
+import { claudeSdkHarness } from '../../harnesses/claude-sdk.ts'
+import { fakeClaudeSdk } from '../../rig/fake-claude-sdk.ts'
+import { runChecks } from '../../suites/checks.ts'
+import type { HarnessUnderTest } from '../../suites/harness.ts'
+import { startWatchProxy } from '../watch-proxy.ts'
 
 describe('F2: no real credential is present', () => {
   it('refuses an env that names a chat token, even with a junk value', () => {
@@ -227,3 +232,33 @@ describe('F5: Docker is the local one, and the project is ours', () => {
     expect(() => assertSafeWorkDir('/Users/someone/.hermes-x/tmp/w', { home, tmp: '/Users/someone/.hermes-x/tmp' })).toThrow(RefusingToRun)
   })
 })
+
+// The guard is only worth what the lab makes of it: it has to be asked, with the exact
+// environment the harness is about to get, before the harness is started.
+describe('F2: the lab asks the guard before it starts a harness', () => {
+  it('[U:named-fakes] a harness whose environment holds a credential-shaped value is not started, under a name it named or under one it did not', async () => {
+    const watch = await startWatchProxy()
+    try {
+      const good = claudeSdkHarness(fakeClaudeSdk(), 'fake', watch)
+      let started = 0
+      const bad: Record<string, string>[] = [{ GITHUB_TOKEN: 'x' }, { ANTHROPIC_API_KEY: 'PLACEHOLDER-0badf00d' }, { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }]
+      for (const extra of bad) {
+        const harness: HarnessUnderTest = {
+          ...good,
+          cellEnv: (cell, variant) => ({ ...good.cellEnv(cell, variant), ...extra }),
+          start: (cell, variant) => { started++; return good.start(cell, variant) },
+        }
+        const [result] = await runChecks({ harness, shim: 'good' }, ['C1'])
+        expect(result.pass, JSON.stringify(extra)).toBe(false)
+        expect(result.detail).toMatch(new RegExp(`^check threw: REFUSING TO RUN: F2 .*${Object.keys(extra)[0]}`))
+      }
+      expect(started).toBe(0)
+      // Positive control: the same harness with its own environment is started, and passes.
+      const [ok] = await runChecks({ harness: good, shim: 'good' }, ['C1'])
+      expect(ok.detail).toBe('ok')
+    } finally {
+      watch.close()
+    }
+  }, 30_000)
+})
+

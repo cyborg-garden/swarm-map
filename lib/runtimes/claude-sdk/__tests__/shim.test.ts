@@ -154,6 +154,14 @@ describe('the Claude Agent SDK shim: sessions', () => {
     expect(stub.closed).toContain(0)
   })
 
+  it('[U:claude-sdk-shim] a turn that ends with nothing to say is settled with no reply: an empty message is not posted', async () => {
+    await start(function* (_text, o) { yield init(o); yield done('') })
+    link.send({ t: 'turn', env: envelope({ tools: [] }) })
+    await until(settled(1))
+    expect(got.filter((m) => m.t === 'reply')).toEqual([])
+    expect(got.filter((m) => m.t === 'settled')).toEqual([{ t: 'settled', turnId: 'turn-1' }])
+  })
+
   it('[U:claude-sdk-shim] a turn the SDK ends in an error gives an error and no reply, whatever text came with it', async () => {
     await start(function* (_text, o) { yield init(o); yield done('API Error: 402 Monthly budget spent.', { is_error: true }) })
     link.send({ t: 'turn', env: envelope({ tools: [] }) })

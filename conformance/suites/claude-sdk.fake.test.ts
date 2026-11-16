@@ -47,7 +47,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual([
-      'asks-sometimes', 'chatty', 'claims-sealed', 'dials-out', 'hides-errors', 'ignores-verdicts', 'inherits-env', 'leaks-env',
+      'asks-sometimes', 'chatty', 'claims-sealed', 'dials-out', 'hides-errors', 'ignores-verdicts', 'inherits-env', 'lacks-a-tool', 'leaks-env',
       'maps-a-tool-it-lacks', 'one-transcript', 'other-version', 'tools-always-on', 'unwatched', 'waits-forever',
     ])
     const ids = ALL_CHECKS.map((c) => c.id)
@@ -91,6 +91,11 @@ describe('must-fail: broken shims turn their named checks red', () => {
     const [c4m] = await run('maps-a-tool-it-lacks', ['C4m'])
     expect(c4m.pass).toBe(false)
     expect(c4m.detail).toContain('the shell tool did not make the file')
+  }, 30_000)
+
+  it('[U:claude-sdk-must-fail] an SDK that has one tool fewer than it says answers every turn, and C4m says which tool did not run and what the model was really offered', async () => {
+    const [c4m] = await run('lacks-a-tool', ['C4m'])
+    expect(c4m.detail).toBe('the edit tool did not run; the model was offered Bash, Read, and the shim maps Bash, Edit, Read')
   }, 30_000)
 
   it('[U:claude-sdk-must-fail] a shim that goes on waiting for a turn nobody will read leaves the room\'s next message unanswered, and C1t says so', async () => {

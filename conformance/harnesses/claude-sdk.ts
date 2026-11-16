@@ -279,6 +279,7 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
       case 'ignores-verdicts': return { ...base, sdk: wrappedSdk(sdk, 'unrestricted') }
       case 'asks-sometimes': return { ...base, sdk: wrappedSdk(sdk, 'no-ask-rules') }
       case 'tools-always-on': return { ...base, sdk: wrappedSdk(sdk, 'tools-always-on') }
+      case 'lacks-a-tool': return { ...base, sdk: wrappedSdk(sdk, 'drops-a-tool') }
       case 'other-version': return { ...base, sdk: wrappedSdk(sdk, 'other-version') }
       case 'dials-out': return { ...base, sdk: wrappedSdk(sdk, 'dials-out') }
       case 'one-transcript': return { ...base, sdk: wrappedSdk(sdk, 'continues-last') }
@@ -372,6 +373,12 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
       // happens: the agent just stops answering. No other check allows that class, so only this one sees it.
       'maps-a-tool-it-lacks': {
         what: 'A shim that tells the door it has a tool the SDK does not have in its minimal mode (a separate write tool)',
+        red: ['C4m'], green: allBut('C4m'),
+      },
+      // The other way round: the map is right, and the SDK has less than it says. The session starts and
+      // answers, so only driving each mapped tool shows that one of them is not there.
+      'lacks-a-tool': {
+        what: 'An SDK that starts without its edit tool and says it has every tool it was given',
         red: ['C4m'], green: allBut('C4m'),
       },
       // Nothing unsafe happens here either. The room just goes quiet: every later message waits behind a
