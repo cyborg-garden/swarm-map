@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useApi } from '@/lib/hooks/use-api'
 import { TierMix } from '@/components/shared/tier-mix'
@@ -13,6 +13,7 @@ import { providerOptions } from '@/lib/key-providers'
 import { BUDGET_HINT, BUDGET_LABEL } from '@/lib/budget-copy'
 import { failedRestarts, restartFailureMessage } from '@/lib/restart-outcome'
 import type { Key, Harness } from '@/lib/types'
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
 import type { HabitatTier, HarnessStatus } from '@/lib/types'
 
 function keyHealthToStatus(health: Key['health']): HarnessStatus {
@@ -26,7 +27,9 @@ function KeysPageContent() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { data: keys, loading, refetch } = useApi<Key[]>('/api/keys')
-  const { data: harnesses } = useApi<Harness[]>('/api/harnesses')
+  const { data: fleet } = useApi<Harness[]>('/api/harnesses')
+  // Keys are assigned to Hermes agents. A door agent names its two secret files on its own page.
+  const harnesses = useMemo(() => fleet?.filter((h) => !isDoorRuntime(h.runtime)) ?? null, [fleet])
 
   // Search/filter state
   const [query, setQuery] = useState('')

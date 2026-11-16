@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { applyTuningToHarness, readHarnessTuning, TUNING_SPEC, type TuningEdits, type TuningValues } from '@/lib/services/tuning-writer'
-import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
+import { invalidHarnessId, refuseDoorAgent, requireHarness } from '@/lib/harness-ref'
 
 /**
  * GET /api/harnesses/:id/tuning
@@ -14,7 +14,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const invalid = invalidHarnessId(id)
+  // A door agent has none of this: its id is refused here, before anything is read.
+  const invalid = invalidHarnessId(id) ?? refuseDoorAgent(id)
   if (invalid) return invalid
   const r = readHarnessTuning(id)
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: r.status })

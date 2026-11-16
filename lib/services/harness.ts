@@ -32,7 +32,7 @@ import { generateStandaloneCompose, setComposeImage, readComposeImage, readCompo
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
 import {
-  UnsupportedRuntimeError, markRuntimeDrivable, unmanagedRowNote,
+  UnsupportedRuntimeError, isDoorRuntime, markRuntimeDrivable, unmanagedRowNote,
   unsupportedRowReason, unsupportedRuntimeReason,
 } from './runtime-adapter'
 
@@ -1345,6 +1345,8 @@ export class HarnessService {
     for (const o of this.storage.read<Partial<Harness>[]>(HARNESSES_FILE, [])) {
       const unsupported = unsupportedRowReason(o)
       if (!o.id || !unsupported) continue
+      // A door agent's row is managed, by DoorAgentService. It is not retired.
+      if (isDoorRuntime(unsupported.runtime)) continue
       const { reason, runtime } = unsupported
       rows.push({
         id: o.id,

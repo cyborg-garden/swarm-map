@@ -7,6 +7,8 @@ import { TierBadge } from '@/components/shared/tier-badge'
 import { DbHealthBadge, type DbIntegritySummary, type DbWriteFailureSummary } from '@/components/shared/db-health-badge'
 import { DriftChip, DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
 import { RetiredRows } from '@/components/fleet/retired-rows'
+import { RuntimeBadge } from '@/components/shared/runtime-badge'
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import type { Harness } from '@/lib/types'
@@ -70,7 +72,8 @@ export default function HarnessesPage() {
   const { data: drift } = useApi<FleetDrift>('/api/fleet/drift', 60000)
   const driftById = new Map((drift?.agents ?? []).map((a) => [a.harnessId, a]))
 
-  const running = harnesses?.filter((h) => h.status === 'running') ?? []
+  // Door agents are not restarted by "Restart all running": that route drives Hermes agents only.
+  const running = harnesses?.filter((h) => h.status === 'running' && !isDoorRuntime(h.runtime)) ?? []
   const [pending, setPending] = useState<PendingAction | null>(null)
 
   function runPending() {
@@ -141,6 +144,46 @@ export default function HarnessesPage() {
       refetch()
     } catch {
       toast.error('Import failed')
+    }
+  }
+
+  // A door agent is made from a name. Its rules are filled in on its own page.
+  async function addDoorAgent() {
+    const name = window.prompt('Name for the new door agent (a Pi agent in one Discord channel):')
+    if (!name?.trim()) return
+    try {
+      const res = await fetch('/api/harnesses/door', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(body.error ?? 'Could not add the door agent')
+        return
+      }
+      router.push(`/harnesses/${body.id}`)
+    } catch {
+      toast.error('Could not add the door agent')
+    }
+  }
+
+  async function removeDoorAgent(id: string, name: string) {
+    const confirmed = window.confirm(
+      `Remove "${name}"?\n\nThis stops its door and forgets its rules, its receipts and its spend record. The two secret files are left where they are.`
+    )
+    if (!confirmed) return
+    try {
+      const res = await fetch(`/api/harnesses/${id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        toast.error(err.error ?? 'Remove failed')
+        return
+      }
+      toast.success(`Removed "${name}"`)
+      refetch()
+    } catch {
+      toast.error('Remove failed')
     }
   }
 
@@ -216,6 +259,9 @@ export default function HarnessesPage() {
           <Button variant="outline" size="sm" onClick={importHarness}>
             Import
           </Button>
+          <Button variant="outline" size="sm" onClick={addDoorAgent}>
+            Add door agent
+          </Button>
           {running.length > 0 && (
             <Button variant="outline" size="sm" onClick={() => setPending({ kind: 'restart-all', count: running.length })}>
               Restart all running ({running.length})
@@ -252,11 +298,17 @@ export default function HarnessesPage() {
                       {h.health?.errors > 0 && (
                         <span className="text-xs text-destructive">({h.health.errors} err)</span>
                       )}
-                      <DbHealthBadge
-                        integrity={dbHealthById.get(h.id)?.integrity}
-                        writeFailures={dbHealthById.get(h.id)?.writeFailures}
-                      />
-                      {drift && <DriftChip drift={driftById.get(h.id)} />}
+                      <RuntimeBadge runtime={h.runtime} />
+                      {/* A door agent has no state database and no image built from this
+                          checkout, so neither chip applies to it. Drawing them would say
+                          "build unknown" about something that was never in question. */}
+                      {!isDoorRuntime(h.runtime) && (
+                        <DbHealthBadge
+                          integrity={dbHealthById.get(h.id)?.integrity}
+                          writeFailures={dbHealthById.get(h.id)?.writeFailures}
+                        />
+                      )}
+                      {drift && !isDoorRuntime(h.runtime) && <DriftChip drift={driftById.get(h.id)} />}
                     </Link>
                   </td>
                   <td className="px-4 py-3">
@@ -270,6 +322,19 @@ export default function HarnessesPage() {
                   <td className="px-4 py-3 text-right">{h.costToday == null ? '—' : `$${h.costToday.toFixed(2)}`}</td>
                   <td className="px-4 py-3 text-right">{h.invocations ?? '—'}</td>
                   <td className="px-4 py-3 text-right">
+                    {isDoorRuntime(h.runtime) ? (
+                      // Restart and Duplicate do not apply to a door agent. Start is on its page, where the dry run's result is shown.
+                      <div className="flex items-center justify-end gap-2">
+                        {h.status === 'running' && (
+                          <Button variant="ghost" size="xs" onClick={() => setPending({ kind: 'stop', id: h.id, name: h.name ?? h.id })}>
+                            Stop
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="xs" onClick={() => removeDoorAgent(h.id, h.name)} title="Remove" className="text-destructive hover:text-destructive">
+                          ✕
+                        </Button>
+                      </div>
+                    ) : (
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="xs" onClick={() => setPending({ kind: 'restart', id: h.id, name: h.name ?? h.id })} disabled={h.status === 'restarting'}>
                         {h.status === 'restarting' ? 'Rebuilding...' : 'Restart'}
@@ -284,6 +349,7 @@ export default function HarnessesPage() {
                         ✕
                       </Button>
                     </div>
+                    )}
                   </td>
                 </tr>
               ))}

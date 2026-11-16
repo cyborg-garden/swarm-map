@@ -13,10 +13,12 @@ export type RestartMode = 'quick' | 'recreate' | 'rebuild' | 'purge'
 export type Harness = {
   id: string
   name: string
-  // Only 'hermes' has a container adapter today. A stored row carrying any
-  // other tag (a retired runtime, or one this build does not know) never
-  // becomes a Harness: see HarnessService.listRetired().
-  runtime: 'hermes' | 'claude-code-proxy' | 'custom'
+  // Only 'hermes' has a container adapter today. 'pi' and 'letta-code' are
+  // door agents: they are listed and driven by DoorAgentService, never by
+  // HarnessService. A stored row carrying any other tag (a retired runtime,
+  // or one this build does not know) never becomes a Harness: see
+  // HarnessService.listRetired().
+  runtime: 'hermes' | 'claude-code-proxy' | 'custom' | 'pi' | 'letta-code'
   parentId?: string
   status: HarnessStatus
   health: { errors: number; errorMsg?: string }

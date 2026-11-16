@@ -1,5 +1,6 @@
 'use client'
 
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
 import { useApi } from '@/lib/hooks/use-api'
 import { HarnessCard } from '@/components/harness/harness-card'
 import { DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
@@ -66,6 +67,11 @@ export default function DashboardPage() {
   const invocations = harnesses?.reduce((s, h) => s + (h.invocations ?? 0), 0) ?? 0
   const errors = harnesses?.reduce((s, h) => s + (h.health?.errors ?? 0), 0) ?? 0
   const costToday = harnesses?.reduce((s, h) => s + (h.costToday ?? 0), 0) ?? 0
+  // A door agent keeps a monthly ledger and no daily figure. It adds nothing to
+  // the two daily totals, and the cards say so rather than pass it off as $0.
+  const doorCount = harnesses?.filter((h) => isDoorRuntime(h.runtime)).length ?? 0
+  const doorNote = doorCount === 0 ? undefined
+    : `not counting ${doorCount} door agent${doorCount === 1 ? '' : 's'}: no daily figure is kept for ${doorCount === 1 ? 'it' : 'them'}`
   const recentAudit = audit?.slice(-10).reverse() ?? []
 
   return (
@@ -94,9 +100,9 @@ export default function DashboardPage() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard label="Running" value={hLoading ? '—' : running} sub={`of ${harnesses?.length ?? 0} harnesses`} />
-        <StatCard label="Invocations today" value={hLoading ? '—' : invocations} />
+        <StatCard label="Invocations today" value={hLoading ? '—' : invocations} sub={doorNote} />
         <StatCard label="Errors" value={hLoading ? '—' : errors} />
-        <StatCard label="Cost today" value={hLoading ? '—' : `$${costToday.toFixed(2)}`} />
+        <StatCard label="Cost today" value={hLoading ? '—' : `$${costToday.toFixed(2)}`} sub={doorNote} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -126,7 +132,7 @@ export default function DashboardPage() {
           <div className="space-y-1">
             {hLoading && <p className="text-sm text-muted-foreground">Loading harnesses...</p>}
             {harnesses?.map((h) => (
-              <HarnessCard key={h.id} harness={h} drift={drift ? driftById.get(h.id) ?? null : undefined} />
+              <HarnessCard key={h.id} harness={h} drift={drift && !isDoorRuntime(h.runtime) ? driftById.get(h.id) ?? null : undefined} />
             ))}
           </div>
         </div>

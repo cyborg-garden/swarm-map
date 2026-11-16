@@ -14,8 +14,12 @@ function inside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
-/** Why the file a variable points at cannot be used, or undefined if it can. Says where, never what. */
-export function secretFileProblem(name: string, env: Record<string, string | undefined>, repoRoot: string): string | undefined {
+/**
+ * Why the file a variable points at is not in a fit place, or undefined if it
+ * is: set, a full path, a plain file of this user's that nobody else can
+ * read, outside the repo. The file is never opened.
+ */
+export function secretFilePlaceProblem(name: string, env: Record<string, string | undefined>, repoRoot: string): string | undefined {
   const file = env[name]
   if (!file) return `${name} is not set. Point it at a file that holds the secret`
   if (!path.isAbsolute(file)) return `${name} must be an absolute path`
@@ -26,6 +30,14 @@ export function secretFileProblem(name: string, env: Record<string, string | und
   if ((stat.mode & 0o077) !== 0) return `${name} points at a file others can read. Run: chmod 600 on it`
   if (typeof process.getuid === 'function' && stat.uid !== process.getuid()) return `${name} points at a file owned by someone else`
   if (inside(realpathSync(file), realpathSync(repoRoot))) return `${name} points inside the repo. Keep the secret outside it`
+  return undefined
+}
+
+/** Why the file a variable points at cannot be used, or undefined if it can. Says where, never what. */
+export function secretFileProblem(name: string, env: Record<string, string | undefined>, repoRoot: string): string | undefined {
+  const misplaced = secretFilePlaceProblem(name, env, repoRoot)
+  if (misplaced) return misplaced
+  const file = env[name] as string
   const value = readFileSync(file, 'utf8').trim()
   if (value.length < 8 || /\s/.test(value)) return `${name} points at a file that does not hold one secret on one line`
   return undefined

@@ -3,7 +3,8 @@ import { services } from '@/lib/services'
 import { isValidHarnessId } from '@/lib/services/surface-admins'
 import { Storage } from '@/lib/services/storage'
 import { DATA_DIR } from '@/lib/services/data-dir'
-import { unmanagedRowNote, unsupportedRowReason } from '@/lib/services/runtime-adapter'
+import { isDoorRuntime, unmanagedRowNote, unsupportedRowReason } from '@/lib/services/runtime-adapter'
+import { DoorError } from '@/lib/services/door-agents'
 import type { Harness } from '@/lib/types'
 
 /**
@@ -22,6 +23,13 @@ import type { Harness } from '@/lib/types'
  * Only the tag decides: a row with no tag is Hermes. The one request let
  * through is the one that forgets the row (requireHarnessToRemove). The
  * lookup reads harnesses.json and nothing else.
+ *
+ * A door agent (runtime `pi`, `letta-code`) is such a row as far as Hermes is
+ * concerned: requireHarness answers 409 for its id, so no Hermes route acts on
+ * it. The routes that do serve door agents ask first, with doorAgentId (a
+ * route that serves both kinds) or requireDoorAgent (a door-only route), and
+ * then work through DoorAgentService. Both read harnesses.json and nothing
+ * else.
  *
  * app/api/harness-id-sweep.test.ts walks every route file and fails if one
  * that takes an agent id skips this.
@@ -76,6 +84,12 @@ function unmanagedRow(id: string): Unmanaged | undefined {
 
 /** 409 for the id of a stored row whose runtime tag Swarm Map does not know. */
 function unmanagedRowRefusal(row: Unmanaged): NextResponse {
+  if (isDoorRuntime(row.runtime)) {
+    return NextResponse.json(
+      { error: `This is a ${row.runtime} agent behind a door. This action is for Hermes agents and does not apply to it.`, reason: 'door', runtime: row.runtime },
+      { status: 409 },
+    )
+  }
   return NextResponse.json(
     {
       error: `${unmanagedRowNote(row)} Nothing can be changed through it. Forget the row to free the name.`,
@@ -111,4 +125,48 @@ export function requireHarnessToRemove(id: unknown): NextResponse | undefined {
   if (invalid) return invalid
   if (unmanagedRow(id as string)) return undefined
   return listedHarness(id as string).refusal
+}
+
+/**
+ * `id` when it is well-formed and the stored row with exactly that id is a
+ * door agent's, else undefined. For routes that serve both kinds of agent:
+ * they ask this first and fall through to requireHarness.
+ */
+export function doorAgentId(id: unknown): string | undefined {
+  if (!isValidHarnessId(id)) return undefined
+  const rows = new Storage(DATA_DIR).read<Array<{ id?: string; runtime?: string | null }>>('harnesses.json', [])
+  if (!Array.isArray(rows)) return undefined
+  return isDoorRuntime(rows.find((r) => r?.id === id)?.runtime) ? id : undefined
+}
+
+/** 409 for a door agent's id, on a read that only makes sense for a Hermes agent. Else undefined. */
+export function refuseDoorAgent(id: unknown): NextResponse | undefined {
+  const door = doorAgentId(id)
+  if (!door) return undefined
+  return unmanagedRowRefusal(unmanagedRow(door) as Unmanaged)
+}
+
+/**
+ * The resolving step for a door-only route. A malformed id is a 400, a row of
+ * a runtime Swarm Map does not know is a 409, an id that names no agent is a
+ * 404, and a Hermes agent is a 409: the route is not for it.
+ */
+export function requireDoorAgent(id: unknown): { id: string; refusal?: undefined } | { id?: undefined; refusal: NextResponse } {
+  const invalid = invalidHarnessId(id)
+  if (invalid) return { refusal: invalid }
+  const door = doorAgentId(id)
+  if (door) return { id: door }
+  const unmanaged = unmanagedRow(id as string)
+  if (unmanaged) return { refusal: unmanagedRowRefusal(unmanaged) }
+  const { refusal } = listedHarness(id as string)
+  if (refusal) return { refusal }
+  return { refusal: NextResponse.json({ error: 'This agent does not run behind a door, so this does not apply to it.' }, { status: 409 }) }
+}
+
+/** The response for a refusal from DoorAgentService. Anything else is a 500 that says nothing of its cause. */
+export function doorErrorResponse(err: unknown): NextResponse {
+  if (err instanceof DoorError) {
+    return NextResponse.json({ error: err.message, ...(err.details ? { details: err.details } : {}) }, { status: err.status })
+  }
+  return NextResponse.json({ error: 'The door agent could not be changed' }, { status: 500 })
 }

@@ -28,6 +28,13 @@
  * read-only on every route; the one exception is DELETE /api/harnesses/:id,
  * which forgets the row.
  *
+ * A door agent (a stored row with runtime `pi` or `letta-code`) is checked the
+ * same way, on every method, reads included. A route either serves door
+ * agents (SERVES_DOOR), and then it works through DoorAgentService and never
+ * through HarnessService, or it answers 409 and calls nothing. So no route
+ * can act on a door agent as though it were a Hermes agent, and a new route
+ * has to say which it is.
+ *
  * Both checks run with an empty body, so the id check has to come before the
  * body is looked at.
  *
@@ -160,6 +167,8 @@ const OTHER_FIELDS: Record<string, string> = {
   './harnesses/[id]/cascade/save-as/route.ts': 'name overwrite',
   './harnesses/[id]/chat-updates/route.ts': 'level',
   './harnesses/[id]/duplicate/route.ts': 'name',
+  './harnesses/[id]/door/receipts/route.ts': '?last',
+  './harnesses/[id]/door/rules/route.ts': 'rules secrets version',
   './harnesses/[id]/image/route.ts': 'imageRef',
   './harnesses/[id]/logs/route.ts': '?lines ?source',
   './harnesses/[id]/models/route.ts': 'cascade chain expected_chain expected_fallback_providers fallback_providers model provider set_primary',
@@ -176,6 +185,7 @@ const OTHER_FIELDS: Record<string, string> = {
   './harnesses/[id]/tools/route.ts': 'tools',
   './harnesses/[id]/tuning/route.ts': 'expected values',
   './harnesses/[id]/usecase/reapply/route.ts': 'templateId',
+  './harnesses/door/route.ts': 'name runtime',
   './harnesses/create/route.ts': 'action channel keyId models name packs platform provider surface tier',
   './harnesses/import/route.ts': 'action dataDir keyId name packs provider surface',
   './health/docker/route.ts': 'data ts',
@@ -212,6 +222,7 @@ const WHOLE_BODY: Record<string, string> = {
 // existing agents before anything is written; each has its own test for that.
 const NEW_NAME: Record<string, string> = {
   './harnesses/create/route.ts': 'lib/services/__tests__/harness-name-taken.test.ts',
+  './harnesses/door/route.ts': 'app/api/harnesses/door-routes.test.ts',
   './harnesses/import/route.ts': 'lib/services/__tests__/harness-name-taken.test.ts',
   './setup/deploy/route.ts': 'lib/services/__tests__/deploy-route.integration.test.ts',
 }
@@ -267,6 +278,19 @@ const UNKNOWN = 'h_no_such_agent'
 // act on it.
 const UNMANAGED = { id: 'h_old', name: 'old', runtime: 'some-other-runtime' }
 const FORGET_ROUTE = './harnesses/[id]/route.ts'
+// A door agent's row, and the routes that serve door agents. Every other
+// route under harnesses/[id]/ refuses one.
+const DOOR = { id: 'h_door', name: 'door', runtime: 'pi' }
+const SERVES_DOOR = new Set([
+  './harnesses/[id]/route.ts',
+  './harnesses/[id]/start/route.ts',
+  './harnesses/[id]/stop/route.ts',
+  './harnesses/[id]/logs/route.ts',
+  './harnesses/[id]/usage/route.ts',
+  './harnesses/[id]/door/route.ts',
+  './harnesses/[id]/door/rules/route.ts',
+  './harnesses/[id]/door/receipts/route.ts',
+])
 // The sweep stubs fs writes; the stored rows are put in place with the real one.
 const realWriteFileSync = fs.writeFileSync
 const storeRows = (rows: unknown[]) => realWriteFileSync(path.join(DATA_DIR, 'harnesses.json'), JSON.stringify(rows))
@@ -402,6 +426,28 @@ describe('routes with the agent id in the URL', () => {
       }
       expect(fsWrites, method).toEqual([])
     }
+  })
+
+  it.each(URL_ID_ROUTES)('%s serves a door agent through DoorAgentService, or refuses it', async (file) => {
+    for (const [method, handler] of await handlers(file)) {
+      state.calls.length = 0
+      state.canned = {}
+      storeRows([DOOR])
+      const res = await handler(request(method), { params: Promise.resolve({ id: DOOR.id }) })
+      if (SERVES_DOOR.has(file)) {
+        expect(state.calls.length, method).toBeGreaterThan(0)
+        expect(state.calls.filter((c) => !c.startsWith('doorAgents.')), method).toEqual([])
+      } else {
+        expect(res.status, method).toBe(409)
+        expect(await res.json(), method).toMatchObject({ reason: 'door', runtime: DOOR.runtime })
+        expect(state.calls, method).toEqual([])
+      }
+      expect(fsWrites, method).toEqual([])
+    }
+  })
+
+  it('the routes that serve door agents all exist', () => {
+    for (const file of SERVES_DOOR) expect(URL_ID_ROUTES, file).toContain(file)
   })
 
   it('the route that forgets a row is one of them', () => {
@@ -587,6 +633,20 @@ describe('routes with the agent id in the body', () => {
       const res = await handler(request(spec.method, bodyWith(spec, field, UNKNOWN)), { params: Promise.resolve(spec.params ?? {}) })
       expect([400, 404]).toContain(res.status)
       expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual(['harness.get'])
+      expect(fsWrites).toEqual([])
+    },
+  )
+
+  it.each(BODY_CASES.filter(([, , s]) => !s.unknown))(
+    '%s changes nothing when %s is a door agent',
+    async (file, field, spec) => {
+      const handler = (await modules[file]())[spec.method]!
+      state.canned = spec.reads ?? {}
+      storeRows([DOOR])
+      const res = await handler(request(spec.method, bodyWith(spec, field, DOOR.id)), { params: Promise.resolve(spec.params ?? {}) })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ reason: 'door', runtime: DOOR.runtime })
+      expect(state.calls.filter((c) => !(c in (spec.reads ?? {})))).toEqual([])
       expect(fsWrites).toEqual([])
     },
   )

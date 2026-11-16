@@ -34,6 +34,8 @@ import { TIER_LABELS } from '@/lib/constants'
 import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
 import { BUDGET_HINT, BUDGET_LABEL } from '@/lib/budget-copy'
 import { failedRestarts, requestRestart, restartFailureMessage } from '@/lib/restart-outcome'
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
+import { DoorAgentPage } from '@/components/harness/door-agent-page'
 
 type PairingUser = {
   userId: string
@@ -143,8 +145,22 @@ function fmtUsd(v: number | null | undefined, costStatus?: 'estimated' | 'partia
   return `${costStatus === 'estimated' ? '~' : ''}$${v.toFixed(2)}`
 }
 
+/**
+ * The page of one agent. Which page that is depends on the agent's runtime,
+ * so the agent is looked up first, and only the page that fits is mounted:
+ * a door agent's page asks for nothing a Hermes agent has, and the other way
+ * round.
+ */
 export default function HarnessDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const { data: harness, loading } = useApi<Harness>(`/api/harnesses/${id}`)
+  if (loading) return <p className="text-muted-foreground">Loading...</p>
+  // An agent behind a door has a page of its own, with only the tabs that apply to it.
+  if (harness && isDoorRuntime(harness.runtime)) return <DoorAgentPage harness={harness} />
+  return <HermesHarnessDetailPage id={id} />
+}
+
+function HermesHarnessDetailPage({ id }: { id: string }) {
   const router = useRouter()
 
   const { data: harness, loading, refetch } = useApi<Harness>(`/api/harnesses/${id}`)

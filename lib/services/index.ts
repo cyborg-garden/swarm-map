@@ -12,6 +12,8 @@ import { SurfaceAdminService } from './surface-admins'
 import { CascadeLibraryService } from './cascades'
 import { ModelFreshnessService } from './model-freshness'
 import { DATA_DIR } from './data-dir'
+import { DoorAgentService, agentNameTaken } from './door-agents'
+import { createCliLauncher } from './door-launcher'
 
 
 const storage = new Storage(DATA_DIR)
@@ -55,4 +57,13 @@ export const services = {
   // Named cascade library: saved fallback_providers shapes, portable across harnesses.
   cascades: new CascadeLibraryService(storage, audit),
   analytics,
+  // Door agents (runtime pi): listed and driven here, never by HarnessService.
+  doorAgents: new DoorAgentService({
+    storage,
+    audit,
+    dataDir: DATA_DIR,
+    launcher: createCliLauncher(),
+    repoRoot: process.cwd(),
+    nameTaken: (name) => agentNameTaken(harness, name),
+  }),
 }

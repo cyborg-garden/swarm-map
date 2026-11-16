@@ -10,7 +10,7 @@ import { GROUPS_VARS as GROUP_VARS } from '@/lib/surfaces/derive'
 // so the harness id must never escape ~/.hermes-* and a chatId must never
 // add a line to the .env.
 import { agentDataDir, sanitizeGroupId } from '@/lib/services/surface-admins'
-import { invalidHarnessId, requireHarness } from '@/lib/harness-ref'
+import { invalidHarnessId, refuseDoorAgent, requireHarness } from '@/lib/harness-ref'
 
 function parseEnvFile(envPath: string): Record<string, string> {
   const result: Record<string, string> = {}
@@ -45,7 +45,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const invalid = invalidHarnessId(id)
+  // A door agent has none of this: its id is refused here, before anything is read.
+  const invalid = invalidHarnessId(id) ?? refuseDoorAgent(id)
   if (invalid) return invalid
   const url = new URL(request.url)
   const action = url.searchParams.get('action') || 'group-check'
