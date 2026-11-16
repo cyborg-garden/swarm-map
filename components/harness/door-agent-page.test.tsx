@@ -361,6 +361,14 @@ describe('what the Overview says about the door, plainly', () => {
 describe('a Letta Code agent behind a door', () => {
   beforeEach(() => { current = view({ harness: LETTA, record: { ...view().record, runtime: 'letta-code' } }) })
 
+  it('has its Tools card switched off, and says tools are built for the other harness', async () => {
+    await openPage()
+    await openTab('Rules')
+    const card = await screen.findByTestId('door-tools-card')
+    expect((within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])).toEqual([['never', true], ['never', true], ['never', true]])
+    expect(within(card).getByRole('note')).toHaveTextContent('Tools are built for Pi only')
+  })
+
   it('shows its harness in the badge and on the Overview', async () => {
     const original = ROW.runtime
     ROW.runtime = 'letta-code'

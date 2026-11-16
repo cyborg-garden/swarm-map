@@ -42,9 +42,15 @@ export function withMode(tools: ToolsConfig | undefined, key: ToolClass, mode: M
 
 const inputClass = 'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
-export function DoorToolsCard({ rules, onChange }: { rules: LabConfig; onChange: (tools: ToolsConfig) => void }) {
+export function DoorToolsCard({ rules, builtFor, onChange }: {
+  rules: LabConfig
+  /** Set when this agent's harness has no tools: the name of the one that does. The card is then switched off. */
+  builtFor?: string
+  onChange: (tools: ToolsConfig) => void
+}) {
   const tools = rules.tools
   const anyone = rules.discord.anyoneInChannel
+  const off = anyone || builtFor !== undefined
   const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask')
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3" data-testid="door-tools-card">
@@ -53,7 +59,11 @@ export function DoorToolsCard({ rules, onChange }: { rules: LabConfig; onChange:
         Off by default. Every tool runs inside the agent&apos;s sealed cell: a small scratch folder that is emptied when it stops, no network, no secrets.
         With &quot;Ask an admin&quot;, the door posts exactly what the agent wants to run in the channel, and it runs only if an admin replies approve or reacts ✅.
       </p>
-      {anyone && (
+      {builtFor !== undefined ? (
+        <p role="note" className="text-xs text-amber-600">
+          Tools are built for {builtFor} only. This agent&apos;s harness has none.
+        </p>
+      ) : anyone && (
         <p role="note" className="text-xs text-amber-600">
           This agent hears anyone in the channel, so it gets no tools. Name who it hears to switch one on.
         </p>
@@ -65,8 +75,8 @@ export function DoorToolsCard({ rules, onChange }: { rules: LabConfig; onChange:
             <p className="text-xs text-muted-foreground">{row.hint}</p>
           </div>
           <select
-            name={`tools.${row.key}`} aria-label={row.label} className={inputClass} disabled={anyone}
-            value={anyone ? 'never' : modeOf(tools, row.key)}
+            name={`tools.${row.key}`} aria-label={row.label} className={inputClass} disabled={off}
+            value={off ? 'never' : modeOf(tools, row.key)}
             onChange={(e) => onChange(withMode(tools, row.key, e.target.value as Mode))}
           >
             <option value="never">Off</option>
@@ -75,7 +85,7 @@ export function DoorToolsCard({ rules, onChange }: { rules: LabConfig; onChange:
           </select>
         </div>
       ))}
-      {asks && !anyone && (
+      {asks && !off && (
         <label className="block space-y-1">
           <span className="text-sm">Seconds an admin has to answer</span>
           <input

@@ -178,7 +178,9 @@ Results are in "What was run".
 Not built here. Its shim asks the door before a tool runs and takes a plain yes or no. It does not
 check that a yes names the call, keeps no file tool in a scratch folder and applies no limits. So
 it does not tell the door it can hold a call, the door never offers it a tool in ask mode, and its
-matrix lists each of the ten tool checks as not run, with that reason.
+matrix lists each of the ten tool checks as not run, with that reason. The launcher refuses a
+config that names Letta Code and switches a tool on, and the dashboard's Tools card is switched
+off for such an agent.
 
 ## A later tool: fetch through the door
 
