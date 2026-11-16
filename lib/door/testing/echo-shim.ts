@@ -1,5 +1,6 @@
 // A shim with no harness behind it. It answers `echo: <text>`, and a message
-// containing `!tool <name>` makes it ask to run that tool first. The door's
+// containing `!tool <name>` makes it ask to run that tool first
+// (`!tool <name>=<word>` asks with that word as the call's command). The door's
 // plumbing tests use it so they need no Docker and no model.
 //
 // `mode` makes it misbehave on purpose, so tests can show the door holds when
@@ -41,7 +42,7 @@ export interface EchoShim {
   /** Tools the shim ran. This is `toolRan`. */
   toolsRan: { turnId: string; tool: string }[]
   /** Answers the shim got to its tool requests. */
-  verdicts: { tool: string; allow: boolean; reason?: string }[]
+  verdicts: { tool: string; allow: boolean; reason?: string; hash?: string }[]
   client: ShimClient
   mode: EchoMode
   close(): void
@@ -49,9 +50,11 @@ export interface EchoShim {
 
 export async function startEchoShim(opts: {
   host?: string; port: number; token: string; verdictTimeoutMs?: number; mode?: EchoMode
+  /** What it says of itself at hello, on top of ECHO_CAPS. */
+  caps?: Partial<Capabilities>
 }): Promise<EchoShim> {
   const client = await connectShim({
-    host: opts.host ?? '127.0.0.1', port: opts.port, token: opts.token, caps: ECHO_CAPS,
+    host: opts.host ?? '127.0.0.1', port: opts.port, token: opts.token, caps: { ...ECHO_CAPS, ...opts.caps },
     verdictTimeoutMs: opts.verdictTimeoutMs,
   })
   const shim: EchoShim = {
@@ -61,12 +64,12 @@ export async function startEchoShim(opts: {
   const onTurn = async (env: Envelope): Promise<void> => {
     shim.heard.push(env)
     const { turnId } = env
-    for (const [, tool] of env.text.matchAll(/!tool (\S+)/g)) {
+    for (const [, tool, word] of env.text.matchAll(/!tool ([^\s=]+)(?:=(\S+))?/g)) {
       if (shim.mode === 'tool-without-asking') {
         shim.toolsRan.push({ turnId, tool })
         continue
       }
-      const answer = await client.requestTool(turnId, tool, { from: 'echo' })
+      const answer = await client.requestTool(turnId, tool, word === undefined ? { from: 'echo' } : { command: word })
       shim.verdicts.push({ tool, ...answer })
       if (answer.allow) {
         shim.toolsRan.push({ turnId, tool })

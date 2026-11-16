@@ -47,7 +47,7 @@ afterAll(() => {
 describe('letta-code in the launcher, dry run: the containment checks', () => {
   it('the cell a real run would start is sealed', async () => {
     const checks = await sealChecks({ harness: HARNESS, model: 'lab/model', workDir: tmp, log: () => {} })
-    expect(checks.map((c) => c.id)).toEqual(['S0', 'S0r', 'S0d', 'S1', 'S2', 'S3', 'S9'])
+    expect(checks.map((c) => c.id)).toEqual(['S0', 'S0r', 'S0d', 'S1', 'S2', 'S3', 'S4', 'S9'])
     expect(checks.filter((c) => !c.pass)).toEqual([])
     // The cell that was checked is Letta Code's, and the check that names the harness says so.
     expect(checks.find((c) => c.id === 'S2')?.title).toBe('the shim, the gate and Letta Code cannot be changed from inside the cell')

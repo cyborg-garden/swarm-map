@@ -28,7 +28,7 @@ export const LETTA_CODE_CAPS: Capabilities = {
   // It has chat channels of its own. They belong to its server mode, which this shim never starts.
   ownsChat: true,
   toolVeto: 'pre-call',
-  approvalRoundTrip: false, // it can hold a call for as long as it takes; the door's ask flow is not built yet
+  approvalRoundTrip: false, // it can hold a call, but this shim does not check that a yes names the call, so the door is not told it can
   toolMap: LETTA_CODE_TOOL_MAP,
   modelBaseUrl: true,
   mcpClient: false, // none is configured in the home the shim gives it

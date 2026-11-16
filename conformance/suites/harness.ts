@@ -5,6 +5,7 @@
 // runChecks(). Nothing in this folder needs editing.
 import type { ModelShape } from '../../lib/door/model-shapes.ts'
 import type { Capabilities } from '../../lib/door/protocol.ts'
+import type { LabOptions } from './lab.ts'
 import type { NamedFake } from '../guards/preflight.ts'
 
 /** One native tool call, as the scripted model should ask for it. */
@@ -25,6 +26,22 @@ export interface Cell {
   /** How long the shim waits for a verdict, and how long the in-cell veto waits for the shim. */
   verdictTimeoutMs: number
   vetoTimeoutMs: number
+  /** The time one shell call may run and the output that reaches the model, when a check sets them. */
+  toolLimits?: { callSeconds?: number; outputBytes?: number }
+}
+
+/** What the tool checks need from a harness whose shim holds a call for approval and keeps file tools in a scratch folder. */
+export interface ToolSurface {
+  /** Native calls that read a file, write one, and list a folder. */
+  read(file: string): NativeToolCall
+  write(file: string, content: string): NativeToolCall
+  list(dir: string): NativeToolCall
+  /**
+   * Something outside the scratch folder that is there once the harness has started: a file and
+   * text it holds, and a folder and a name in it. Neither the text nor the name may be anything
+   * a check would write in a call.
+   */
+  outside(cell: Cell): { file: string; holds: string; dir: string; dirHolds: string }
 }
 
 export interface MatrixRowInput { id: string; title: string; status: 'not-run' | 'n/a'; reason: string }
@@ -36,6 +53,12 @@ export interface BrokenVariant {
   red: string[]
   /** Checks it must leave green, which shows the suite is not simply red everywhere. */
   green: string[]
+  /** The checks it is put through, when that is not all of them. `red` and `green` are both among these. */
+  checks?: string[]
+  /** The shim to start, when the fault is not in the shim. Left out, it is the variant's own name. */
+  shim?: string
+  /** A fault outside the shim: how the lab itself is to be broken. */
+  lab?: Pick<LabOptions, 'rig'>
 }
 
 export interface HarnessUnderTest {
@@ -54,6 +77,10 @@ export interface HarnessUnderTest {
   policy?: Record<string, unknown>
   /** Native calls of class `shell` that touch a file, dump the environment to a file, and run one command line. */
   shell: { touch(file: string): NativeToolCall; dumpEnv(file: string): NativeToolCall; exec(command: string): NativeToolCall }
+  /** Set when the tool checks (tool-checks.ts) can be run for this harness. Left out, `noTools` says why not. */
+  tools?: ToolSurface
+  /** Why the tool checks are not run for this harness. It is the reason on each of their rows in its matrix. */
+  noTools?: string
   /** Where a tool started by this harness would write `name` so the lab can see it. */
   workFile(cell: Cell, name: string): string
   /**

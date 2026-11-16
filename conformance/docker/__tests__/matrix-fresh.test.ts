@@ -10,10 +10,13 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../../lib/runtimes/pi/caps.ts'
 import { buildMatrix, KNOWN_CHECK_IDS, type Matrix } from '../../matrix.ts'
-import { BROKEN_RIGS, IN_CELL, SKIPPED_IN_CELL } from '../broken.ts'
+import { BROKEN_RIGS as SHARED_RIGS, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL, TOOL_RIGS, TOOLS_IN_CELL } from '../broken.ts'
 import { SEAL_CHECKS } from '../runner.ts'
 
 const file = path.resolve(import.meta.dirname, '..', '..', 'matrix', `pi-${PI_VERSION}.docker.json`)
+// Pi is put through the tool checks as well, with the gates that are broken for them.
+const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL]
+const BROKEN_RIGS = { ...SHARED_RIGS, ...TOOL_RIGS }
 const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
 const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
 
@@ -46,6 +49,8 @@ describe('the committed Docker matrix for the pinned Pi', () => {
   it('[U:docker-matrix] every wall check has a rig that is broken for it', () => {
     const covered = new Set(Object.values(BROKEN_RIGS).flatMap((rig) => rig.red))
     for (const id of ['S0', 'S1', 'S2', 'S3', 'C8', 'C9', 'C10']) expect([...covered], id).toContain(id)
+    // And so does a tool check of each kind: held for an admin, what ran is what was shown, the scratch folder, the limits.
+    for (const id of ['C6', 'C6x', 'W1', 'L1', 'L2', 'C5v']) expect([...covered], id).toContain(id)
     for (const rig of Object.values(BROKEN_RIGS)) for (const id of [...rig.red, ...rig.green]) expect(KNOWN_CHECK_IDS).toContain(id)
   })
 })

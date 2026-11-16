@@ -27,7 +27,8 @@ COPY lib/core /opt/swarm/lib/core
 COPY lib/door/framing.ts lib/door/protocol.ts lib/door/shim-client.ts /opt/swarm/lib/door/
 COPY lib/runtimes/pi /opt/swarm/lib/runtimes/pi
 COPY conformance/guards/preflight.ts /opt/swarm/conformance/guards/
-COPY conformance/broken/gate-allows-all.ts /opt/swarm/conformance/broken/
+# The gates that are broken on purpose. A cell loads one only when its rig names it.
+COPY conformance/broken/gate-allows-all.ts conformance/broken/gate-silence-is-yes.ts conformance/broken/gate-runs-more.ts conformance/broken/gate-no-path-check.ts conformance/broken/gate-no-limits.ts /opt/swarm/conformance/broken/
 COPY conformance/docker/cell-main.ts conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
 # Owned by root and not writable by anyone. The cell also runs on a read-only disk.
 RUN chmod -R a-w /opt/swarm /opt/pi

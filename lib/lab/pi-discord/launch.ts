@@ -21,8 +21,9 @@ import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
-import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
-import { harnessOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
+import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
+import { approvalSecondsOf, harnessOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -156,7 +157,10 @@ export async function start(o: StartOptions): Promise<Running> {
   const cellHeld = [brainToken, `PLACEHOLDER-${cellNonce}`, cellNonce]
 
   // Rendered here on three blocks of the lab's range, to be judged before anything is started. It is started on blocks that are free then.
-  const cellOptions: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])) }
+  // Where a class of tool waits for an admin, the door waits this long, and the cell is told to wait a little longer.
+  const approvalSeconds = approvalSecondsOf(o.config)
+  const approvalMs = approvalSeconds === undefined ? undefined : approvalSeconds * 1000
+  const cellOptions: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])), limits: DEFAULT_TOOL_LIMITS, approvalMs }
   const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
 
@@ -205,10 +209,13 @@ export async function start(o: StartOptions): Promise<Running> {
       ...(o.discord ?? {}),
       sendScope: [o.config.discord.channelId], guildId: o.config.discord.guildId,
       messageContent: o.config.discord.readAllMessages, log: o.log, onFatal: o.onFatal,
+      // An admin may answer a request with a reaction. Only asked of Discord when a class of tool asks.
+      reactions: approvalMs !== undefined,
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
       receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: 180_000,
+      approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
     })
     await joinCell({
       ready: (ms) => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false),
@@ -278,6 +285,7 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
       const sinkHits = docker(['logs', `${project}-sink-1`]).out.split('\n').filter((l) => l.startsWith('SINK-HIT '))
       const outside = [...sinkProblems(sinkHits, nonce), ...host.hits.slice(seen).map((url) => `a listener on this machine was reached from inside the cell (${url})`)]
       for (const c of probed) add(c.id, c.title, c.id === 'S1' ? [...c.problems, ...outside] : c.problems)
+      add('S4', 'the scratch folder and the cell\'s own folder can be written, and each takes no more than its size', scratchProblems(project))
     }
   } finally {
     await door.close()

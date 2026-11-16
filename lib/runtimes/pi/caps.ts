@@ -22,7 +22,7 @@ export const PI_CAPS: Capabilities = {
   version: PI_VERSION,
   ownsChat: false,
   toolVeto: 'pre-call',
-  approvalRoundTrip: false, // Pi can hold a call; the door's ask flow is not built yet
+  approvalRoundTrip: true, // the gate holds a call for as long as the shim and the gate are told to wait (C6)
   toolMap: PI_TOOL_MAP,
   modelBaseUrl: true,
   mcpClient: false, // started with --no-mcp in this slice

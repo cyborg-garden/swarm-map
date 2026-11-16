@@ -15,9 +15,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { piEnv } from '../../lib/runtimes/pi/shim.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
-import { piHarness } from '../harnesses/pi.ts'
+import { PI_CHECKS as CHECKS, piHarness } from '../harnesses/pi.ts'
 import { buildMatrix, type MustFailInput } from '../matrix.ts'
-import { CHECKS, runChecks, type CheckResult } from './checks.ts'
+import { runChecks as runShared, type CheckResult } from './checks.ts'
 import { brokenVariants } from './harness.ts'
 
 armTripwire()
@@ -25,6 +25,8 @@ armTripwire()
 const PI = process.env.SWARMLAB_PI_BIN
 const harness = piHarness([PI ?? 'no-pi-given'], 'real')
 const BROKEN = brokenVariants(harness)
+// Every run here is over Pi's whole list: the shared checks and the tool checks.
+const runChecks = (base: Parameters<typeof runShared>[0], ids?: string[]) => runShared(base, ids, CHECKS)
 
 const results: CheckResult[] = []
 const mustFail: Record<string, MustFailInput> = {}
@@ -51,7 +53,7 @@ describe(`real Pi ${PI_VERSION}`, () => {
 
   it('is the pinned version', () => {
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-version-'))
-    const version = execFileSync(PI!, ['--version'], { env: piEnv({ agentDir: scratch, homeDir: scratch }) as NodeJS.ProcessEnv }).toString().trim()
+    const version = execFileSync(PI!, ['--version'], { env: piEnv({ agentDir: scratch, homeDir: scratch, workDir: scratch }) as NodeJS.ProcessEnv }).toString().trim()
     expect(version).toBe(PI_VERSION)
     versionOk = true
   })
@@ -62,11 +64,11 @@ describe(`real Pi ${PI_VERSION}`, () => {
     expect(result.detail).toBe('ok')
   }, 30_000)
 
-  it.each(Object.entries(BROKEN))('must-fail: %s', async (shim, { red, green }) => {
-    const got = await runChecks({ harness, shim })
+  it.each(Object.entries(BROKEN))('must-fail: %s', async (name, { red, green, shim, lab, checks }) => {
+    const got = await runChecks({ harness, shim: shim ?? name, ...lab }, checks)
     const failed = got.filter((r) => !r.pass).map((r) => r.id)
-    mustFail[shim] = { mustFail: red, failed }
-    for (const id of red) expect(failed, `${shim} must fail ${id}`).toContain(id)
-    for (const id of green) expect(failed, `${shim} must still pass ${id}`).not.toContain(id)
-  }, 240_000)
+    mustFail[name] = { mustFail: red, failed }
+    for (const id of red) expect(failed, `${name} must fail ${id}`).toContain(id)
+    for (const id of green) expect(failed, `${name} must still pass ${id}: ${got.find((r) => r.id === id)?.detail}`).not.toContain(id)
+  }, 480_000)
 })

@@ -8,10 +8,12 @@
 //                 receipt.
 import { randomUUID } from 'node:crypto'
 import { decide } from '../core/decide.ts'
-import type { Decision, Event, Facts } from '../core/events.ts'
+import type { Decision, Event, Facts, Principal } from '../core/events.ts'
 import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.ts'
 import { validatePolicy } from '../core/policy/validate.ts'
-import type { PolicyRecord, SurfaceId } from '../core/policy/types.ts'
+import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
+import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
+import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
 import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
@@ -45,6 +47,10 @@ export interface DoorOptions {
   maxReplyChars?: number
   /** Allows the test-only fake surface in the policy. */
   testing?: boolean
+  /** How long an admin has to answer a request to run a tool. No answer by then is a no. Default two minutes. */
+  approvalTimeoutMs?: number
+  /** How many tool calls one conversation may make in an hour. */
+  toolCallsPerHour?: number
   /** Test hook: never answer a tool request, to prove silence means no. */
   silentVerdicts?: boolean
   onUsage?: (turnId: string, usage: Usage) => void
@@ -68,7 +74,22 @@ interface Turn {
   connector: SurfaceConnector
   /** The bot-run count this turn was admitted under, so the re-check before posting asks the same question. */
   botRun: number
+  sessionKey: string
   reply?: string
+  timer: ReturnType<typeof setTimeout>
+}
+
+/** A tool call that is held until an admin answers the request the door posted for it. */
+interface Held {
+  /** The id of the door's own post. An answer has to point at it. */
+  requestId: string
+  turn: Turn
+  link: ShimLink
+  callId: string
+  tool: string
+  toolClass: ToolClass
+  /** The hash of the call that was shown. The yes that goes back to the cell carries it. */
+  hash: string
   timer: ReturnType<typeof setTimeout>
 }
 
@@ -96,6 +117,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const turns = new Map<string, Turn>()
   const deadlineMs = opts.turnDeadlineMs ?? 120_000
   const maxReplyChars = opts.maxReplyChars ?? 6000
+  const approvalMs = opts.approvalTimeoutMs ?? 120_000
+  const callsPerHour = opts.toolCallsPerHour ?? DEFAULT_TOOL_LIMITS.callsPerHour
+  // priv.approval: calls waiting for an admin, by the id of the request the door posted.
+  const held = new Map<string, Held>()
+  // tools.limits: when each conversation's recent tool calls were let through.
+  const toolCalls = new Map<string, number[]>()
   // bots.loop: bot messages delivered in a row, per room, since a person was last delivered there.
   // A thread counts with its parent, so a loop cannot carry on by moving into one.
   // Where the policy names its bots, each named bot has a count of its own in a room. Where it does
@@ -130,13 +157,76 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const factsFor = async (connector: SurfaceConnector, e: ConnectorInbound, botRun = runOf(e)): Promise<Facts> =>
     ({ ...await connector.facts({ principal: e.sender, room: e.room }), botTurnsInARow: botRun })
 
+  // A call that was waiting for an answer goes with its turn, however the turn ended. Its request can no longer be answered.
+  const dropHeld = (turn: Turn): void => {
+    for (const h of [...held.values()]) {
+      if (h.turn !== turn) continue
+      held.delete(h.requestId)
+      clearTimeout(h.timer)
+      receipt(about(turn.event, 'tool', turn.turnId), { verdict: 'deny', rule: 'turn.known', why: 'The turn ended while the call waited for an admin, so it does not run.' }, `tool=${h.tool} call=${shortHash(h.hash)}`)
+      h.link.send({ t: 'tool_verdict', callId: h.callId, allow: false, reason: 'the turn is over' })
+    }
+  }
   const closeTurn = (turn: Turn): void => {
     if (!turns.delete(turn.turnId)) return
     clearTimeout(turn.timer)
+    dropHeld(turn)
     end()
+  }
+  /** The clock on a turn: started when the turn is, stopped while a call of its waits for an admin, and started again after. */
+  const startClock = (turn: Turn): void => {
+    clearTimeout(turn.timer)
+    if (turns.get(turn.turnId) !== turn || [...held.values()].some((h) => h.turn === turn)) return
+    turn.timer = setTimeout(() => {
+      receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness did not finish the turn in time.' })
+      closeTurn(turn)
+    }, deadlineMs)
+  }
+
+  // priv.approval. An answer has to point at an open request: a reply to it, or a reaction on it.
+  // Who sent it is whoever the surface says did, and decide() says whether that account may answer.
+  // Returns true when the message was about a request, open or not the door's to answer: such a
+  // message is for the door, and is never passed to the harness.
+  function answered(surface: SurfaceId, room: string, requestId: string | undefined, by: Principal, say: Answer | undefined): boolean {
+    const h = requestId === undefined ? undefined : held.get(requestId)
+    if (!h) return false
+    const e = h.turn.event
+    const tag = { kind: 'approval' as const, surface, room, sender: by.id, messageId: h.requestId, turnId: h.turn.turnId }
+    const note = `tool=${h.tool} call=${shortHash(h.hash)}`
+    if (surface !== e.surface || room !== e.room.id) {
+      receipt(tag, { verdict: 'deny', rule: 'priv.approval', why: 'An answer has to be in the room the request was posted in.' }, note)
+      return true
+    }
+    const who = decide(policy, { kind: 'approval', surface, room: e.room, approver: by }, {})
+    if (who.verdict !== 'allow') { receipt(tag, who, note); return true }
+    if (say === undefined) {
+      receipt(tag, { verdict: 'deny', rule: 'priv.approval', why: 'That is not an answer. The request is still open.' }, note)
+      return true
+    }
+    // From here the request is closed: it is answered once, and never again.
+    held.delete(h.requestId)
+    clearTimeout(h.timer)
+    receipt(tag, who, `answer=${say} ${note}`)
+    if (say === 'deny') { settle(h, false, 'An admin said no, so the call does not run.'); return true }
+    // The yes is checked against the rules as they are now, not as they were when the door asked.
+    const now = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass: h.toolClass, toolName: h.tool, argsDigest: '' }, {})
+    if (now.verdict === 'deny') { settle(h, false, `The rules changed while the call waited: ${now.why}`, now.rule); return true }
+    settle(h, true, 'An admin said yes, so the call runs.')
+    return true
+  }
+
+  /**
+   * Close a held call with its verdict, and start its turn's clock again. A held call never
+   * outlives its turn (dropHeld), so the turn is live here.
+   */
+  function settle(h: Held, allow: boolean, why: string, rule = 'priv.approval'): void {
+    receipt(about(h.turn.event, 'tool', h.turn.turnId), { verdict: allow ? 'allow' : 'deny', rule, why }, `tool=${h.tool} call=${shortHash(h.hash)}`)
+    h.link.send({ t: 'tool_verdict', callId: h.callId, allow, ...(allow ? { hash: h.hash } : { reason: why }) })
+    startClock(h.turn)
   }
 
   async function inbound(connector: SurfaceConnector, e: ConnectorInbound): Promise<void> {
+    if (answered(e.surface, e.room.id, e.replyTo, e.sender, readAnswer(e.text))) return
     // The lookup comes first. From the count being read to the count being written nothing waits,
     // so messages that arrive together are counted one by one, not all against the same figure.
     const looked = await connector.facts({ principal: e.sender, room: e.room })
@@ -198,10 +288,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
 
     const caps = shim.caps
     const turnId = randomUUID()
+    // A tool that would have to wait for a yes is only offered to a harness that can hold a call.
+    const offered = caps.approvalRoundTrip === true ? ['allow', 'ask'] : ['allow']
     const tools = Object.entries(caps.toolMap)
-      .filter(([toolName, toolClass]) => decide(policy, {
+      .filter(([toolName, toolClass]) => offered.includes(decide(policy, {
         kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: '',
-      }, facts).verdict === 'allow')
+      }, facts).verdict))
       .map(([toolName]) => toolName)
     const env: Envelope = {
       id: e.messageId, turnId, sessionKey, surface: e.surface, room: e.room,
@@ -209,14 +301,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       text, attachments: e.attachments, context: { observed: observed.drain(sessionKey) },
       tools, whenBusy: 'queue', deadlineMs,
     }
-    const turn: Turn = {
-      turnId, event: e, connector, botRun,
-      timer: setTimeout(() => {
-        receipt(about(e, 'outbound', turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness did not finish the turn in time.' })
-        closeTurn(turn)
-      }, deadlineMs),
-    }
+    const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never }
     turns.set(turnId, turn)
+    startClock(turn)
     begin()
     if (keepsOneMemory(caps)) given = sessionKey
     shim.link.send({ t: 'turn', env })
@@ -291,6 +378,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         if (msg.usage) opts.onUsage?.(turn.turnId, msg.usage)
         clearTimeout(turn.timer)
         turns.delete(turn.turnId) // no reply can join this turn from here on
+        dropHeld(turn) // and no call of it can still be approved
         const finish = turn.reply === undefined ? Promise.resolve() : outbound(turn, turn.reply)
         void finish.catch(() => {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'Posting the reply failed.' })
@@ -310,26 +398,69 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         // written down; anything else is the fixed code 'unmapped'.
         const mapped = typeof msg.tool === 'string' && Object.hasOwn(caps.toolMap, msg.tool)
         const toolName = mapped ? msg.tool : 'unmapped'
+        const toolClass: ToolClass = mapped ? caps.toolMap[msg.tool] : 'unknown'
+        // The hash is of the name the shim sent, so it matches what the cell works out. Only the hash is written down.
+        const hash = callHash(typeof msg.tool === 'string' ? msg.tool : '', msg.input)
+        const tag = about(e, 'tool', turn.turnId)
+        const note = `tool=${toolName} call=${shortHash(hash)}`
         const verdict = (allow: boolean, reason?: string): void => {
-          if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? {} : { reason }) })
+          if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? { hash } : { reason }) })
         }
-        void factsFor(turn.connector, e).then((facts) => {
+        const refuse = (rule: string, why: string): void => { receipt(tag, { verdict: 'deny', rule, why }, note); verdict(false, why) }
+        // Whether this call stopped its turn's clock. Only a call that did may start it again: no other request moves a turn's deadline.
+        let stopped = false
+        void factsFor(turn.connector, e).then(async (facts) => {
           // The lookup took time. A turn that ended meanwhile gets a no, whatever the policy says.
-          if (turns.get(msg.turnId) !== turn) {
-            receipt(about(e, 'tool', turn.turnId), { verdict: 'deny', rule: 'turn.known', why: 'The turn ended before the tool could be decided.' }, `tool=${toolName}`)
-            return verdict(false, 'the turn is over')
-          }
-          const d = decide(policy, {
-            kind: 'tool', surface: e.surface, room: e.room, actor: e.sender,
-            toolClass: mapped ? caps.toolMap[msg.tool] : 'unknown', toolName, argsDigest: '',
-          }, facts)
+          if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
+          const d = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: hash }, facts)
           if (opts.silentVerdicts) return
-          receipt(about(e, 'tool', turn.turnId), d, `tool=${toolName}`)
-          verdict(d.verdict === 'allow', d.why)
+          if (d.verdict !== 'allow' && d.verdict !== 'ask') { receipt(tag, d, note); return verdict(false, d.why) }
+
+          // tools.limits: a conversation gets so many calls an hour. Counted when the rules let a call
+          // through, to run or to be asked about, so a call the rules refuse costs nothing.
+          const since = Date.now() - 3_600_000
+          const recent = (toolCalls.get(turn.sessionKey) ?? []).filter((at) => at > since)
+          if (recent.length >= callsPerHour) return refuse('tools.limits', 'This conversation has made as many tool calls as it may in an hour.')
+          toolCalls.set(turn.sessionKey, [...recent, Date.now()])
+
+          if (d.verdict === 'allow') { receipt(tag, d, note); return verdict(true) }
+
+          // priv.approval: hold the call, show it in the room, and wait for an admin.
+          const no = (why: string): void => refuse('priv.approval', why)
+          if (caps.approvalRoundTrip !== true) return no('This harness cannot hold a call while an admin answers.')
+          if (!(policy.surfaces[e.surface]?.admins ?? []).some((ref) => ref.kind === 'user')) return no('Nobody is on the admin list, so nobody could say yes.')
+          const shown = showInput(msg.input)
+          if ('problem' in shown) return no(`It cannot be shown for approval: ${shown.problem}.`)
+          const text = requestText(toolName, shown.text, hash, approvalMs)
+          // What is posted has to be what would run. A request the outbound check would change is not posted.
+          let clean: ReturnType<Sanitizer['run']>
+          try { clean = sanitizer.run('outbound', text, { posture: policy.posture, room: e.room }) } catch { return no('The outbound check failed, so the request was not posted.') }
+          if (clean.findings.length > 0 || clean.text !== text) return no('The call holds something secret-shaped, so it is not shown and does not run.')
+          const out = decide(policy, { kind: 'outbound', surface: e.surface, room: e.room, turnId: turn.turnId, text }, { ...facts, turnLive: true })
+          if (out.verdict !== 'allow') return no(`The request could not be posted: ${out.why}`)
+          clearTimeout(turn.timer) // the turn's clock stops while a person is asked
+          stopped = true
+          let requestId: string
+          try {
+            requestId = (await turn.connector.send(e.room, { text, turnId: turn.turnId, inReplyTo: e.messageId })).id
+          } catch {
+            startClock(turn)
+            return no('The request could not be posted, so the call does not run.')
+          }
+          if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
+          if (requestId === '' || held.has(requestId)) { startClock(turn); return no('The request could not be posted, so the call does not run.') }
+          const h: Held = {
+            requestId, turn, link, callId: msg.callId, tool: toolName, toolClass, hash,
+            timer: setTimeout(() => {
+              if (held.delete(requestId)) settle(h, false, 'No admin answered in time, so the call does not run.')
+            }, approvalMs),
+          }
+          held.set(requestId, h)
+          receipt({ ...tag, bytes: Buffer.byteLength(text) }, d, `${note} request=${requestId}`)
         }).catch(() => {
           // No facts, or no decision: that is no verdict, and no verdict is a no.
-          receipt(about(e, 'tool', turn.turnId), { verdict: 'deny', rule: 'tools.no-verdict', why: 'The tool could not be decided, so it does not run.' }, `tool=${toolName}`)
-          verdict(false, 'could not decide')
+          if (stopped) startClock(turn)
+          refuse('tools.no-verdict', 'The tool could not be decided, so it does not run.')
         })
         return
       }
@@ -361,6 +492,8 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     await connector.connect(creds)
     connector.onEvent((e) => {
       if (e.kind === 'notice') return notice(e)
+      // A reaction is only ever read as an answer to an open request. On anything else it is nothing.
+      if (e.kind === 'reaction') { answered(e.surface, e.room, e.messageId, e.sender, readReaction(e.emoji)); return }
       if (e.kind !== 'inbound') return // invites are not built in this slice
       begin()
       void inbound(connector, e).catch((err) => {

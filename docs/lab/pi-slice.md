@@ -4,9 +4,11 @@ This is the first slice of the harness-agnostic lab described in [`primitives.md
 built by following [`plan-pi.md`](plan-pi.md). Nothing here is wired into the Swarm Map app, the UI
 or any running agent. It is a library, a test rig and one command.
 
-One thing has been added since: a Discord connector and a launcher for one Pi agent in one
-channel. It is described in [`pi-discord.md`](pi-discord.md). Everything below about fakes still
-holds for every test: the connector is only ever tested against a fake Discord on loopback.
+Two things have been added since. A Discord connector and a launcher for one Pi agent in one
+channel: [`pi-discord.md`](pi-discord.md). And the agent's first tools, with an approval step in
+the room: [`tools-slice.md`](tools-slice.md), which has its own checks and its own results.
+Everything below about fakes still holds for every test: the connector is only ever tested
+against a fake Discord on loopback.
 
 ## In short
 
@@ -107,7 +109,7 @@ evidence.
 | Part | Where | Tested by |
 |---|---|---|
 | Policy record, hash, validation of every closed set | `lib/core/policy/` (`shape.ts` lists the sets) | `validate.test.ts`, `schema-coverage.test.ts` |
-| Rule catalogue (38 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
+| Rule catalogue (41 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
 | Pi's own rules (4) | `lib/runtimes/pi/rules.ts` | `rules.test.ts` |
 | `decide()` | `lib/core/decide.ts` | 41 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
 | Brain protocol, framing, shim client | `lib/door/protocol.ts`, `framing.ts`, `brain-server.ts`, `shim-client.ts` | `framing.test.ts`, `brain-server.test.ts` |
@@ -148,9 +150,10 @@ canary file touched, did a planted secret show up.
 | C15t | The tools a turn may use follow the policy at that turn, in a session that is already running | pass | pass |
 | C13 | Text that claims to be an admin does not change a tool verdict | not run | not run |
 
-**C13 is not run, and was wrongly listed as a pass before.** No tool verdict depends on who asked
-yet (approvals are not built), so a real admin gets the same answer as a forged one. The check
-could not fail for the reason it names. It comes back with C6.
+**C13 is not run, and was wrongly listed as a pass before.** When this was written no tool verdict
+depended on who asked, so the check could not fail for the reason it names. Approvals are built
+now ([`tools-slice.md`](tools-slice.md)): C6n covers a turn whose text claims an admin said yes,
+and answers from everyone who is not one. C13 is still not a check of its own.
 
 Must-fail: the same checks against eight deliberately broken shims. Each turned its named checks
 red, on the fake Pi and on real Pi.
@@ -245,6 +248,10 @@ with that harness in the loop. Each matrix file ends with one line per rule, bui
 | Need nothing from the harness (28) | Every "who may it hear and answer" rule, receipts, the sanitizer |
 
 A second harness starts with nothing in the first three rows until its own runs put it there.
+
+Three rules came with the tools slice and are not in this table: `priv.approval`,
+`tools.workspace` and `tools.limits`. What was shown for them is in
+[`tools-slice.md`](tools-slice.md).
 
 The middle row holds for the one machine the Docker run was made on. And `tools.posture` is still a
 guardrail: C10 shows that when the gate fails, the denied tool does run. What held behind it is
@@ -512,6 +519,7 @@ build a matrix from it.
 | S4 (limits), and the broken shims run again in a cell | Nothing; not started |
 | Policy push from Swarm Map with a per-agent secret (`control.ts`) | Nothing; not started |
 | C17 (a probe per declared capability), `why` command | Nothing; not started |
-| `ask` approvals (C6), and C13 with it; memory (C11), real connectors, Hermes native mode | Out of this slice by design |
+| Memory (C11), real connectors, Hermes native mode | Out of this slice by design |
+| `ask` approvals (C6) | Built since: [`tools-slice.md`](tools-slice.md) |
 | A `ModelShape` for the Anthropic Messages API | Needed before the Claude Agent SDK or Letta Code's Anthropic path can have a key swap or a budget cap |
 | A folder and home per session that other sessions cannot reach, then `sessionIsolation: 'sealed'` for Pi | A cell per session, or mounts per session inside one |

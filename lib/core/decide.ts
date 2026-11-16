@@ -146,8 +146,8 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
   const surface = e.surface ? policy.surfaces[e.surface] : undefined
   // The privilege of whoever triggered the turn, from the door's own record.
   const privilege: Privilege = surface && matches(surface.admins, e.actor, facts) ? 'admin' : 'guest'
-  const end = (verdict: 'allow' | 'deny', rule: string, why: string): Partial_ => {
-    trace.push({ rule, outcome: verdict === 'allow' ? 'pass' : 'fail' })
+  const end = (verdict: 'allow' | 'ask' | 'deny', rule: string, why: string): Partial_ => {
+    trace.push({ rule, outcome: verdict === 'deny' ? 'fail' : 'pass' })
     return { verdict, rule, why, privilege, trace }
   }
   if (policy.posture === 'public') {
@@ -156,8 +156,28 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     trace.push({ rule: 'tools.posture', outcome: 'pass' })
   }
   if (policy.tools.deny.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are on the deny list.`)
+  // Ask comes before allow: a class on both lists waits for a yes.
+  if (policy.tools.ask.includes(e.toolClass)) return end('ask', 'priv.approval', `${e.toolClass} tools need an admin's yes in the room.`)
   if (!policy.tools.allow.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are not on the allow list.`)
   return end('allow', 'tools.lists', `${e.toolClass} tools are allowed.`)
+}
+
+/**
+ * May this account answer a request to approve a tool call? Only a person on
+ * the admin list, by the id the surface reported. A role is not enough, a bot
+ * is never enough (a named one too), and the agent cannot answer for itself.
+ */
+function decideApproval(policy: PolicyRecord, e: Extract<Event, { kind: 'approval' }>): Partial_ {
+  const surface = policy.surfaces[e.surface]
+  const end = (verdict: 'allow' | 'deny', why: string): Partial_ => ({
+    verdict, rule: 'priv.approval', why, privilege: verdict === 'allow' ? 'admin' : 'guest',
+    trace: [{ rule: 'priv.approval', outcome: verdict === 'allow' ? 'pass' : 'fail' }],
+  })
+  if (!surface || !surface.enabled) return end('deny', `The ${e.surface} surface is switched off.`)
+  if (e.approver.isSelf) return end('deny', 'The agent cannot approve its own tool call.')
+  if (e.approver.isBot) return end('deny', 'A bot cannot approve a tool call.')
+  const listed = surface.admins.some((ref) => ref.kind === 'user' && ref.id === e.approver.id)
+  return listed ? end('allow', 'An admin answered.') : end('deny', 'Only an admin can answer a request to run a tool.')
 }
 
 function decideModel(policy: PolicyRecord, facts: Facts): Partial_ {
@@ -208,7 +228,7 @@ const UNBUILT_EVENTS: Partial<Record<Event['kind'], string>> = {
 function refuseAll(event: Event, problem: string): Partial_ | undefined {
   const verdict: Verdict | undefined =
     event.kind === 'inbound' || event.kind === 'outbound' ? 'drop'
-      : event.kind === 'tool' || event.kind === 'model' ? 'deny'
+      : event.kind === 'tool' || event.kind === 'model' || event.kind === 'approval' ? 'deny'
         : undefined
   if (!verdict) return undefined
   return {
@@ -236,6 +256,7 @@ export function decide(policy: PolicyRecord, event: Event, facts: Facts): Decisi
   switch (event.kind) {
     case 'inbound': return done(decideInbound(policy, event, facts))
     case 'tool': return done(decideTool(policy, event, facts))
+    case 'approval': return done(decideApproval(policy, event))
     case 'model': return done(decideModel(policy, facts))
     case 'outbound': return done(decideOutbound(policy, event, facts))
     default: throw new UnrenderedError(`event.${event.kind}`, UNBUILT_EVENTS[event.kind] ?? 'unknown')

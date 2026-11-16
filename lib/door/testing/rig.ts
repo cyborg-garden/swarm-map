@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import type { PolicyRecord } from '../../core/policy/types.ts'
 import { createFakeConnector, type FakeConnector } from '../connectors/fake.ts'
 import { createDoor, type Door, type DoorOptions } from '../door.ts'
+import type { Capabilities } from '../protocol.ts'
 import { createReceiptLog, type ReceiptLog } from '../receipts.ts'
 import { startEchoShim, type EchoMode, type EchoShim } from './echo-shim.ts'
 
@@ -21,6 +22,8 @@ export async function startRig(policy: PolicyRecord, opts: {
   noShim?: boolean
   door?: Partial<DoorOptions>
   verdictTimeoutMs?: number
+  /** What the echo shim says of itself at hello, on top of its usual capabilities. */
+  shimCaps?: Partial<Capabilities>
 } = {}): Promise<Rig> {
   const nonce = randomBytes(4).toString('hex')
   const brainToken = `cell-${randomBytes(8).toString('hex')}`
@@ -32,7 +35,7 @@ export async function startRig(policy: PolicyRecord, opts: {
   })
   let shim = undefined as EchoShim | undefined
   if (!opts.noShim) {
-    shim = await startEchoShim({ port: door.brainPort, token: brainToken, mode: opts.mode, verdictTimeoutMs: opts.verdictTimeoutMs })
+    shim = await startEchoShim({ port: door.brainPort, token: brainToken, mode: opts.mode, verdictTimeoutMs: opts.verdictTimeoutMs, caps: opts.shimCaps })
     await door.shimConnected()
   }
   return {

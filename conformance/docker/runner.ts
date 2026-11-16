@@ -289,7 +289,7 @@ export interface LiveRig {
   doorLine(marker: string, timeoutMs: number): Promise<string | undefined>
 }
 
-export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'extraCellEnv'>
+export type RigRequest = Pick<RigOptions, 'check' | 'variant' | 'gate' | 'hostPort' | 'targets' | 'verdictTimeoutMs' | 'vetoTimeoutMs' | 'toolLimits' | 'extraCellEnv'>
 
 const rigSubnets = ([cell, outside, spare]: string[]): RigOptions['subnets'] => ({ cell, outside, spare })
 

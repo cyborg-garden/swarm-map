@@ -11,15 +11,18 @@
 // no gate at all.
 //
 // It says what it is: its first record is {"type":"fake_pi"}. It has no
-// shell. Its `bash` tool understands two commands only, `touch <path>` and
-// `env > <path>`, which is all the conformance checks need. `npm run
+// shell. Its `bash` tool understands a handful of fixed commands, joined by
+// `;` or `&&` (see runBash), which is all the conformance checks need, and it
+// has `read`, `write` and `ls`. As in the real Pi, a `tool_call` handler may
+// change a call's input before it runs, a `tool_result` handler may change
+// what the model is handed, and a shell call stops at its `timeout`. `npm run
 // conformance` runs the same checks against the real Pi.
 //
 // Like the real Pi, it is started by the lab with a tripwire loaded first
 // (guards/child-tripwire.ts), so a model call that is not to this machine is
 // stopped and recorded here, in the process that would have made it.
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -89,14 +92,24 @@ for (let i = 0; i < argv.length; i++) {
 }
 for (const handler of handlers.session_start ?? []) await handler({ type: 'session_start', reason: 'startup' }, ctx)
 
-/** Runs every `tool_call` handler. Any one of them can block the call. */
-async function blockedBy(call: { id: string; function: { name: string; arguments: string } }): Promise<string | undefined> {
-  const event = { type: 'tool_call', toolName: call.function.name, toolCallId: call.id, input: JSON.parse(call.function.arguments) }
+/** Runs every `tool_call` handler, in order. Any one of them can block the call, or change `input` in place. */
+async function blockedBy(name: string, id: string, input: unknown): Promise<string | undefined> {
+  const event = { type: 'tool_call', toolName: name, toolCallId: id, input }
   for (const handler of handlers.tool_call ?? []) {
     const result = await handler(event, ctx) as { block?: boolean; reason?: string } | undefined
     if (result?.block) return result.reason ?? 'blocked'
   }
   return undefined
+}
+
+/** Runs every `tool_result` handler. Each may hand back other content for the model. */
+async function resultFor(name: string, id: string, input: unknown, ran: { text: string; isError: boolean }): Promise<string> {
+  let content: { type: string; text?: string }[] = [{ type: 'text', text: ran.text }]
+  for (const handler of handlers.tool_result ?? []) {
+    const patch = await handler({ type: 'tool_result', toolName: name, toolCallId: id, input, content, isError: ran.isError }, ctx) as { content?: typeof content } | undefined
+    if (Array.isArray(patch?.content)) content = patch.content
+  }
+  return content.map((part) => part.text ?? '').join('')
 }
 
 // --- the session ------------------------------------------------------------
@@ -106,23 +119,65 @@ const sessionFile = path.join(flag('--session-dir') ?? '.', 'fake-pi-session.jso
 const messages: Record<string, unknown>[] =
   argv.includes('--continue') && existsSync(sessionFile) ? JSON.parse(readFileSync(sessionFile, 'utf8')) : []
 
-function runTool(name: string, args: { command?: string }): { text: string; isError: boolean } {
-  const command = args.command ?? ''
-  const touch = /^touch (\S+)$/.exec(command)
-  const dump = /^env > (\S+)$/.exec(command)
-  if (name === 'bash' && touch) { writeFileSync(touch[1], ''); return { text: '(no output)', isError: false } }
-  if (name === 'bash' && dump) {
-    writeFileSync(dump[1], Object.entries(process.env).map(([k, v]) => `${k}=${v}`).join('\n'))
-    return { text: '(no output)', isError: false }
+type Ran = { text: string; isError: boolean }
+const UNSUPPORTED: Ran = { text: 'fake pi: command not supported', isError: true }
+
+/**
+ * The fake shell. One command, or several joined by `;` or `&&`, each of:
+ *   touch <path>                              env > <path>
+ *   ln -s <target> <path>                     sleep <seconds>
+ *   printf '%s%s\n' <a> <b> [> <path>]         head -c <n> /dev/zero | tr '\0' x
+ * A call that sleeps past its `timeout` (seconds) stops there, as the real one is killed.
+ */
+async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<Ran> {
+  const limit = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : undefined
+  let out = ''
+  let slept = 0
+  for (const part of String(args.command ?? '').split(/\s*(?:;|&&)\s*/)) {
+    let m: RegExpExecArray | null
+    if ((m = /^touch (\S+)$/.exec(part))) writeFileSync(m[1], '')
+    else if ((m = /^env > (\S+)$/.exec(part))) writeFileSync(m[1], Object.entries(process.env).map(([k, v]) => `${k}=${v}`).join('\n'))
+    else if ((m = /^ln -s (\S+) (\S+)$/.exec(part))) symlinkSync(m[1], m[2])
+    else if ((m = /^sleep (\d+(?:\.\d+)?)$/.exec(part))) {
+      const wanted = Number(m[1])
+      const cut = limit !== undefined && slept + wanted > limit
+      const wait = cut ? limit - slept : wanted
+      await new Promise((resolve) => setTimeout(resolve, wait * 1000))
+      slept += wait
+      if (cut) return { text: `${out}\nCommand timed out after ${limit} seconds`, isError: true }
+    }
+    else if ((m = /^printf '%s%s\\n' (\S+) (\S+)(?: > (\S+))?$/.exec(part))) {
+      if (m[3]) writeFileSync(m[3], `${m[1]}${m[2]}\n`)
+      else out += `${m[1]}${m[2]}\n`
+    }
+    else if ((m = /^head -c (\d+) \/dev\/zero \| tr '\\0' x$/.exec(part))) out += 'x'.repeat(Number(m[1]))
+    else return UNSUPPORTED
   }
-  return { text: 'fake pi: command not supported', isError: true }
+  return { text: out === '' ? '(no output)' : out, isError: false }
+}
+
+async function runTool(name: string, args: Record<string, unknown>): Promise<Ran> {
+  try {
+    if (name === 'bash') return await runBash(args)
+    const file = String(args.path ?? '.')
+    if (name === 'read') return { text: readFileSync(file, 'utf8'), isError: false }
+    if (name === 'ls') return { text: readdirSync(file).sort().join('\n') || '(empty directory)', isError: false }
+    if (name === 'write') {
+      mkdirSync(path.dirname(path.resolve(file)), { recursive: true })
+      writeFileSync(file, String(args.content ?? ''))
+      return { text: `Successfully wrote to ${file}`, isError: false }
+    }
+    return UNSUPPORTED
+  } catch (err) {
+    return { text: (err as Error).message, isError: true }
+  }
 }
 
 async function prompt(id: string, message: string): Promise<void> {
   emit({ id, type: 'response', command: 'prompt', success: true, data: { disposition: 'started' } })
   messages.push({ role: 'user', content: message })
   emit({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text: message }] } })
-  for (let round = 0; round < 8; round++) {
+  for (let round = 0; round < 16; round++) {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${provider.apiKey}` },
@@ -147,8 +202,14 @@ async function prompt(id: string, message: string): Promise<void> {
         // Like the real Pi: a tool that was not declared at start never reaches an extension.
         result = { text: `Tool ${call.function.name} not found`, isError: true }
       } else {
-        const reason = await blockedBy(call)
-        result = reason === undefined ? runTool(call.function.name, JSON.parse(call.function.arguments)) : { text: reason, isError: true }
+        // One input for the handlers and the tool: a handler's change to it is what runs.
+        const input = JSON.parse(call.function.arguments) as Record<string, unknown>
+        const reason = await blockedBy(call.function.name, call.id, input)
+        if (reason !== undefined) result = { text: reason, isError: true }
+        else {
+          const ran = await runTool(call.function.name, input)
+          result = { text: await resultFor(call.function.name, call.id, input, ran), isError: ran.isError }
+        }
       }
       emit({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.function.name, isError: result.isError })
       messages.push({ role: 'tool', tool_call_id: call.id, content: result.text })

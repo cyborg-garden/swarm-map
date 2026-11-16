@@ -238,6 +238,9 @@ export function lettaCodeHarness(command: string[], build: 'real' | 'fake'): Har
         red: ['C16'], green: allBut('C16'),
       },
     },
+    // Its shim asks the door before a tool runs and takes a plain yes or no. It does not check that a yes
+    // names the call it is about to run, keeps no file tool in a scratch folder, and applies no limits.
+    noTools: 'not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call',
     rows: [
       { id: 'C7', title: 'an unmapped tool is denied on a public agent', status: 'not-run',
         reason: 'this shim starts Letta Code with exactly the tools the door offered, and the door offers only mapped ones, so an unmapped tool is never attached. Whether the door would refuse one was not driven' },

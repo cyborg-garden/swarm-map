@@ -26,7 +26,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CLAUDE_SDK_VERSION } from '../../lib/runtimes/claude-sdk/caps.ts'
 import { BROKEN_RIGS as BROKEN, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL as SKIPPED } from '../docker/broken.ts'
 import { CLAUDE_SDK_CELL } from '../docker/cells.ts'
-import { contextFiles, readSource, type RigVariant } from '../docker/compose.ts'
+import { contextFiles, readSource, type GateVariant, type RigVariant } from '../docker/compose.ts'
 import {
   cellRefuses, imageProblems, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, setCell, withRig,
   type DockerFacts, type HostListener,
@@ -53,7 +53,7 @@ let facts: DockerFacts | undefined
 let host: HostListener
 let before: ReturnType<typeof labObjects>
 
-const run = (id: string, variant: RigVariant, gate?: 'real' | 'allows-all'): Promise<CheckResult> => {
+const run = (id: string, variant: RigVariant, gate?: GateVariant): Promise<CheckResult> => {
   const check = IN_CELL.find((c) => c.id === id)!
   return runInRig(id, check.title, {
     variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'), targets: facts!.targets,

@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { startPiShim, systemPromptProblem, type PiShimOptions } from '../../lib/runtimes/pi/shim.ts'
 import { assertNoCredentials } from '../guards/preflight.ts'
-import { BRAIN_PORT, LAB_DIR, ROUTE_PORT, SWARM_ROOT } from './compose.ts'
+import { BRAIN_PORT, BROKEN_GATES, LAB_DIR, ROUTE_PORT, SWARM_ROOT } from './compose.ts'
 
 const nonce = process.env.SWARMLAB_NONCE ?? ''
 try {
@@ -41,13 +41,19 @@ writeFileSync(path.join(dirs.agent, 'models.json'), JSON.stringify({
 const promptProblem = systemPrompt === undefined ? undefined : systemPromptProblem(systemPrompt, dirs.work)
 if (promptProblem) { console.error(`cell: ${promptProblem}`); process.exit(2) }
 
-const gate = process.env.SMLAB_GATE === 'allows-all'
-  ? `${SWARM_ROOT}/conformance/broken/gate-allows-all.ts`
-  : `${SWARM_ROOT}/lib/runtimes/pi/cell/gate.ts`
+// The gate Pi loads. Anything but a name on this list is the real one.
+const brokenGate = BROKEN_GATES.find((name) => name === process.env.SMLAB_GATE)
+const gate = brokenGate ? `${SWARM_ROOT}/conformance/broken/gate-${brokenGate}.ts` : `${SWARM_ROOT}/lib/runtimes/pi/cell/gate.ts`
+// The limits the gate applies, when the rig names them: whole numbers above zero, or the gate's own.
+const limit = (name: string): number | undefined => {
+  const n = Number(process.env[name])
+  return Number.isInteger(n) && n > 0 ? n : undefined
+}
+const toolLimits = { callSeconds: limit('SMLAB_TOOL_SECONDS'), outputBytes: limit('SMLAB_TOOL_OUTPUT_BYTES') }
 const options: PiShimOptions = {
   host: 'door', port: BRAIN_PORT, token: process.env.SWARMLAB_BRAIN ?? '',
   piCommand: ['/usr/local/bin/pi'], agentDir: dirs.agent, sessionsDir: dirs.sessions, workDir: dirs.work, homeDir: dirs.home,
-  gate: { path: gate }, gateReadyMs: 20_000, model, systemPrompt,
+  gate: { path: gate }, gateReadyMs: 20_000, model, systemPrompt, toolLimits,
   verdictTimeoutMs: Number(process.env.SMLAB_VERDICT_MS) || 400,
   gateTimeoutMs: Number(process.env.SMLAB_VETO_MS) || 2000,
 }

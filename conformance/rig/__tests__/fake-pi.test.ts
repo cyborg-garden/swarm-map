@@ -38,7 +38,7 @@ function runFakePi(baseUrl: string, env: Record<string, string>): Promise<{ code
   return new Promise((resolve) => child.on('exit', (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }) }))
 }
 const env = (rig: Record<string, string> = {}) =>
-  piEnv({ agentDir: path.join(dir, 'agent'), homeDir: path.join(dir, 'home'), rigEnv: rig })
+  piEnv({ agentDir: path.join(dir, 'agent'), homeDir: path.join(dir, 'home'), workDir: path.join(dir, 'work'), rigEnv: rig })
 
 describe('the tripwire inside the harness process', () => {
   it('[U:child-tripwire] a fake Pi that is told to call a model outside this machine is stopped, and the attempt is on record', async () => {

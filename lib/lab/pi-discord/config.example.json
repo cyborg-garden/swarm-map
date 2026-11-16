@@ -16,6 +16,12 @@
     "readAllMessages": false
   },
   "budget": { "monthlyUsd": 5 },
+  "tools": {
+    "$comment": "Off while enabled is empty. Classes: file_read, file_write, shell. Modes: never, ask, allow. Left out, shell asks an admin, reading files is allowed, and writing files asks when the shell does. Shell ask with file_write allow is refused.",
+    "enabled": [],
+    "mode": { "shell": "ask" },
+    "approvalSeconds": 120
+  },
   "model": {
     "baseUrl": "https://openrouter.ai/api/v1",
     "id": "<provider/model>",

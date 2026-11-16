@@ -22,6 +22,7 @@ function fakeProcess(o: { gate?: 'announced' | 'silent' } = {}) {
   return { proc, sent, emit, announce, exit: (code: number) => exit(code) }
 }
 
+const HASH = 'a'.repeat(64)
 const assistant = (text: string, stopReason = 'stop') =>
   ({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text }], stopReason } })
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
@@ -29,7 +30,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
 describe('Pi RPC pump', () => {
   it('[U:pi-rpc] sends a prompt and resolves with the final text only at agent_settled', async () => {
     const pi = fakeProcess()
-    const rpc = createPiRpc(pi.proc, { onGate: async () => false })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: false }) })
     let settled = false
     const turn = rpc.prompt('hello').then((r) => { settled = true; return r })
     await tick()
@@ -50,7 +51,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-rpc] a record containing U+2028 is not split', async () => {
     const pi = fakeProcess()
-    const rpc = createPiRpc(pi.proc, { onGate: async () => false })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: false }) })
     const turn = rpc.prompt('x')
     await tick()
     pi.emit(assistant('line one line two end'))
@@ -58,10 +59,10 @@ describe('Pi RPC pump', () => {
     expect((await turn).text).toBe('line one line two end')
   })
 
-  it('[U:pi-rpc] a gate request is put to the caller and answered with exactly allow or deny', async () => {
+  it('[U:pi-rpc] a gate request is put to the caller, and a yes is passed on with the hash of the call it is for', async () => {
     const pi = fakeProcess()
     const asked: unknown[] = []
-    const rpc = createPiRpc(pi.proc, { onGate: async (call) => { asked.push(call); return call.tool === 'read' } })
+    const rpc = createPiRpc(pi.proc, { onGate: async (call) => { asked.push(call); return call.tool === 'read' ? { allow: true, hash: HASH } : { allow: false } } })
     const turn = rpc.prompt('x')
     await tick()
     const title = (tool: string) => 'swarm-gate:v1:' + JSON.stringify({ tool, input: { path: '/etc/hosts' }, callId: `c-${tool}` })
@@ -73,9 +74,28 @@ describe('Pi RPC pump', () => {
       { tool: 'bash', input: { path: '/etc/hosts' }, callId: 'c-bash' },
     ])
     expect(pi.sent.slice(1)).toEqual([
-      { type: 'extension_ui_response', id: 'u1', value: 'allow' },
+      { type: 'extension_ui_response', id: 'u1', value: `allow:${HASH}` },
       { type: 'extension_ui_response', id: 'u2', value: 'deny' },
     ])
+    pi.emit({ type: 'agent_settled', aborted: false })
+    await turn
+  })
+
+  it('[U:pi-rpc] a yes that names no call, or names something that is not a hash, is passed on as a no', async () => {
+    const answers: unknown[] = [
+      { allow: true }, { allow: true, hash: '' }, { allow: true, hash: 'allow' }, { allow: true, hash: HASH.slice(1) }, { allow: true, hash: `${HASH}\n` },
+      { allow: 'true', hash: HASH }, { allow: 1, hash: HASH }, { allow: false, hash: HASH }, true, 'allow', undefined, null,
+    ]
+    const pi = fakeProcess()
+    let next = 0
+    const rpc = createPiRpc(pi.proc, { onGate: async () => answers[next++] as never })
+    const turn = rpc.prompt('x')
+    await tick()
+    for (let i = 0; i < answers.length; i++) {
+      pi.emit({ type: 'extension_ui_request', id: `u${i}`, method: 'select', title: 'swarm-gate:v1:' + JSON.stringify({ tool: 'bash', input: {}, callId: `c${i}` }) })
+      await tick()
+    }
+    expect(pi.sent.slice(1).map((r) => (r as { value: string }).value)).toEqual(answers.map(() => 'deny'))
     pi.emit({ type: 'agent_settled', aborted: false })
     await turn
   })
@@ -98,7 +118,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-rpc] any other dialog from an extension is cancelled, and notices are ignored', async () => {
     const pi = fakeProcess()
-    const rpc = createPiRpc(pi.proc, { onGate: async () => true })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: true, hash: HASH }) })
     const turn = rpc.prompt('x')
     await tick()
     pi.emit({ type: 'extension_ui_request', id: 'u1', method: 'confirm', title: 'Delete everything?' })
@@ -115,7 +135,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-gate-ready] no prompt is sent until the gate has announced itself', async () => {
     const pi = fakeProcess({ gate: 'silent' })
-    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 500 })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: true, hash: HASH }), gateReadyMs: 500 })
     const turn = rpc.prompt('hello')
     await tick()
     await tick()
@@ -136,7 +156,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-gate-ready] a Pi whose gate never announces itself is never sent a turn', async () => {
     const pi = fakeProcess({ gate: 'silent' })
-    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 40 })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: true, hash: HASH }), gateReadyMs: 40 })
     await expect(rpc.prompt('one')).rejects.toThrow('the tool gate did not announce itself')
     // It stays refused: a late announcement after the deadline does not open it.
     pi.announce()
@@ -147,7 +167,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-gate-ready] a Pi that exits before its gate announced rejects the turn and is sent nothing', async () => {
     const pi = fakeProcess({ gate: 'silent' })
-    const rpc = createPiRpc(pi.proc, { onGate: async () => true, gateReadyMs: 5000 })
+    const rpc = createPiRpc(pi.proc, { onGate: async () => ({ allow: true, hash: HASH }), gateReadyMs: 5000 })
     const turn = rpc.prompt('one')
     await tick()
     pi.exit(1)
@@ -157,13 +177,13 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-rpc] a refused prompt, or Pi exiting mid-turn, rejects the turn', async () => {
     const a = fakeProcess()
-    const refused = createPiRpc(a.proc, { onGate: async () => false }).prompt('x')
+    const refused = createPiRpc(a.proc, { onGate: async () => ({ allow: false }) }).prompt('x')
     await tick()
     a.emit({ id: a.sent[0].id, type: 'response', command: 'prompt', success: false, error: 'busy' })
     await expect(refused).rejects.toThrow('pi refused the prompt: busy')
 
     const b = fakeProcess()
-    const died = createPiRpc(b.proc, { onGate: async () => false }).prompt('x')
+    const died = createPiRpc(b.proc, { onGate: async () => ({ allow: false }) }).prompt('x')
     await tick()
     b.exit(1)
     await expect(died).rejects.toThrow('pi exited (1) before the turn settled')
@@ -171,7 +191,7 @@ describe('Pi RPC pump', () => {
 
   it('[U:pi-rpc] an aborted run reports aborted and no text', async () => {
     const pi = fakeProcess()
-    const turn = createPiRpc(pi.proc, { onGate: async () => false }).prompt('x')
+    const turn = createPiRpc(pi.proc, { onGate: async () => ({ allow: false }) }).prompt('x')
     await tick()
     pi.emit(assistant('partial'))
     pi.emit({ type: 'agent_settled', aborted: true })

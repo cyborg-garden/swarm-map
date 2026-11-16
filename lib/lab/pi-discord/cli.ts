@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, type LabConfig } from './config.ts'
+import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, toolsLine, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
@@ -49,10 +49,11 @@ async function dryRun(): Promise<void> {
   say('config')
   for (const line of harnessLines(config)) say(line)
   say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
-  say(`  ok    it introduces itself as "${config.persona.name}", and is told it has no tools`)
+  const tools = toolsLine(config)
+  say(`  ok    it introduces itself as "${config.persona.name}", and is told ${tools === 'tools: none' ? 'it has no tools' : 'which tools it has'}`)
   say(`  ok    heard: ${d.adminUserIds.length} admin(s), ${d.allowedUserIds.length} other people, ${d.allowedRoleIds.length} role(s)${d.anyoneInChannel ? ', and anyone in the channel' : ''}`)
   say(`  ${d.bots === 'mentions' && d.allowedBotIds.length === 0 ? 'note' : 'ok  '}  ${botsLine(config)}`)
-  say('  ok    direct messages: refused; tools: none')
+  say(`  ${tools === 'tools: none' ? 'ok  ' : 'note'}  direct messages: refused; ${tools}`)
   say(d.readAllMessages
     ? '  note  this config asks Discord for the Message Content intent. Switch it ON for the bot in the Developer Portal, or the start is refused. The dry run connects to nothing, so it cannot check'
     : '  ok    the Message Content intent is not asked for, so its switch in the Developer Portal does not matter')

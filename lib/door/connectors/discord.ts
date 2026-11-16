@@ -16,14 +16,17 @@
 //   MESSAGE_CONTENT   only when `messageContent` is set. Without it Discord
 //                     still sends the text of messages that mention the bot,
 //                     which is all a mention-only room needs.
+//   GUILD_MESSAGE_REACTIONS   only when `reactions` is set: an admin may answer
+//                     a request to run a tool with a reaction. A reaction is
+//                     passed on with who put it there, and never read as text.
 // It never asks for direct messages, so none arrive. One that did would be
 // passed to the door as a DM like any other event.
 import { randomBytes } from 'node:crypto'
 import type { Facts, RoomRef } from '../../core/events.ts'
-import type { ConnectorInbound, InviteEvent, NoticeEvent, OutboundMessage, SendReceipt, SurfaceConnector } from '../connector.ts'
+import type { ConnectorEvent, ConnectorInbound, NoticeEvent, OutboundMessage, ReactionEvent, SendReceipt, SurfaceConnector } from '../connector.ts'
 
 export const DISCORD_API = 'https://discord.com/api/v10'
-export const INTENTS = { GUILDS: 1 << 0, GUILD_MESSAGES: 1 << 9, MESSAGE_CONTENT: 1 << 15 } as const
+export const INTENTS = { GUILDS: 1 << 0, GUILD_MESSAGES: 1 << 9, GUILD_MESSAGE_REACTIONS: 1 << 10, MESSAGE_CONTENT: 1 << 15 } as const
 /** Discord's limit on one message. */
 export const MAX_MESSAGE_CHARS = 2000
 
@@ -40,6 +43,8 @@ export interface DiscordOptions {
   guildId?: string
   /** Ask for the text of messages that do not mention the bot. A privileged intent: it must also be switched on for the application. */
   messageContent?: boolean
+  /** Ask to be told when someone reacts to a message in a server channel. */
+  reactions?: boolean
   /**
    * The channels send() may post to. A thread counts by its parent. A post
    * anywhere else throws before any request is made, whatever the caller
@@ -98,7 +103,7 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
   const log = opts.log ?? (() => {})
   const backoff = opts.reconnect ?? { firstMs: 1000, maxMs: 60_000 }
   const maxWait = opts.maxRateLimitWaitMs ?? 30_000
-  const listeners: ((e: ConnectorInbound | InviteEvent | NoticeEvent) => void)[] = []
+  const listeners: ((e: ConnectorEvent) => void)[] = []
   const channels = new Map<string, Channel | null>()
   const seen = new Set<string>()
 
@@ -122,7 +127,7 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
   const posting = new Map<string, Promise<unknown>>()
   const holdUntil = new Map<string, number>()
 
-  const emit = (e: ConnectorInbound | NoticeEvent): void => { for (const cb of listeners) cb(e) }
+  const emit = (e: ConnectorInbound | NoticeEvent | ReactionEvent): void => { for (const cb of listeners) cb(e) }
 
   async function rest(method: string, path: string, body?: unknown): Promise<{ json: Raw; headers: Headers }> {
     for (let attempt = 0; ; attempt++) {
@@ -215,7 +220,7 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
         startBeat(Number((p.d as Raw)?.heartbeat_interval) || 41_250)
         if (session && seq !== null) sendOp(6, { token, session_id: session.id, seq })
         else {
-          const intents = INTENTS.GUILDS | INTENTS.GUILD_MESSAGES | (opts.messageContent ? INTENTS.MESSAGE_CONTENT : 0)
+          const intents = INTENTS.GUILDS | INTENTS.GUILD_MESSAGES | (opts.messageContent ? INTENTS.MESSAGE_CONTENT : 0) | (opts.reactions ? INTENTS.GUILD_MESSAGE_REACTIONS : 0)
           sendOp(2, { token, intents, properties: { os: process.platform, browser: 'swarm-door', device: 'swarm-door' } })
         }
         return
@@ -287,6 +292,25 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
         }
         return
       }
+      case 'MESSAGE_REACTION_ADD': {
+        const room = str(d.channel_id); const messageId = str(d.message_id); const userId = str(d.user_id); const emoji = str(d.emoji?.name)
+        // Only a reaction in this bot's own server, by someone Discord describes. Anything less is not passed on.
+        if (!room || !messageId || !userId || !emoji || !selfId || !str(d.guild_id) || elsewhere(d.guild_id)) return
+        const member = d.member
+        const known = str(member?.user?.id) === userId
+        line = line.then(() => emit({
+          kind: 'reaction', surface: 'discord', room, messageId, emoji,
+          sender: {
+            id: userId,
+            display: str(member?.nick) ?? str(member?.user?.global_name) ?? str(member?.user?.username) ?? userId,
+            // Who reacted is taken from what Discord says about them. With nothing said, it is not taken for a person.
+            isBot: !known || member.user.bot === true,
+            isSelf: userId === selfId,
+            roles: Array.isArray(member?.roles) ? member.roles.filter((r: unknown): r is string => typeof r === 'string') : [],
+          },
+        }))
+        return
+      }
       default: return
     }
   }
@@ -327,8 +351,10 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     const text = typeof m.content === 'string' ? m.content : ''
     const mentions: Raw[] = Array.isArray(m.mentions) ? m.mentions : []
     const room = await roomOf(m)
+    // The message this one was written as a reply to, where it is one.
+    const replyTo = m.type === 19 ? str(m.message_reference?.message_id) : undefined
     emit({
-      kind: 'inbound', surface: 'discord', messageId, room,
+      kind: 'inbound', surface: 'discord', messageId, room, ...(replyTo ? { replyTo } : {}),
       sender: {
         // A webhook is not a member, and what it gives as its id is not a member's id. It is kept apart,
         // so it can never be taken for a person or a bot that is on a list.

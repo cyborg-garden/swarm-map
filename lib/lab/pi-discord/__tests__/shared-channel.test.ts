@@ -70,7 +70,7 @@ describe('one channel: who is heard', () => {
     const id = say(rig, { text: 'hello there' })
     await rig.posts(1)
     expect(rig.shim.heard.map((e) => [e.id, e.room.id, e.sender.id, e.surface])).toEqual([[id, IDS.home, IDS.member, 'discord']])
-    expect(rig.fake.posted).toEqual([{ channel: IDS.home, content: `echo: <@${rig.fake.selfId}> hello there`, allowedMentions: { parse: [], replied_user: false }, replyTo: id }])
+    expect(rig.fake.posted).toEqual([{ id: expect.any(String), channel: IDS.home, content: `echo: <@${rig.fake.selfId}> hello there`, allowedMentions: { parse: [], replied_user: false }, replyTo: id }])
     expect(verdicts(rig)).toEqual(['deliver/addr.mention'])
   })
 
@@ -449,3 +449,75 @@ describe('one channel: receipts', () => {
     expect(rig.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', why: 'Posting the reply failed.' })
   })
 })
+
+describe('a tool that waits for an admin, in the Discord channel', () => {
+  const asking = () => {
+    const { config: c, errors } = parseConfig({
+      agentId: 'pi-lab',
+      discord: { guildId: IDS.guild, channelId: IDS.home, adminUserIds: [IDS.admin], allowedUserIds: [IDS.member], allowedBotIds: [IDS.bot] },
+      budget: { monthlyUsd: 5 },
+      tools: { enabled: ['shell'] },
+      model: { baseUrl: 'https://model.example/v1', id: 'lab/model', usdPerMTokIn: 1, usdPerMTokOut: 2 },
+    })
+    expect(errors).toEqual([])
+    return policyFor(c as LabConfig)
+  }
+  const start = async (): Promise<DiscordRig> => {
+    rig = await startDiscordRig(asking(), { shimCaps: { approvalRoundTrip: true }, verdictTimeoutMs: 4000, connector: { reactions: true }, door: { approvalTimeoutMs: 3000 } })
+    return rig
+  }
+  const on = (r: DiscordRig) => ({ channel: IDS.home, guild: IDS.guild, messageId: r.fake.posted[0].id })
+  // Time for what was sent over the gateway to arrive. The door is not idle while a call is held, so it cannot be waited on.
+  const arrive = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 120))
+
+  it('the request is posted under the message that asked, pings nobody, and an admin\'s tick on it lets the call run', async () => {
+    const r = await start()
+    const id = say(r, { text: '!tool bash=echo$IFS@everyone' })
+    await expect.poll(() => r.fake.posted.length).toBe(1)
+    const request = r.fake.posted[0]
+    expect(request).toMatchObject({ channel: IDS.home, replyTo: id, allowedMentions: { parse: [], replied_user: false } })
+    expect(request.content.split('\n')[0]).toBe('Approval needed. The agent wants to run bash:')
+    expect(request.content).not.toMatch(/@|</)
+    expect(r.shim.toolsRan).toEqual([])
+    // Ticks from the person who asked, a stranger, a named bot and the bot itself do nothing.
+    for (const author of [{ id: IDS.member }, { id: IDS.stranger }, { id: IDS.bot, bot: true }, { id: r.fake.selfId, bot: true }]) r.fake.react({ ...on(r), author, emoji: '✅' })
+    // Nor does a tick Discord says nothing about the sender of, even under the admin's id.
+    r.fake.react({ ...on(r), author: { id: IDS.admin }, emoji: '✅', bare: true })
+    await arrive()
+    expect(r.shim.toolsRan).toEqual([])
+    expect(verdicts(r, 'approval')).toEqual(Array(5).fill('deny/priv.approval'))
+    r.fake.react({ ...on(r), author: { id: IDS.admin }, emoji: '✅' })
+    await r.posts(2)
+    expect(r.shim.toolsRan.map((t) => t.tool)).toEqual(['bash'])
+    expect(verdicts(r, 'tool')).toEqual(['ask/priv.approval', 'allow/priv.approval'])
+  })
+
+  it('an admin\'s reply to the request works too, and a reply from anyone else, or to another message, does not', async () => {
+    const r = await start()
+    const id = say(r, { text: '!tool bash=ls' })
+    await expect.poll(() => r.fake.posted.length).toBe(1)
+    const reply = (author: string, to: string, content = 'approve'): string => r.fake.post({
+      channel: IDS.home, guild: IDS.guild, author: { id: author }, content: `<@${r.fake.selfId}> ${content}`, mentions: [r.fake.selfId], replyToMessage: to,
+    })
+    reply(IDS.member, r.fake.posted[0].id)
+    reply(IDS.stranger, r.fake.posted[0].id)
+    // The admin answers the wrong message: the one that asked, not the door's request. The admin is heard, so that is a turn of its own.
+    reply(IDS.admin, id, 'approve it')
+    await arrive()
+    expect(r.shim.toolsRan).toEqual([])
+    reply(IDS.admin, r.fake.posted[0].id, 'deny')
+    await r.settle()
+    expect(r.shim.toolsRan).toEqual([])
+    expect(r.shim.verdicts).toEqual([{ tool: 'bash', allow: false, reason: 'An admin said no, so the call does not run.' }])
+    expect(verdicts(r, 'approval')).toEqual(['deny/priv.approval', 'deny/priv.approval', 'allow/priv.approval'])
+  })
+
+  it('with no tool switched on, Discord is not asked for reactions, and with one that asks it is', async () => {
+    const r = await start()
+    expect(r.fake.identifies[0].intents & (1 << 10)).toBe(1 << 10)
+    await r.close()
+    rig = await startDiscordRig(policy())
+    expect(rig.fake.identifies[0].intents & (1 << 10)).toBe(0)
+  })
+})
+

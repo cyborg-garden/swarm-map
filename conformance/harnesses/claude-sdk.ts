@@ -299,6 +299,10 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
     build,
     modelShape: ANTHROPIC_MESSAGES,
     namedEnv: CLAUDE_SDK_NAMED_ENV,
+    // Its shim puts every tool call to the door and takes a plain yes or no. It does not say it can hold a
+    // call while an admin answers, does not check that a yes names the call, keeps no file tool in a
+    // scratch folder and applies no limits, so the door never offers it a tool in ask mode.
+    noTools: 'not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call',
     caveats: [
       'C9p for this harness: its traffic was watched by a proxy it is told to use, not from inside its process. The SDK starts a compiled program, which no tripwire can be loaded into. Traffic that ignores proxy settings would not have been seen. The Docker cell (C9) is the check that does not depend on that.',
     ],

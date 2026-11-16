@@ -42,7 +42,7 @@ afterAll(() => {
 describe('pi-discord dry run: the containment checks', () => {
   it('the cell a real run would start is sealed', async () => {
     const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {} })
-    expect(checks.map((c) => c.id)).toEqual(['S0', 'S0r', 'S0d', 'S1', 'S2', 'S3', 'S9'])
+    expect(checks.map((c) => c.id)).toEqual(['S0', 'S0r', 'S0d', 'S1', 'S2', 'S3', 'S4', 'S9'])
     expect(checks.filter((c) => !c.pass)).toEqual([])
   }, 180_000)
 
@@ -70,6 +70,154 @@ describe('pi-discord dry run: the containment checks', () => {
     // Not S2: the cell still runs as a user who owns none of those files, so the probe's writes fail anyway.
     expect(failed(checks)).toEqual(['S0', 'S0d'])
   }, 180_000)
+
+  it('must-fail: a cell folder that is a plain Docker volume, on Docker\'s disk with no size, is caught as written, as Docker made it, and by filling it', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-folder-uncapped' })
+    expect(failed(checks)).toEqual(['S0', 'S0d', 'S4'])
+    expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the cell's own folder took \d+ bytes, which is more than its 256 MB/)
+  }, 180_000)
+
+  it('must-fail: a scratch folder that is a plain folder with no size of its own is caught as written, as Docker made it, and by filling it', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-scratch-uncapped' })
+    expect(failed(checks)).toEqual(['S0', 'S0d', 'S4'])
+    expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the scratch folder took \d+ bytes, which is more than its 64 MB/)
+  }, 180_000)
+})
+
+describe('pi-discord: tools, end to end, through real Pi in the sealed cell', () => {
+  let fake: FakeDiscord
+  let model: ScriptedModel
+  let running: Running | undefined
+  const stateDir = path.join(tmp, 'state-tools')
+  const nonce = randomBytes(4).toString('hex')
+  const script: ScriptEntry[] = []
+  const WORK = '/tmp/smlab/work'
+
+  beforeAll(async () => {
+    fake = await startFakeDiscord()
+    assertFakeDiscord({ apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl, token: fake.token, nonce: fake.nonce })
+    fake.addChannel({ id: IDS.home })
+    model = await startScriptedModel({ nonce, script })
+    const tokenFile = path.join(tmp, 'tools-discord-token')
+    const keyFile = path.join(tmp, 'tools-model-key')
+    writeFileSync(tokenFile, `${fake.token}\n`, { mode: 0o600 })
+    writeFileSync(keyFile, `UPSTREAM-${nonce}\n`, { mode: 0o600 })
+    const env = { [TOKEN_FILE_ENV]: tokenFile, [MODEL_KEY_FILE_ENV]: keyFile }
+    const parsed = parseConfig({
+      agentId: 'pi-lab-tools',
+      discord: { guildId: IDS.guild, channelId: IDS.home, adminUserIds: [IDS.admin], allowedUserIds: [IDS.member] },
+      budget: { monthlyUsd: 5 },
+      // Shell asks an admin, and so, by default, does writing a file. Reading is allowed.
+      tools: { enabled: ['shell', 'file_read', 'file_write'], approvalSeconds: 60 },
+      model: { baseUrl: model.baseUrl, id: 'scripted', usdPerMTokIn: 1, usdPerMTokOut: 2 },
+    }, { allowLoopbackModel: true })
+    expect(parsed.errors).toEqual([])
+    const secrets = { discordToken: readSecretFile(TOKEN_FILE_ENV, env, REPO_ROOT), modelKey: readSecretFile(MODEL_KEY_FILE_ENV, env, REPO_ROOT) }
+    running = await start({ config: parsed.config!, secrets, stateDir, log: () => {}, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
+  }, 180_000)
+
+  afterAll(async () => {
+    await running?.stop()
+    await model?.close()
+    await fake?.close()
+  }, 60_000)
+
+  const say = (text: string): string => fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: `<@${fake.selfId}> ${text}`, mentions: [fake.selfId] })
+  const until = async (what: () => boolean, ms = 90_000): Promise<void> => {
+    const end = Date.now() + ms
+    while (!what() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(what()).toBe(true)
+  }
+  const inCell = (command: string): string => docker(['exec', `${readRun(stateDir)!.project}-cell-1`, 'sh', '-c', command]).out
+  const receipts = (): { verdict: string; rule: string; event: { kind: string; sender?: string } }[] =>
+    readFileSync(path.join(stateDir, 'receipts.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  // What tools handed back to the model: the tool results in the last request it was sent, which holds the whole conversation.
+  const toolResults = (): string[] => (JSON.parse(model.requests.at(-1)!.body) as { messages: { role: string; content: unknown }[] }).messages
+    .filter((m) => m.role === 'tool').map((m) => JSON.stringify(m.content))
+
+  it('the model is offered the tools the rules switch on, and is told the truth about them', async () => {
+    script.push({ match: 'CANARY-hello', text: 'hello' })
+    say('CANARY-hello')
+    await until(() => fake.posted.length === 1)
+    const first = JSON.parse(model.requests[0].body) as { messages: { role: string; content: unknown }[]; tools?: { function?: { name?: string } }[] }
+    expect((first.tools ?? []).map((t) => t.function?.name).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'])
+    const system = JSON.stringify(first.messages.filter((m) => m.role === 'system' || m.role === 'developer'))
+    expect(system).toContain('You also have tools')
+    expect(system).toContain('an admin is shown exactly what you asked for')
+    // Discord was asked for reactions, because a class of tool asks.
+    expect(fake.identifies[0].intents & (1 << 10)).toBe(1 << 10)
+  }, 120_000)
+
+  it('a shell command waits in the channel for an admin, and runs in the capped scratch folder only after the admin\'s tick', async () => {
+    const command = `printf '%s%s\\n' RAN- ${nonce} > made.txt`
+    script.unshift({ match: 'CANARY-shell', tools: [{ name: 'bash', args: { command } }], text: 'ran it' })
+    const asked = say('CANARY-shell')
+    await until(() => fake.posted.length === 2)
+    const request = fake.posted[1]
+    expect(request).toMatchObject({ channel: IDS.home, replyTo: asked, allowedMentions: { parse: [], replied_user: false } })
+    expect(request.content.split('\n')[0]).toBe('Approval needed. The agent wants to run bash:')
+    // What is shown is the whole call: the command, and the time limit the gate put on it.
+    expect(JSON.parse(request.content.split('\n')[2])).toEqual({ command, timeout: 60 })
+    expect(request.content).toContain('No answer in 60 seconds means no.')
+    const on = { channel: IDS.home, guild: IDS.guild, messageId: request.id }
+    // The person who asked, and a stranger, tick it. Nothing runs.
+    fake.react({ ...on, author: { id: IDS.member }, emoji: '✅' })
+    fake.react({ ...on, author: { id: IDS.stranger }, emoji: '✅' })
+    await until(() => receipts().filter((r) => r.event.kind === 'approval' && r.verdict === 'deny').length === 2, 15_000)
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(inCell(`ls ${WORK}; echo LISTED`)).not.toContain('made.txt')
+    // The admin ticks it.
+    fake.react({ ...on, author: { id: IDS.admin }, emoji: '✅' })
+    await until(() => fake.posted.length === 3)
+    expect(inCell(`cat ${WORK}/made.txt`).trim()).toBe(`RAN-${nonce}`)
+    expect(fake.posted[2].content).toContain('ran it')
+    expect(receipts().filter((r) => r.rule === 'priv.approval').map((r) => `${r.event.kind}:${r.verdict}`)).toEqual(['tool:ask', 'approval:deny', 'approval:deny', 'approval:allow', 'tool:allow'])
+    // Where it ran: a mount in memory with a size of its own, in a cell whose disk is still read-only.
+    expect(inCell(`df -k ${WORK} | tail -1`)).toMatch(/^tmpfs\s+65536\s/)
+    expect(inCell('touch /opt/swarm/x 2>&1; touch /home/node/x 2>&1; echo TRIED')).toMatch(/Read-only file system[\s\S]*Read-only file system[\s\S]*TRIED/)
+  }, 180_000)
+
+  it('file tools work inside the scratch folder and are refused outside it, and a write waits for the admin as the shell does', async () => {
+    const posts = fake.posted.length
+    script.unshift({
+      match: 'CANARY-files', text: 'filed',
+      tools: [
+        { name: 'write', args: { path: 'notes.txt', content: `kept ${nonce}` } },
+        { name: 'read', args: { path: 'made.txt' } },
+        { name: 'read', args: { path: '../agent/models.json' } },
+        { name: 'read', args: { path: '/opt/swarm/lib/door/protocol.ts' } },
+        { name: 'write', args: { path: '../planted.txt', content: 'planted' } },
+        { name: 'ls', args: { path: '/tmp/smlab' } },
+      ],
+    })
+    say('CANARY-files')
+    // The write inside the folder is put to the admin, with what it would write. The one outside is refused before anyone is asked.
+    await until(() => fake.posted.length === posts + 1)
+    const request = fake.posted[posts]
+    expect(request.content.split('\n')[0]).toBe('Approval needed. The agent wants to run write:')
+    expect(JSON.parse(request.content.split('\n')[2])).toEqual({ path: `${WORK}/notes.txt`, content: `kept ${nonce}` })
+    fake.react({ channel: IDS.home, guild: IDS.guild, messageId: request.id, author: { id: IDS.admin }, emoji: '✅' })
+    await until(() => fake.posted.length === posts + 2)
+    expect(fake.posted.at(-1)?.content).toContain('filed')
+    expect(inCell(`cat ${WORK}/notes.txt`)).toBe(`kept ${nonce}`)
+    expect(inCell('ls /tmp/smlab; echo LISTED')).not.toContain('planted.txt')
+    const results = toolResults()
+    // What the shell wrote before, read back by the file tool.
+    expect(results.some((r) => r.includes(`RAN-${nonce}`))).toBe(true)
+    // The cell's own stand-in for a key is in a file outside the scratch folder. A file tool does not get it.
+    expect(results.some((r) => r.includes('PLACEHOLDER-') || r.includes('ToShim') || r.includes('sessions'))).toBe(false)
+    expect(results.filter((r) => r.includes('the path is outside the scratch folder'))).toHaveLength(4)
+    // One request was posted, for the one write that stayed inside the folder. Reading and listing ask nobody.
+    expect(fake.posted.slice(posts).filter((p) => p.content.startsWith('Approval needed.'))).toHaveLength(1)
+  }, 180_000)
+
+  it('stopping the agent takes the scratch folder with it', async () => {
+    const project = readRun(stateDir)!.project
+    await running!.stop()
+    running = undefined
+    expect(containersOf(project)).toEqual([])
+    expect(docker(['volume', 'ls', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Name}}']).out.trim()).toBe('')
+  }, 60_000)
 })
 
 describe('pi-discord: one message, end to end, through real Pi in the sealed cell', () => {

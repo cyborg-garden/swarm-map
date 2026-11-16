@@ -46,6 +46,8 @@ export type Event =
   | { kind: 'tool'; surface?: SurfaceId; room: RoomRef; actor: Principal; toolClass: ToolClass
       /** For the caller's own records. decide() never puts it in `why`: it can be harness-supplied text. */
       toolName: string; argsDigest: string }
+  /** Someone answered a request to approve a tool call. `approver` is who the surface says sent the answer. */
+  | { kind: 'approval'; surface: SurfaceId; room: RoomRef; approver: Principal }
   | { kind: 'memory'; op: 'read' | 'write'; scope: MemoryScope; room: RoomRef }
   | { kind: 'model'; provider: string; model: string }
   | { kind: 'egress'; host: string; method: string }

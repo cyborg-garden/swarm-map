@@ -1,0 +1,55 @@
+{
+  "id": "priv.approval/bot-answers",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.admins": [
+      {
+        "kind": "user",
+        "id": "b-friend"
+      }
+    ],
+    "surfaces.fake.bots.mode": "all",
+    "surfaces.fake.bots.ids": [
+      "b-friend"
+    ]
+  },
+  "steps": [
+    {
+      "approval": {
+        "room": "r-general",
+        "approver": {
+          "id": "b-friend",
+          "isBot": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "priv.approval"
+    },
+    "privilege": "guest"
+  },
+  "twin": {
+    "steps": [
+      {
+        "approval": {
+          "room": "r-general",
+          "approver": {
+            "id": "b-friend",
+            "isBot": false
+          }
+        }
+      }
+    ],
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "priv.approval"
+      },
+      "privilege": "admin"
+    }
+  }
+}

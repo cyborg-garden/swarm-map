@@ -28,6 +28,9 @@ import { labNetwork, writtenNetworkProblems, type LabNetwork } from './subnets.t
 
 export const RIG_VARIANTS = ['good', 'route-out', 'open', 'leaks-env', 'leaks-file', 'writable', 'host-mount', 'socket', 'blind-sink', 'door-out', 'other-subnet'] as const
 export type RigVariant = typeof RIG_VARIANTS[number]
+/** Tool gates that are broken on purpose (conformance/broken/gate-<name>.ts), which a cell can be told to load in place of the real one. */
+export const BROKEN_GATES = ['allows-all', 'silence-is-yes', 'runs-more', 'no-path-check', 'no-limits'] as const
+export type GateVariant = 'real' | typeof BROKEN_GATES[number]
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
 
@@ -171,8 +174,11 @@ export interface RigOptions {
   /**
    * `allows-all` swaps the tool gate in the cell for one that lets every tool
    * run without asking. That is the gate removed: what is left is the wall.
+   * The other names are gates broken in one way each, to show a check goes red.
    */
-  gate?: 'real' | 'allows-all'
+  gate?: GateVariant
+  /** The time one shell call may run and the output that reaches the model, when a check sets them. */
+  toolLimits?: { callSeconds?: number; outputBytes?: number }
   /** The sink's address on the outside network, known once the sink is up. */
   sinkIp?: string
   /** A listener on this machine's loopback, which a sealed cell must not be able to reach. */
@@ -299,6 +305,8 @@ export function renderRig(o: RigOptions): Rig {
       SMLAB_GATE: o.gate ?? 'real',
       SMLAB_VERDICT_MS: String(o.verdictTimeoutMs ?? 400),
       SMLAB_VETO_MS: String(o.vetoTimeoutMs ?? 2000),
+      ...(o.toolLimits?.callSeconds !== undefined ? { SMLAB_TOOL_SECONDS: String(o.toolLimits.callSeconds) } : {}),
+      ...(o.toolLimits?.outputBytes !== undefined ? { SMLAB_TOOL_OUTPUT_BYTES: String(o.toolLimits.outputBytes) } : {}),
       ...o.extraCellEnv,
     }),
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'], pids_limit: 256, mem_limit: '1g', cpus: 1,

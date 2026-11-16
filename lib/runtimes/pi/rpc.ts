@@ -5,8 +5,9 @@
 //   and follow-ups can still come after `agent_end`).
 // - The reply is the last finished assistant message that is not a tool call.
 // - The in-cell gate asks "may I run this tool?" through Pi's extension UI
-//   channel: a `select` whose title starts with GATE_PREFIX. Only the exact
-//   answer `allow` lets the tool run.
+//   channel: a `select` whose title starts with GATE_PREFIX. The only answer
+//   that lets the tool run is `allow:` and the hash of the call the sidecar
+//   said yes to. The gate compares that with the hash of what it is about to run.
 // - The gate says it is loaded with a `notify` whose message is GATE_READY.
 //   Until that arrives no prompt is written to Pi at all. If it does not
 //   arrive in time, every prompt is refused for the life of this process:
@@ -49,7 +50,8 @@ interface PiRecord {
 const DIALOGS = new Set(['select', 'confirm', 'input', 'editor'])
 
 export interface PiRpcOptions {
-  onGate: (call: GateCall) => Promise<boolean>
+  /** The sidecar's answer. A yes with no hash of a call is not a yes. */
+  onGate: (call: GateCall) => Promise<{ allow: boolean; hash?: string }>
   /** How long the gate has, from process start, to announce itself. Default 15 seconds. */
   gateReadyMs?: number
 }
@@ -65,14 +67,15 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
   gateTimer.unref?.()
 
   const gate = async (id: string, title: string): Promise<void> => {
-    let allow = false
+    let value = 'deny'
     try {
       const call = JSON.parse(title.slice(GATE_PREFIX.length)) as GateCall
-      allow = (await opts.onGate(call)) === true
+      const answer = await opts.onGate(call)
+      if (answer?.allow === true && typeof answer.hash === 'string' && /^[0-9a-f]{64}$/.test(answer.hash)) value = `allow:${answer.hash}`
     } catch {
-      allow = false // unreadable request, or no answer: the tool does not run
+      value = 'deny' // unreadable request, or no answer: the tool does not run
     }
-    send({ type: 'extension_ui_response', id, value: allow ? 'allow' : 'deny' })
+    send({ type: 'extension_ui_response', id, value })
   }
 
   const decoder = createLineDecoder((raw) => {

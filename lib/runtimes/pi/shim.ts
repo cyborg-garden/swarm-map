@@ -41,6 +41,8 @@ export interface PiShimOptions {
   gateTimeoutMs?: number
   /** How long a fresh Pi has for its gate to announce itself before its turn is refused. */
   gateReadyMs?: number
+  /** The time one shell call may run and the size of output that reaches the model. Left out, the gate's own defaults. */
+  toolLimits?: { callSeconds?: number; outputBytes?: number }
   /**
    * Rig-only: extra env for Pi. The lab uses it to arm a tripwire inside Pi, and the
    * broken-shim suite to plant a leak. It cannot change the offline flags below.
@@ -81,12 +83,16 @@ export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: s
  * The three offline flags are the only thing that keeps a real Pi from the network at
  * start-up (fetching, telemetry, the version check), so they come last and win.
  */
-export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'gateTimeoutMs' | 'rigEnv'>): Record<string, string> {
+export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'workDir' | 'gateTimeoutMs' | 'toolLimits' | 'rigEnv'>): Record<string, string> {
   return {
     PATH: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
     HOME: o.homeDir,
     PI_CODING_AGENT_DIR: o.agentDir,
     SWARM_GATE_TIMEOUT_MS: String(o.gateTimeoutMs ?? 30_000),
+    // The scratch folder: where Pi is started, and the only place the gate lets a file tool reach.
+    SWARM_WORKSPACE: o.workDir,
+    ...(o.toolLimits?.callSeconds !== undefined ? { SWARM_TOOL_SECONDS: String(o.toolLimits.callSeconds) } : {}),
+    ...(o.toolLimits?.outputBytes !== undefined ? { SWARM_TOOL_OUTPUT_BYTES: String(o.toolLimits.outputBytes) } : {}),
     ...o.rigEnv,
     PI_OFFLINE: '1',
     PI_TELEMETRY: '0',
@@ -134,8 +140,8 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
         gateReadyMs: opts.gateReadyMs,
         // Pi asks through the gate; the sidecar answers. No live turn means no.
         onGate: async (call) => {
-          if (!live.turnId) return false
-          return (await client.requestTool(live.turnId, call.tool, call.input)).allow
+          if (!live.turnId) return { allow: false }
+          return client.requestTool(live.turnId, call.tool, call.input)
         },
       }),
     }
