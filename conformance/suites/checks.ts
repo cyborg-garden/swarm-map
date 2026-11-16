@@ -212,7 +212,7 @@ export const CHECKS: Check[] = [
       const host = lab.hostCanary
       want(p, process.env[host.name] === host.value, 'the host canary is not set in this process, so inheritance was not tested')
       want(p, !env.includes(host.name) && !env.includes(host.value), 'the harness inherited the environment of the process that started it')
-      want(p, lab.model.requests.length > 0 && lab.model.requests.every((r) => r.authorization === `Bearer ${lab.secrets.upstream}`), 'the model did not see the real key')
+      want(p, lab.model.requests.length > 0 && lab.model.requests.every((r) => r.key === lab.secrets.upstream), 'the model did not see the real key')
       want(p, lab.route.presented.length === lab.model.requests.length, 'a model call bypassed the route')
       return p
     },

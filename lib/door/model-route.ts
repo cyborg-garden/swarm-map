@@ -9,9 +9,9 @@
 //
 // The route knows no wire format of its own. Where the placeholder is
 // presented, which path is a model call, where usage is reported and how a
-// stream is cut up all come from a ModelShape (model-shapes.ts). Only the
-// OpenAI chat-completions shape exists today, so the key swap and the budget
-// cap hold for harnesses that speak that format and for no others.
+// stream is cut up all come from a ModelShape (model-shapes.ts). Two exist:
+// OpenAI chat-completions and Anthropic Messages. The key swap and the budget
+// cap hold for harnesses that speak one of those and for no others.
 //
 // Three things keep the cap honest:
 // - Every call the provider accepted is metered. When the reply says nothing
@@ -37,7 +37,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { decide } from '../core/decide.ts'
 import type { PolicyRecord } from '../core/policy/types.ts'
-import type { ModelShape } from './model-shapes.ts'
+import type { CallState, ModelShape } from './model-shapes.ts'
 import type { ReceiptLog } from './receipts.ts'
 import type { SpendLedger } from './spend-ledger.ts'
 
@@ -154,6 +154,13 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       res.end(JSON.stringify({ object: 'list', data: Object.keys(opts.prices).map((id) => ({ id, object: 'model' })) }))
       return
     }
+    // "How many tokens is this?" is answered here too, from the size of the request: three
+    // bytes to a token, rounded up. It is an estimate, and it says so. No call is made for it.
+    if (req.method === 'POST' && shape.countPath !== undefined && url.pathname === shape.countPath) {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ input_tokens: Math.ceil(Buffer.byteLength(raw) / 3), estimated: true }))
+      return
+    }
     if (req.method !== 'POST' || url.pathname !== shape.path) {
       return fail(res, 404, `model route: only ${shape.id} calls (POST ${shape.path}) are forwarded`)
     }
@@ -165,6 +172,21 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     const rate = (n: unknown): boolean => typeof n === 'number' && Number.isFinite(n) && n >= 0
     const price = Object.hasOwn(opts.prices, model) ? opts.prices[model] as Price | null : undefined
     if (!price || !rate(price.inPerMTok) || !rate(price.outPerMTok)) return fail(res, 400, 'model route: no price for that model, so it cannot be metered')
+    // A call whose cost would not show in its usage figure is not forwarded either.
+    const hidden = shape.unmetered?.(body)
+    if (hidden !== undefined) return fail(res, 400, `model route: ${hidden}, so it cannot be metered`)
+    // What the provider needs of the request besides its body: named headers, named query parameters, nothing else.
+    const passed: Record<string, string> = {}
+    for (const name of shape.passHeaders ?? []) {
+      const value = req.headers[name]
+      if (typeof value === 'string') passed[name] = value
+    }
+    const query = new URLSearchParams()
+    for (const name of shape.passQuery ?? []) {
+      const value = url.searchParams.get(name)
+      if (value !== null) query.set(name, value)
+    }
+    const upstreamUrl = `${opts.upstream}${shape.upstreamPath}${query.size > 0 ? `?${query}` : ''}`
 
     // Under a refusing cap this call waits here until every call ahead of it has been charged.
     const release = opts.policy().budget?.onExceed === 'refuse' ? await takeTurn() : () => {}
@@ -197,9 +219,9 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       // Until the provider itself refuses the call, assume it was run and will be billed.
       let billable = true
       try {
-        const upstream = await fetch(`${opts.upstream}${shape.upstreamPath}`, {
+        const upstream = await fetch(upstreamUrl, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', ...shape.upstreamAuth(opts.upstreamKey) },
+          headers: { ...passed, 'content-type': 'application/json', ...shape.upstreamAuth(opts.upstreamKey) },
           body: forward,
           signal: AbortSignal.timeout(opts.upstreamTimeoutMs ?? 600_000),
         })
@@ -214,6 +236,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
             else if (output) usage = undefined
           },
           received: (n) => { received += n },
+          call: {},
         })
       } finally {
         let recorded = true
@@ -250,7 +273,12 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     return changed
   }
 
-  type Seen = { event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void; received(bytes: number): void }
+  type Seen = {
+    event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void
+    received(bytes: number): void
+    /** What the shape keeps between the events of this one call. */
+    call: CallState
+  }
 
   /**
    * A reply that is not a stream of events, as text to send back. Passed on as it came unless
@@ -260,7 +288,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   function plainBody(text: string, seen: Seen): string {
     let json: unknown
     try { json = JSON.parse(text) } catch { return redact(text) } // not JSON: it reports no usage
-    seen.event(shape.usage(json), false)
+    seen.event(shape.usage(json, seen.call), false)
     if (typeof json === 'string') return redact(json) === json ? redact(text) : JSON.stringify(redact(json))
     return redactDeep(json) ? redact(JSON.stringify(json)) : redact(text)
   }
@@ -282,8 +310,13 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     let sawData = false
     let before = '' // everything read so far, kept only until the first data event
     const write = (event: string): void => { out(redact(event) + '\n\n') }
+    /** An event the route makes itself, under the name its format gives it, if it gives one. */
+    const writeOwn = (json: unknown): void => {
+      const name = shape.eventName?.(json)
+      write([...(name === undefined ? [] : [`event: ${name}`]), `data: ${JSON.stringify(json)}`].join('\n'))
+    }
     const drain = (): void => {
-      for (const [key, text] of held) if (text !== '') write(`data: ${JSON.stringify(shape.textEvent(key, text))}`)
+      for (const [key, text] of held) if (text !== '') writeOwn(shape.textEvent(key, text))
       held.clear()
     }
     const isData = (line: string): boolean => line.startsWith('data:')
@@ -302,11 +335,13 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         seen.event(undefined, true)
         return write(event)
       }
-      seen.event(shape.usage(json), shape.hasOutput(json))
+      seen.event(shape.usage(json, seen.call), shape.hasOutput(json))
       for (const piece of shape.streamText(json)) {
         const clean = redact((held.get(piece.key) ?? '') + piece.text)
         const keep = piece.last ? 0 : heldBack(clean, opts.upstreamKey)
-        piece.set(clean.slice(0, clean.length - keep))
+        // An event that ends a run and cannot carry text hands back one that can. It goes first.
+        const ahead = piece.set(clean.slice(0, clean.length - keep))
+        if (ahead !== undefined) writeOwn(ahead)
         held.set(piece.key, clean.slice(clean.length - keep))
       }
       // Every other string in the event, searched after JSON's escapes are undone.
