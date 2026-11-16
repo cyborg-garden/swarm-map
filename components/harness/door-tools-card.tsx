@@ -23,20 +23,36 @@ export const TOOL_ROWS: { key: ToolClass; label: string; hint: string }[] = [
 ]
 const EMPTY: ToolsConfig = { enabled: [], mode: {}, approvalSeconds: 120 }
 
-/** How one class is set: off unless it is switched on, then its mode, or the default for its class. */
+/**
+ * How one class is set: off unless it is switched on, then its mode, or the default for its class.
+ * Writing files asks by default when the shell asks, as in the launcher.
+ */
 export function modeOf(tools: ToolsConfig | undefined, key: ToolClass): Mode {
   const t = tools ?? EMPTY
   if (!t.enabled.includes(key)) return 'never'
-  return t.mode[key] ?? (key === 'shell' ? 'ask' : 'allow')
+  const fallback: Mode = key === 'shell' ? 'ask' : key === 'file_read' ? 'allow' : modeOf(t, 'shell') === 'ask' ? 'ask' : 'allow'
+  return t.mode[key] ?? fallback
 }
 
-/** The tools part of the rules with one class set. A class that is off is taken off both lists. */
+/**
+ * Whether a choice is one the launcher takes. A shell that asks with file writing that does not is
+ * refused there: a yes to `sh run.sh` would run whatever the agent wrote into run.sh unseen.
+ */
+export function mayChoose(tools: ToolsConfig | undefined, key: ToolClass, mode: Mode): boolean {
+  return !(key === 'file_write' && mode === 'allow' && modeOf(tools, 'shell') === 'ask')
+}
+
+/**
+ * The tools part of the rules with one class set. A class that is off is taken off both lists.
+ * Setting the shell to ask brings file writing that was allowed down to ask with it.
+ */
 export function withMode(tools: ToolsConfig | undefined, key: ToolClass, mode: Mode): ToolsConfig {
   const t = tools ?? EMPTY
   const enabled = TOOL_ROWS.map((r) => r.key).filter((k) => (k === key ? mode !== 'never' : t.enabled.includes(k)))
   const modes = { ...t.mode }
   if (mode === 'never') delete modes[key]
   else modes[key] = mode
+  if (key === 'shell' && mode === 'ask' && modeOf(t, 'file_write') === 'allow') modes.file_write = 'ask'
   return { ...t, enabled, mode: modes }
 }
 
@@ -81,10 +97,18 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
           >
             <option value="never">Off</option>
             <option value="ask">Ask an admin</option>
-            <option value="allow">Allow</option>
+            <option value="allow" disabled={!mayChoose(tools, row.key, 'allow')}>Allow</option>
           </select>
         </div>
       ))}
+      {!off && modeOf(tools, 'shell') === 'ask' && modeOf(tools, 'file_write') !== 'never' && (
+        <p className="text-xs text-muted-foreground">
+          While the shell asks, writing files asks too: an admin is shown a command, not the files it runs.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        A yes to a shell command is a yes to whatever it leaves behind in the cell, running or written, until the agent is stopped.
+      </p>
       {asks && !off && (
         <label className="block space-y-1">
           <span className="text-sm">Seconds an admin has to answer</span>

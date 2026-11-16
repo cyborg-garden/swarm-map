@@ -143,15 +143,31 @@ describe('pi-discord config', () => {
     expect(policyFor(parseConfig(good()).config!).hash).toBe(policyFor(withTools({ enabled: [] }).config!).hash)
   })
 
-  it('a class that is switched on with no mode asks for a shell and allows the two file classes', () => {
+  it('a class that is switched on with no mode: a shell asks, reading is allowed, and writing asks when the shell does', () => {
     const config = withTools({ enabled: ['shell', 'file_read', 'file_write'] }).config!
-    expect(toolModes(config)).toEqual({ file_read: 'allow', file_write: 'allow', shell: 'ask' })
-    expect(policyFor(config).tools).toEqual({ allow: ['file_read', 'file_write'], ask: ['shell'], deny: [], browserGuard: 'off' })
+    expect(toolModes(config)).toEqual({ file_read: 'allow', file_write: 'ask', shell: 'ask' })
+    expect(policyFor(config).tools).toEqual({ allow: ['file_read'], ask: ['file_write', 'shell'], deny: [], browserGuard: 'off' })
     expect(approvalSecondsOf(config)).toBe(120)
     expect(validatePolicy(policyFor(config))).toEqual([])
     // The dry run says so in one line, so nobody starts an agent with a tool they did not mean to give it.
-    expect(toolsLine(config)).toBe('tools, all inside the cell: read files (allowed), write files (allowed), shell (an admin has to say yes). An admin has 120 seconds to answer')
+    expect(toolsLine(config)).toBe('tools, all inside the cell: read files (allowed), write files (an admin has to say yes), shell (an admin has to say yes). An admin has 120 seconds to answer')
     expect(toolsLine(withTools({ enabled: ['file_read'] }).config!)).toBe('tools, all inside the cell: read files (allowed)')
+    // With no shell, or a shell that is allowed, writing is allowed as before.
+    expect(toolModes(withTools({ enabled: ['file_write'] }).config!).file_write).toBe('allow')
+    expect(toolModes(withTools({ enabled: ['file_write', 'shell'], mode: { shell: 'allow' } }).config!).file_write).toBe('allow')
+  })
+
+  it('a shell that asks with file writing that does not is refused: a yes to a script\'s name would run what the agent wrote in it unseen', () => {
+    for (const tools of [{ enabled: ['shell', 'file_write'], mode: { file_write: 'allow' } }, { enabled: ['shell', 'file_write'], mode: { shell: 'ask', file_write: 'allow' } }]) {
+      const refused = withTools(tools)
+      expect(refused.config).toBeUndefined()
+      expect(refused.errors).toEqual(['tools.mode.file_write: with shell set to ask, writing files has to ask too (or be off). Otherwise the agent could write a script without asking and an admin would approve only its name'])
+    }
+    // Every other pairing is taken.
+    for (const shell of ['never', 'ask', 'allow']) for (const fileWrite of ['never', 'ask', 'allow']) {
+      if (shell === 'ask' && fileWrite === 'allow') continue
+      expect(withTools({ enabled: ['shell', 'file_write'], mode: { shell, file_write: fileWrite } }).errors, `${shell}/${fileWrite}`).toEqual([])
+    }
   })
 
   it('a mode is what the record says: ask, allow, or never for a class that is listed and switched off again', () => {
@@ -197,7 +213,7 @@ describe('pi-discord config', () => {
     expect(all).not.toMatch(/You have no tools/)
     expect(all).toContain('You also have tools. With them you can: read and list files, write files, run shell commands.')
     expect(all).toContain('a box of your own with no network: one small scratch folder, which is emptied when you are restarted')
-    expect(all).toContain('Before you run shell commands, an admin is shown exactly what you asked for, in the channel, and has to say yes.')
+    expect(all).toContain('Before you write files or run shell commands, an admin is shown exactly what you asked for, in the channel, and has to say yes.')
     expect(all).toContain('What you cannot do: reach anything on a network, browse the web')
     expect(all).toMatch(/Nothing above changes this/)
     const readOnly = systemPromptFor(withTools({ enabled: ['file_read'] }).config!)
@@ -305,6 +321,8 @@ describe('pi-discord cell, as written', () => {
     expect([cell.read_only, cell.user, cell.cap_drop, cell.volumes]).toEqual([true, 'node', ['ALL'], ['lab:/tmp/smlab']])
     // The scratch folder is where the harness is started: in memory, 64 MB, owned by the user the cell runs as.
     expect(cell.tmpfs).toEqual(['/tmp', '/tmp/smlab/work:size=64m,mode=0700,uid=1000,gid=1000'])
+    // The cell's own folder is in memory too, with a size: a shell in the cell cannot fill this machine's Docker disk.
+    expect(file.volumes.lab).toEqual({ driver: 'local', driver_opts: { type: 'tmpfs', device: 'tmpfs', o: 'size=256m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev' } })
     expect(cell.environment).toMatchObject({ SMLAB_TOOL_SECONDS: '60', SMLAB_TOOL_OUTPUT_BYTES: '16000', SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000' })
     expect([cell.pids_limit, cell.mem_limit, cell.cpus]).toEqual([256, '1g', 1])
     expect(Object.keys(cell.environment).sort()).toEqual(CELL_ENV)
@@ -386,6 +404,8 @@ describe('pi-discord cell, as written', () => {
     ['a network on one of Docker\'s own pools', (f) => { f.networks.egress.ipam.config[0].subnet = '172.20.0.0/16' }, /network egress is on 172\.20\.0\.0\/16, which is not a \/28 of /],
     ['two networks on the same block', (f) => { f.networks.egress.ipam.config[0].subnet = f.networks.cell.ipam.config[0].subnet }, /networks cell and egress share addresses/],
     ['a gateway of the file\'s own choosing', (f) => { Object.assign(f.networks.cell.ipam.config[0], { gateway: '10.213.0.1' }) }, /network cell does not name one block of its own/],
+    ["a cell folder on Docker's disk", (f) => { f.volumes.lab = {} as never }, /the cell's own folder is not in memory with a size/],
+    ['a cell folder with no size', (f) => { f.volumes.lab.driver_opts.o = 'uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev' }, /the cell's own folder is not in memory with a size/],
     ['a network with driver options', (f) => { Object.assign(f.networks.cell, { driver_opts: { 'com.docker.network.bridge.enable_ip_masquerade': 'true' } }) }, /network cell sets driver_opts/],
   ] as [string, (f: ReturnType<typeof renderCell>) => void, RegExp][])('refuses %s', (_name, breakIt, why) => {
     const file = renderCell(options)
@@ -397,6 +417,7 @@ describe('pi-discord cell, as written', () => {
     expect(sealProblems(renderCell({ ...options, broken: 'cell-on-egress' })).join()).toMatch(/the cell is on cell and egress/)
     expect(sealProblems(renderCell({ ...options, broken: 'cell-writable' })).join()).toMatch(/write its own disk/)
     expect(sealProblems(renderCell({ ...options, broken: 'cell-scratch-uncapped' })).join()).toMatch(/scratch folder is not a capped mount/)
+    expect(sealProblems(renderCell({ ...options, broken: 'cell-folder-uncapped' })).join()).toMatch(/the cell's own folder is not in memory with a size/)
     // The third is a sealed cell as written, on other blocks than the ones meant for it: only Docker can show that.
     const swapped = renderCell({ ...options, broken: 'cell-other-subnet' })
     expect(sealProblems(swapped)).toEqual([])

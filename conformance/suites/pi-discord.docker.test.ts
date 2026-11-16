@@ -71,6 +71,12 @@ describe('pi-discord dry run: the containment checks', () => {
     expect(failed(checks)).toEqual(['S0', 'S0d'])
   }, 180_000)
 
+  it('must-fail: a cell folder that is a plain Docker volume, on Docker\'s disk with no size, is caught as written, as Docker made it, and by filling it', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-folder-uncapped' })
+    expect(failed(checks)).toEqual(['S0', 'S0d', 'S4'])
+    expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the cell's own folder took \d+ bytes, which is more than its 256 MB/)
+  }, 180_000)
+
   it('must-fail: a scratch folder that is a plain folder with no size of its own is caught as written, as Docker made it, and by filling it', async () => {
     const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-scratch-uncapped' })
     expect(failed(checks)).toEqual(['S0', 'S0d', 'S4'])
@@ -101,7 +107,7 @@ describe('pi-discord: tools, end to end, through real Pi in the sealed cell', ()
       agentId: 'pi-lab-tools',
       discord: { guildId: IDS.guild, channelId: IDS.home, adminUserIds: [IDS.admin], allowedUserIds: [IDS.member] },
       budget: { monthlyUsd: 5 },
-      // Shell asks an admin. The two file classes are allowed.
+      // Shell asks an admin, and so, by default, does writing a file. Reading is allowed.
       tools: { enabled: ['shell', 'file_read', 'file_write'], approvalSeconds: 60 },
       model: { baseUrl: model.baseUrl, id: 'scripted', usdPerMTokIn: 1, usdPerMTokOut: 2 },
     }, { allowLoopbackModel: true })
@@ -171,7 +177,7 @@ describe('pi-discord: tools, end to end, through real Pi in the sealed cell', ()
     expect(inCell('touch /opt/swarm/x 2>&1; touch /home/node/x 2>&1; echo TRIED')).toMatch(/Read-only file system[\s\S]*Read-only file system[\s\S]*TRIED/)
   }, 180_000)
 
-  it('file tools need no admin here, work inside the scratch folder, and are refused outside it', async () => {
+  it('file tools work inside the scratch folder and are refused outside it, and a write waits for the admin as the shell does', async () => {
     const posts = fake.posted.length
     script.unshift({
       match: 'CANARY-files', text: 'filed',
@@ -185,7 +191,13 @@ describe('pi-discord: tools, end to end, through real Pi in the sealed cell', ()
       ],
     })
     say('CANARY-files')
+    // The write inside the folder is put to the admin, with what it would write. The one outside is refused before anyone is asked.
     await until(() => fake.posted.length === posts + 1)
+    const request = fake.posted[posts]
+    expect(request.content.split('\n')[0]).toBe('Approval needed. The agent wants to run write:')
+    expect(JSON.parse(request.content.split('\n')[2])).toEqual({ path: `${WORK}/notes.txt`, content: `kept ${nonce}` })
+    fake.react({ channel: IDS.home, guild: IDS.guild, messageId: request.id, author: { id: IDS.admin }, emoji: '✅' })
+    await until(() => fake.posted.length === posts + 2)
     expect(fake.posted.at(-1)?.content).toContain('filed')
     expect(inCell(`cat ${WORK}/notes.txt`)).toBe(`kept ${nonce}`)
     expect(inCell('ls /tmp/smlab; echo LISTED')).not.toContain('planted.txt')
@@ -195,8 +207,8 @@ describe('pi-discord: tools, end to end, through real Pi in the sealed cell', ()
     // The cell's own stand-in for a key is in a file outside the scratch folder. A file tool does not get it.
     expect(results.some((r) => r.includes('PLACEHOLDER-') || r.includes('ToShim') || r.includes('sessions'))).toBe(false)
     expect(results.filter((r) => r.includes('the path is outside the scratch folder'))).toHaveLength(4)
-    // No request was posted for any of them: nothing here asks.
-    expect(fake.posted.slice(posts).some((p) => p.content.startsWith('Approval needed.'))).toBe(false)
+    // One request was posted, for the one write that stayed inside the folder. Reading and listing ask nobody.
+    expect(fake.posted.slice(posts).filter((p) => p.content.startsWith('Approval needed.'))).toHaveLength(1)
   }, 180_000)
 
   it('stopping the agent takes the scratch folder with it', async () => {

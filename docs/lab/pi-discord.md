@@ -122,7 +122,7 @@ server, the channel or a person and choose **Copy ID**.
 | `discord.readAllMessages` | `false` | Ask Discord for the text of every message. Needed when `mentionRequired` is false |
 | `budget.monthlyUsd` | none | Model spend allowed in a calendar month (UTC). After it, model calls are refused |
 | `tools.enabled` | `[]` | Classes of tool that are switched on: `file_read`, `file_write`, `shell`. All run inside the cell. See [the tools slice](tools-slice.md) |
-| `tools.mode` | shell asks, files allowed | For a class that is switched on: `allow`, `ask` (an admin says yes in the channel first) or `never` |
+| `tools.mode` | shell asks, reading allowed, writing asks when the shell does | For a class that is switched on: `allow`, `ask` (an admin says yes in the channel first) or `never` |
 | `tools.approvalSeconds` | `120` | How long an admin has to answer, 10 to 600. No answer is a no |
 | `model.baseUrl` | none | An OpenAI-compatible base URL ending in `/v1`, over https |
 | `model.id` | none | The model's name at that provider |
@@ -130,7 +130,7 @@ server, the channel or a person and choose **Copy ID**.
 
 A setting the file does not know is refused. There is no setting for direct messages: they are
 off. Tools are off until a class is switched on, and a config that hears anyone in the channel
-and switches a tool on is refused.
+and switches a tool on is refused. So is one where the shell asks and writing files does not.
 
 **What the agent is told about itself.** Pi's own introduction says it is a coding assistant that
 can run commands. Here that is not true, so the launcher replaces it. The agent is told its name

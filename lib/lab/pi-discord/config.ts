@@ -69,7 +69,11 @@ export interface ToolsConfig {
   enabled: SliceClass[]
   /**
    * How a class that is switched on is decided: `allow` runs it, `ask` waits for an admin's yes in
-   * the channel, `never` switches it off again. Left out, shell asks and the file classes are allowed.
+   * the channel, `never` switches it off again. Left out, shell asks, reading files is allowed, and
+   * writing files asks when the shell does and is allowed when it does not.
+   *
+   * Shell `ask` with file_write `allow` is refused: a yes to `sh run.sh` would run whatever the
+   * agent wrote into run.sh without asking, and the admin is shown the command, not the file.
    */
   mode: Partial<Record<SliceClass, ToolMode>>
   /** How long an admin has to answer a request, in seconds. No answer by then is a no. */
@@ -81,8 +85,9 @@ const TOOL_MODES: ToolMode[] = ['never', 'ask', 'allow']
 /** How each class is decided under a config: `never` for one that is not switched on. */
 export function toolModes(c: Pick<LabConfig, 'tools'>): Record<SliceClass, ToolMode> {
   const t = c.tools ?? NO_TOOLS
-  const modeOf = (k: SliceClass): ToolMode => (!t.enabled.includes(k) ? 'never' : t.mode[k] ?? (k === 'shell' ? 'ask' : 'allow'))
-  return { file_read: modeOf('file_read'), file_write: modeOf('file_write'), shell: modeOf('shell') }
+  const modeOf = (k: SliceClass, fallback: ToolMode): ToolMode => (!t.enabled.includes(k) ? 'never' : t.mode[k] ?? fallback)
+  const shell = modeOf('shell', 'ask')
+  return { file_read: modeOf('file_read', 'allow'), file_write: modeOf('file_write', shell === 'ask' ? 'ask' : 'allow'), shell }
 }
 /** The seconds the door waits for an admin, or undefined when no class asks. */
 export function approvalSecondsOf(c: Pick<LabConfig, 'tools'>): number | undefined {
@@ -187,6 +192,12 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   // It is refused here, so nobody is left thinking a tool is on. decide() says the same no, for any record that gets past this.
   if (config.discord.anyoneInChannel && anyTool) {
     return { errors: ['tools.enabled: an agent that hears anyone in the channel gets no tools. Switch the tools off, or name who it hears'] }
+  }
+  // What an admin is shown for a shell call is the command, not the files it runs. If the agent can write files
+  // without asking, a yes to `sh run.sh` is a yes to whatever it put in run.sh, so the two do not go together.
+  const chosen = toolModes(config)
+  if (chosen.shell === 'ask' && chosen.file_write === 'allow') {
+    return { errors: ['tools.mode.file_write: with shell set to ask, writing files has to ask too (or be off). Otherwise the agent could write a script without asking and an admin would approve only its name'] }
   }
   // The gate that holds a call for an admin, keeps file tools in the scratch folder and applies the limits is the default harness's. No other has one yet.
   if (harness !== DEFAULT_HARNESS && anyTool) {

@@ -11,7 +11,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import HarnessDetailPage from '@/app/(dashboard)/harnesses/[id]/page'
 import HarnessesPage from '@/app/(dashboard)/harnesses/page'
 import { usd } from './door-agent-page'
-import { modeOf, TOOL_ROWS, withMode } from './door-tools-card'
+import { mayChoose, modeOf, TOOL_ROWS, withMode } from './door-tools-card'
 import { parseConfig, toolModes } from '@/lib/lab/pi-discord/config'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() } }))
@@ -209,6 +209,11 @@ describe('the page of a door agent', () => {
     const values = () => (within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])
     // Shell with no mode of its own asks: that is its default.
     expect(values()).toEqual([['never', false], ['ask', false], ['ask', false]])
+    // While the shell asks, file writing cannot be set to allow: an admin would approve a script's name, not what is in it.
+    const allowWrite = within(within(card).getByRole('combobox', { name: 'Write files' })).getByRole('option', { name: 'Allow' }) as HTMLOptionElement
+    expect(allowWrite.disabled).toBe(true)
+    expect(card).toHaveTextContent('While the shell asks, writing files asks too')
+    expect(card).toHaveTextContent('A yes to a shell command is a yes to whatever it leaves behind in the cell')
     expect((document.querySelector('input[name="tools.approvalSeconds"]') as HTMLInputElement).value).toBe('60')
     fireEvent.click(screen.getByRole('switch', { name: 'Anyone in the channel' }))
     expect(values()).toEqual([['never', true], ['never', true], ['never', true]])
@@ -227,6 +232,11 @@ describe('the page of a door agent', () => {
     expect(TOOL_ROWS.map((r) => r.key).sort()).toEqual(Object.keys(toolModes(parseConfig(base).config!)).sort())
     // Every choice on the card, from every starting point, is a config the launcher accepts and reads back the same.
     for (const start of cases) for (const row of TOOL_ROWS) for (const mode of ['never', 'ask', 'allow'] as const) {
+      // The one choice the card does not offer: file writing allowed while the shell asks. The launcher refuses it too.
+      if (!mayChoose(start as never, row.key, mode)) {
+        expect(parseConfig({ ...base, tools: { ...withMode(start as never, row.key, mode), mode: { ...withMode(start as never, row.key, mode).mode, file_write: 'allow' } } }).errors[0]).toMatch(/^tools\.mode\.file_write: with shell set to ask/)
+        continue
+      }
       const next = withMode(start as never, row.key, mode)
       const parsed = parseConfig({ ...base, tools: next })
       expect(parsed.errors).toEqual([])
