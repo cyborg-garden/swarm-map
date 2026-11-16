@@ -165,7 +165,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   }
 
   if (errors.length > 0) return { errors }
-  const config = { agentId: root.agentId, persona: { name: (p.name as string).trim(), description: (p.description as string).trim() }, discord: d, budget: b, tools: t, model: m } as unknown as LabConfig
+  const config = { agentId: root.agentId, persona: { name: (p.name as string).trim(), description: (p.description as string).trim() }, discord: d, budget: b, tools: { enabled: t.enabled, mode: t.mode, approvalSeconds: t.approvalSeconds }, model: m } as unknown as LabConfig
   // An agent anyone can talk to is a public one, and a public agent gets none of these tools whatever is asked for.
   // It is refused here, so nobody is left thinking a tool is on. decide() says the same no, for any record that gets past this.
   if (config.discord.anyoneInChannel && Object.values(toolModes(config)).some((mode) => mode !== 'never')) {

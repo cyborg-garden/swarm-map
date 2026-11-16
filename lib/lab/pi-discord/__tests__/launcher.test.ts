@@ -133,6 +133,8 @@ describe('pi-discord config', () => {
       expect(approvalSecondsOf(config)).toBeUndefined()
       expect(systemPromptFor(config)).toMatch(/You have no tools/)
     }
+    // Only the three settings are kept: a note written beside them in the file is not carried into the record.
+    expect(withTools({ $comment: 'a note', enabled: ['shell'] }).config!.tools).toEqual({ enabled: ['shell'], mode: {}, approvalSeconds: 120 })
     // A config from before there were tools is read as one with none, and makes the same record as before.
     expect(policyFor(parseConfig(good()).config!).hash).toBe(policyFor(withTools({ enabled: [] }).config!).hash)
   })
