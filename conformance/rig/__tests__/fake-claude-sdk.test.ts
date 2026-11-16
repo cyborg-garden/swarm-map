@@ -82,7 +82,8 @@ describe('the fake Claude Agent SDK', () => {
 
   it.each(['DISABLE_AUTOUPDATER', 'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'])('[U:fake-claude-sdk] refuses to start without %s, or outside its minimal mode', async (name) => {
     const options = await setup([])
-    const { [name]: _dropped, ...env } = options([]).env
+    const env = { ...options([]).env }
+    delete env[name]
     await expect(run({ ...options([]), env }, ['hello'])).rejects.toThrow(`refusing to start: ${name} is not 1`)
     await expect(run({ ...options([]), extraArgs: {} }, ['hello'])).rejects.toThrow('only its minimal mode exists here')
     expect(model.requests).toEqual([])
@@ -97,7 +98,8 @@ describe('the fake Claude Agent SDK', () => {
     const asked: string[] = []
     const refuse: CanUseTool = async (tool) => { asked.push(tool); return { behavior: 'deny', message: 'no' } }
     // Without the ask rules, nobody is asked and both run.
-    const { settings: _dropped, ...loose } = options(['Bash', 'Read'], { canUseTool: refuse })
+    const loose = options(['Bash', 'Read'], { canUseTool: refuse })
+    delete loose.settings
     await run(loose, ['CANARY-read', 'CANARY-cat'])
     expect(asked).toEqual([])
     expect(model.requests.filter((r) => r.body.includes('what the file holds')).length).toBeGreaterThan(0)

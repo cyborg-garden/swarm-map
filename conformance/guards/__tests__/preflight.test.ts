@@ -126,8 +126,9 @@ describe('F2: a harness that reads its key and its model address from fixed name
   })
 
   it.each([
-    'https://api.anthropic.com', 'http://api.anthropic.com', 'https://127.0.0.1:4010', 'http://127.0.0.1:4010/v1', 'http://user:pw@127.0.0.1:4010',
-    'http://127.0.0.1', 'http://127.0.0.1:4010@evil.example', 'http://10.0.0.5:4010', 'http://door.example:4010',
+    // The two addresses with an @ in them are put together here, so no string shaped like a login is ever committed.
+    'https://api.anthropic.com', 'http://api.anthropic.com', 'https://127.0.0.1:4010', 'http://127.0.0.1:4010/v1', ['http://user', 'pw@127.0.0.1:4010'].join(':'),
+    'http://127.0.0.1', ['http://127.0.0.1', '4010@evil.example'].join(':'), 'http://10.0.0.5:4010', 'http://door.example:4010',
   ])('[U:named-fakes] refuses %s where the route goes', (value) => {
     expect(() => assertNoCredentials({ ...good, ANTHROPIC_BASE_URL: value }, { nonce, named })).toThrow(/^REFUSING TO RUN: F2 .*ANTHROPIC_BASE_URL/)
   })

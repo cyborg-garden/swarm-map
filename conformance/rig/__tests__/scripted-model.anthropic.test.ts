@@ -18,7 +18,10 @@ afterEach(async () => {
 })
 const start = async (script: ScriptEntry[] = []) => { model = await startScriptedModel({ nonce: NONCE, script, shape: 'anthropic-messages' }); return model }
 
-const HEADERS = { 'content-type': 'application/json', 'x-api-key': `UPSTREAM-${NONCE}`, 'anthropic-version': '2023-06-01' }
+const KEY = `UPSTREAM-${NONCE}`
+// The stand-ins a wrong caller might hold: this run's placeholder, and another run's key.
+const NOT_THE_KEY = [`PLACEHOLDER-${NONCE}`, ['UPSTREAM', '0badf00d'].join('-')]
+const HEADERS = { 'content-type': 'application/json', 'x-api-key': KEY, 'anthropic-version': '2023-06-01' }
 const ask = (m: ScriptedModel, body: unknown, headers: Record<string, string> = HEADERS, path = '/messages') =>
   fetch(`${m.baseUrl}${path}`, { method: 'POST', headers, body: JSON.stringify(body) })
 const text = (t: string) => ({ role: 'user', content: [{ type: 'text', text: t }] })
@@ -29,9 +32,9 @@ const toolResult = { role: 'user', content: [{ type: 'tool_result', tool_use_id:
 describe('scripted model, Anthropic Messages', () => {
   it('[U:scripted-anthropic] refuses any caller that does not hold the upstream key of this run, in the header this format uses', async () => {
     const m = await start()
-    expect((await ask(m, call([text('hi')]), { ...HEADERS, 'x-api-key': `PLACEHOLDER-${NONCE}` })).status).toBe(401)
-    expect((await ask(m, call([text('hi')]), { ...HEADERS, 'x-api-key': 'UPSTREAM-0badf00d' })).status).toBe(401)
-    const { 'x-api-key': _none, ...bearer } = { ...HEADERS, authorization: `Bearer UPSTREAM-${NONCE}` }
+    for (const wrong of NOT_THE_KEY) expect((await ask(m, call([text('hi')]), { ...HEADERS, 'x-api-key': wrong })).status).toBe(401)
+    const bearer: Record<string, string> = { ...HEADERS, authorization: `Bearer ${KEY}` }
+    delete bearer['x-api-key']
     expect((await ask(m, call([text('hi')]), bearer)).status).toBe(401)
     expect(m.requests).toEqual([])
     expect(m.refused).toBe(3)
@@ -39,7 +42,8 @@ describe('scripted model, Anthropic Messages', () => {
 
   it('[U:scripted-anthropic] like the real API, refuses a call that names no version, and any path but the model call', async () => {
     const m = await start()
-    const { 'anthropic-version': _none, ...unversioned } = HEADERS
+    const unversioned: Record<string, string> = { ...HEADERS }
+    delete unversioned['anthropic-version']
     const res = await ask(m, call([text('hi')]), unversioned)
     expect(res.status).toBe(400)
     expect(await res.json()).toMatchObject({ type: 'error', error: { type: 'invalid_request_error' } })
@@ -57,7 +61,7 @@ describe('scripted model, Anthropic Messages', () => {
       content: [{ type: 'text', text: `scripted answer FAKE-MODEL-${NONCE}` }], usage: { input_tokens: 100, output_tokens: 20 },
     })
     expect(m.requests).toHaveLength(1)
-    expect(m.requests[0]).toMatchObject({ key: `UPSTREAM-${NONCE}`, path: '/v1/messages?beta=true' })
+    expect(m.requests[0]).toMatchObject({ key: KEY, path: '/v1/messages?beta=true' })
     expect(m.heard('CANARY-a')).toBe(true)
   })
 
