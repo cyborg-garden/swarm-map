@@ -57,6 +57,7 @@ const paths = doorAgentPaths(DATA_DIR, 'h_pi_one')
 
 const launcher: DoorLauncher = {
   command: () => ({ node: '/fake/node', cli: '/fake/cli.ts' }),
+  nodeProblem: () => undefined,
   dryRun: async () => { calls.push('dryRun'); return dryRunResult },
   start: async (o) => {
     calls.push('start')

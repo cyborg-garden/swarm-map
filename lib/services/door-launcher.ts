@@ -10,10 +10,13 @@
 import { spawn, spawnSync } from 'child_process'
 import fs from 'fs'
 import path from 'path'
+import { chooseNode, nodeProblem, realProbe, type NodeProbe } from './door-node'
 
 export interface DoorLauncher {
-  /** The two paths the start script is rendered with. */
+  /** The two paths the start script is rendered with. Worked out again on every call. */
   command(): { node: string; cli: string }
+  /** Why the Node that `command()` names cannot run the launcher. Undefined when it can. */
+  nodeProblem(): string | undefined
   /** Run the launcher's dry run on a config. `code` is null when it never finished. */
   dryRun(o: { configPath: string; env: Record<string, string> }): Promise<{ code: number | null; output: string }>
   /** Start the door from its start script, in the background, with its output appended to the log. */
@@ -55,12 +58,17 @@ function run(node: string, args: string[], env: Record<string, string>, timeoutM
 }
 
 /**
- * The real launcher: the lab's command, run with this Node. The command is
- * found in the checkout Swarm Map runs from, or where SWARM_MAP_DOOR_LAUNCHER
- * points.
+ * The real launcher: the lab's command, run with the Node that door-node.ts
+ * chooses (SWARM_MAP_NODE, else a path that survives a Node upgrade, else
+ * this Node). The command is found in the checkout Swarm Map runs from, or
+ * where SWARM_MAP_DOOR_LAUNCHER points.
+ *
+ * The Node is chosen again each time it is needed, never once at start-up:
+ * a Node upgraded under a running Swarm Map is then seen at the next start.
  */
-export function createCliLauncher(): DoorLauncher {
-  const node = process.execPath
+export function createCliLauncher(o: { execPath?: string; version?: string; probe?: NodeProbe } = {}): DoorLauncher {
+  const probe = o.probe ?? realProbe
+  const node = (): string => chooseNode({ execPath: o.execPath ?? process.execPath, version: o.version ?? process.version, env: process.env, probe }).path
   const cli = process.env.SWARM_MAP_DOOR_LAUNCHER || path.join(process.cwd(), 'lib', 'lab', 'pi-discord', 'cli.ts')
   const alive = (pid: number): boolean => {
     try { process.kill(pid, 0) } catch { return false }
@@ -68,8 +76,9 @@ export function createCliLauncher(): DoorLauncher {
     return spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).stdout.includes('pi-discord')
   }
   return {
-    command: () => ({ node, cli }),
-    dryRun: (o) => run(node, [cli, 'dry-run', '--config', o.configPath], o.env, DRY_RUN_TIMEOUT_MS),
+    command: () => ({ node: node(), cli }),
+    nodeProblem: () => nodeProblem(node(), probe),
+    dryRun: (o) => run(node(), [cli, 'dry-run', '--config', o.configPath], o.env, DRY_RUN_TIMEOUT_MS),
     async start(o) {
       const out = fs.openSync(o.logPath, 'a', 0o600)
       let exited = false
@@ -90,7 +99,7 @@ export function createCliLauncher(): DoorLauncher {
       }
     },
     async stop(o) {
-      const { code, output } = await run(node, [cli, 'stop', '--config', o.configPath], { SMLAB_STATE_DIR: o.stateDir }, STOP_TIMEOUT_MS)
+      const { code, output } = await run(node(), [cli, 'stop', '--config', o.configPath], { SMLAB_STATE_DIR: o.stateDir }, STOP_TIMEOUT_MS)
       return { ok: code === 0, output }
     },
     alive,
