@@ -14,14 +14,18 @@ export const CLAUDE_SDK_VERSION_LINE = `${CLAUDE_SDK_VERSION} (Claude Agent SDK)
 
 /**
  * The built-in tools the shim is willing to start a session with, classified.
- * The SDK has many more (web fetch and search, sub-agents, notebooks, tasks,
- * schedules). Those are left out on purpose: a tool that is not here is never
- * offered, and a session is started with exactly the tools it was offered.
+ * These three are every tool the pinned SDK has in its minimal mode, which is
+ * the only mode the shim starts it in. Outside that mode it has many more (a
+ * separate write tool, web fetch and search, sub-agents, notebooks, tasks,
+ * schedules). None of those can be listed here: the door offers what is in
+ * this map, a session is started with exactly what it was offered, and one
+ * that reports other tools than it was started with is stopped. So a name the
+ * SDK does not have would stop every turn of a policy that allows its class.
+ * `Edit` makes a file that does not exist yet, so there is no need for `Write`.
  */
 export const CLAUDE_SDK_TOOL_MAP: Record<string, ToolClass> = {
   Read: 'file_read',
   Edit: 'file_write',
-  Write: 'file_write',
   Bash: 'shell',
 }
 

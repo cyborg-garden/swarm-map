@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { CLAUDE_CODE_VERSION } from '../caps.ts'
 import type { PermissionResult, SdkOptions } from '../sdk.ts'
-import { createClaudeSession, DENIED, type ClaudeSessionOptions } from '../session.ts'
+import { createClaudeSession, DENIED, NeverStarted, type ClaudeSessionOptions } from '../session.ts'
 import { claudeSdkOptions } from '../shim.ts'
 import { done, init, stubSdk, type Play } from './stub-sdk.ts'
 
@@ -46,6 +46,22 @@ describe('the Claude Agent SDK pump: turns', () => {
   ])('[U:claude-sdk-session] a result with %s is not a reply either', async (_what, patch) => {
     const { session: s } = session(function* (_text, o) { yield init(o); yield done('looks fine', patch) })
     await expect(s.prompt('hello')).rejects.toThrow('the SDK ended the turn with an error')
+  })
+
+  it('[U:claude-sdk-session] a turn the SDK ends without first saying it has started is not a reply, whatever it says: its version and its tools were never checked', async () => {
+    for (const patch of [{}, { is_error: true }, { subtype: 'error_during_execution', is_error: true }]) {
+      const { session: s } = session(function* () { yield done('looks fine', patch) })
+      const failed = await s.prompt('hello').then(() => undefined, (err: Error) => err)
+      expect(failed, JSON.stringify(patch)).toBeInstanceOf(NeverStarted)
+    }
+    // Positive control: the same record after it has said so is a reply.
+    const { session: s } = session(function* (_text, o) { yield init(o); yield done('looks fine') })
+    expect(await s.prompt('hello')).toEqual({ text: 'looks fine' })
+    // And an ordinary failed turn is not taken for a session that never started.
+    const { session: failing } = session(function* (_text, o) { yield init(o); yield done('API Error', { is_error: true }) })
+    const err = await failing.prompt('hello').then(() => undefined, (e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(NeverStarted)
   })
 
   it('[U:claude-sdk-session] a session that ends, or throws, before its turn is finished fails the turn', async () => {

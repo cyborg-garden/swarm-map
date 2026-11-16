@@ -162,6 +162,102 @@ describe('the Claude Agent SDK shim: sessions', () => {
     expect(got.filter((m) => m.t === 'error')).toEqual([{ t: 'error', turnId: 'turn-1', message: 'the SDK ended the turn with an error' }])
   })
 
+  // The SDK retries a failing model call for minutes, and waits on one that never answers for longer.
+  // The door stops waiting at the turn's deadline. A shim that went on waiting would hold every later
+  // message of that room behind a turn nobody will read.
+  it('[U:claude-sdk-deadline] a turn the SDK does not finish by the turn\'s own deadline is given up on: its process is stopped, the door is told, and the room\'s next turn runs on the same transcript', async () => {
+    const stuck: (() => void)[] = []
+    const stub = await start(async function* (text, o) {
+      yield init(o)
+      if (text.includes('never answered')) await new Promise<void>((resolve) => { stuck.push(resolve) })
+      else yield done(`heard: ${text.split('\n').at(-2)}`)
+    })
+    try {
+      link.send({ t: 'turn', env: envelope({ turnId: 'turn-1', text: 'never answered', tools: [], deadlineMs: 150 }) })
+      link.send({ t: 'turn', env: envelope({ turnId: 'turn-2', text: 'and then', tools: [], deadlineMs: 5000 }) })
+      await until(settled(2))
+      expect(got.filter((m) => m.t === 'error')).toEqual([{ t: 'error', turnId: 'turn-1', message: 'the turn was not finished by its deadline' }])
+      expect(got.filter((m) => m.t === 'reply')).toEqual([{ t: 'reply', turnId: 'turn-2', text: 'heard: and then', attachments: [] }])
+      expect(stub.closed).toEqual([0])
+      expect(stub.started.map((o) => o.resume)).toEqual([undefined, 'session-1'])
+    } finally {
+      for (const free of stuck) free()
+    }
+  })
+
+  it('[U:claude-sdk-deadline] a turn whose deadline passed while it waited behind another is not started: nothing of it is sent to the SDK', async () => {
+    const stuck: (() => void)[] = []
+    const stub = await start(async function* (text, o) {
+      yield init(o)
+      if (text.includes('never answered')) await new Promise<void>((resolve) => { stuck.push(resolve) })
+      else yield done(`heard: ${text.split('\n').at(-2)}`)
+    })
+    try {
+      link.send({ t: 'turn', env: envelope({ turnId: 'turn-1', text: 'never answered', tools: [], deadlineMs: 300 }) })
+      link.send({ t: 'turn', env: envelope({ turnId: 'turn-2', text: 'too late', tools: [], deadlineMs: 100 }) })
+      link.send({ t: 'turn', env: envelope({ turnId: 'turn-3', text: 'in time', tools: [], deadlineMs: 5000 }) })
+      await until(settled(3))
+      expect(got.filter((m) => m.t === 'error').map((m) => (m as { turnId?: string }).turnId)).toEqual(['turn-1', 'turn-2'])
+      expect(got.filter((m) => m.t === 'reply')).toEqual([{ t: 'reply', turnId: 'turn-3', text: 'heard: in time', attachments: [] }])
+      expect(stub.sent.some((sent) => sent.text.includes('too late'))).toBe(false)
+    } finally {
+      for (const free of stuck) free()
+    }
+  })
+
+  it('[U:claude-sdk-deadline] a turn that finishes in time is not cut short, and a deadline that is not a time at all is read as the door\'s default', async () => {
+    const stub = await start(async function* (text, o) {
+      yield init(o)
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      yield done(`heard: ${text.split('\n').at(-2)}`)
+    })
+    link.send({ t: 'turn', env: envelope({ turnId: 'turn-1', tools: [], deadlineMs: 2000 }) })
+    link.send({ t: 'turn', env: envelope({ turnId: 'turn-2', tools: [], deadlineMs: Number.NaN }) })
+    link.send({ t: 'turn', env: envelope({ turnId: 'turn-3', tools: [], deadlineMs: -1 }) })
+    await until(settled(3))
+    expect(got.filter((m) => m.t === 'error')).toEqual([])
+    expect(got.filter((m) => m.t === 'reply')).toHaveLength(3)
+    expect(stub.closed).toEqual([])
+  })
+
+  // Asked to pick up a transcript that is no longer there, the SDK ends the turn at once and never says it
+  // started. A shim that kept asking for that transcript would fail every later turn of the room.
+  it('[U:claude-sdk-shim] a transcript that cannot be picked up costs one turn, not the room: it is forgotten, and the next turn starts a new one', async () => {
+    let lost = false
+    const stub = await start(function* (text, o, session) {
+      if (lost && o.resume !== undefined) { yield { type: 'result', subtype: 'error_during_execution', is_error: true }; return 'end' }
+      yield init(o, { session_id: `session-of-${session}` })
+      yield done(`heard: ${text.split('\n').at(-2)}`)
+    })
+    const turn = (n: number, tools: string[]) => { link.send({ t: 'turn', env: envelope({ turnId: `turn-${n}`, tools }) }); return until(settled(n)) }
+    await turn(1, [])
+    lost = true
+    await turn(2, ['Bash']) // a changed tool list: the session is restarted on its transcript, which is gone
+    await turn(3, ['Bash'])
+    await turn(4, ['Bash'])
+    expect(stub.started.map((o) => o.resume)).toEqual([undefined, 'session-of-0', undefined])
+    expect(got.filter((m) => m.t === 'error')).toEqual([{ t: 'error', turnId: 'turn-2', message: 'the SDK ended the turn without saying it had started' }])
+    expect(got.filter((m) => m.t === 'reply').map((m) => (m as { turnId: string }).turnId)).toEqual(['turn-1', 'turn-3', 'turn-4'])
+    // An ordinary failed turn does not cost the room its thread.
+    lost = false
+  })
+
+  it('[U:claude-sdk-shim] a turn that fails after the session has started keeps the room\'s transcript for the next one', async () => {
+    let fail = false
+    const stub = await start(function* (text, o) {
+      yield init(o)
+      yield fail ? done('API Error: 500', { is_error: true }) : done(`heard: ${text.split('\n').at(-2)}`)
+    })
+    const turn = (n: number) => { link.send({ t: 'turn', env: envelope({ turnId: `turn-${n}`, tools: [] }) }); return until(settled(n)) }
+    await turn(1)
+    fail = true
+    await turn(2)
+    fail = false
+    await turn(3)
+    expect(stub.started.map((o) => o.resume)).toEqual([undefined, 'session-1'])
+    expect(got.filter((m) => m.t === 'reply').map((m) => (m as { turnId: string }).turnId)).toEqual(['turn-1', 'turn-3'])
+  })
+
   it('[U:claude-sdk-version] an SDK that is not the pinned version is sent nothing: no session is started for it', async () => {
     for (const version of ['0.3.326 (Claude Agent SDK), 2.1.326 (Claude Code)', '0.3.325 (Claude Agent SDK), 2.1.326 (Claude Code)', '']) {
       const stub = await start(echo, version)

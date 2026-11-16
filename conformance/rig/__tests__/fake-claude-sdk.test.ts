@@ -121,6 +121,17 @@ describe('the fake Claude Agent SDK', () => {
     expect(results(records)).toHaveLength(1)
   })
 
+  it('[U:fake-claude-sdk] like the real one in its minimal mode, it has a shell, a read and an edit and no more: asked to start with a write tool, it starts without one', async () => {
+    const options = await setup([{ match: 'CANARY-w', tool: { name: 'Write', args: { file_path: work('written'), content: 'x' } }, text: 'done' }])
+    let asked = 0
+    const records = await run(options(['Bash', 'Edit', 'Read', 'Write'], { canUseTool: async (_t, input) => { asked++; return { behavior: 'allow', updatedInput: input } } }), ['CANARY-w'])
+    expect(records.find((r) => r.subtype === 'init')).toMatchObject({ tools: ['Bash', 'Edit', 'Read'] })
+    expect(JSON.parse(model.requests[0].body).tools.map((t: { name: string }) => t.name)).toEqual(['Bash', 'Edit', 'Read'])
+    expect(asked).toBe(0)
+    expect(existsSync(work('written'))).toBe(false)
+    expect(model.requests.at(-1)!.body).toContain('No such tool available: Write')
+  })
+
   it('[U:fake-claude-sdk] a tool it has runs on a yes and not on a no, and with no one to ask it does not run', async () => {
     const script = [{ match: 'CANARY-t', tool: { name: 'Bash', args: { command: `touch ${work('touched')}` } }, text: 'done' }]
     const options = await setup(script)
@@ -157,7 +168,29 @@ describe('the fake Claude Agent SDK', () => {
     expect(model.requests.at(-1)!.body).not.toContain('CANARY-first')
     await run(options([], { continue: true }), ['CANARY-continued'])
     expect(model.requests.at(-1)!.body).toContain('CANARY-fresh')
-    await expect(run(options([], { resume: 'no-such-session' }), ['hello'])).rejects.toThrow('no such session')
+  })
+
+  it('[U:fake-claude-sdk] like the real one, asked to pick up a session it has no transcript of, it ends the turn in an error without ever saying it started', async () => {
+    const options = await setup([])
+    const records = await run(options([], { resume: 'no-such-session' }), ['hello'])
+    expect(records.filter((r) => r.type !== 'fake_claude_sdk')).toEqual([{ type: 'result', subtype: 'error_during_execution', is_error: true }])
+    expect(model.requests).toEqual([])
+  })
+
+  it('[U:fake-claude-sdk] like the real one, it writes a message into the transcript when it takes it, so a session stopped in the middle of a model call can be picked back up', async () => {
+    const entry: ScriptEntry = { match: 'CANARY-stuck', text: 'never', hang: true }
+    const options = await setup([entry])
+    const records: SdkMessage[] = []
+    async function* once(): AsyncGenerator<SdkUserMessage> { yield { type: 'user', message: { role: 'user', content: 'CANARY-stuck' }, parent_tool_use_id: null }; await new Promise(() => {}) }
+    const query = fakeClaudeSdk().query({ prompt: once(), options: options([]) })
+    void (async () => { try { for await (const record of query) records.push(record) } catch { /* stopped */ } })()
+    for (let i = 0; i < 200 && model.requests.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(model.requests).toHaveLength(1)
+    query.close()
+    const id = records.find((r) => r.subtype === 'init')!.session_id!
+    entry.hang = false
+    await run(options([], { resume: id }), ['and then'])
+    expect(model.requests.at(-1)!.body).toContain('CANARY-stuck')
   })
 
   it('[U:fake-claude-sdk] its shell sees the environment it was given and nothing of this process, and it sends its model calls through the proxy that environment names', async () => {

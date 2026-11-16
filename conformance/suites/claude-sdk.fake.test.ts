@@ -1,8 +1,8 @@
 // @vitest-environment node
 //
 // C: shim conformance for the Claude Agent SDK, at process level. The same
-// shared checks every harness is put through, then the four only this harness
-// needs (C4q, C7n, C11r, C11d). Here the harness is the fake SDK (so this runs
+// shared checks every harness is put through, then the six only this harness
+// needs (C4q, C4m, C1t, C7n, C11r, C11d). Here the harness is the fake SDK (so this runs
 // in CI); `npm run conformance -- claude-sdk` runs the same checks against
 // the real one.
 //
@@ -29,7 +29,10 @@ afterAll(() => {
 
 const harness = claudeSdkHarness(fakeClaudeSdk(), 'fake', watch)
 const byId = (results: CheckResult[]) => Object.fromEntries(results.map((r) => [r.id, r]))
-const run = (shim: string, ids?: string[]) => runChecks({ harness, shim }, ids, ALL_CHECKS)
+// The fake starts at once, so the one check that waits out a turn's deadline is given a shorter one here.
+// Everything else about it is the same as in the real runs.
+const FAST = ALL_CHECKS.map((check) => (check.lab?.turnDeadlineMs === undefined ? check : { ...check, lab: { ...check.lab, turnDeadlineMs: 1200 } }))
+const run = (shim: string, ids?: string[]) => runChecks({ harness, shim }, ids, FAST)
 
 describe('Claude Agent SDK shim, against the fake SDK', () => {
   it.each(ALL_CHECKS.map((c) => [c.id, c.title] as const))('[U:claude-sdk-shim] %s %s', async (id) => {
@@ -45,7 +48,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual([
       'asks-sometimes', 'chatty', 'claims-sealed', 'dials-out', 'hides-errors', 'ignores-verdicts', 'inherits-env', 'leaks-env',
-      'one-transcript', 'other-version', 'tools-always-on', 'unwatched',
+      'maps-a-tool-it-lacks', 'one-transcript', 'other-version', 'tools-always-on', 'unwatched', 'waits-forever',
     ])
     const ids = ALL_CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
@@ -77,10 +80,28 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('[U:claude-sdk-must-fail] an SDK that keeps its tools on whatever it is offered fails C7n for what ran and for what the model was offered', async () => {
     const [c7n] = await run('tools-always-on', ['C7n'])
-    for (const what of ['the shell ran', 'the write tool ran', 'the edit tool ran', 'the read tool ran', 'the model was offered tools: Bash, Edit, Read, Write']) {
+    // It has no write tool to run, in any mode the shim starts it in: making a file is the edit tool's job.
+    expect(c7n.detail).not.toContain('the write tool ran')
+    for (const what of ['the shell ran', 'the edit tool ran', 'the read tool ran', 'the model was offered tools: Bash, Edit, Read']) {
       expect(c7n.detail).toContain(what)
     }
   }, 30_000)
+
+  it('[U:claude-sdk-must-fail] a shim that maps a tool the SDK does not have gets no turn through once that tool is allowed, and C4m says so', async () => {
+    const [c4m] = await run('maps-a-tool-it-lacks', ['C4m'])
+    expect(c4m.pass).toBe(false)
+    expect(c4m.detail).toContain('the shell tool did not make the file')
+  }, 30_000)
+
+  it('[U:claude-sdk-must-fail] a shim that goes on waiting for a turn nobody will read leaves the room\'s next message unanswered, and C1t says so', async () => {
+    const [c1t] = await run('waits-forever', ['C1t'])
+    expect(c1t.pass).toBe(false)
+    expect(c1t.detail).toContain('the next turn never reached the model: the harness is still waiting on the one before')
+  }, 90_000)
+
+  it('[U:claude-sdk-options] every tool the shim has a class for is one the check drives: a tool added to the map with no call here is a tool nobody saw run', () => {
+    expect(Object.keys(harness.caps.toolMap).sort()).toEqual(['Bash', 'Edit', 'Read'])
+  })
 
   it('[U:claude-sdk-version] an SDK of another version is sent nothing: no turn reaches the model and no tool runs', async () => {
     const [c1, c4plus] = await run('other-version', ['C1', 'C4+'])

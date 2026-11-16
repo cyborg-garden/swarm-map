@@ -13,6 +13,7 @@ import { assertNoCredentials } from '../guards/preflight.ts'
 import { watchProxyEnv, type WatchProxy } from '../guards/watch-proxy.ts'
 import { CHECKS, type Check } from '../suites/checks.ts'
 import type { Cell, HarnessUnderTest, NativeToolCall } from '../suites/harness.ts'
+import type { ScriptEntry } from '../rig/scripted-model.ts'
 import type { Lab } from '../suites/lab.ts'
 
 type Outcome = string[]
@@ -49,7 +50,9 @@ async function plantFile(lab: Lab, name: string, file: string): Promise<string |
 
 /**
  * The checks only this harness needs. Each is about something the SDK does
- * that the other harnesses do not: it runs some calls without asking, it
+ * that the other harnesses do not: it runs some calls without asking, it has
+ * fewer tools in its minimal mode than outside it, it waits on a silent model
+ * for far longer than the door does, it
  * ships far more tools than the door has a class for, it can pick up "the
  * last conversation", and it keeps every session's files in one place.
  */
@@ -84,6 +87,69 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       }
       // What the file holds can only reach the model as the result of a tool that ran.
       want(p, secret === undefined || !lab.model.requests.some((r) => r.body.includes(secret)), 'a call the door said no to ran: what it read was sent to the model')
+      return p
+    },
+  },
+  {
+    id: 'C4m', title: 'every tool the shim has a class for is one the harness really has: allowed, each is offered and runs',
+    lab: { policy: { 'tools.allow': ['shell', 'file_read', 'file_write'] } },
+    async run(lab) {
+      const p: Outcome = []
+      const mapped = Object.keys(lab.harness.caps.toolMap).sort()
+      const [file, touched] = [lab.file('c4m.txt'), lab.file('c4m.touched')]
+      // Every class is allowed from the first turn, so the session starts with every mapped tool. A tool in the
+      // map that the harness does not have is found here, on the first turn: it cannot start with a tool it lacks.
+      const secret = await plantFile(lab, 'c4m', file)
+      want(p, secret !== undefined, 'the shell tool did not make the file, so nothing was checked')
+      // One call for each mapped tool. The read comes before the edit: the harness will not edit a file it has not read.
+      const drives: [string, NativeToolCall][] = [
+        ['Bash', lab.harness.shell.touch(touched)],
+        ['Read', { name: 'Read', args: { file_path: file } }],
+        ['Edit', { name: 'Edit', args: { file_path: file, old_string: 'second line', new_string: 'edited line' } }],
+      ]
+      const driven = drives.map(([name]) => name).sort()
+      want(p, mapped.join() === driven.join(), `the shim maps ${mapped.join(', ')} and this check drives ${driven.join(', ')}: a mapped tool nobody saw run`)
+      for (const [name, tool] of drives) {
+        const canary = lab.canary(`c4m-${name}`)
+        lab.script({ match: canary, tool, text: 'done' })
+        say(lab, `use ${canary}`)
+        await lab.door.idle()
+        want(p, lab.model.heard(canary), `${name}: the turn never reached the model`)
+      }
+      want(p, existsSync(touched), 'the shell tool did not run')
+      want(p, secret !== undefined && lab.model.requests.some((r) => r.body.includes(secret)), 'the read tool did not run: what the file holds never reached the model')
+      want(p, existsSync(file) && readFileSync(file, 'utf8').includes('edited line'), 'the edit tool did not run')
+      // What the model was offered is the map, no more and no less.
+      const offered = [...new Set(lab.model.requests.flatMap((r) => offeredTo(r.body)))].sort()
+      want(p, offered.join() === mapped.join(), `the model was offered ${offered.join(', ') || 'nothing'}, and the shim maps ${mapped.join(', ')}`)
+      want(p, lab.fake.ledger.length === 1 + drives.length, `expected ${1 + drives.length} posts, got ${lab.fake.ledger.length}`)
+      return p
+    },
+  },
+  {
+    id: 'C1t', title: 'a turn the model never answers is given up on at its deadline, and the room is answered again afterwards',
+    // Long enough for a session to start twice at process level. A cell is given longer (docker/rig-main.ts).
+    lab: { turnDeadlineMs: 6000 },
+    async run(lab) {
+      const p: Outcome = []
+      const [stuck, next] = [lab.canary('c1t-stuck'), lab.canary('c1t-next')]
+      // The model takes the call and says nothing. The harness would wait on it, and try again, for many minutes.
+      const silent: ScriptEntry = { match: stuck, text: 'at last', hang: true }
+      lab.script(silent)
+      say(lab, `wait for ${stuck}`)
+      await lab.door.idle()
+      want(p, lab.model.heard(stuck), 'the turn never reached the model, so nothing was checked')
+      want(p, lab.fake.ledger.length === 0, 'a turn the model never answered was answered')
+      const gaveUp = lab.receipts.all().filter((r) => r.event.kind === 'outbound' && r.verdict === 'drop').length
+      want(p, gaveUp === 1, `expected one receipt for the turn that was given up on, got ${gaveUp}`)
+      // From here the model answers. The next message of the same room must not be left waiting behind the first.
+      silent.hang = false
+      say(lab, `and now ${next}`)
+      await lab.door.idle()
+      want(p, lab.model.heard(next), 'the next turn never reached the model: the harness is still waiting on the one before')
+      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      // The room kept its thread: what was said in the turn that hung is in what the model is sent now.
+      want(p, lab.model.requests.some((r) => r.body.includes(next) && r.body.includes(stuck)), 'the room lost its thread when the turn was given up on')
       return p
     },
   },
@@ -221,6 +287,8 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
       case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(claudeSdkEnv(base)), ...watched } }
       case 'unwatched': return { ...base, rigEnv: {} }
       case 'claims-sealed': return { ...base, rigCaps: { sessionIsolation: 'sealed' } }
+      case 'waits-forever': return { ...base, rigTurnMs: 2 ** 31 - 1 }
+      case 'maps-a-tool-it-lacks': return { ...base, rigCaps: { toolMap: { ...CLAUDE_SDK_CAPS.toolMap, Write: 'file_write' } } }
       default: throw new Error(`the Claude Agent SDK harness has no shim variant '${variant}'`)
     }
   }
@@ -298,6 +366,19 @@ export function claudeSdkHarness(sdk: ClaudeSdk, build: 'real' | 'fake', watch?:
       'claims-sealed': {
         what: 'A shim that tells the door each session\'s files are kept apart',
         red: ['C11d'], green: allBut('C11d'),
+      },
+      // The pinned SDK has no `Write` in the mode the shim starts it in. A map that names it has the door offer
+      // it whenever writing files is allowed, and a session cannot start with a tool it lacks. Nothing unsafe
+      // happens: the agent just stops answering. No other check allows that class, so only this one sees it.
+      'maps-a-tool-it-lacks': {
+        what: 'A shim that tells the door it has a tool the SDK does not have in its minimal mode (a separate write tool)',
+        red: ['C4m'], green: allBut('C4m'),
+      },
+      // Nothing unsafe happens here either. The room just goes quiet: every later message waits behind a
+      // turn the door stopped waiting for.
+      'waits-forever': {
+        what: 'A shim that goes on waiting for a turn after the door has given up on it',
+        red: ['C1t'], green: allBut('C1t'),
       },
       'hides-errors': {
         what: 'An SDK that marks a turn that ended in an error as one that did not, so the error text is taken for a reply',

@@ -52,6 +52,6 @@ describe('the shared shim suite names no harness', () => {
     // placeholder and its route from, for the credential guard. The other is what a reader of its matrix has to be told.
     const third = claudeSdkHarness(fakeClaudeSdk(), 'fake')
     expect(Object.keys(third).sort()).toEqual(['broken', 'build', 'caps', 'caveats', 'cellEnv', 'modelShape', 'namedEnv', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
-    for (const v of Object.values(brokenVariants(third))) for (const id of v.red) expect([...ids, 'C4q', 'C7n', 'C11r', 'C11d']).toContain(id)
+    for (const v of Object.values(brokenVariants(third))) for (const id of v.red) expect([...ids, 'C4q', 'C4m', 'C1t', 'C7n', 'C11r', 'C11d']).toContain(id)
   })
 })

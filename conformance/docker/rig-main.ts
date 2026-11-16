@@ -27,9 +27,11 @@ const cells: Record<string, { local: HarnessUnderTest; own: Check[]; slow: boole
   'letta-code': { local: lettaCodeHarness(['/usr/local/bin/letta'], 'real'), own: LETTA_CODE_CHECKS, slow: true },
   'claude-sdk': { local: claudeSdkHarness(NOT_HERE, 'real'), own: CLAUDE_SDK_CHECKS, slow: true },
 }
-const { local, own, slow } = cells[process.env.SMLAB_HARNESS ?? 'pi'] ?? cells.pi
+const { local, own: asWritten, slow } = cells[process.env.SMLAB_HARNESS ?? 'pi'] ?? cells.pi
 // A harness that takes seconds to start needs longer than the lab's default before a turn is given up on.
 const base = slow ? { turnDeadlineMs: 60_000 } : {}
+// The same goes for a check that sets a deadline of its own, to wait one out: in such a cell it is five times as long.
+const own = asWritten.map((check) => (slow && check.lab?.turnDeadlineMs !== undefined ? { ...check, lab: { ...check.lab, turnDeadlineMs: check.lab.turnDeadlineMs * 5 } } : check))
 const harness: HarnessUnderTest = {
   ...local,
   cellEnv: () => ({}),

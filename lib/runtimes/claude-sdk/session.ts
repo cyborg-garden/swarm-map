@@ -8,8 +8,9 @@
 //   so many words (`is_error: false`), that the turn finished without error. The SDK writes a failed model call into the
 //   same field, under the same subtype (`success`), with `is_error` set. That
 //   text is the SDK's, not the model's, and is never passed on.
-// - The session says which tools it has in its `init` record. If that is not
-//   exactly what it was started with, the session is stopped.
+// - The session says which tools it has in its `init` record, at the start
+//   of every turn. If that is not exactly what it was started with, the
+//   session is stopped. A turn that ends with no such record gives no reply.
 // - The SDK asks before a tool through a callback (`canUseTool`), and waits
 //   for as long as it takes. So the veto's timeout is here: whoever is asked
 //   gets `vetoTimeoutMs`, and after that the answer is no. Only the exact
@@ -40,6 +41,15 @@ export interface ClaudeSessionOptions {
 }
 
 export const DENIED = 'swarm gate: not allowed'
+
+/**
+ * The SDK ended a turn without ever saying it had started. It does that when it is asked to
+ * pick up a transcript it cannot find. Nothing it says in such a turn is a reply: which
+ * version it is and which tools it has were never checked.
+ */
+export class NeverStarted extends Error {
+  constructor() { super('the SDK ended the turn without saying it had started') }
+}
 
 const sameTools = (a: string[], b: string[]): boolean => {
   const [x, y] = [[...new Set(a)].sort(), [...new Set(b)].sort()]
@@ -107,7 +117,9 @@ export function createClaudeSession(sdk: ClaudeSdk, options: Omit<SdkOptions, 'c
           const turn = current
           current = undefined
           clearTimeout(turn.timer)
-          if (record.subtype === 'success' && record.is_error === false && typeof record.result === 'string') turn.resolve({ text: record.result })
+          // The `init` record comes with every turn, before anything else of it. A turn that ends without one was never checked.
+          if (!turn.started) turn.reject(new NeverStarted())
+          else if (record.subtype === 'success' && record.is_error === false && typeof record.result === 'string') turn.resolve({ text: record.result })
           else turn.reject(new Error('the SDK ended the turn with an error'))
         }
       }

@@ -6,8 +6,9 @@
 // picked back up, and model calls in the Anthropic Messages format, streamed.
 //
 // It behaves like the real one where the checks would notice a difference:
-// - It has exactly the tools it was started with. A call to any other tool
-//   fails as "no such tool" and nobody is asked.
+// - It has the tools it was started with, of the three its minimal mode has
+//   (a shell, a read, an edit). A call to any other tool fails as "no such
+//   tool" and nobody is asked.
 // - It does NOT ask before every call. A read inside its work folder and a
 //   shell command it takes to be harmless (`ls`, `cat`) run unasked, unless
 //   the settings it was given name the tool under `permissions.ask`.
@@ -39,8 +40,13 @@ const MIMICS = { sdk: '0.3.325', code: '2.1.325' }
 // without them. A shim that stops setting them turns every check red.
 const OFFLINE = ['DISABLE_AUTOUPDATER', 'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC']
 
-/** The built-in tools the real one starts with when it is not told which. Only the first four do anything here. */
-const PRESET = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Agent', 'NotebookEdit']
+/**
+ * The built-in tools the real one has in its minimal mode, which is the only mode this fake has.
+ * It is every one of them: asked to start with any other (a separate write tool, a web tool, a
+ * sub-agent), the real one starts without it and says so in its `init` record. Its edit tool
+ * makes a file that is not there yet.
+ */
+const MINIMAL = ['Bash', 'Edit', 'Read']
 
 interface Block { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown>; tool_use_id?: string; content?: string; is_error?: boolean }
 interface Kept { messages: { role: string; content: Block[] }[] }
@@ -94,12 +100,12 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
   const fileOf = (id: string): string => path.join(store, `${id}.json`)
   const last = (): string | undefined => readdirSync(store).filter((f) => f.endsWith('.json'))
     .map((f) => ({ id: f.slice(0, -'.json'.length), at: statSync(path.join(store, f)).mtimeMs })).sort((a, b) => b.at - a.at)[0]?.id
-  if (options.resume !== undefined && !existsSync(fileOf(options.resume))) throw new Error('fake claude sdk: no such session')
+  const lost = options.resume !== undefined && !existsSync(fileOf(options.resume))
   const sessionId = options.resume ?? (options.continue ? last() : undefined) ?? randomUUID()
   const kept: Kept = existsSync(fileOf(sessionId)) ? JSON.parse(readFileSync(fileOf(sessionId), 'utf8')) : { messages: [] }
   const messages = kept.messages
 
-  const tools = Array.isArray(options.tools) ? options.tools : PRESET
+  const tools = MINIMAL.filter((name) => !Array.isArray(options.tools) || options.tools.includes(name))
 
   // --- tools --------------------------------------------------------------------
   function runTool(name: string, input: Record<string, unknown>): { text: string; isError: boolean } {
@@ -121,7 +127,6 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
       }
       const file = path.resolve(options.cwd, String(input.file_path ?? ''))
       if (name === 'Read') return ok(readFileSync(file, 'utf8'))
-      if (name === 'Write') { writeFileSync(file, String(input.content ?? '')); return ok() }
       if (name === 'Edit') { writeFileSync(file, readFileSync(file, 'utf8').replace(String(input.old_string ?? ''), String(input.new_string ?? ''))); return ok() }
     } catch (err) {
       return no((err as Error).message)
@@ -162,8 +167,12 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
 
   for await (const user of prompt) {
     if (closed()) return
+    // Like the real one: asked to pick up a session it has no transcript of, it ends the turn at once, and never says it started.
+    if (lost) { yield { type: 'result', subtype: 'error_during_execution', is_error: true }; return }
     yield { type: 'system', subtype: 'init', session_id: sessionId, tools, claude_code_version: MIMICS.code }
     messages.push({ role: 'user', content: [{ type: 'text', text: user.message.content }] })
+    // Like the real one: the message is in the transcript before the model is called.
+    save()
     let text = ''
     let failed: string | undefined
     for (let round = 0; round < 8 && failed === undefined; round++) {
