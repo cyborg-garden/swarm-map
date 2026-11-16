@@ -104,8 +104,6 @@ swarm-map/
 │   ├── (dashboard)/          # Main app pages
 │   │   ├── harnesses/        # Fleet list + per-harness detail (tabbed)
 │   │   ├── keys/             # API key management (discovered + manual)
-│   │   ├── tools/            # Tool registry (discovered from agent configs)
-│   │   ├── memory/           # Memory scope browser
 │   │   ├── audit/            # Append-only audit log
 │   │   └── settings/         # App settings
 │   ├── (setup)/              # Onboarding / wizard
@@ -124,7 +122,7 @@ swarm-map/
 │   │   └── __tests__/        # Vitest tests
 │   ├── hooks/                # React hooks (useApi)
 │   ├── types.ts              # Shared TypeScript types
-│   ├── constants.ts          # Tier colors, risk levels, sidebar items
+│   ├── constants.ts          # Tier colors, risk levels
 │   └── seed.ts               # Dev seed data script
 ├── components/
 │   ├── shared/               # TierBadge, StatusDot, RiskBar, SplitButton, etc.

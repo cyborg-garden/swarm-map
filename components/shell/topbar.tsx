@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon, Search } from 'lucide-react'
+import { Sun, Moon } from 'lucide-react'
 
 export function Topbar() {
   const { theme, setTheme } = useTheme()
@@ -11,11 +11,7 @@ export function Topbar() {
   useEffect(() => { setMounted(true) }, [])
 
   return (
-    <header className="flex items-center justify-between h-14 px-4 md:px-6 border-b border-[var(--border)] bg-[var(--surface)]">
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Search className="h-4 w-4" />
-        <span className="opacity-60">Search... Cmd+K</span>
-      </div>
+    <header className="flex items-center justify-end h-14 px-4 md:px-6 border-b border-[var(--border)] bg-[var(--surface)]">
       <div className="flex items-center gap-2">
         <Button
           variant="ghost"

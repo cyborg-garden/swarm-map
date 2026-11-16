@@ -1,11 +1,13 @@
 'use client'
 
+import { useState } from 'react'
 import { useApi } from '@/lib/hooks/use-api'
 import { StatusDot } from '@/components/shared/status-dot'
 import { TierBadge } from '@/components/shared/tier-badge'
 import { DbHealthBadge, type DbIntegritySummary, type DbWriteFailureSummary } from '@/components/shared/db-health-badge'
 import { DriftChip, DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
 import { RetiredRows } from '@/components/fleet/retired-rows'
+import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import type { Harness } from '@/lib/types'
 import Link from 'next/link'
@@ -15,6 +17,35 @@ import { toast } from 'sonner'
 type FleetDrift = {
   checkedAt: number
   agents: DriftSummary[]
+}
+
+// Stop and restart cut off whatever an agent is doing, so each is asked about
+// before it runs.
+type PendingAction =
+  | { kind: 'restart' | 'stop'; id: string; name: string }
+  | { kind: 'restart-all'; count: number }
+
+function confirmCopy(action: PendingAction): { title: string; description: string; confirmLabel: string } {
+  if (action.kind === 'restart-all') {
+    const agents = `${action.count} running agent${action.count === 1 ? '' : 's'}`
+    return {
+      title: `Restart ${agents}?`,
+      description: 'Each one drops the conversation it is in the middle of and is unavailable until it comes back up.',
+      confirmLabel: 'Restart all',
+    }
+  }
+  if (action.kind === 'stop') {
+    return {
+      title: `Stop ${action.name}?`,
+      description: 'It drops the conversation it is in the middle of and stays offline until you start it again.',
+      confirmLabel: 'Stop',
+    }
+  }
+  return {
+    title: `Restart ${action.name}?`,
+    description: 'It drops the conversation it is in the middle of and is unavailable until it comes back up.',
+    confirmLabel: 'Restart',
+  }
 }
 
 type FleetDbHealth = {
@@ -40,6 +71,16 @@ export default function HarnessesPage() {
   const driftById = new Map((drift?.agents ?? []).map((a) => [a.harnessId, a]))
 
   const running = harnesses?.filter((h) => h.status === 'running') ?? []
+  const [pending, setPending] = useState<PendingAction | null>(null)
+
+  function runPending() {
+    const action = pending
+    setPending(null)
+    if (!action) return
+    if (action.kind === 'restart-all') restartAll()
+    else if (action.kind === 'stop') stopOne(action.id)
+    else restartOne(action.id)
+  }
 
   async function restartAll() {
     try {
@@ -176,7 +217,7 @@ export default function HarnessesPage() {
             Import
           </Button>
           {running.length > 0 && (
-            <Button variant="outline" size="sm" onClick={restartAll}>
+            <Button variant="outline" size="sm" onClick={() => setPending({ kind: 'restart-all', count: running.length })}>
               Restart all running ({running.length})
             </Button>
           )}
@@ -230,10 +271,10 @@ export default function HarnessesPage() {
                   <td className="px-4 py-3 text-right">{h.invocations ?? '—'}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="xs" onClick={() => restartOne(h.id)} disabled={h.status === 'restarting'}>
+                      <Button variant="ghost" size="xs" onClick={() => setPending({ kind: 'restart', id: h.id, name: h.name ?? h.id })} disabled={h.status === 'restarting'}>
                         {h.status === 'restarting' ? 'Rebuilding...' : 'Restart'}
                       </Button>
-                      <Button variant="ghost" size="xs" onClick={() => stopOne(h.id)}>
+                      <Button variant="ghost" size="xs" onClick={() => setPending({ kind: 'stop', id: h.id, name: h.name ?? h.id })}>
                         Stop
                       </Button>
                       <Button variant="ghost" size="xs" onClick={() => duplicateOne(h.id, h.name)} title="Duplicate">
@@ -252,6 +293,13 @@ export default function HarnessesPage() {
       )}
 
       <RetiredRows />
+
+      <ConfirmDialog
+        open={pending !== null}
+        {...(pending ? confirmCopy(pending) : { title: '', description: '', confirmLabel: '' })}
+        onConfirm={runPending}
+        onCancel={() => setPending(null)}
+      />
     </div>
   )
 }

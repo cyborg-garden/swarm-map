@@ -16,6 +16,8 @@ type SurfaceSettings = {
 }
 
 type Settings = {
+  // No control edits this: the stored choice does not change who can DM the
+  // agent. It stays in the type so a save round-trips the value unchanged.
   dmPolicy: 'approved-only' | 'allow-all'
   groupInvitePolicy: 'approved-only' | 'allow-all'
   mentionGating: boolean
@@ -56,13 +58,6 @@ useEffect(() => {
       })
       .catch(() => setLoading(false))
   }, [harnessId])
-
-function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
-    if (!settings) return
-    setSettings({ ...settings, dmPolicy: policy })
-    setDirty(true)
-    setSaved(false)
-  }
 
   function updateGroupInvitePolicy(policy: 'approved-only' | 'allow-all') {
     if (!settings) return
@@ -216,38 +211,17 @@ if (loading) {
 
   return (
     <div className="space-y-6">
-      {/* DM Policy */}
-      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3">
+      {/* Who can DM: an explanation, not a setting. The stored DM policy is
+          not read by anything, so it has no control here. */}
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-2">
         <div className="flex items-center gap-2">
           <Shield className="h-4 w-4 text-muted-foreground" />
-          <h3 className="font-medium text-sm">DM Access Policy</h3>
-        </div>
-        <div className="flex gap-3">
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="dmPolicy"
-              checked={settings.dmPolicy === 'approved-only'}
-              onChange={() => updateDmPolicy('approved-only')}
-              className="accent-[var(--accent)]"
-            />
-            Approved users only
-          </label>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input
-              type="radio"
-              name="dmPolicy"
-              checked={settings.dmPolicy === 'allow-all'}
-              onChange={() => updateDmPolicy('allow-all')}
-              className="accent-[var(--accent)]"
-            />
-            Allow all
-          </label>
+          <h3 className="font-medium text-sm">Who can DM this agent</h3>
         </div>
         <p className="text-xs text-muted-foreground">
-          This choice is saved but does not change who can DM the agent. On Discord, DMs are
-          limited to the DM list (DISCORD_DM_ALLOWED_USERS), and those users must also pass the
-          allowlist. On other surfaces, users on the allowlist can DM it.
+          There is no separate DM switch. On Discord, DMs are limited to the DM list
+          (DISCORD_DM_ALLOWED_USERS), and those users must also pass the allowlist. On other
+          surfaces, users on the allowlist can DM it.
         </p>
       </div>
 

@@ -32,6 +32,8 @@ import { TagInput } from '@/components/ui/tag-input'
 import { Switch } from '@/components/ui/switch'
 import { TIER_LABELS } from '@/lib/constants'
 import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
+import { BUDGET_HINT, BUDGET_LABEL } from '@/lib/budget-copy'
+import { failedRestarts, requestRestart, restartFailureMessage } from '@/lib/restart-outcome'
 
 type PairingUser = {
   userId: string
@@ -160,8 +162,6 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
   const [tierOverride, setTierOverride] = useState<HabitatTier | null>(null)
 
   // Model edit state
-  const [modelProvider, setModelProvider] = useState('')
-  const [modelName, setModelName] = useState('')
   const [modelSaving, setModelSaving] = useState(false)
   // Bumped after a 409 so the editor remounts on the freshly fetched rows.
   const [cascadeEditorGen, setCascadeEditorGen] = useState(0)
@@ -263,14 +263,19 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
       setNewKeyEnvVar('')
       // Recreate (not 'quick') so the new env_file value actually loads — a plain
       // restart keeps the old creation-time env. (POST /api/keys also recreates
-      // server-side; this is the belt-and-suspenders client trigger.)
-      await fetch(`/api/harnesses/${id}/restart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'recreate' }),
-      })
-      toast.success('Restarting agent to apply key...')
+      // server-side; this is the belt-and-suspenders client trigger, and the
+      // retry when the server's own recreate failed.)
+      const restart = await requestRestart(id, 'recreate')
       refetch()
+      // The Keys tab lists from /api/keys, a separate fetch from the agent's.
+      refetchKeys()
+      if (!restart.ok) {
+        // Stay on the page: a reload would drop the only notice that the key
+        // is saved but not yet loaded.
+        toast.error(`Key saved, but the restart failed: ${restart.error}. Restart the agent to apply it.`)
+        return
+      }
+      toast.success('Restarting agent to apply key...')
       window.location.reload()
     } catch {
       toast.error('Failed to add key')
@@ -307,13 +312,15 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
       // Recreate (not 'quick') so the newly-assigned env_file value actually
       // loads — a plain restart keeps the old creation-time env, so the key
       // would appear assigned but never reach the running process (D3).
-      await fetch(`/api/harnesses/${id}/restart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'recreate' }),
-      })
-      toast.success('Restarting agent to apply key...')
+      const restart = await requestRestart(id, 'recreate')
       refetch()
+      // The Keys tab lists from /api/keys, a separate fetch from the agent's.
+      refetchKeys()
+      if (!restart.ok) {
+        toast.error(`Key assigned, but the restart failed: ${restart.error}. Restart the agent to apply it.`)
+        return
+      }
+      toast.success('Restarting agent to apply key...')
       window.location.reload()
     } catch {
       toast.error('Failed to assign key')
@@ -348,13 +355,6 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
         [platform]: { ...surfaceSettings.surfaces[platform], [field]: value },
       },
     })
-    setSettingsDirty(true)
-    setSettingsSaved(false)
-  }
-
-  function updateDmPolicy(policy: 'approved-only' | 'allow-all') {
-    if (!surfaceSettings) return
-    setSurfaceSettings({ ...surfaceSettings, dmPolicy: policy })
     setSettingsDirty(true)
     setSettingsSaved(false)
   }
@@ -581,43 +581,6 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
       router.push('/harnesses')
     } catch {
       toast.error('Remove failed')
-    }
-  }
-
-  async function saveModelConfig() {
-    const provider = modelProvider || modelConfig?.provider || ''
-    const model = modelName || modelConfig?.primary || ''
-    if (!provider || !model) {
-      toast.error('Provider and model are required')
-      return
-    }
-    setModelSaving(true)
-    try {
-      const res = await fetch(`/api/harnesses/${id}/models`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, model }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        toast.error(err.error ?? 'Failed to save model config')
-        return
-      }
-      toast.success('Model config saved')
-      setModelProvider('')
-      setModelName('')
-      refetchModels()
-      // Auto-restart to pick up model changes
-      await fetch(`/api/harnesses/${id}/restart`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'quick' }),
-      })
-      toast.success('Restarting agent to apply model changes...')
-    } catch {
-      toast.error('Failed to save model config')
-    } finally {
-      setModelSaving(false)
     }
   }
 
@@ -939,12 +902,15 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
                 toast.success('Model cascade saved')
                 refetchModels()
                 // Auto-restart to pick up cascade changes
-                await fetch(`/api/harnesses/${id}/restart`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ mode: 'quick' }),
-                })
-                toast.success('Restarting agent to apply model changes...')
+                const restart = await requestRestart(id, 'quick')
+                if (restart.ok && restart.alreadyRestarting) {
+                  // That restart may have begun before this save was written.
+                  toast.warning('Model cascade saved. A restart was already under way and may have started before this change. Restart again if the new models are not in use.')
+                } else if (restart.ok) {
+                  toast.success('Restarting agent to apply model changes...')
+                } else {
+                  toast.error(`Model cascade saved, but the restart failed: ${restart.error}. Restart the agent to apply it.`)
+                }
               } catch { toast.error('Failed to save') }
               finally { setModelSaving(false) }
             }}
@@ -1286,7 +1252,6 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
                   <th className="text-left px-4 py-3">Source</th>
                   <th className="text-left px-4 py-3">Risk</th>
                   <th className="text-left px-4 py-3">Tiers</th>
-                  <th className="text-left px-4 py-3">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -1317,14 +1282,11 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
                           ))}
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className="text-[var(--success)]">✓</span>
-                      </td>
                     </tr>
                   )
                 })}
                 {allTools.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-6 text-center text-muted-foreground text-sm">No tools discovered.</td></tr>
+                  <tr><td colSpan={5} className="px-4 py-6 text-center text-muted-foreground text-sm">No tools discovered.</td></tr>
                 )}
               </tbody>
             </table>
@@ -1373,7 +1335,7 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
                     </select>
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground">Budget ($/mo)</label>
+                    <label className="text-xs text-muted-foreground" title={BUDGET_HINT}>{BUDGET_LABEL}</label>
                     <input
                       type="number"
                       value={newKeyBudget}
@@ -1598,7 +1560,10 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
         body: JSON.stringify(payload),
       })
       if (!res.ok) throw new Error('Failed')
-      toast.success(newValue ? 'Key rotated across all harnesses' : 'Key updated')
+      const rotated = 'value' in payload
+      const restartWarning = restartFailureMessage(rotated ? 'Key rotated' : 'Key updated', failedRestarts(await res.json().catch(() => null)))
+      if (restartWarning) toast.error(restartWarning)
+      else toast.success(rotated ? 'Key rotated across all harnesses' : 'Key updated')
       setEditing(false)
       setNewValue('')
       onUpdate()
@@ -1619,7 +1584,9 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
       // Never say "removed" for the non-destructive path — name the scope so the
       // operator knows the key survived (issue #191).
       const remaining = newAssigned.length
-      toast.success(
+      const restartWarning = restartFailureMessage('Key unassigned', failedRestarts(await res.json().catch(() => null)), () => harnessName)
+      if (restartWarning) toast.error(restartWarning)
+      else toast.success(
         `${keyData.provider} key unassigned from ${harnessName}` +
         (remaining > 0
           ? ` — still assigned to ${remaining} other agent${remaining === 1 ? '' : 's'}`
@@ -1636,7 +1603,11 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
     try {
       const res = await fetch(`/api/keys/${keyData.id}`, { method: 'DELETE' })
       if (!res.ok) throw new Error('Failed')
-      toast.success(`${keyData.provider} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
+      // A failed restart leaves the old value loaded in a running agent, so
+      // "deleted everywhere" would be untrue.
+      const restartWarning = restartFailureMessage('Key deleted', failedRestarts(await res.json().catch(() => null)), (h) => (h === harnessId ? harnessName : h))
+      if (restartWarning) toast.error(restartWarning)
+      else toast.success(`${keyData.provider} key deleted everywhere — secret destroyed, stripped from ${affected} agent${affected === 1 ? '' : 's'}`)
       onUpdate()
     } catch { toast.error('Failed to delete key') }
     finally { setSaving(false); setConfirmDelete(false) }
@@ -1673,7 +1644,7 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
             />
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-xs text-muted-foreground w-20" title="Informational only — not enforced">Budget (not enforced):</label>
+            <label className="text-xs text-muted-foreground w-20" title={BUDGET_HINT}>{BUDGET_LABEL}:</label>
             <input
               type="number"
               value={budget}
@@ -1706,7 +1677,7 @@ function HarnessKeyRow({ keyData, harnessId, harnessName, onUpdate }: { keyData:
       </div>
       <div className="flex items-center gap-2">
         {keyData.budgetUsd != null && (
-          <span className="text-xs text-muted-foreground">${keyData.budgetUsd}/mo</span>
+          <span className="text-xs text-muted-foreground" title={BUDGET_HINT}>${keyData.budgetUsd}/mo budget (not enforced)</span>
         )}
         <Button size="xs" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
         {/* Unassign (safe, per-agent) and Delete (destructive, global) must be
