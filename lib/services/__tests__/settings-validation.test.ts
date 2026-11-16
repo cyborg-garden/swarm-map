@@ -5,7 +5,11 @@
 // and then flowed into filesystem scans and (pre-F1..F5) shell sinks. The patch
 // must be validated against an explicit allowlist before it touches storage.
 import { describe, it, expect } from 'vitest'
-import { validateSettingsPatch } from '../config'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
+import { ConfigService, validateSettingsPatch } from '../config'
+import { Storage } from '../storage'
 
 describe('validateSettingsPatch (P3/F6)', () => {
   it('rejects an unknown key', () => {
@@ -26,6 +30,22 @@ describe('validateSettingsPatch (P3/F6)', () => {
 
   it('rejects a newline inside a composeFiles entry', () => {
     expect(() => validateSettingsPatch({ composeFiles: ['/a.yml', 'b.yml\nrm -rf'] })).toThrow(/newline/i)
+  })
+
+  // Three states: forced on, forced off, and automatic (decided from the
+  // Docker engine). null is how a client goes back to automatic.
+  it('useStateVolume: accepts true and false, and null clears it to automatic', () => {
+    expect(validateSettingsPatch({ useStateVolume: true })).toEqual({ useStateVolume: true })
+    expect(validateSettingsPatch({ useStateVolume: false })).toEqual({ useStateVolume: false })
+    const cleared = validateSettingsPatch({ useStateVolume: null })
+    expect('useStateVolume' in cleared).toBe(true)
+    expect(cleared.useStateVolume).toBeUndefined()
+  })
+
+  it('useStateVolume: rejects anything else', () => {
+    for (const bad of ['true', 'auto', 1, 0, [], {}]) {
+      expect(() => validateSettingsPatch({ useStateVolume: bad })).toThrow(/useStateVolume/)
+    }
   })
 
   it('accepts apiBindHost beside the other bind hosts', () => {
@@ -115,5 +135,24 @@ describe('validateSettingsPatch — discordApproverRoles', () => {
     expect(() => validateSettingsPatch({ discordApproverRoles: ['123'] })).toThrow()
     expect(() => validateSettingsPatch({ discordApproverRoles: ["1533670688001495051'\nx: y"] })).toThrow()
     expect(() => validateSettingsPatch({ discordApproverRoles: ['1533670688001495051,1'] })).toThrow()
+  })
+})
+
+describe('ConfigService: useStateVolume is automatic unless set', () => {
+  it('a fresh install has no value, and null removes a stored one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'settings-state-volume-'))
+    try {
+      const config = new ConfigService(new Storage(dir))
+      // No default: a default would force the layout one way on every install
+      // and the Docker engine would never be asked.
+      expect(config.getSettings().useStateVolume).toBeUndefined()
+      expect(config.updateSettings({ useStateVolume: false }).useStateVolume).toBe(false)
+      expect(config.getSettings().useStateVolume).toBe(false)
+      config.updateSettings({ useStateVolume: null } as never)
+      expect(config.getSettings().useStateVolume).toBeUndefined()
+      expect('useStateVolume' in config.getSettings()).toBe(false)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

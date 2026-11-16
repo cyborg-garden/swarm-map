@@ -20,6 +20,7 @@ import {
   type ThreadGateSource,
 } from '@/lib/services/discord-thread-gate'
 import { adapterForRuntime } from '@/lib/services/harness'
+import { resolveUseStateVolume } from '@/lib/services/state-volume'
 import { isDeployBornCompose, validateExtraMounts, validateExtraEnv, validateExtraAptPackages } from '@/lib/services/harness-compose'
 import {
   applySharedVpnToCompose,
@@ -1204,6 +1205,17 @@ export async function PUT(
         apiBindHost: settings.apiBindHost,
         memory: effectiveResources?.memory,
         cpus: effectiveResources?.cpus,
+        // An agent whose databases are already on the named volume keeps the
+        // layout whatever the setting says: without the /state mount its DB
+        // symlinks would point at nothing. The file being replaced mounting
+        // the volume counts too. Otherwise the settings override, else the
+        // Docker engine decides (lib/services/state-volume.ts).
+        useStateVolume: resolveUseStateVolume({
+          setting: settings.useStateVolume,
+          dataDir,
+          existingCompose,
+          hostInfo: () => services.docker.hostInfo(),
+        }).use,
         // Carried through every regeneration. Dropping these here is exactly
         // the bug extraMounts exists to prevent: the container comes back
         // healthy with a capability silently missing.
