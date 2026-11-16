@@ -5,6 +5,45 @@ Moves a harness's SQLite files (`state.db`, `response_store.db`, `kanban.db`, wi
 vector — onto a named Docker volume (`hermes-state-<name>`, native ext4 inside the
 VM), leaving symlinks at the old `/opt/data` paths so the agent needs no changes.
 
+## When a new compose file gets this layout
+
+Swarm Map decides per agent each time it generates a compose file (new agent,
+duplicate, import, deploy, or a regeneration after a VPN or resource-limit
+change). The rule is in `lib/services/state-volume.ts`:
+
+1. **An agent whose databases are already on the volume keeps the layout.** Its
+   data dir holds symlinks into `/state`; a compose file without the `/state`
+   mount would leave them pointing at nothing. The same applies when the data
+   dir cannot be read, and on a regeneration when the compose file being
+   replaced already mounts the volume and the data dir holds no regular
+   `state.db` (a `state-init` run that was interrupted). This holds whatever
+   the setting below says. To take such an agent off the volume, do the
+   Rollback below first. An agent whose data dir holds a regular `state.db`
+   and no symlinks is not on the volume, whatever its old compose file mounts.
+2. Otherwise **`useStateVolume` in settings** decides, when it is set:
+   `PUT /api/settings` with `{"useStateVolume": true}` or `false`. Send `null` to
+   go back to automatic.
+3. Otherwise it is **automatic**, from the Docker engine (`docker info`):
+   - **on** when the engine runs in a VM, so the bind mount crosses a
+     file-sharing layer: any engine on macOS or Windows, and Docker Desktop,
+     OrbStack, Rancher Desktop or WSL seen from a Linux process;
+   - **on** when the engine cannot be identified: it does not answer, the
+     `docker` CLI points at another machine, Swarm Map itself runs in a
+     container, or the docker context name or socket path contains `colima`,
+     `lima`, `rancher` or `podman` as a whole word (`lima-default`,
+     `rancher-desktop`, `~/.colima/default/docker.sock`; not `lima01`). The
+     machine's hostname is not looked at. `{"useStateVolume": false}` overrides
+     this rule like any other automatic result;
+   - **off** on native Linux, where a bind mount is an ordinary local directory
+     and the layout is unnecessary (#273).
+
+   Docker installed inside WSL and a Podman `docker` shim on native Linux both
+   count as "cannot be identified", so they get the layout. If the host is known
+   to need none, turn it off with `{"useStateVolume": false}`.
+
+An agent with plain database files that is regenerated with the layout on is
+migrated by `state-init` at its next start, the same way the route below does it.
+
 ## Migrate one harness
 
 ```
@@ -95,6 +134,7 @@ discarding committed transactions — that's your signal this assumption broke.
    ```
    docker run --rm -v hermes-state-<name>:/state -v <DATA_DIR>:/opt/data \
      <agent-image> sh -c 'for db in state.db response_store.db kanban.db; do
+       [ -L /opt/data/$db ] && rm -f /opt/data/$db
        [ -f /state/$db ] || continue
        for suf in "" -wal -shm; do rm -f /opt/data/$db$suf; done
        for suf in "" -wal -shm; do [ -f /state/$db$suf ] && cp -p /state/$db$suf /opt/data/$db$suf; done
@@ -102,7 +142,10 @@ discarding committed transactions — that's your signal this assumption broke.
    ```
 3. Remove the migration wiring from the compose file (the `state-init-<name>`
    service, its `depends_on` entry, the `- hermes-state-<name>:/state` mount, and
-   the top-level `volumes:` block).
+   the top-level `volumes:` block). If the layout would be automatic-on for this
+   host (see "When a new compose file gets this layout"), also set
+   `useStateVolume` to `false`, or the next regeneration of this agent's compose
+   file migrates it again.
 4. `docker compose up -d --force-recreate`, then delete the volume once satisfied:
    `docker volume rm hermes-state-<name>`.
 

@@ -15,6 +15,8 @@ import os from 'os'
 const holder = vi.hoisted(() => ({
   harness: undefined as Record<string, unknown> | undefined,
   dataDir: '',
+  settings: {} as Record<string, unknown>,
+  hostInfo: null as Record<string, string> | null,
 }))
 
 vi.mock('@/lib/services', () => ({
@@ -24,9 +26,9 @@ vi.mock('@/lib/services', () => ({
       get: vi.fn(() => holder.harness),
       updateConfig: vi.fn(),
     },
-    config: { getSettings: vi.fn(() => ({ dataDir: holder.dataDir })) },
+    config: { getSettings: vi.fn(() => ({ ...holder.settings, dataDir: holder.dataDir })) },
     surfaceAdmins: { syncFromAllowlist: vi.fn() },
-    docker: { upNoRecreate: vi.fn(), validateCompose: vi.fn(), waitHealthy: vi.fn(() => true) },
+    docker: { upNoRecreate: vi.fn(), validateCompose: vi.fn(), waitHealthy: vi.fn(() => true), hostInfo: vi.fn(() => holder.hostInfo) },
   },
 }))
 vi.mock('@/lib/resolvers', () => ({
@@ -101,6 +103,8 @@ describe('Settings PUT — shared VPN', () => {
     fs.writeFileSync(vpnEnv, 'VPN_SERVICE_PROVIDER=mullvad\n', { mode: 0o600 })
     composeFile = path.join(swarmDir, 'compose', NAME, 'docker-compose.yml')
     holder.dataDir = swarmDir
+    holder.settings = {}
+    holder.hostInfo = null
     holder.harness = { id: ID, name: NAME, runtime: 'hermes', composeFile }
     writeAgent(generateAgentCompose(NAME, PORT, agentDir, { build: '/src/hermes-agent-mt' }))
   })
@@ -485,6 +489,115 @@ describe('Settings PUT — shared VPN', () => {
       const res = await PUT(put({ ...BASE, resources: { memory: '4G' } }), params())
       expect(res.status).toBe(409)
       expect(readCompose()).toBe(handMade)
+    })
+  })
+
+  // A resources change regenerates a standalone compose. An existing agent's
+  // databases must be where the new compose looks for them, whichever way the
+  // layout default points (lib/services/state-volume.ts).
+  describe('state-volume layout across a regeneration', () => {
+    const NATIVE = { operatingSystem: 'Ubuntu 24.04.1 LTS', kernelVersion: '6.8.0-45-generic', osType: 'linux', endpoint: 'unix:///var/run/docker.sock' }
+    const realPlatform = process.platform
+    const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true })
+    afterEach(() => setPlatform(realPlatform))
+
+    const regenerate = async () => {
+      const res = await PUT(put({ ...BASE, resources: { memory: '4G' } }), params())
+      expect(res.status).toBe(200)
+      const after = readCompose()
+      expect(after).toContain('memory: 4G')
+      const on = after.includes(`  state-init-${NAME}:`)
+      expect(after.includes(`- hermes-state-${NAME}:/state`)).toBe(on)
+      expect(/^volumes:\s*$/m.test(after)).toBe(on)
+      return on
+    }
+    /** What state-init leaves in a migrated agent's data dir. */
+    const onTheVolume = () => {
+      for (const db of ['state.db', 'response_store.db', 'kanban.db']) fs.symlinkSync(`/state/${db}`, path.join(agentDir, db))
+    }
+
+    it('native Linux: an agent whose databases are on the volume KEEPS the layout', async () => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      onTheVolume()
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('native Linux, setting forced off: an agent whose databases are on the volume STILL keeps the layout', async () => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      holder.settings = { useStateVolume: false }
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      onTheVolume()
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('native Linux: an agent with plain database files stays plain', async () => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'a real database')
+      expect(await regenerate()).toBe(false)
+      expect(fs.readFileSync(path.join(agentDir, 'state.db'), 'utf-8')).toBe('a real database')
+    })
+
+    it('macOS: an agent with plain database files gets the layout (state-init moves them at the next start)', async () => {
+      setPlatform('darwin')
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'a real database')
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('Linux process, engine not answering: the layout (the safe side)', async () => {
+      setPlatform('linux')
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('settings.useStateVolume true forces the layout on a native-Linux engine', async () => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      holder.settings = { useStateVolume: true }
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('settings.useStateVolume false keeps a plain agent plain on macOS', async () => {
+      setPlatform('darwin')
+      holder.settings = { useStateVolume: false }
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'a real database')
+      expect(await regenerate()).toBe(false)
+    })
+
+    it('native Linux: interrupted state-init (compose mounts the volume, no state.db in the data dir) KEEPS the layout', async () => {
+      // state-init stopped between removing the database from the data dir
+      // and writing the symlink: nothing in the data dir says "migrated".
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      expect(await regenerate()).toBe(true)
+    })
+
+    // The symlinks were removed by hand and the agent has been writing real
+    // files since, under a compose file that still mounts the volume. The live
+    // database is in the data dir, so the layout follows the engine and the
+    // setting and the files are left alone.
+    it.each([
+      ['automatic', {}],
+      ['setting false', { useStateVolume: false }],
+    ])('native Linux: regular state.db under an old compose that mounts the volume goes plain (%s)', async (_label, settings) => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      holder.settings = settings
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'the live database')
+      expect(await regenerate()).toBe(false)
+      expect(fs.readFileSync(path.join(agentDir, 'state.db'), 'utf-8')).toBe('the live database')
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/state-volume/))
     })
   })
 })

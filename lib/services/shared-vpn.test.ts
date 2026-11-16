@@ -166,6 +166,10 @@ describe('removeSharedVpnFromCompose', () => {
     ['deploy-born + google MCP', deployBornGoogle],
     ['hand-edited with environment block', () => HAND_EDITED],
     ['standalone', () => generateStandaloneCompose(NAME, PORT, DATA)],
+    // No state volume means no depends_on: and no volumes: trailer (native
+    // Linux). The transform must still apply and reverse exactly.
+    ['standalone, state volume off', () => generateStandaloneCompose(NAME, PORT, DATA, { useStateVolume: false })],
+    ['deploy-born, state volume off', () => generateAgentCompose(NAME, PORT, DATA, { image: 'ghcr.io/x/hermes:1' }, { useStateVolume: false })],
   ] as const) {
     it(`restores the original bytes exactly (${label})`, () => {
       const before = make()

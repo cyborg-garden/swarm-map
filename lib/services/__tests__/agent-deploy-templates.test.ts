@@ -250,6 +250,29 @@ describe('generateAgentCompose', () => {
     expect(c).toContain('hermes-sci:')
   })
 
+  it('omits the state-volume layout when useStateVolume is false (no state-init, no named volume, no depends_on)', () => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { useStateVolume: false })
+    expect(c).not.toContain('state-init-sci:')
+    expect(c).not.toContain('- hermes-state-sci:/state')
+    expect(c).not.toContain('depends_on:')
+    expect(c).not.toMatch(/^volumes:\s*$/m)
+  })
+
+  // Left out = ON: the generator cannot see the Docker engine, and the layout
+  // is the side that cannot tear a database.
+  it.each([
+    ['set', { useStateVolume: true }],
+    ['left out', {}],
+    ['no options at all', undefined],
+    ['null', { useStateVolume: null }],
+  ])('emits the state-volume layout when useStateVolume is %s', (_label, opts) => {
+    const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, opts)
+    expect(c).toContain('  state-init-sci:')
+    expect(c).toContain('- hermes-state-sci:/state')
+    expect(c).toMatch(/state-init-sci:\s*\n\s*condition: service_completed_successfully/)
+    expect(c).toMatch(/^volumes:\s*$/m)
+  })
+
   it('emits a healthy-gated ollama sidecar when bundledOllama is set', () => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, { bundledOllama: true })
     expect(c).toContain('ollama-sci:')
