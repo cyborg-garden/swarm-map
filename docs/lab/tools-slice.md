@@ -47,7 +47,14 @@ The launcher's config, and the dashboard's Tools card, write those lists from a 
 ```
 
 `enabled` is empty by default. A class that is enabled with no mode gets `ask` for shell and
-`allow` for the two file classes. `approvalSeconds` is how long an admin has to answer.
+`allow` for reading files. Writing files gets `ask` when the shell asks and `allow` otherwise.
+`approvalSeconds` is how long an admin has to answer.
+
+**A shell that asks and file writing that does not are refused together.** An admin is shown a
+command, not the files it runs. If the agent could write `run.sh` without asking, a yes to
+`sh run.sh` would run whatever it put there, unseen. This was tried: with writing allowed and the
+shell asking, a script written in the same turn ran on the admin's yes to its name. The launcher
+and the dashboard's Tools card refuse that pairing, and the card does not offer it.
 
 **Hearing anyone makes an agent public.** The launcher writes `posture: public` into the record
 for a config with `anyoneInChannel`, and refuses such a config outright if it also switches a tool
@@ -73,7 +80,7 @@ Approval needed. The agent wants to run bash:
 ```
 {"command":"ls -la","timeout":60}
 ```
-An admin can reply approve or deny, or react ✅ or ❌. No answer in 120 seconds means no. (call 3fa9c1d2e4b6)
+An admin can reply approve or deny, or react ✅ or ❌. No answer in 120 seconds means no. Whatever it starts or changes in the agent's cell stays until the agent is stopped. (call 3fa9c1d2e4b6)
 ````
 
 What makes that safe to act on:
@@ -82,7 +89,8 @@ What makes that safe to act on:
   gate will run it: here with the time limit the gate put on it. A call too long to show in full
   (1,200 characters) is refused, never cut and then approved.
 - **Nothing in it is hidden or can ping.** Every character outside plain printable ASCII, and
-  `@`, `<` and the backtick, is written as a `\u` escape. So the text cannot hide a character,
+  `@`, `<` and the backtick, is written as a `\u` escape, and so is every space past the third in a
+  row, so blank space cannot push the end of a command out of sight. So the text cannot hide a character,
   break out of its block, or mention anyone. The escapes are still JSON: read back, it is the
   same input, byte for byte.
 - **A call with something secret-shaped in it is refused** rather than shown with a part
@@ -130,6 +138,7 @@ approval time, so the door's no arrives first. If it does not, theirs does.
 | Output of one call | 16,000 bytes, then cut with a note | The gate, before the model sees it |
 | Tool calls per conversation | 30 in an hour | The door |
 | Scratch folder | 64 MB | The mount |
+| The cell's own folder (its harness's settings, sessions and home) | 256 MB, in memory, gone on stop | The mount |
 | Processes and memory | 256 and 1 GB, as before | Docker |
 
 ## What is a wall and what is a guardrail
@@ -145,6 +154,15 @@ approval time, so the door's no arrives first. If it does not, theirs does.
   can run, and the wall is what is left.
 - **So `ask` is a control on the model, not on the cell.** That is the right size for it: the
   cell has nothing to steal and nowhere to send it.
+- **A yes to a shell command reaches past that command.** Something it starts in the background
+  keeps running after it, with no further yes, until the agent is stopped. A file it changes stays
+  changed, and that includes the harness's own settings, so it can change how later commands run.
+  The request says so on its last line. Approve only what you would let run unattended.
+- **The time and output limits are the gate's, in the cell.** The door holds who may answer, the
+  count of calls, and the turn. It does not see a shell call run.
+- **A shell can call the model through the door, outside a turn.** It finds the cell's stand-in key
+  in the harness's settings. Such a call is metered and counted against the monthly budget like any
+  other; the budget is what bounds it.
 - **File tools stay in the scratch folder only while there is no shell.** The gate follows every
   path a file tool is given, links and all, and hands the tool the plain path it checked. A shell
   is not held to that: it can read the rest of the cell's disk, which holds the harness and this

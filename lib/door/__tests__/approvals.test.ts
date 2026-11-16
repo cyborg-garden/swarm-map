@@ -262,6 +262,18 @@ describe('door: what a request shows', () => {
     expect(r.shim.verdicts[0].hash).toBe(callHash('bash', readShown(shown)))
   })
 
+  it('[P:approval-shown] a request says plainly that a yes reaches past the call: what it leaves in the cell stays', async () => {
+    const r = await start()
+    ask(r, '!tool bash=ls')
+    const req = await request(r)
+    const last = req.text.split('\n').at(-1)!
+    expect(last).toContain('Whatever it starts or changes in the agent\'s cell stays until the agent is stopped.')
+    // It sits on the line the call's short hash ends, so a request still reads back the same way.
+    expect(shownIn(req.text)).toBeDefined()
+    reply(r, req.id, 'deny')
+    await r.door.idle()
+  })
+
   it('[P:approval-shown] nothing in a request can ping anyone, hide a character or break out of its block', async () => {
     const r = await start()
     ask(r, '!tool bash=@everyone<@123456789012345678>```‮​<#1>')

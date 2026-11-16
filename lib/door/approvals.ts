@@ -20,7 +20,8 @@ export function requestText(tool: string, shown: string, hash: string, timeoutMs
   return [
     `Approval needed. The agent wants to run ${tool}:`,
     '```', shown, '```',
-    `An admin can reply approve or deny, or react ✅ or ❌. No answer in ${Math.round(timeoutMs / 1000)} seconds means no. (call ${shortHash(hash)})`,
+    // A yes reaches past the call: a background process it starts, or a file it changes, is still there after it.
+    `An admin can reply approve or deny, or react ✅ or ❌. No answer in ${Math.round(timeoutMs / 1000)} seconds means no. Whatever it starts or changes in the agent's cell stays until the agent is stopped. (call ${shortHash(hash)})`,
   ].join('\n')
 }
 

@@ -41,9 +41,21 @@ describe('a call written down for a person', () => {
     expect(text).toContain('\\u202e')
   })
 
+  it('[U:call-shown] a long run of spaces cannot push the rest of a command out of sight: past three, each is written out', () => {
+    const text = shown({ command: `ls${' '.repeat(150)}; rm -rf x` })
+    expect(text).not.toMatch(/ {4}/)
+    expect(text).toContain('ls   \\u0020\\u0020')
+    expect(text.endsWith('; rm -rf x"}')).toBe(true)
+    expect(readShown(text)).toEqual({ command: `ls${' '.repeat(150)}; rm -rf x` })
+    // Written out, a long enough run no longer fits, and the call is refused rather than cut.
+    expect(showInput({ command: `ls${' '.repeat(400)}; rm -rf x` })).toEqual({ problem: 'the call is too long to show in full' })
+    // Up to three in a row are kept as they are, so ordinary text and indentation read as they always did.
+    expect(shown({ command: 'a b  c   d' })).toBe('{"command":"a b  c   d"}')
+  })
+
   it('[U:call-shown] reads back as exactly the call, so what is shown is what is hashed', () => {
     const r = rng(20261116)
-    const alphabet = ['a', 'Z', '0', ' ', '"', '\\', '/', '@', '<', '>', '`', '\n', '\t', '\u0000', '\u001b', 'é', '​', '‮', '😀', '\ud800', '$', '{', '}', '&']
+    const alphabet = ['a', 'Z', '0', ' ', '    ', '"', '\\', '/', '@', '<', '>', '`', '\n', '\t', '\u0000', '\u001b', 'é', '​', '‮', '😀', '\ud800', '$', '{', '}', '&']
     const word = (): string => Array.from({ length: r.int(12) }, () => r.pick(alphabet)).join('')
     const value = (depth: number): unknown => {
       const kind = r.int(depth > 2 ? 4 : 6)
@@ -59,6 +71,7 @@ describe('a call written down for a person', () => {
       const text = shown(input, 100_000)
       expect(text).toMatch(/^[\x20-\x7e]*$/)
       expect(/[@<`]/.test(text)).toBe(false)
+      expect(/ {4}/.test(text)).toBe(false)
       expect(callHash('t', readShown(text))).toBe(callHash('t', input))
     }
   })

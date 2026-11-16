@@ -46,7 +46,7 @@ const MEANT = new Set(['@', '<', '`'])
 /**
  * A call's input written down for a person: canonical JSON, with every
  * character that could hide, ping or break out of its block written as a
- * `\u` escape. It is still JSON, so reading it back gives the same input.
+ * `\u` escape, and so is every space past the third in a row. It is still JSON, so reading it back gives the same input.
  * Returns why it cannot be shown when it is too long or cannot be written.
  */
 export function showInput(input: unknown, maxChars: number = MAX_SHOWN_CHARS): { text: string } | { problem: string } {
@@ -57,9 +57,13 @@ export function showInput(input: unknown, maxChars: number = MAX_SHOWN_CHARS): {
   try { same = canonicalJson(JSON.parse(json)) === json } catch { /* not JSON */ }
   if (!same) return { problem: 'the call cannot be written down' }
   let text = ''
+  // Spaces in a row so far. Past three each is written out, so a long run of them cannot push the rest of a
+  // command off a narrow screen, out of sight of the person who approves it.
+  let spaces = 0
   for (let i = 0; i < json.length; i++) {
     const ch = json[i]
-    text += PLAIN.test(ch) && !MEANT.has(ch) ? ch : `\\u${json.charCodeAt(i).toString(16).padStart(4, '0')}`
+    spaces = ch === ' ' ? spaces + 1 : 0
+    text += PLAIN.test(ch) && !MEANT.has(ch) && spaces <= 3 ? ch : `\\u${json.charCodeAt(i).toString(16).padStart(4, '0')}`
     if (text.length > maxChars) return { problem: 'the call is too long to show in full' }
   }
   return { text }
