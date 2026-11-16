@@ -10,9 +10,9 @@ running agent. It is a library, a test rig and two commands. There is no launche
 - **Same door, same four verbs.** `lib/runtimes/claude-sdk/` is the only SDK-specific code that
   runs: start it, send text, read text, veto a tool. Every "who may it hear and answer" rule is
   still decided once, in `decide()`, and the SDK is not asked to enforce one.
-- **The real SDK 0.3.325 passes all 18 process-level checks**, with a scripted room and a scripted
+- **The real SDK 0.3.325 passes all 20 process-level checks**, with a scripted room and a scripted
   model on this machine. No key and no account were used.
-- **In the sealed Docker cell it passes all 24**: the same checks with the SDK in the cell, and the
+- **In the sealed Docker cell it passes all 26**: the same checks with the SDK in the cell, and the
   ones that need a cell. A tool run by the SDK could not reach the internet, the laptop or a
   stand-in for the internet, and could not read the model key or the chat token. That held with
   its tool veto switched off. This is shown for one machine and one Docker, and for nothing wider.
@@ -20,8 +20,11 @@ running agent. It is a library, a test rig and two commands. There is no launche
   promises as the first: the key is swapped, every forwarded call is metered, the cap refuses.
 - **Tools are off unless the policy turns one on.** With none offered, a session has none: no
   shell, no file tool, no web tool, no sub-agent. A check asks for seven of them and none runs.
+  It has three tools to turn on, a shell, a read and an edit, and each was seen to run.
 - **Its own permission callback is not a complete veto.** The SDK runs some calls without
-  asking. The shim tells it to ask about each tool by name. See "What needed special handling".
+  asking. The shim tells it to ask about each tool by name. If a call runs anyway without the
+  door being asked, the shim sees its result, stops the session and posts no reply. That comes
+  after the call has run, not before. See "What needed special handling".
 - **It keeps a thread per room and no memory across rooms**, started the way the shim starts it.
   Its sessions share one folder on disk, so it is given no direct messages.
 - **It has not been run against the real API.** That needs a key, and one was not used here.
@@ -56,13 +59,13 @@ cell image is its own (`...-cell:claude-sdk-0.3.325-<source>`); the rig image is
 | Finding and loading a real SDK from its install folder | `lib/runtimes/claude-sdk/load.ts` | `load.test.ts` |
 | The pump: one SDK session, messages in, records out, the veto | `lib/runtimes/claude-sdk/session.ts` | `session.test.ts` |
 | The shim: one session per door session, its options, its environment | `lib/runtimes/claude-sdk/shim.ts` | `env.test.ts`, `shim.test.ts` |
-| The SDK's own rules (8) | `lib/runtimes/claude-sdk/rules.ts` | `rules.test.ts` |
+| The SDK's own rules (9) | `lib/runtimes/claude-sdk/rules.ts` | `rules.test.ts` |
 | The Anthropic Messages wire format for the model route | `lib/door/model-shapes.ts`, `model-route.ts` | `model-route.anthropic.test.ts` |
 | A scripted model that speaks that format | `conformance/rig/scripted-model.ts` | `scripted-model.anthropic.test.ts` |
 | A fake SDK, for CI | `conformance/rig/fake-claude-sdk.ts` | `fake-claude-sdk.test.ts` |
 | A watcher for a harness that is a compiled program | `conformance/guards/watch-proxy.ts` | `watch-proxy.test.ts` |
 | One turn against a real provider, for the day there is a key | `conformance/live/anthropic.ts`, `conformance/suites/anthropic-live.real.test.ts` | `live/__tests__/anthropic.test.ts`, with a stand-in at each end. Not run for real |
-| The adapter for the shared checks, and four checks of its own | `conformance/harnesses/claude-sdk.ts` | `claude-sdk.fake.test.ts`, `claude-sdk.real.test.ts` |
+| The adapter for the shared checks, and six checks of its own | `conformance/harnesses/claude-sdk.ts` | `claude-sdk.fake.test.ts`, `claude-sdk.real.test.ts` |
 | Ways of starting the SDK wrong on purpose | `conformance/broken/claude-sdk-wrapped.ts` | the must-fail runs |
 | A cell image, its entry, and the suite that runs it | `conformance/docker/Dockerfile` (stage `cell-claude-sdk`), `conformance/docker/claude-sdk/`, `conformance/suites/claude-sdk.docker.test.ts` | `claude-sdk-matrix-fresh.test.ts` in CI; the Docker run on a machine with Docker |
 
@@ -81,7 +84,11 @@ cell image is its own (`...-cell:claude-sdk-0.3.325-<source>`); the rig image is
   when the record says in so many words that the turn did not fail.
 - **Veto.** The SDK asks before a tool through a callback (`canUseTool`). The shim passes the
   question to the door and answers yes only on the door's yes. It gives the question a time
-  limit of its own, because the SDK waits for as long as it takes.
+  limit of its own, because the SDK waits for as long as it takes. It also keeps the id of every
+  call it was asked about. A result for a call it was never asked about, to a tool the session
+  has, means the SDK ran that call on its own. The session is stopped there, and the turn gives
+  no reply. A call the SDK turned down before it would ask (an edit of a file it has not read,
+  input it rejects) comes back as an error that opens with `<tool_use_error>`, and is not a run.
 - **Tools.** A session is started with exactly the tools the door offered for the turn. They are
   fixed when its process starts, so a changed list restarts that session's process on the same
   transcript, as with the other two harnesses.
@@ -90,6 +97,9 @@ cell image is its own (`...-cell:claude-sdk-0.3.325-<source>`); the rig image is
 - **Nothing from disk.** It is started in its minimal mode (`--bare`) and told to read no
   settings file. No instruction file, hook, plugin, skill, MCP server or stored login is picked
   up. Its own slash commands are switched off.
+- **A deadline.** A turn has until the deadline the door gave it. Then the shim stops that
+  session's process and tells the door, and the next turn picks the transcript back up. A turn
+  whose deadline passed while it waited behind another is not started.
 - **Version.** The shim asks the install which package version it is and which Claude Code it
   starts, once, and sends no turn to anything but 0.3.325 with Claude Code 2.1.325. Each session
   says which Claude Code it is again when it starts, and is stopped if that is another.
@@ -118,13 +128,15 @@ Every check drives a fresh lab and reads only what can be seen from outside the 
 | C7n | With no tool offered, none of its built-in tools runs, whatever the model asks for | pass | pass | pass |
 | C11r | What is said in one room is not in what the model is sent for another, and a room keeps its own thread | pass | pass | pass |
 | C11d | A direct message is not delivered to a harness that keeps every session's files in one place | pass | pass | pass |
+| C4m | Every tool the shim has a class for is one the harness really has: allowed, each is offered and runs | pass | pass | pass |
+| C1t | A turn the model never answers is given up on at its deadline, and the room is answered again afterwards | pass | pass | pass |
 | S0-S3 | The cell is the lab's own, sealed, read-only, and holds nothing of the host | | | pass |
 | C8 | A tool finds the model key and the chat token nowhere in the cell | | | pass |
 | C9 | A tool reaches nothing but the door | | | pass |
 | C10 | With the veto switched off, a denied tool does run, and still reaches nothing and reads no secret | | | pass |
 
-That is 18 of 18 at process level and 24 of 24 in the cell. C4q, C7n, C11r and C11d are this
-harness's own. Each is about something the SDK does that the other two do not.
+That is 20 of 20 at process level and 26 of 26 in the cell. C4q, C7n, C11r, C11d, C4m and C1t are
+this harness's own. Each is about something the SDK does that the other two do not.
 
 **C9p is weaker for this harness, and its matrix says so.** For Pi and Letta Code a tripwire is
 loaded into the harness's own process. The SDK starts a compiled program, which has no place for
@@ -133,14 +145,14 @@ machine and refuses and records a request to anywhere else. The SDK does send it
 through it. Traffic that ignored proxy settings would not be seen. The Docker cell does not
 depend on that.
 
-**Must-fail.** At process level, twelve shims broken on purpose, on the fake and on the real SDK.
+**Must-fail.** At process level, fifteen shims broken on purpose, on the fake and on the real SDK.
 Each turned its named checks red.
 
 | Broken shim | What it does wrong | Must turn red |
 |---|---|---|
-| `ignores-verdicts` | The SDK started in the mode that asks nobody | C4, C4p, C5, C5v, C15t, C4q |
-| `asks-sometimes` | Not told to ask about every tool by name | C4q, and nothing else |
-| `tools-always-on` | Starts with every mapped tool whatever it was offered, asks nobody, and reports the tools it was given | C4, C4a, C4p, C5, C5v, C15t, C4q, C7n |
+| `ignores-verdicts` | The SDK started in the mode that asks nobody | C4, C4p, C5, C5v, C15t, C4q, C4+, C4m |
+| `asks-sometimes` | Not told to ask about every tool by name | C4q, C4m |
+| `tools-always-on` | Starts with every mapped tool whatever it was offered, asks nobody, and reports the tools it was given | C4, C4a, C4p, C5, C5v, C15t, C4q, C7n, C4+, C4m |
 | `leaks-env` | The real model key planted in its environment | C8p |
 | `inherits-env` | Started with the shim's own environment passed down | C8p |
 | `other-version` | An SDK that says it is another version | C1, C4+ (it is sent nothing) |
@@ -150,14 +162,21 @@ Each turned its named checks red.
 | `claims-sealed` | A shim that tells the door each session's files are kept apart | C11d |
 | `hides-errors` | Marks a turn that ended in an error as one that did not | C12 |
 | `chatty` | Answers without the model, twice, and for turns nobody opened | C1, C3 |
+| `maps-a-tool-it-lacks` | Tells the door it has a separate write tool, which the SDK does not have in its minimal mode | C4m, and nothing else |
+| `lacks-a-tool` | An SDK that starts without its edit tool and says it has every tool it was given | C4m, and nothing else |
+| `waits-forever` | Goes on waiting for a turn after the door has given up on it | C1t, and nothing else |
 
 In Docker, the same eleven broken rigs as for the other two harnesses. Each turned its named
-checks red with the SDK in the cell.
+checks red with the SDK in the cell. For C10, "the gate removed" means every call is still put to
+the door and runs whatever the door says. Started in the mode that asks nobody instead, the shim
+would stop the session at the first call it was not asked about, and C10 could not show its last
+half.
 
 ## What needed special handling
 
-Four things about the real SDK were not what the plan assumed. Each was found by running it, and
-each now has a test and a broken shim behind it.
+Seven things about the real SDK were not what the plan assumed. Each was found by running it, and
+each now has a test. All but the last have a broken shim behind them. The last three were found by a
+later audit of this work, which is why they are listed apart.
 
 1. **Its permission callback is not asked about every call.** With `canUseTool` set and nothing
    approved ahead of time, the SDK still ran a file read inside its work folder and a shell
@@ -165,7 +184,10 @@ each now has a test and a broken shim behind it.
    tools it must always ask about, and those can be given in the call that starts a session. So
    the shim names every tool a session has. Then every call is put to the callback. C4q drives a
    read and a shell `cat` that the door says no to, and the `asks-sometimes` shim shows both
-   running without that line.
+   running without that line. Because nothing in the SDK makes asking a promise, the shim also
+   checks afterwards: a tool result for a call the door was never asked about stops the session,
+   with no reply. A later audit added that. The broken shims that run tools unasked also fail C4+
+   and C4m since then, because their sessions are stopped.
 2. **Its hooks do not run in minimal mode.** The plan's second way to veto a tool, a hook before
    each call, was tried first as the stronger of the two. In the minimal mode the hook was never
    called. Minimal mode is what keeps the SDK from reading settings, instruction files and a
@@ -178,6 +200,28 @@ each now has a test and a broken shim behind it.
 4. **It is a compiled program.** No tripwire can be loaded into it, which is why C9p has a proxy
    in its place, and why this harness's process-level run says less than the other two.
 
+5. **In its minimal mode it has three tools, not four.** A shell, a read and an edit. There is no
+   separate write tool there: asked to start with `Write`, the SDK starts without it. The first
+   version of this shim listed `Write` in its tool map, and the fake SDK had one. So a policy that
+   allowed writing files had the door offer `Write`, the session reported other tools than it was
+   started with, and the shim stopped it: every turn of such a policy ended in an error and no
+   reply. Nothing unsafe ran, but the agent was mute, and no check allowed that class, so none
+   saw it. `Write` is gone from the map (the edit tool makes a file that is not there yet), the
+   fake has the same three tools as the real one, and C4m drives each of them.
+6. **It waits far longer than the door does.** A model call that is refused with 401, 429 or 500
+   is tried eleven times over about three minutes before the turn ends. A model that takes the
+   call and says nothing was still being waited on after nine minutes. The door stops waiting at
+   the turn's deadline (two minutes by default), but the shim had no deadline of its own, so
+   every later message of that room queued behind a turn nobody would read. The shim now keeps
+   the turn's deadline itself. C1t drives a silent model, and the `waits-forever` shim shows the
+   room going quiet without it.
+7. **A transcript it cannot find ends the turn before it starts.** Asked to pick up a session
+   whose file is gone, the SDK ends the turn at once with an error and never says it started. The
+   shim kept asking for the same transcript, so that room failed every turn until it was reset.
+   It now forgets a transcript that cannot be picked up, and the next turn starts a new one. In
+   the same place: a turn that ends before the session has said which version it is and which
+   tools it has gives no reply, whatever it says. This one has unit tests and no broken shim.
+
 Smaller things: a message that starts with `/` is read as one of the SDK's own commands and
 answered without a model call, even with its commands switched off. The frame the shim writes
 never starts with one. And the SDK accepts a model name it has never heard of, with a warning.
@@ -187,7 +231,7 @@ never starts with one. And the SDK accepts a model name it has never heard of, w
 | Capability | Declared | Why |
 |---|---|---|
 | Tool veto | before the call | the callback, with every tool named. Shown by C4, C4q, C5, C5v |
-| Tools | `Read`, `Edit`, `Write`, `Bash` | the four with a clear class that were run. Web fetch, web search, sub-agents, notebooks, tasks and schedules are never attached |
+| Tools | `Read`, `Edit`, `Bash` | every tool it has in its minimal mode. Each was run (C4m). Outside that mode it has a separate write tool, web fetch, web search, sub-agents, notebooks, tasks and schedules. None can be attached in the mode the shim starts it in |
 | Memory of its own | can be switched off, and is | minimal mode: no notes kept, no instruction file read. Each session has its own transcript. Shown by C11r |
 | Sessions | one process each | about 190 MB for one idle session on this machine, measured once |
 | Session isolation | none | every session's process shares one home and one work folder |
@@ -206,7 +250,16 @@ never starts with one. And the SDK accepts a model name it has never heard of, w
    another's model request (C11r). But with a file tool allowed, a session can write a file that
    another session's tool can read. That is the same as for Pi.
 3. **A reset starts a new transcript.** The old one stays on disk under the shim's home.
-4. **Tools the door has no class for.** The SDK ships many. None is attached, so none was driven.
+4. **Tools the door has no class for.** The SDK ships many. None is attached. 89 tool
+   names were asked for by hand with the shim's own start, with no tool offered and with all
+   three offered and every answer no: a shell in eight forms, the file tools, search tools,
+   notebooks, web fetch and search, sub-agents under both of their names, tasks, schedules,
+   skills, plan mode, worktrees, MCP, and the rest of what the package's types list. Every one
+   that is not one of the three failed as "no such tool" and nobody was asked. Every call to one
+   of the three was put to the callback and did not run on a no. That is a list of names tried
+   on one version, not a proof that no other name exists.
+5. **Writing files is the edit tool.** There is no separate write tool to allow. See "What needed
+   special handling".
 
 ## The model route's second format
 
@@ -214,6 +267,10 @@ never starts with one. And the SDK accepts a model name it has never heard of, w
 
 - The placeholder is read from `x-api-key`, and only there. The real key goes out in the same
   header. The version headers the API needs are passed on, and one query parameter. Nothing else.
+- A redirect from the provider is not followed. An HTTP client that follows one sends `x-api-key`
+  on to wherever it points, another host included. The first version of this route did. It now
+  answers 502 with a receipt, charges nothing, and the key goes nowhere else. This holds for
+  both formats.
 - Usage comes in two stream events: the input count when the reply opens, the output count after
   the text. The route keeps the first for the second. A stream cut before the second is charged
   by size, as before.
@@ -225,6 +282,8 @@ never starts with one. And the SDK accepts a model name it has never heard of, w
   does not show it. The route forwards nothing it cannot meter.
 - A call that asks for the same model at another price (a faster mode, a named region) is refused
   too. The route has one price for a model.
+- Calls sent at once under a cap that refuses go one at a time, each metered from its own two
+  events, so they cannot all slip under the cap together.
 - The token-count call is answered by the route itself, as an estimate from the size of the
   request. Nothing is forwarded for it. The pinned SDK was not seen to make this call.
 - Text held back because it might be the start of the key is sent before its block closes, as an
@@ -244,13 +303,17 @@ Each of these was run or read on the SDK 0.3.325 from npm, not taken from notes.
 | Account | None was needed for anything here. The SDK accepted a placeholder as its key and never checked it anywhere but the address it was given |
 | What the package brings | 112 packages in the cell's lock file, each pinned to a version and an integrity hash from the npm registry. None has an install script. One is the Claude Code program for the platform, about 250 MB on Linux: the lock file names eight (one per platform) and npm installs the one that fits. The rest are the packages the SDK asks its user to provide (Anthropic's API client, the MCP library, `zod`) and what those need. 90 are MIT, 7 ISC, 3 BSD, 2 Apache-2.0, 1 Unlicense; the SDK and its eight programs are under Anthropic's terms. `npm audit` reports nothing. Nothing of it is copied into this repo or pushed: the lock file names it, and the local test image holds it |
 | Does it call home | Started the way the shim starts it, in a sealed container with a packet capture attached: it looked up one name, the door's, and opened connections to the door and to nothing else. Started with its defaults instead (no offline switch, not its minimal mode), in the same container: it looked up `api.anthropic.com` ten times in twenty-five seconds. Every lookup failed, because the cell has no way to resolve a name outside it, and no packet left for anywhere but the door. So its phone-home is off as the shim starts it, and blocked by the wall when it is not |
-| What it sends in the sealed cell | A packet capture in the cell's network, attached by hand during the Docker run and not part of the suite. In the seventeen in-cell checks that run no probe, every packet the cell sent went to the door (its link to the door, and the model route), and every name it had answered was the door's. In one of the seventeen (C3) the cell sent nothing while the capture ran: that message is dropped before the SDK is given anything. The capture was attached just after each cell started, so the first moments of the shim are not in it |
+| What it sends in the sealed cell | A packet capture in the cell's network, attached by hand during the Docker run and not part of the suite. In the seventeen in-cell checks that run no probe, every packet the cell sent went to the door (its link to the door, and the model route), and every name it had answered was the door's. In one of the seventeen (C3) the cell sent nothing while the capture ran: that message is dropped before the SDK is given anything. The capture was attached just after each cell started, so the first moments of the shim are not in it. A later audit attached a capture to every cell of a whole Docker run on the final code, as each cell appeared, 41 in all, and kept it for the cell's whole life, start and turns. Ten ran the probe, which tries to leave on purpose and is judged by C8-C10. Eight sent nothing while watched. In the other 23, the only name asked of DNS was the door's, and every packet that left the cell went to the door on its link port or its model route. In 18 of those the capture has the cell's first lookup, so the SDK's whole start is in it; in the other five it began under a second late. No name of Anthropic's, and no update, telemetry or error-report host, was looked up in any cell |
 | How it finds its model | `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` in its environment. It adds `/v1/messages?beta=true` itself. One model call per step of a turn, always streamed. No other call was seen |
 | A proxy | It sends its model calls through `HTTP_PROXY` when one is named, loopback included |
 | Tool approval | The `canUseTool` callback. Not asked about every call: see above. It waits with no time limit of its own |
 | A tool it was not started with | Fails as "no such tool", and nobody is asked |
 | Where its sessions live | Under `CLAUDE_CONFIG_DIR`, one file per session. A session can be picked back up by its id |
 | Instruction files | Not read in minimal mode, also when a folder is named for them |
+| Anything else on disk | Tried by hand: settings files (project, local, user, managed, cached remote) with allow rules, a bypass mode, ten kinds of hook, a key helper and an address for the model; instruction files in six places; an MCP file in three; a skill, a command, a sub-agent, an output style and a plugin with hooks; a stored login; shell start files. Written into the work folder and the SDK's own folder before a start. None was read: no hook ran, no instruction reached the model, no tool was added, and every tool call was still put to the callback. A line in the transcript that names another permission mode did not change the mode on pick-up either |
+| A message that names a file | `@file` in a message attaches nothing, with no tool and with the read tool on. `!command` runs nothing |
+| Built in to the program | Three plugins that ship inside the program still load in minimal mode (`init` names them: `cc-plugin-agents-md`, `cc-plugin-privacy`, `cc-plugin-plugin-authoring`), and `init` lists its built-in sub-agent types. None of them added a tool, a skill, a command or an instruction: the run with every planted file above saw the same three tools and no planted text reach the model |
+| Sub-agents | The tool that starts one does not exist in minimal mode. Outside it (not how the shim starts it), a sub-agent's shell call was put to the same callback and did not run on a no. Seen once |
 | What a tool's environment holds | What the shim listed, a few variables the program adds about itself, and the name of the user it runs as. No key |
 
 ## What changed in the shared contracts
@@ -282,21 +345,22 @@ every check in its cell.
 
 ## Terms of use
 
-This was read on Anthropic's own pages on 2026-11-16, and is one reader's summary, not advice.
+This was read on Anthropic's own pages on 2026-11-16, and again on 2026-11-17. It is one reader's summary, not advice.
 What the pages say: use of the Agent SDK is under Anthropic's Commercial Terms of Service, also
 when it powers a product or service made available to one's own customers and end users. A
-product built on it must authenticate with an API key from the Console or a supported cloud
-provider. Offering sign-in with a Claude account, or routing requests through subscription
+developer building on it should authenticate with an API key from the Console or a supported
+cloud provider. Offering sign-in with a Claude account, or routing requests through subscription
 credentials, is not allowed. A product may say "Powered by Claude" and may not present itself as
 Claude Code. Anthropic's usage policy applies to what the agent is used for. **Not verified:**
 the Commercial Terms and the usage policy themselves were not read, so what they ask of an
 operator whose agent answers other people is not known here. The same pages set conditions for
 running Claude Code inside a product: the program unmodified, no sign-in method removed or
-restricted, and no paying for end users' usage. The SDK starts that same program, and the shim
-starts it in a mode that reads an API key only, behind a route that holds the key. Whether those
-conditions reach an agent built this way, and whether an agent on an operator's key that answers
-strangers in a public room counts as paying for end users, are questions for Anthropic before
-anything public is run.
+restricted, and no paying for, reselling or passing on of usage on end users' behalf. The same
+condition says each end user must sign in with their own API key, plan or cloud credential, and
+be billed for their own use. The SDK starts that same program, and the shim starts it in a mode
+that reads an API key only, behind a route that holds one operator's key for every person in a
+room. That design sits against those conditions as written. Whether they reach an agent built
+this way is a question for Anthropic before anything is run for other people.
 
 ## What a run against the real API still needs
 
@@ -347,14 +411,16 @@ two other harnesses' evidence means, and is its own piece of work.
 4. **Direct messages and session isolation rest on what the shim says**, as for Letta Code's
    memory. A shim that says "sealed" is given the direct message, which is what `claims-sealed`
    shows.
-5. **Not tried:** hooks outside minimal mode; MCP; sub-agents; web tools; cancel and steer (C14);
+5. **Not tried:** hooks outside minimal mode; MCP; sub-agents in a mode that has them; web tools; cancel and steer (C14);
    approvals by an admin (C6); the SDK's own session store; resuming after the shim restarts;
    more than a few sessions at once; a long session that has to be compacted.
 6. **The real API.** See above.
 7. **The cell image is about 1.6 GB.** Memory was measured once, for one idle session.
 8. **The meter has one price for a model.** It counts cache reads in full and cache writes
    twice, and refuses a faster mode and a named region. A prompt long enough to be billed at a
-   higher tier is not known to it: whoever sets the price should set the higher one.
+   higher tier is not known to it: whoever sets the price should set the higher one. The
+   `anthropic-beta` header is passed on as the SDK sent it, so a beta that turns on a longer,
+   dearer context is not refused either.
 9. **Mutation checks were run by hand, not committed.** Eighty-nine changes were made to the new
    code, one at a time: the veto saying yes on a timeout, on an error and on any truthy answer;
    each line that fixes a session's tools; the ask rules; minimal mode; each offline switch; the
@@ -365,4 +431,19 @@ two other harnesses' evidence means, and is its own piece of work.
    back in a block's thinking, an install that fails when asked its version, a route named with
    `https`, and another run's placeholder under one of the lab's own names, which was a gap in
    the older guard's tests. The fifth was a second run of the credential guard inside the live
-   run that nothing could make refuse. It was removed.
+   run that nothing could make refuse. It was removed. Two later audits made more. What the first of them found surviving is now caught: an SDK
+   that lacks a tool it claims (`lacks-a-tool`), a lab that never asks the credential guard, and
+   a reply with no text that is posted all the same. The second made seventeen changes, one at a
+   time: the check for calls run unasked (five ways), the fake SDK's call ids, the route's
+   redirect, the headers it passes, the calls it refuses as unmetered, its queue under a cap,
+   cache writes, the token-count answer, where the placeholder is read, the guard's rule for a
+   route address, the ask rules and the turn deadline. All seventeen turned a named test red.
+10. **The turn deadline is this shim's only.** The shims for Pi and Letta Code queue a room's turns
+    the same way and keep no deadline of their own. What they do with a model that never answers
+    was not driven here.
+11. **A redirect is refused, not understood.** A provider that really has moved needs its new
+    address written down by whoever runs the door.
+12. **A call run without asking is caught after it has run.** The shim stops the session at the
+    call's result. Whatever the call did on its own (a file written, a command run) has happened
+    by then. What it read is not passed on. And a call that ran and then came back as an error
+    opening with `<tool_use_error>` would be taken for one turned down before it ran.

@@ -128,6 +128,16 @@
       "status": "pass"
     },
     {
+      "id": "C4m",
+      "title": "every tool the shim has a class for is one the harness really has: allowed, each is offered and runs",
+      "status": "pass"
+    },
+    {
+      "id": "C1t",
+      "title": "a turn the model never answers is given up on at its deadline, and the room is answered again afterwards",
+      "status": "pass"
+    },
+    {
       "id": "C7n",
       "title": "with no tool offered, none of the harness's built-in tools runs, whatever the model asks for",
       "status": "pass"

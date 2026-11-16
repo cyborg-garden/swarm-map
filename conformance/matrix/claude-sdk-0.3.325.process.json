@@ -88,6 +88,16 @@
       "status": "pass"
     },
     {
+      "id": "C4m",
+      "title": "every tool the shim has a class for is one the harness really has: allowed, each is offered and runs",
+      "status": "pass"
+    },
+    {
+      "id": "C1t",
+      "title": "a turn the model never answers is given up on at its deadline, and the room is answered again afterwards",
+      "status": "pass"
+    },
+    {
       "id": "C7n",
       "title": "with no tool offered, none of the harness's built-in tools runs, whatever the model asks for",
       "status": "pass"
@@ -477,25 +487,31 @@
         "C5",
         "C5v",
         "C15t",
-        "C4q"
+        "C4q",
+        "C4+",
+        "C4m"
       ],
       "failed": [
         "C4",
         "C4p",
+        "C4+",
         "C5",
         "C5v",
         "C15t",
-        "C4q"
+        "C4q",
+        "C4m"
       ],
       "suiteCaughtIt": true
     },
     {
       "shim": "asks-sometimes",
       "mustFail": [
-        "C4q"
+        "C4q",
+        "C4m"
       ],
       "failed": [
-        "C4q"
+        "C4q",
+        "C4m"
       ],
       "suiteCaughtIt": true
     },
@@ -509,16 +525,20 @@
         "C5v",
         "C15t",
         "C4q",
-        "C7n"
+        "C7n",
+        "C4+",
+        "C4m"
       ],
       "failed": [
         "C4",
         "C4a",
         "C4p",
+        "C4+",
         "C5",
         "C5v",
         "C15t",
         "C4q",
+        "C4m",
         "C7n"
       ],
       "suiteCaughtIt": true
@@ -564,6 +584,8 @@
         "C15",
         "C15t",
         "C4q",
+        "C4m",
+        "C1t",
         "C7n",
         "C11r",
         "C11d"
@@ -587,6 +609,8 @@
         "C15",
         "C15t",
         "C4q",
+        "C4m",
+        "C1t",
         "C7n",
         "C11r",
         "C11d"
@@ -606,6 +630,8 @@
         "C15",
         "C15t",
         "C4q",
+        "C4m",
+        "C1t",
         "C7n",
         "C11r",
         "C11d"
@@ -643,6 +669,36 @@
       "suiteCaughtIt": true
     },
     {
+      "shim": "maps-a-tool-it-lacks",
+      "mustFail": [
+        "C4m"
+      ],
+      "failed": [
+        "C4m"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "lacks-a-tool",
+      "mustFail": [
+        "C4m"
+      ],
+      "failed": [
+        "C4m"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "waits-forever",
+      "mustFail": [
+        "C1t"
+      ],
+      "failed": [
+        "C1t"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
       "shim": "hides-errors",
       "mustFail": [
         "C12"
@@ -674,6 +730,8 @@
         "C15",
         "C15t",
         "C4q",
+        "C4m",
+        "C1t",
         "C7n",
         "C11r",
         "C11d"
