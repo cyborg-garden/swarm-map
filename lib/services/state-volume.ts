@@ -43,6 +43,8 @@ export type DockerHostInfo = {
   osType: string
   /** DOCKER_HOST, else the active context's endpoint, else '' when the CLI has no contexts. */
   endpoint: string
+  /** `docker info` .Name: the engine host's own name, e.g. "colima", "lima-default". */
+  name?: string
   /** The active docker context's name, e.g. "default", "colima", "rancher-desktop". */
   contextName?: string
   /**
@@ -91,6 +93,19 @@ const VM_ENGINE = /docker desktop|orbstack|rancher desktop|linuxkit|microsoft|ws
 // "lima01", "limassol" and "ranchero" do not match.
 const VM_ENGINE_NAME = /(^|[^a-z0-9])(colima|lima|rancher|podman)($|[^a-z0-9])/i
 
+// Rancher Desktop's socket lives under ~/.rd/, which the word rule above
+// cannot see.
+const VM_ENGINE_SOCKET_DIR = /\/\.rd\//
+
+// The one use of the engine's host name. Reached through the default context
+// and a /var/run/docker.sock symlink, a Colima or Lima VM (Rancher Desktop's
+// backend is Lima) shows nothing in the context or socket path; the VM's own
+// hostname is the only tell. Only the exact forms those tools give their VMs
+// count: "colima", "colima-<profile>", "lima-<instance>". A native host called
+// "rancher-node1", "podman-host", "lima01", "limassol" or "colima2" does not
+// match.
+const VM_ENGINE_HOST_NAME = /^(colima(-.+)?|lima-.+)$/i
+
 /**
  * Whether bind mounts on this engine need the state-volume layout.
  *
@@ -118,6 +133,8 @@ export function engineNeedsStateVolume(
   if ([info.contextName, info.endpoint].some((v) => !!v && VM_ENGINE_NAME.test(v))) {
     return { use: true, reason: 'unknown-engine' }
   }
+  if (info.endpoint && VM_ENGINE_SOCKET_DIR.test(info.endpoint)) return { use: true, reason: 'unknown-engine' }
+  if (info.name && VM_ENGINE_HOST_NAME.test(info.name)) return { use: true, reason: 'unknown-engine' }
   if (VM_ENGINE.test(info.operatingSystem) || VM_ENGINE.test(info.kernelVersion)) return { use: true, reason: 'vm-engine' }
   return { use: false, reason: 'native-linux' }
 }
@@ -222,9 +239,9 @@ export function resolveUseStateVolume(opts: {
   // symlinks were replaced by hand and the agent has since been writing real
   // files. In both cases the old compose file's mount says nothing about where
   // the data is, and the layout follows the setting and the engine.
-  const interrupted = layout === 'not-on-volume'
+  const mounted = layout === 'not-on-volume'
     && !!opts.existingCompose && composeMountsStateVolume(opts.existingCompose)
-    && !hasRegularStateDb(opts.dataDir)
+  const interrupted = mounted && !hasRegularStateDb(opts.dataDir)
   if (layout === 'on-volume' || interrupted) {
     if (opts.setting === false) {
       console.warn(interrupted
@@ -233,6 +250,22 @@ export function resolveUseStateVolume(opts: {
     }
     return { use: true, reason: 'existing-layout' }
   }
+  const decision = decide(opts)
+  // The mount was set aside above (regular state.db) and the new file drops
+  // it: say so once, because the volume itself stays behind.
+  if (mounted && !decision.use) {
+    const volume = opts.existingCompose?.match(/^\s*- (hermes-state-[^\s:]+):\/state\s*$/m)?.[1] ?? 'its state volume'
+    console.info(`[state-volume] ${opts.dataDir}: the live state.db is a regular file in the data dir, so the regenerated compose file no longer mounts ${volume}. The volume is left in place, not deleted.`)
+  }
+  return decision
+}
+
+/** The setting, else the engine: the part of the decision with no existing layout. */
+function decide(opts: {
+  setting?: boolean | null
+  hostInfo: () => DockerHostInfo | null | undefined
+  platform?: NodeJS.Platform
+}): StateVolumeDecision {
   if (typeof opts.setting === 'boolean') return { use: opts.setting, reason: 'setting' }
   const platform = opts.platform ?? process.platform
   if (platform !== 'linux') return engineNeedsStateVolume(platform, null)

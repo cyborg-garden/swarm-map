@@ -57,7 +57,7 @@ export class DockerService {
 
   /**
    * What the Docker engine behind the `docker` CLI is: its operating system,
-   * kernel and endpoint, the active context's name, and whether this process
+   * kernel, host name and endpoint, the active context's name, and whether this process
    * is itself in a container. Read by the state-volume decision
    * (state-volume.ts), which needs to know whether the engine runs in a VM.
    * Null when any of it cannot be read; the caller treats that as "unknown".
@@ -72,7 +72,7 @@ export class DockerService {
    * that it is local.
    */
   hostInfo(): DockerHostInfo | null {
-    let info: { OperatingSystem?: unknown; KernelVersion?: unknown; OSType?: unknown }
+    let info: { OperatingSystem?: unknown; KernelVersion?: unknown; OSType?: unknown; Name?: unknown }
     try {
       const out = execFileSync('docker', ['info', '--format', '{{json .}}'], { stdio: 'pipe', timeout: HOST_INFO_TIMEOUT_MS }).toString()
       info = JSON.parse(out)
@@ -110,6 +110,7 @@ export class DockerService {
       kernelVersion: str(info.KernelVersion),
       osType: str(info.OSType),
       endpoint,
+      name: str(info.Name),
       contextName,
       containerised,
     }

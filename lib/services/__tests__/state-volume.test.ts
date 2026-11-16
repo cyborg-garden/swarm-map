@@ -112,6 +112,34 @@ describe('engineNeedsStateVolume: VM engines that look native, and containerised
       .toEqual({ use: false, reason: 'native-linux' })
   })
 
+  // Reached through the default context and the standard socket path, these
+  // engines show only in the VM's own hostname (`docker info` .Name), or, for
+  // Rancher Desktop's own socket, in the ~/.rd/ directory. CONSTRUCTED
+  // fixtures, not captured output.
+  it.each([
+    ['Colima behind /var/run/docker.sock, default context (constructed)', { name: 'colima' }],
+    ['Lima behind /var/run/docker.sock, default context (constructed)', { name: 'lima-default' }],
+    ['Rancher Desktop on Lima behind /var/run/docker.sock, default context (constructed)', { name: 'lima-rancher-desktop' }],
+    ['Rancher Desktop through DOCKER_HOST at its own socket (constructed)', { contextName: '', endpoint: 'unix:///home/u/.rd/docker.sock', name: 'build-box' }],
+    ['a Colima profile, capitalised (constructed)', { name: 'Colima-work' }],
+  ])('Linux process, %s: on, as unknown', (_label, engine) => {
+    expect(engineNeedsStateVolume('linux', { ...GUEST, endpoint: 'unix:///var/run/docker.sock', ...engine }))
+      .toEqual({ use: true, reason: 'unknown-engine' })
+  })
+
+  // A native host's own name is not evidence unless it is exactly a form
+  // those tools give their VMs (constructed).
+  it.each([['rancher-node1'], ['podman-host'], ['lima01'], ['limassol'], ['colima2'], ['lima'], ['my-colima'], ['rancher'], ['build-box']])(
+    'native Linux host named "%s" stays off', (name) => {
+      expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', name })).toEqual({ use: false, reason: 'native-linux' })
+    })
+
+  it('a socket path that merely contains "rd" is not Rancher Desktop', () => {
+    for (const endpoint of ['unix:///srv/rd/docker.sock', 'unix:///home/u/.rdx/docker.sock', 'unix:///home/u/x.rd/docker.sock']) {
+      expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', endpoint }).use).toBe(false)
+    }
+  })
+
   it('Linux process inside a container: on, as unknown, even when the engine reads as native', () => {
     expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', containerised: true }))
       .toEqual({ use: true, reason: 'unknown-engine' })
@@ -218,6 +246,24 @@ describe('agentHasStateVolumeLayout / resolveUseStateVolume', () => {
       expect(warn).not.toHaveBeenCalled()
       // The engine still decides when nothing is forced.
       expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'darwin', hostInfo: native }).use).toBe(true)
+    })
+
+    it('says once that the volume is left in place when the regenerated file stops mounting it', () => {
+      fs.writeFileSync(path.join(dataDir, 'state.db'), 'the live database')
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })
+      expect(info).toHaveBeenCalledTimes(1)
+      const line = String(info.mock.calls[0][0])
+      expect(line).toContain('hermes-state-sci')
+      expect(line).toMatch(/no longer mounts/)
+      expect(line).toMatch(/left in place/)
+      // Not when the layout stays on, and not when there was no mount to drop.
+      info.mockClear()
+      resolveUseStateVolume({ dataDir, existingCompose, platform: 'darwin', hostInfo: native })
+      resolveUseStateVolume({ setting: true, dataDir, existingCompose, platform: 'linux', hostInfo: native })
+      resolveUseStateVolume({ dataDir, existingCompose: '      - /d:/opt/data\n', platform: 'linux', hostInfo: native })
+      resolveUseStateVolume({ dataDir, platform: 'linux', hostInfo: native })
+      expect(info).not.toHaveBeenCalled()
     })
 
     it('only a REGULAR state.db counts as live data in the data dir', () => {

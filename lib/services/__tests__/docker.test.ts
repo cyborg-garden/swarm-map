@@ -84,6 +84,7 @@ describe('DockerService', () => {
         kernelVersion: '6.8.0-45-generic',
         osType: 'linux',
         endpoint: 'unix:///var/run/docker.sock',
+        name: 'build-box',
         contextName: 'default',
         containerised: false,
       })
@@ -155,7 +156,7 @@ describe('DockerService', () => {
         .mockReturnValueOnce(Buffer.from(CONTEXT))
       expect(docker.hostInfo()).toEqual({
         operatingSystem: '', kernelVersion: '', osType: '', endpoint: 'unix:///var/run/docker.sock',
-        contextName: 'default', containerised: false,
+        name: '', contextName: 'default', containerised: false,
       })
     })
 
