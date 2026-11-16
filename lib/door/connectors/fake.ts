@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Facts, RoomRef } from '../../core/events.ts'
 import { toPrincipal, toRoom, type RoomInput, type SenderInput } from '../../core/normalise.ts'
-import type { ConnectorInbound, InviteEvent, NoticeEvent, SurfaceConnector } from '../connector.ts'
+import type { ConnectorEvent, ConnectorInbound, NoticeEvent, SurfaceConnector } from '../connector.ts'
 
 export interface SayInput {
   room: RoomInput
@@ -15,6 +15,8 @@ export interface SayInput {
   mention?: boolean
   inlineMention?: boolean
   replyToAgent?: boolean
+  /** The id of the message this one is a reply to. */
+  replyTo?: string
 }
 
 export interface LedgerEntry { nonce: string; id: string; room: string; text: string; turnId?: string; ts: string }
@@ -25,6 +27,8 @@ export interface FakeConnector {
   say(input: SayInput): string
   /** Script an edit or a delete of a message that was said. */
   notice(what: NoticeEvent['what'], messageId: string, room: string): void
+  /** Script a reaction on a message. */
+  react(input: { room: string; sender: SenderInput; messageId: string; emoji: string }): void
   /** Every post the door made. This is `answered`. */
   ledger: LedgerEntry[]
   /** Live facts the door will be given, by principal id. `delayMs` makes the lookup slow; `fail` makes it throw. */
@@ -32,7 +36,7 @@ export interface FakeConnector {
 }
 
 export function createFakeConnector(opts: { nonce: string }): FakeConnector {
-  const listeners: ((e: ConnectorInbound | InviteEvent | NoticeEvent) => void)[] = []
+  const listeners: ((e: ConnectorEvent) => void)[] = []
   const ledger: LedgerEntry[] = []
   const facts: FakeConnector['facts'] = { rolesOf: {} }
   let connected = false
@@ -66,12 +70,16 @@ export function createFakeConnector(opts: { nonce: string }): FakeConnector {
     notice(what, messageId, room) {
       for (const cb of listeners) cb({ kind: 'notice', what, surface: 'fake', room, messageId })
     },
+    react(input) {
+      for (const cb of listeners) cb({ kind: 'reaction', surface: 'fake', room: input.room, messageId: input.messageId, sender: toPrincipal(input.sender), emoji: input.emoji })
+    },
     say(input) {
       const messageId = randomUUID()
       const event: ConnectorInbound = {
         kind: 'inbound', surface: 'fake', room: toRoom(input.room, input.isDm), sender: toPrincipal(input.sender),
         isDm: input.isDm ?? false, mention: input.mention ?? false, inlineMention: input.inlineMention ?? false,
         replyToAgent: input.replyToAgent ?? false, text: input.text, attachments: [], messageId,
+        ...(input.replyTo !== undefined ? { replyTo: input.replyTo } : {}),
       }
       for (const cb of listeners) cb(event)
       return messageId

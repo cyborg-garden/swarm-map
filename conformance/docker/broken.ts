@@ -3,7 +3,8 @@
 // suite so a test that needs no Docker can hold the committed matrix to it.
 import { CHECKS, type Check } from '../suites/checks.ts'
 import { DOCKER_CHECKS } from './checks.ts'
-import type { RigVariant } from './compose.ts'
+import { TOOL_CHECKS } from '../suites/tool-checks.ts'
+import type { GateVariant, RigVariant } from './compose.ts'
 
 // C9p reads a tripwire inside the harness process. In a cell there is none: the wall and the sink do that job (C9).
 export const SKIPPED_IN_CELL: Record<string, string> = {
@@ -13,7 +14,7 @@ export const SKIPPED_IN_CELL: Record<string, string> = {
 export const IN_CELL: Check[] = [...CHECKS.filter((c) => !(c.id in SKIPPED_IN_CELL)), ...DOCKER_CHECKS]
 
 /** A rig broken in one way on purpose, the checks run against it, and what each must do. */
-export interface BrokenRig { what: string; variant: RigVariant; gate?: 'real' | 'allows-all'; seal: boolean; checks: string[]; red: string[]; green: string[] }
+export interface BrokenRig { what: string; variant: RigVariant; gate?: GateVariant; seal: boolean; checks: string[]; red: string[]; green: string[] }
 export const BROKEN_RIGS: Record<string, BrokenRig> = {
   'route-out': {
     what: 'The cell is also put on the network the sink is on',
@@ -58,5 +59,36 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
   'gate-kept': {
     what: 'C10 run in a cell that still has its gate, so the denied tool never runs',
     variant: 'good', gate: 'real', seal: false, checks: ['C10'], red: ['C10'], green: [],
+  },
+}
+
+/** The tool checks, for a harness whose shim can run them. They run in a cell like the rest, one rig each. */
+export const TOOLS_IN_CELL: Check[] = TOOL_CHECKS
+
+/**
+ * Cells whose tool gate is broken in one way each, for the tool checks. The
+ * rig around them is a sealed one: only the file the harness loads as its
+ * gate differs. A tool that reaches the network is `route-out` above (C9).
+ */
+export const TOOL_RIGS: Record<string, BrokenRig> = {
+  'gate-asks-nobody': {
+    what: 'The gate in the cell lets every tool run without asking, so nothing is held for an admin',
+    variant: 'good', gate: 'allows-all', seal: false, checks: ['C6', 'C6d'], red: ['C6', 'C6d'], green: [],
+  },
+  'gate-silence-is-yes': {
+    what: 'The gate in the cell lets a tool run when nobody answers it in time',
+    variant: 'good', gate: 'silence-is-yes', seal: false, checks: ['C5v', 'C6'], red: ['C5v'], green: ['C6'],
+  },
+  'gate-runs-more': {
+    what: 'The gate in the cell adds a command of its own to a shell call after the call was approved',
+    variant: 'good', gate: 'runs-more', seal: false, checks: ['C6x', 'C6'], red: ['C6x'], green: ['C6'],
+  },
+  'gate-no-path-check': {
+    what: 'The gate in the cell does not keep file tools in the scratch folder',
+    variant: 'good', gate: 'no-path-check', seal: false, checks: ['W1', 'W1+'], red: ['W1'], green: ['W1+'],
+  },
+  'gate-no-limits': {
+    what: 'The gate in the cell applies no time limit and no output limit',
+    variant: 'good', gate: 'no-limits', seal: false, checks: ['L1', 'L2'], red: ['L1', 'L2'], green: [],
   },
 }

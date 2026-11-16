@@ -1,0 +1,38 @@
+{
+  "id": "tools.posture/public-never-asks",
+  "rule": "tools.posture",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.ask": [
+      "shell"
+    ],
+    "posture": "public"
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.posture"
+    }
+  },
+  "twin": {
+    "patch": {
+      "posture": "team"
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "ask",
+        "rule": "priv.approval"
+      }
+    }
+  }
+}

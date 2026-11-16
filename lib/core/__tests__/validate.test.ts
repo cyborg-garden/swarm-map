@@ -28,9 +28,9 @@ describe('validatePolicy', () => {
   })
 
   it('[U:validate] refuses a policy that asks for a rule that is not built', () => {
-    const asks = withHash(applyPatch(team(), { 'tools.ask': ['shell'] }))
+    const asks = withHash(applyPatch(team(), { 'tools.browserGuard': 'public-hosts-only' }))
     expect(validatePolicy(asks, { testing: true })).toEqual([
-      'tools.ask: the rule that reads it (priv.approval) is not built yet',
+      'tools.browserGuard: the rule that reads it (tools.browser-guard) is not built yet',
     ])
   })
 

@@ -1,0 +1,37 @@
+{
+  "id": "priv.approval/ask-holds",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.ask": [
+      "shell"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "ask",
+      "rule": "priv.approval"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.ask": []
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

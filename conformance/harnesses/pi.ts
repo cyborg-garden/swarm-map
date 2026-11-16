@@ -10,7 +10,9 @@ import { PI_CAPS } from '../../lib/runtimes/pi/caps.ts'
 import { piEnv, startPiShim, type PiShimOptions } from '../../lib/runtimes/pi/shim.ts'
 import { childTripwireEnv, readChildTripwire } from '../guards/child-tripwire.ts'
 import { assertNoCredentials } from '../guards/preflight.ts'
+import { CHECKS, type Check } from '../suites/checks.ts'
 import type { Cell, HarnessUnderTest } from '../suites/harness.ts'
+import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const GATE = path.resolve(HERE, '..', '..', 'lib', 'runtimes', 'pi', 'cell', 'gate.ts')
@@ -20,8 +22,16 @@ export function fakePiCommand(): string[] {
   return [process.execPath, path.resolve(HERE, '..', 'rig', 'fake-pi.ts')]
 }
 
-const OTHERS = ['C1', 'C2', 'C3', 'C4', 'C4a', 'C4p', 'C4+', 'C5', 'C5v', 'C8p', 'C9p', 'C12', 'C15', 'C15t']
-const allBut = (...red: string[]): string[] => OTHERS.filter((id) => !red.includes(id))
+/** Every check Pi is put through: the shared ones, and the tool checks, which its shim can run. */
+export const PI_CHECKS: Check[] = [...CHECKS, ...TOOL_CHECKS]
+const SHARED = CHECKS.map((c) => c.id)
+const TOOLS = TOOL_CHECKS.map((c) => c.id)
+/** Every check, but for the ones named. */
+const allBut = (...red: string[]): string[] => [...SHARED, ...TOOLS].filter((id) => !red.includes(id))
+/** The shared checks, but for the ones named: for a fault the tool checks have nothing to say about. */
+const sharedBut = (...red: string[]): string[] => SHARED.filter((id) => !red.includes(id))
+// What a gate that asks nobody turns red among the tool checks: every one that waits for an answer, the scratch folder, and both limits.
+const UNGATED = ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
 function hostEnvSafeToHandOver(base: Record<string, string>): Record<string, string> {
@@ -47,7 +57,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
     const base: PiShimOptions = {
       ...cell.link, piCommand, agentDir: d.agent, sessionsDir: d.sessions, workDir: d.work, homeDir: d.home,
       gate: { path: GATE }, verdictTimeoutMs: cell.verdictTimeoutMs, gateTimeoutMs: cell.vetoTimeoutMs, gateReadyMs: 10_000,
-      rigEnv: watched,
+      rigEnv: watched, ...(cell.toolLimits ? { toolLimits: cell.toolLimits } : {}),
     }
     switch (variant) {
       case 'good': return base
@@ -59,6 +69,10 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(piEnv(base)), ...watched } }
       case 'dials-out': return { ...base, gate: { path: path.join(BROKEN, 'gate-dials-out.ts') } }
       case 'unwatched': return { ...base, rigEnv: {} }
+      case 'silence-is-yes': return { ...base, gate: { path: path.join(BROKEN, 'gate-silence-is-yes.ts') } }
+      case 'runs-more': return { ...base, gate: { path: path.join(BROKEN, 'gate-runs-more.ts') } }
+      case 'no-path-check': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-path-check.ts') } }
+      case 'no-limits': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-limits.ts') } }
       default: throw new Error(`the Pi harness has no shim variant '${variant}'`)
     }
   }
@@ -71,6 +85,13 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       touch: (file) => ({ name: 'bash', args: { command: `touch ${file}` } }),
       dumpEnv: (file) => ({ name: 'bash', args: { command: `env > ${file}` } }),
       exec: (command) => ({ name: 'bash', args: { command } }),
+    },
+    tools: {
+      read: (file) => ({ name: 'read', args: { path: file } }),
+      write: (file, content) => ({ name: 'write', args: { path: file, content } }),
+      list: (dir) => ({ name: 'ls', args: { path: dir } }),
+      // Pi's own config file, which holds the placeholder it presents for a key, and the folder Pi's folders sit in.
+      outside: (cell) => ({ file: path.join(dirs(cell).agent, 'models.json'), holds: cell.placeholder, dir: cell.dir, dirHolds: 'sessions' }),
     },
     workFile: (cell, name) => path.join(dirs(cell).work, name),
     cellEnv: (cell, variant) => piEnv(options(cell, variant)),
@@ -88,37 +109,59 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       'ignores-verdicts': {
         what: 'A gate that announces itself, then lets every tool run without asking',
         // C15t is red too: the added tool runs, but nobody was asked, so there is no receipt for it.
-        red: ['C4', 'C4p', 'C5', 'C5v', 'C15t'], green: allBut('C4', 'C4p', 'C5', 'C5v', 'C15t'),
+        red: ['C4', 'C4p', 'C5', 'C5v', 'C15t', ...UNGATED], green: allBut('C4', 'C4p', 'C5', 'C5v', 'C15t', ...UNGATED),
+      },
+      // In C5 the shim gives up first and says no out loud, so only the check where the gate is left waiting goes red.
+      'silence-is-yes': {
+        what: 'The real gate, except that it lets a tool run when nobody answers it in time',
+        red: ['C5v'], green: ['C4', 'C4+', 'C5', 'C6', 'C6d', 'C6t'], checks: ['C4', 'C4+', 'C5', 'C5v', 'C6', 'C6d', 'C6t'],
+      },
+      'runs-more': {
+        what: 'The real gate, and then a command of its own added to a shell call the real gate let through',
+        red: ['C6x'], green: ['C4', 'C4+', 'C6', 'C6d', 'W1', 'W1+', 'L2'], checks: ['C4', 'C4+', 'C6', 'C6d', 'C6x', 'W1', 'W1+', 'L2'],
+      },
+      'no-path-check': {
+        what: 'The real gate with the scratch-folder check left out',
+        red: ['W1'], green: ['C4', 'C4+', 'C6', 'W1+', 'L1', 'L2'], checks: ['C4', 'C4+', 'C6', 'W1', 'W1+', 'L1', 'L2'],
+      },
+      'no-limits': {
+        what: 'The real gate with the time limit and the output limit left out',
+        red: ['L1', 'L2'], green: ['C4', 'C4+', 'C6', 'C6x', 'W1', 'W1+'], checks: ['C4', 'C4+', 'C6', 'C6x', 'L1', 'L2', 'W1', 'W1+'],
+      },
+      // Not a fault of the shim: the gate and the door are the real ones. The chat surface says the wrong person answered.
+      'answers-as-admin': {
+        what: 'A chat surface that reports every answer to a request as the admin\'s, whoever sent it',
+        red: ['C6n'], green: TOOLS.filter((id) => id !== 'C6n'), checks: TOOLS, shim: 'good', lab: { rig: 'answers-as-admin' },
       },
       'leaks-env': {
         what: 'The real model key planted in Pi\'s environment',
-        red: ['C8p'], green: allBut('C8p'),
+        red: ['C8p'], green: sharedBut('C8p'), checks: SHARED,
       },
       'inherits-env': {
         what: 'Pi started with the shim\'s own environment passed down',
-        red: ['C8p'], green: allBut('C8p'),
+        red: ['C8p'], green: sharedBut('C8p'), checks: SHARED,
       },
       // With no gate, the right outcome is that nothing runs at all: no turn
       // reaches the model (C1) and the allowed tool does not run (C4+). A
       // dropped message is still dropped (C3).
       'gate-missing': {
         what: 'The gate file is not there, so Pi cannot load it',
-        red: ['C1', 'C4+'], green: ['C3'],
+        red: ['C1', 'C4+'], green: ['C3'], checks: SHARED,
       },
       'gate-silent': {
         what: 'Pi loads a gate that never announces itself and blocks nothing',
-        red: ['C1', 'C4+'], green: ['C3'],
+        red: ['C1', 'C4+'], green: ['C3'], checks: SHARED,
       },
       // Every check that starts Pi goes red, not only C9p: an attempt to leave the
       // machine fails whichever check it happened in. C3 starts no Pi, so it stays green.
       'dials-out': {
         what: 'A working gate that also tries to connect to an address outside this machine when Pi starts',
-        red: allBut('C3'), green: ['C3'],
+        red: sharedBut('C3'), green: ['C3'], checks: SHARED,
       },
       // Everything works, but nothing was watching. No evidence is not a pass: C9p must say so.
       'unwatched': {
         what: 'Pi started without the tripwire loaded inside it',
-        red: ['C9p'], green: allBut('C9p'),
+        red: ['C9p'], green: sharedBut('C9p'), checks: SHARED,
       },
     },
     rows: [

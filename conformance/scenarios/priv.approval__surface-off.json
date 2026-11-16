@@ -1,0 +1,35 @@
+{
+  "id": "priv.approval/surface-off",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "patch": {
+    "surfaces.fake.enabled": false
+  },
+  "steps": [
+    {
+      "approval": {
+        "room": "r-general",
+        "approver": "u-root"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "priv.approval"
+    },
+    "privilege": "guest"
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.enabled": true
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "priv.approval"
+      },
+      "privilege": "admin"
+    }
+  }
+}

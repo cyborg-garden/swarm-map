@@ -6,14 +6,14 @@
 // nothing.
 import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, tripwireAttempts } from '../../../conformance/guards/tripwire.ts'
-import type { ConnectorInbound, InviteEvent, NoticeEvent, SurfaceConnector } from '../connector.ts'
-import { chunk, createDiscordConnector, DISCORD_API, type DiscordOptions } from '../connectors/discord.ts'
+import type { ConnectorEvent, ConnectorInbound, SurfaceConnector } from '../connector.ts'
+import { chunk, createDiscordConnector, DISCORD_API, INTENTS, type DiscordOptions } from '../connectors/discord.ts'
 import { IDS, startDiscordRig } from '../testing/discord-rig.ts'
 import { assertFakeDiscord, fakeDiscordToken, startFakeDiscord, type FakeDiscord } from '../testing/fake-discord.ts'
 
 armTripwire()
 
-type Seen = ConnectorInbound | InviteEvent | NoticeEvent
+type Seen = ConnectorEvent
 interface Bench { fake: FakeDiscord; connector: SurfaceConnector; events: Seen[]; logs: string[]; fatal: number[] }
 let bench: Bench | undefined
 afterEach(async () => {
@@ -157,6 +157,54 @@ describe('Discord connector: what a message becomes', () => {
     b.fake.post({ id: '778', channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: 'next' })
     await until(() => inbound(b).length === 2)
     expect(inbound(b).map((e) => e.messageId)).toEqual(['777', '778'])
+  })
+})
+
+describe('Discord connector: answers to a request', () => {
+  const reactions = (b: Bench) => b.events.filter((e) => e.kind === 'reaction')
+
+  it('a reply carries the id of the message it answers, and nothing else does', async () => {
+    const b = await start()
+    b.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.admin }, content: 'approve', replyToMessage: '5550001', mentions: [b.fake.selfId] })
+    b.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.admin }, content: 'approve' })
+    // A message that points at another one without being a reply to it (a forward, say) is not one.
+    b.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.admin }, content: 'approve', replyToMessage: '5550001', type: 0 })
+    await until(() => inbound(b).length === 3)
+    expect(inbound(b).map((e) => e.replyTo)).toEqual(['5550001', undefined, undefined])
+    expect(inbound(b)[0].sender).toMatchObject({ id: IDS.admin, isBot: false, isSelf: false })
+  })
+
+  it('reactions are only asked for when the connector is told to, and are passed on with who Discord says put them there', async () => {
+    const quiet = await start()
+    expect(quiet.fake.identifies[0].intents & INTENTS.GUILD_MESSAGE_REACTIONS).toBe(0)
+    await quiet.connector.close()
+    await quiet.fake.close()
+
+    const b = await start({ reactions: true })
+    expect(b.fake.identifies).toEqual([{ intents: INTENTS.GUILDS | INTENTS.GUILD_MESSAGES | INTENTS.GUILD_MESSAGE_REACTIONS }])
+    const on = { channel: IDS.home, guild: IDS.guild, messageId: '5550001' }
+    b.fake.react({ ...on, author: { id: IDS.admin, nick: 'Root', roles: [IDS.role] }, emoji: '✅' })
+    b.fake.react({ ...on, author: { id: IDS.bot, bot: true }, emoji: '✅' })
+    b.fake.react({ ...on, author: { id: b.fake.selfId, bot: true }, emoji: '❌' })
+    await until(() => reactions(b).length === 3)
+    expect(reactions(b)).toEqual([
+      { kind: 'reaction', surface: 'discord', room: IDS.home, messageId: '5550001', emoji: '✅', sender: { id: IDS.admin, display: 'Root', isBot: false, isSelf: false, roles: [IDS.role] } },
+      { kind: 'reaction', surface: 'discord', room: IDS.home, messageId: '5550001', emoji: '✅', sender: { id: IDS.bot, display: IDS.bot, isBot: true, isSelf: false, roles: [] } },
+      { kind: 'reaction', surface: 'discord', room: IDS.home, messageId: '5550001', emoji: '❌', sender: { id: b.fake.selfId, display: b.fake.selfId, isBot: true, isSelf: true, roles: [] } },
+    ])
+  })
+
+  it('a reaction Discord says nothing about the sender of is not taken for a person\'s, and one from elsewhere is not passed on', async () => {
+    const b = await start({ reactions: true })
+    const on = { channel: IDS.home, guild: IDS.guild, messageId: '5550001' }
+    b.fake.react({ ...on, author: { id: IDS.admin }, emoji: '✅', bare: true })
+    b.fake.react({ ...on, guild: '7999999999999999999', author: { id: IDS.admin }, emoji: '✅' })
+    b.fake.react({ channel: IDS.home, messageId: '5550001', author: { id: IDS.admin }, emoji: '✅' }) // no server: a direct message
+    b.fake.react({ ...on, author: { id: IDS.admin }, emoji: '' })
+    b.fake.react({ ...on, author: { id: IDS.member }, emoji: '✅' })
+    await until(() => reactions(b).length === 2)
+    await sleep(30)
+    expect(reactions(b).map((e) => e.kind === 'reaction' && [e.sender.id, e.sender.isBot])).toEqual([[IDS.admin, true], [IDS.member, false]])
   })
 })
 

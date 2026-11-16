@@ -1,0 +1,40 @@
+{
+  "id": "tools.lists/deny-beats-ask",
+  "rule": "tools.lists",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.ask": [
+      "shell"
+    ],
+    "tools.deny": [
+      "shell"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.lists"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.deny": []
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "ask",
+        "rule": "priv.approval"
+      }
+    }
+  }
+}

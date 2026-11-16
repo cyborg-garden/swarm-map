@@ -12,6 +12,7 @@ import { decide } from '../../core/decide.ts'
 import { toPrincipal, toRoom } from '../../core/normalise.ts'
 import { withHash } from '../../core/policy/canonical.ts'
 import type { PolicyRecord } from '../../core/policy/types.ts'
+import { callHash } from '../../core/tools/call.ts'
 import type { SurfaceConnector } from '../connector.ts'
 import { createFakeConnector } from '../connectors/fake.ts'
 import { createDoor } from '../door.ts'
@@ -562,7 +563,8 @@ describe('door: tool verdicts', () => {
     await rig.door.idle()
     expect(rig.shim.toolsRan.map((t) => t.tool)).toEqual(['bash'])
     expect(rig.shim.verdicts).toEqual([
-      { tool: 'bash', allow: true },
+      // A yes names the call it is for: the hash of the tool's name and its whole input.
+      { tool: 'bash', allow: true, hash: callHash('bash', { from: 'echo' }) },
       { tool: 'read', allow: false, reason: 'file_read tools are not on the allow list.' },
       { tool: 'mystery', allow: false, reason: 'unknown tools are not on the allow list.' },
     ])
@@ -591,7 +593,7 @@ describe('door: tool verdicts', () => {
     const env = await shim.turn
     // The lookup now takes longer than the turn has left.
     rig.fake.facts.delayMs = 500
-    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'the turn is over' })
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'The turn ended before the tool could be decided.' })
     const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
     expect(tools.map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/turn.known'])
     shim.client.close()
@@ -604,7 +606,7 @@ describe('door: tool verdicts', () => {
     rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
     const env = await shim.turn
     rig.fake.facts.delayMs = 300
-    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true })
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true, hash: callHash('bash', {}) })
     shim.client.close()
   })
 
@@ -616,10 +618,10 @@ describe('door: tool verdicts', () => {
     const env = await shim.turn
     rig.fake.facts.fail = true
     // The door itself says no; the shim is not left to time out.
-    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'could not decide' })
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: false, reason: 'The tool could not be decided, so it does not run.' })
     expect(rig.receipts.all().filter((r) => r.event.kind === 'tool').map((r) => `${r.verdict}/${r.rule}`)).toEqual(['deny/tools.no-verdict'])
     rig.fake.facts.fail = false
-    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true })
+    expect(await shim.client.requestTool(env.turnId, 'bash', {})).toEqual({ allow: true, hash: callHash('bash', {}) })
     shim.client.close()
   })
 
@@ -666,7 +668,10 @@ describe('door: receipts and heartbeat', () => {
       await rig.door.idle()
       expect(rig.shim.verdicts.map((v) => v.allow)).toEqual([false, true])
       const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
-      expect(tools.map((r) => r.note)).toEqual(['tool=unmapped', 'tool=fetch'])
+      // The name, or the fixed word for a name that was not declared, and the short hash of the call. Nothing else.
+      expect(tools.map((r) => r.note)).toEqual([
+        `tool=unmapped call=${callHash(smuggled, { from: 'echo' }).slice(0, 12)}`, `tool=fetch call=${callHash('fetch', { from: 'echo' }).slice(0, 12)}`,
+      ])
       expect(JSON.stringify(rig.receipts.all())).not.toContain(smuggled)
       // The reason sent back to the shim does not echo it either.
       expect(rig.shim.verdicts.map((v) => v.reason ?? '').join(' ')).not.toContain(smuggled)

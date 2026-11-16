@@ -7,6 +7,7 @@ import { LETTA_CODE_CHECKS, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks } from '../suites/checks.ts'
 import type { HarnessUnderTest } from '../suites/harness.ts'
+import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 import { startLab, type RemoteCell } from '../suites/lab.ts'
 import { DOCKER_CHECKS } from './checks.ts'
 import { BRAIN_PORT, LAB_DIR, ROUTE_PORT } from './compose.ts'
@@ -39,7 +40,7 @@ if (check === 'hold') {
   console.log('SMLAB-READY')
   setInterval(() => {}, 60_000)
 } else {
-  const [result] = await runChecks({ ...base, harness, shim: 'good', remote }, [check], [...CHECKS, ...DOCKER_CHECKS, ...(second ? LETTA_CODE_CHECKS : [])])
+  const [result] = await runChecks({ ...base, harness, shim: 'good', remote }, [check], [...CHECKS, ...DOCKER_CHECKS, ...(second ? LETTA_CODE_CHECKS : TOOL_CHECKS)])
   console.log(`SMLAB-RESULT ${JSON.stringify(result ?? { id: check, title: check, pass: false, detail: 'no such check' })}`)
   process.exit(0)
 }

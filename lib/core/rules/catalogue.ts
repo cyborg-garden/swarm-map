@@ -104,13 +104,26 @@ export const RULES: Rule[] = [
     klass: 'security', kind: 'wall', reads: [`${S}.admins`], surfaces: 'all', enforcer: 'door', tests: ['D:priv.no-forged-identity/claims-admin'], checks: ['C13'] },
 
   { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied.',
-    klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/not-allowed'], checks: ['C4', 'C4a', 'C4+'] },
+    klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/deny-beats-ask', 'D:tools.lists/not-allowed'], checks: ['C4', 'C4a', 'C4+'] },
   // C4p shows the guardrail: the gate says no to a public agent. The wall behind it is C10
   // (the gate removed, in a sealed cell), so the rule is claimed for no harness until C10 runs.
   { id: 'tools.posture', statement: 'Public agents lose shell, file, code-exec and chat-admin tools.',
-    klass: 'security', kind: 'guardrail', reads: ['posture'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'U:tools-posture'], checks: ['C4p', 'C10'] },
+    klass: 'security', kind: 'guardrail', reads: ['posture'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'D:tools.posture/public-never-asks', 'U:tools-posture'], checks: ['C4p', 'C10'] },
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'], checks: ['C7'] },
+
+  // Who may answer, and that an answer is used once, is the door's alone: a wall. That the call
+  // is held until the answer comes, and that what runs is the call that was shown, needs the
+  // harness's gate: a guardrail. So the rule as a whole is a guardrail with a wall behind it (the cell).
+  { id: 'priv.approval', statement: 'A tool in ask mode runs only after an admin says yes in the room to that exact call. Anyone else\'s answer changes nothing, a yes is used once, and no answer in time is a no.',
+    klass: 'security', kind: 'guardrail', reads: ['tools.ask', `${S}.admins`], surfaces: 'all', enforcer: 'gate',
+    tests: ['D:priv.approval/ask-holds', 'D:priv.approval/ask-without-allow', 'D:priv.approval/admin-answers', 'D:priv.approval/member-answers', 'D:priv.approval/role-is-not-enough', 'D:priv.approval/bot-answers', 'D:priv.approval/agent-answers', 'D:priv.approval/surface-off',
+      'U:call-hash', 'U:call-shown', 'P:approval', 'P:approval-who', 'P:approval-once', 'P:approval-shown', 'P:approval-timeout', 'P:approval-recheck', 'P:approval-receipts'],
+    checks: ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r'] },
+  { id: 'tools.workspace', statement: 'A file tool reaches only the scratch folder: not by two dots, a full path or a link.',
+    klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'gate', tests: ['U:workspace-path'], checks: ['W1', 'W1+'] },
+  { id: 'tools.limits', statement: 'A shell call is stopped at a time limit, a call\'s output is cut at a size limit before the model sees it, and a conversation gets a set number of tool calls an hour.',
+    klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'gate', tests: ['P:tool-limit'], checks: ['L1', 'L2'] },
 
   // Both model-route rules hold only for a harness whose model wire format has
   // a ModelShape (lib/door/model-shapes.ts). One exists: OpenAI chat-completions.

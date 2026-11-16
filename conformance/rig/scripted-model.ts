@@ -14,6 +14,12 @@ export interface ScriptEntry {
   match: string
   /** Ask for this tool first; answer with `text` once a tool result comes back. */
   tool?: { name: string; args: unknown }
+  /**
+   * Ask for these tools one after another, on every turn the entry plays: the
+   * next one each time a tool result comes back, then `text`. Counted from the
+   * last message a person sent, so the same entry asks again on a later turn.
+   */
+  tools?: { name: string; args: unknown }[]
   text: string
   /** Leave the run's stamp off the reply, for a test that needs the text to end exactly where it says. */
   noStamp?: boolean
@@ -119,12 +125,15 @@ export function startScriptedModel(opts: {
       res.end(entry.rawBody)
       return
     }
-    const toolPending = entry?.tool && !(body.messages ?? []).some((m) => m.role === 'tool')
+    const messages = body.messages ?? []
+    const sinceUser = messages.slice(messages.map((m) => m.role).lastIndexOf('user') + 1).filter((m) => m.role === 'tool').length
+    const nextTool = entry?.tools ? entry.tools[sinceUser] : entry?.tool && !messages.some((m) => m.role === 'tool') ? entry.tool : undefined
+    const toolPending = nextTool !== undefined
     const base = { id: `chatcmpl-${randomUUID()}`, created: Math.floor(Date.now() / 1000), model: body.model ?? 'scripted' }
     const text = entry?.noStamp ? entry.text : `${entry?.text ?? 'ok'} ${stamp}`
     entry?.before?.()
     const toolCall = toolPending
-      ? { id: `call_${randomUUID().slice(0, 8)}`, type: 'function', function: { name: entry!.tool!.name, arguments: JSON.stringify(entry!.tool!.args) } }
+      ? { id: `call_${randomUUID().slice(0, 8)}`, type: 'function', function: { name: nextTool!.name, arguments: JSON.stringify(nextTool!.args) } }
       : undefined
     const finish = toolCall ? 'tool_calls' : 'stop'
 

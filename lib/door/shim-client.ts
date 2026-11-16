@@ -7,7 +7,8 @@ import net from 'node:net'
 import { createLineDecoder, encodeLine } from './framing.ts'
 import { PROTOCOL_VERSION, type Capabilities, type FromShim, type ToShim } from './protocol.ts'
 
-export interface ToolAnswer { allow: boolean; reason?: string }
+/** `hash` comes with a yes: the hash of the call the sidecar said yes to. */
+export interface ToolAnswer { allow: boolean; reason?: string; hash?: string }
 
 export interface ShimClient {
   send(msg: FromShim): void
@@ -35,7 +36,10 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
       const msg = record as ToShim
       if (msg.t === 'tool_verdict') {
         // Only a pending call can be answered, and only once.
-        waiting.get(msg.callId)?.({ allow: msg.allow === true, ...(msg.reason ? { reason: msg.reason } : {}) })
+        waiting.get(msg.callId)?.({
+          allow: msg.allow === true, ...(msg.reason ? { reason: msg.reason } : {}),
+          ...(msg.allow === true && typeof msg.hash === 'string' ? { hash: msg.hash } : {}),
+        })
         return
       }
       for (const cb of listeners) cb(msg)

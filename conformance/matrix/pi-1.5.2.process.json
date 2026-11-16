@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "process",
-  "date": "2026-11-14",
+  "date": "2026-11-16",
   "model": "scripted",
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
@@ -82,6 +82,56 @@
       "status": "pass"
     },
     {
+      "id": "C6",
+      "title": "ask: a tool is held until an admin says yes in the room, and then runs",
+      "status": "pass"
+    },
+    {
+      "id": "C6n",
+      "title": "ask: an answer from someone who is not an admin, a bot, a named bot or the agent itself changes nothing",
+      "status": "pass"
+    },
+    {
+      "id": "C6d",
+      "title": "ask: an admin's no means the tool does not run",
+      "status": "pass"
+    },
+    {
+      "id": "C6t",
+      "title": "ask: no answer in time means the tool does not run",
+      "status": "pass"
+    },
+    {
+      "id": "C6x",
+      "title": "ask: what runs is exactly what was shown in the room",
+      "status": "pass"
+    },
+    {
+      "id": "C6r",
+      "title": "ask: a yes is used once, and the same call asked again needs its own",
+      "status": "pass"
+    },
+    {
+      "id": "W1",
+      "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
+      "status": "pass"
+    },
+    {
+      "id": "W1+",
+      "title": "positive control: file tools read, write and list inside the scratch folder",
+      "status": "pass"
+    },
+    {
+      "id": "L1",
+      "title": "a shell call that runs past the time limit is stopped",
+      "status": "pass"
+    },
+    {
+      "id": "L2",
+      "title": "tool output past the size limit does not reach the model",
+      "status": "pass"
+    },
+    {
       "id": "S0",
       "title": "fake-proof preflight for the Docker rig",
       "status": "not-run",
@@ -104,12 +154,6 @@
       "title": "no host credential in the cell env or mounts",
       "status": "not-run",
       "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
-    },
-    {
-      "id": "C6",
-      "title": "ask: a tool waits for an admin yes",
-      "status": "not-run",
-      "reason": "not built in this slice"
     },
     {
       "id": "C8",
@@ -145,7 +189,7 @@
       "id": "C13",
       "title": "text that claims to be an admin does not change a tool verdict",
       "status": "not-run",
-      "reason": "blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names"
+      "reason": "not built as a check of its own. C6n covers a turn whose text claims an admin said yes, and answers from everyone who is not one"
     },
     {
       "id": "C14",
@@ -350,6 +394,64 @@
       ]
     },
     {
+      "rule": "priv.approval",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "C6",
+          "status": "pass"
+        },
+        {
+          "id": "C6n",
+          "status": "pass"
+        },
+        {
+          "id": "C6d",
+          "status": "pass"
+        },
+        {
+          "id": "C6t",
+          "status": "pass"
+        },
+        {
+          "id": "C6x",
+          "status": "pass"
+        },
+        {
+          "id": "C6r",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.workspace",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "W1",
+          "status": "pass"
+        },
+        {
+          "id": "W1+",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.limits",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "L1",
+          "status": "pass"
+        },
+        {
+          "id": "L2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
       "rule": "budget.cap",
       "status": "not-run",
       "checks": [
@@ -455,14 +557,84 @@
         "C4p",
         "C5",
         "C5v",
-        "C15t"
+        "C15t",
+        "C6",
+        "C6n",
+        "C6d",
+        "C6t",
+        "C6x",
+        "C6r",
+        "W1",
+        "L1",
+        "L2"
       ],
       "failed": [
         "C4",
         "C4p",
         "C5",
         "C5v",
-        "C15t"
+        "C15t",
+        "C6",
+        "C6n",
+        "C6d",
+        "C6t",
+        "C6x",
+        "C6r",
+        "W1",
+        "L1",
+        "L2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "silence-is-yes",
+      "mustFail": [
+        "C5v"
+      ],
+      "failed": [
+        "C5v"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "runs-more",
+      "mustFail": [
+        "C6x"
+      ],
+      "failed": [
+        "C6x"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "no-path-check",
+      "mustFail": [
+        "W1"
+      ],
+      "failed": [
+        "W1"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "no-limits",
+      "mustFail": [
+        "L1",
+        "L2"
+      ],
+      "failed": [
+        "L1",
+        "L2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "answers-as-admin",
+      "mustFail": [
+        "C6n"
+      ],
+      "failed": [
+        "C6n"
       ],
       "suiteCaughtIt": true
     },
@@ -596,7 +768,17 @@
         "C9p",
         "C12",
         "C15",
-        "C15t"
+        "C15t",
+        "C6",
+        "C6n",
+        "C6d",
+        "C6t",
+        "C6x",
+        "C6r",
+        "W1",
+        "W1+",
+        "L1",
+        "L2"
       ],
       "suiteCaughtIt": true
     }

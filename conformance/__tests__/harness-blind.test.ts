@@ -13,9 +13,10 @@ import { fakeLettaCodeCommand, lettaCodeHarness } from '../harnesses/letta-code.
 import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
 import { CHECKS } from '../suites/checks.ts'
 import { brokenVariants } from '../suites/harness.ts'
+import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
-const SHARED = ['suites/lab.ts', 'suites/checks.ts', 'suites/harness.ts', 'matrix.ts', 'broken/chatty.ts']
+const SHARED = ['suites/lab.ts', 'suites/checks.ts', 'suites/tool-checks.ts', 'suites/harness.ts', 'matrix.ts', 'broken/chatty.ts']
 // Code only: a comment may mention a harness by way of example.
 const code = (file: string): string =>
   readFileSync(path.join(ROOT, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
@@ -39,11 +40,13 @@ describe('the shared shim suite names no harness', () => {
   it('[U:harness-blind] a second harness can be put through the checks by writing an adapter and nothing else', () => {
     // The adapter is plain data plus two functions; the suite asks it for everything it needs.
     const pi = piHarness(fakePiCommand(), 'fake')
-    expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
-    const ids = CHECKS.map((c) => c.id)
+    // One optional key since: `tools`, for a harness whose shim can run the tool checks.
+    expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'tools', 'tripwire', 'workFile'])
+    // Its broken shims name the shared checks and the tool checks, which are shared too, and nothing of its own.
+    const ids = [...CHECKS, ...TOOL_CHECKS].map((c) => c.id)
     for (const v of Object.values(brokenVariants(pi))) for (const id of [...v.red, ...v.green]) expect(ids).toContain(id)
-    // The second one did it: one more optional key (a patch to the lab's starting policy), and nothing else.
+    // The second one did it: one more optional key (a patch to the lab's starting policy), and why it is not put through the tool checks.
     const second = lettaCodeHarness(fakeLettaCodeCommand(), 'fake')
-    expect(Object.keys(second).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'policy', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
+    expect(Object.keys(second).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'noTools', 'policy', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
   })
 })

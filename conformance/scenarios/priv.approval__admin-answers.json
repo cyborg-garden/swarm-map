@@ -1,0 +1,32 @@
+{
+  "id": "priv.approval/admin-answers",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "approval": {
+        "room": "r-general",
+        "approver": "u-root"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "allow",
+      "rule": "priv.approval"
+    },
+    "privilege": "admin"
+  },
+  "twin": {
+    "patch": {
+      "surfaces.fake.admins": []
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "deny",
+        "rule": "priv.approval"
+      },
+      "privilege": "guest"
+    }
+  }
+}

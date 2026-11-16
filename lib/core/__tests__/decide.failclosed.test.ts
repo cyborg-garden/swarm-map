@@ -72,6 +72,12 @@ describe('decide() fails closed on a value it does not recognise', () => {
     expect(d).toMatchObject({ verdict: 'deny', rule: 'ctl.valid', privilege: 'guest' })
     expect(d.why).toContain('posture')
   })
+
+  it('[U:fail-closed] nobody can approve a tool call under a record that is not valid, the admin included', () => {
+    const answer: Event = { kind: 'approval', surface: 'fake', room: toRoom('r-general'), approver: toPrincipal('u-root') }
+    expect(decide(team(), answer, {})).toMatchObject({ verdict: 'allow', rule: 'priv.approval' })
+    expect(decide(team({ posture: 'Public' }), answer, {})).toMatchObject({ verdict: 'deny', rule: 'ctl.valid', privilege: 'guest' })
+  })
 })
 
 // The cap compares spend with a limit. A caller that has no spend figure to

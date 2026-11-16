@@ -70,11 +70,13 @@ export interface FakePost {
   roleMentions?: string[]
   /** The author of the message this one replies to. */
   replyTo?: string
+  /** The id of the message this one replies to. */
+  replyToMessage?: string
   type?: number
   webhook?: boolean
   id?: string
 }
-export interface Posted { channel: string; content: string; allowedMentions: unknown; replyTo?: string }
+export interface Posted { id: string; channel: string; content: string; allowedMentions: unknown; replyTo?: string }
 
 export interface FakeDiscord {
   nonce: string
@@ -86,6 +88,8 @@ export interface FakeDiscord {
   addChannel(c: { id: string; type?: number; parent?: string; listed?: boolean; guild?: string }): void
   /** Send a message to every connected bot. Returns its id. */
   post(m: FakePost): string
+  /** Tell every connected bot that someone reacted to a message. `bare` leaves out what Discord says about who. */
+  react(r: { channel: string; guild?: string; messageId: string; author: FakeAuthor; emoji: string; bare?: boolean }): void
   edit(id: string, channel: string, opts?: { preview?: boolean; author?: string }): void
   remove(id: string, channel: string): void
   /** Every message the bot posted over REST. */
@@ -190,8 +194,8 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
         const once = body.enforce_nonce === true && typeof body.nonce === 'string' && body.nonce !== '' && body.nonce.length <= 25 ? `${channel} ${body.nonce}` : undefined
         const made = once ? byNonce.get(once) : undefined
         if (made) return reply(200, { id: made, timestamp: new Date().toISOString() })
-        fake.posted.push({ channel, content: body.content, allowedMentions: body.allowed_mentions, ...(body.message_reference?.message_id ? { replyTo: body.message_reference.message_id } : {}) })
         const id = String(++nextId)
+        fake.posted.push({ id, channel, content: body.content, allowedMentions: body.allowed_mentions, ...(body.message_reference?.message_id ? { replyTo: body.message_reference.message_id } : {}) })
         if (once) byNonce.set(once, id)
         if (losing > 0) { losing--; return reply(502, { message: 'bad gateway' }) }
         return reply(200, { id, timestamp: new Date().toISOString() })
@@ -285,7 +289,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
     post(m: FakePost): string {
       const id = m.id ?? String(++nextId)
       dispatch('MESSAGE_CREATE', {
-        id, type: m.type ?? (m.replyTo ? 19 : 0), channel_id: m.channel, ...(m.guild ? { guild_id: m.guild } : {}),
+        id, type: m.type ?? (m.replyTo || m.replyToMessage ? 19 : 0), channel_id: m.channel, ...(m.guild ? { guild_id: m.guild } : {}),
         author: { id: m.author.id, username: m.author.name ?? m.author.id, ...(m.author.bot ? { bot: true } : {}) },
         ...(m.guild ? { member: { roles: m.author.roles ?? [], ...(m.author.nick ? { nick: m.author.nick } : {}) } } : {}),
         ...(m.webhook ? { webhook_id: 'w-1' } : {}),
@@ -293,9 +297,16 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
         mentions: (m.mentions ?? []).map((u) => ({ id: u })),
         mention_everyone: m.everyone === true, mention_roles: m.roleMentions ?? [],
         ...(m.replyTo ? { referenced_message: { author: { id: m.replyTo } } } : {}),
+        ...(m.replyToMessage ? { message_reference: { message_id: m.replyToMessage, channel_id: m.channel } } : {}),
         attachments: [], timestamp: new Date().toISOString(),
       })
       return id
+    },
+    react(r: { channel: string; guild?: string; messageId: string; author: FakeAuthor; emoji: string; bare?: boolean }) {
+      dispatch('MESSAGE_REACTION_ADD', {
+        user_id: r.author.id, channel_id: r.channel, message_id: r.messageId, ...(r.guild ? { guild_id: r.guild } : {}), emoji: { id: null, name: r.emoji },
+        ...(r.bare ? {} : { member: { user: { id: r.author.id, username: r.author.name ?? r.author.id, ...(r.author.bot ? { bot: true } : {}) }, roles: r.author.roles ?? [], ...(r.author.nick ? { nick: r.author.nick } : {}) } }),
+      })
     },
     edit(id: string, channel: string, o: { preview?: boolean; author?: string } = {}) {
       dispatch('MESSAGE_UPDATE', { id, channel_id: channel, author: { id: o.author ?? 'u-someone' }, edited_timestamp: o.preview ? null : new Date().toISOString() })

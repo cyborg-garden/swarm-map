@@ -120,7 +120,10 @@ describe('brain server', () => {
         if (m.t !== 'tool_request') return
         asked.push(m.tool)
         if (m.tool === 'answered-yes') l.send({ t: 'tool_verdict', callId: m.callId, allow: true })
+        if (m.tool === 'answered-yes-for') l.send({ t: 'tool_verdict', callId: m.callId, allow: true, hash: 'f'.repeat(64) })
         if (m.tool === 'answered-no') l.send({ t: 'tool_verdict', callId: m.callId, allow: false, reason: 'nope' })
+        if (m.tool === 'answered-no-with-a-hash') l.send({ t: 'tool_verdict', callId: m.callId, allow: false, hash: 'f'.repeat(64) })
+        if (m.tool === 'answered-maybe') l.send({ t: 'tool_verdict', callId: m.callId, allow: 'true' as never, hash: 'f'.repeat(64) })
         // 'silence' gets no verdict at all
       })
     })
@@ -128,8 +131,12 @@ describe('brain server', () => {
     await server!.connected()
     expect(await shim.requestTool('t-1', 'answered-yes', {})).toEqual({ allow: true })
     expect(await shim.requestTool('t-1', 'answered-no', {})).toEqual({ allow: false, reason: 'nope' })
+    // The hash of the call a yes is for is handed on with the yes, and with nothing else.
+    expect(await shim.requestTool('t-1', 'answered-yes-for', {})).toEqual({ allow: true, hash: 'f'.repeat(64) })
+    expect(await shim.requestTool('t-1', 'answered-no-with-a-hash', {})).toEqual({ allow: false })
+    expect(await shim.requestTool('t-1', 'answered-maybe', {})).toEqual({ allow: false })
     expect(await shim.requestTool('t-1', 'silence', {})).toEqual({ allow: false, reason: 'no verdict in time' })
-    expect(asked).toEqual(['answered-yes', 'answered-no', 'silence'])
+    expect(asked).toEqual(['answered-yes', 'answered-no', 'answered-yes-for', 'answered-no-with-a-hash', 'answered-maybe', 'silence'])
     // A verdict that arrives after the timeout cannot turn the no into a yes.
     link!.send({ t: 'tool_verdict', callId: 'late', allow: true })
     shim.close()

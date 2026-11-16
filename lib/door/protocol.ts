@@ -37,7 +37,12 @@ export interface Usage { model: string; inTokens: number; outTokens: number; usd
 
 export type ToShim =
   | { t: 'turn'; env: Envelope }
-  | { t: 'tool_verdict'; callId: string; allow: boolean; reason?: string }
+  /**
+   * `hash` goes with every yes: the hash of the call the door decided on
+   * (callHash in core/tools/call.ts). A veto in the cell runs the call only if
+   * what it is about to run has that hash.
+   */
+  | { t: 'tool_verdict'; callId: string; allow: boolean; reason?: string; hash?: string }
   | { t: 'cancel'; turnId: string }
   | { t: 'reset'; sessionKey: string }
   | { t: 'shutdown' }

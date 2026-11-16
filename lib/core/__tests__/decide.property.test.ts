@@ -111,7 +111,6 @@ describe('decide() properties', () => {
       'surfaces.*.bots.roles': ['role-bots'],
       'surfaces.*.invites.mode': 'open',
       'surfaces.*.approverRoles': ['role-mod'],
-      'tools.ask': ['shell'],
       'tools.perRoom': { 'r-general': { deny: ['shell'] } },
       'tools.browserGuard': 'public-hosts-only',
       'keys': [{ ref: 'k-1', kind: 'model', hosts: [] }],

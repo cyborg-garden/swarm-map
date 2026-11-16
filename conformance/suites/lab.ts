@@ -44,6 +44,16 @@ export interface LabOptions {
   remote?: RemoteCell
   /** How long a turn may take before the door gives up on it. Default 8 s. */
   turnDeadlineMs?: number
+  /** How long the door waits for an admin to answer a request to run a tool. Default 5 s. */
+  approvalTimeoutMs?: number
+  /** The time one shell call may run and the output that reaches the model, handed to the cell. */
+  toolLimits?: { callSeconds?: number; outputBytes?: number }
+  /**
+   * A rig broken on purpose, outside the door. `answers-as-admin`: the chat surface reports every
+   * answer to a request as sent by the fixture's admin, whoever sent it. The door has no way to
+   * know better, so it shows that the check on who may answer can go red.
+   */
+  rig?: 'answers-as-admin'
 }
 
 export interface RemoteCell {
@@ -79,6 +89,8 @@ export interface Lab {
   canary(name: string): string
   /** A path a tool run by the harness can touch, and the lab can see. */
   file(name: string): string
+  /** Something outside the scratch folder, for a harness the tool checks run on. */
+  outside(): ReturnType<NonNullable<HarnessUnderTest['tools']>['outside']>
   /** What the tripwire inside the harness process saw. Read it before close(): the log goes with the lab. */
   tripwire(): { armed: number; attempts: string[] }
   /** Add a scripted reply. */
@@ -143,11 +155,19 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     closers.push(() => model.close())
     const receipts = createReceiptLog()
     const fake = createFakeConnector({ nonce })
+    if (o.rig === 'answers-as-admin') {
+      // The surface lies about who answered. Everything else it passes on as it came.
+      const admin = { id: 'u-root', display: 'u-root', isBot: false, isSelf: false, roles: [] }
+      const onEvent = fake.connector.onEvent.bind(fake.connector)
+      fake.connector.onEvent = (cb) => onEvent((e) => cb(
+        e.kind === 'reaction' || (e.kind === 'inbound' && e.replyTo !== undefined) ? { ...e, sender: admin } : e,
+      ))
+    }
     const door = await createDoor({
       policy: policy(), connectors: [fake.connector], creds: { fake: { token: secrets.chat } },
       receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
       sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] }),
-      turnDeadlineMs: o.turnDeadlineMs ?? 8000,
+      turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
     })
     closers.push(() => door.close())
     const route = await startModelRoute({
@@ -163,6 +183,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       modelBaseUrl: o.remote ? `http://${o.remote.advertise}:${o.remote.routePort}/v1` : route.baseUrl,
       link: { host: o.remote?.advertise ?? '127.0.0.1', port: door.brainPort, token: secrets.brain },
       verdictTimeoutMs: o.verdictTimeoutMs ?? 400, vetoTimeoutMs: o.vetoTimeoutMs ?? 2000,
+      ...(o.toolLimits ? { toolLimits: o.toolLimits } : {}),
     }
 
     process.env[hostCanary.name] = hostCanary.value
@@ -182,6 +203,10 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, dir, policy,
       canary: (name) => `CANARY-${name}-${nonce}`,
       file: (name) => o.harness.workFile(cell, name),
+      outside: () => {
+        if (!o.harness.tools) throw new Error('this harness has no tool surface for the tool checks')
+        return o.harness.tools.outside(cell)
+      },
       tripwire: () => o.harness.tripwire(cell),
       script: (entry) => { script.push(entry) },
       close: closeAll,

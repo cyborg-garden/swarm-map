@@ -1,0 +1,38 @@
+{
+  "id": "priv.approval/ask-without-allow",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.allow": [],
+    "tools.ask": [
+      "shell"
+    ]
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "ask",
+      "rule": "priv.approval"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.ask": []
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "deny",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

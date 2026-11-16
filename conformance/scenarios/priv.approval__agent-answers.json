@@ -1,0 +1,43 @@
+{
+  "id": "priv.approval/agent-answers",
+  "rule": "priv.approval",
+  "policy": "policy-team.json",
+  "steps": [
+    {
+      "approval": {
+        "room": "r-general",
+        "approver": {
+          "id": "u-root",
+          "isSelf": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "priv.approval"
+    },
+    "privilege": "guest"
+  },
+  "twin": {
+    "steps": [
+      {
+        "approval": {
+          "room": "r-general",
+          "approver": {
+            "id": "u-root",
+            "isSelf": false
+          }
+        }
+      }
+    ],
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "priv.approval"
+      },
+      "privilege": "admin"
+    }
+  }
+}

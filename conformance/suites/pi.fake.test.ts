@@ -12,15 +12,18 @@ import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
-import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
-import { CHECKS, runChecks, type CheckResult } from './checks.ts'
+import { fakePiCommand, PI_CHECKS as CHECKS, piHarness } from '../harnesses/pi.ts'
+import { runChecks as runShared, type CheckResult } from './checks.ts'
 import { KNOWN_CHECK_IDS, type Matrix } from '../matrix.ts'
 import { brokenVariants } from './harness.ts'
+import { TOOL_CHECKS } from './tool-checks.ts'
 
 armTripwire()
 afterAll(() => expect(tripwireAttempts()).toEqual([]))
 
 const harness = piHarness(fakePiCommand(), 'fake')
+// Every run here is over Pi's whole list: the shared checks and the tool checks.
+const runChecks = (base: Parameters<typeof runShared>[0], ids?: string[]) => runShared(base, ids, CHECKS)
 const byId = (results: CheckResult[]) => Object.fromEntries(results.map((r) => [r.id, r]))
 
 describe('Pi shim, against the fake Pi', () => {
@@ -36,7 +39,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
-      ['chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'unwatched'])
+      ['answers-as-admin', 'chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'no-limits', 'no-path-check', 'runs-more', 'silence-is-yes', 'unwatched'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)
@@ -44,10 +47,33 @@ describe('must-fail: broken shims turn their named checks red', () => {
     }
   })
 
-  it.each(Object.entries(variants))('[U:must-fail] %s', async (shim, { red, green }) => {
-    const results = byId(await runChecks({ harness, shim }))
-    for (const id of red) expect(results[id].pass, `${shim} must fail ${id}`).toBe(false)
-    for (const id of green) expect(results[id].pass, `${shim} must still pass ${id}: ${results[id].detail}`).toBe(true)
+  it.each(Object.entries(variants))('[U:must-fail] %s', async (name, { red, green, shim, lab, checks }) => {
+    const results = byId(await runChecks({ harness, shim: shim ?? name, ...lab }, checks))
+    for (const id of red) expect(results[id].pass, `${name} must fail ${id}`).toBe(false)
+    for (const id of green) expect(results[id].pass, `${name} must still pass ${id}: ${results[id].detail}`).toBe(true)
+  }, 240_000)
+
+  it('[U:must-fail] every tool check has something broken on purpose that must turn it red', () => {
+    const covered = new Set(Object.values(variants).flatMap((v) => v.red))
+    for (const check of TOOL_CHECKS) if (check.id !== 'W1+') expect([...covered], check.id).toContain(check.id)
+  })
+
+  it('[U:must-fail] each tool check goes red for the reason it names', async () => {
+    const detail = async (name: string, id: string): Promise<string> => {
+      const v = variants[name]
+      return (await runChecks({ harness, shim: v.shim ?? name, ...v.lab }, [id]))[0].detail
+    }
+    expect(await detail('ignores-verdicts', 'C6')).toContain('the door never asked in the room')
+    expect(await detail('answers-as-admin', 'C6n')).toContain('the tool ran on an answer that was not an admin\'s')
+    expect(await detail('runs-more', 'C6x')).toContain('the call that ran made')
+    expect(await detail('runs-more', 'C6x')).toContain('runs-more.marker')
+    expect(await detail('no-path-check', 'W1')).toContain('a file outside the scratch folder was read')
+    expect(await detail('no-path-check', 'W1')).toContain('a folder outside the scratch folder was listed')
+    expect(await detail('no-path-check', 'W1')).toContain('a file was written outside the scratch folder (w1.planted)')
+    expect(await detail('no-path-check', 'W1')).toContain('a file was written outside the scratch folder (w1.planted-by-link)')
+    expect(await detail('no-limits', 'L1')).toBe('a call ran on past the time limit')
+    expect(await detail('no-limits', 'L2')).toContain('output past the size limit reached the model')
+    expect(await detail('silence-is-yes', 'C5v')).toContain('the tool ran with no verdict')
   }, 120_000)
 
   it('[U:must-fail] a harness that ran with no tripwire inside it fails C9p for that reason, not for another', async () => {

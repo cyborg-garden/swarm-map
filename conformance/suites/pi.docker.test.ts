@@ -22,8 +22,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { BROKEN_RIGS as BROKEN, IN_CELL, SKIPPED_IN_CELL as SKIPPED } from '../docker/broken.ts'
-import { contextFiles, readSource, type RigVariant } from '../docker/compose.ts'
+import { BROKEN_RIGS, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL as SKIPPED, TOOL_RIGS, TOOLS_IN_CELL } from '../docker/broken.ts'
+import { contextFiles, readSource, type GateVariant, type RigVariant } from '../docker/compose.ts'
 import {
   cellRefuses, imageProblems, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, withRig,
   type DockerFacts, type HostListener,
@@ -36,6 +36,9 @@ import type { CheckResult } from './checks.ts'
 armTripwire()
 
 const harness = piHarness(['pi'], 'real')
+// Pi's shim can run the tool checks, so they run in a cell too, with their own broken gates.
+const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL]
+const BROKEN = { ...BROKEN_RIGS, ...TOOL_RIGS }
 const EXPECTED = SEAL_CHECKS.length + IN_CELL.length
 
 const results: CheckResult[] = []
@@ -45,11 +48,11 @@ let facts: DockerFacts | undefined
 let host: HostListener
 let before: ReturnType<typeof labObjects>
 
-const run = (id: string, variant: RigVariant, gate?: 'real' | 'allows-all'): Promise<CheckResult> => {
+const run = (id: string, variant: RigVariant, gate?: GateVariant): Promise<CheckResult> => {
   const check = IN_CELL.find((c) => c.id === id)!
   return runInRig(id, check.title, {
     variant, gate: gate ?? (id === 'C10' ? 'allows-all' : 'real'), targets: facts!.targets,
-    verdictTimeoutMs: check.lab?.verdictTimeoutMs, vetoTimeoutMs: check.lab?.vetoTimeoutMs,
+    verdictTimeoutMs: check.lab?.verdictTimeoutMs, vetoTimeoutMs: check.lab?.vetoTimeoutMs, toolLimits: check.lab?.toolLimits,
   }, host)
 }
 
@@ -170,6 +173,17 @@ describe('must-fail: a rig broken on purpose turns its named checks red', () => 
       expect(detail('C9')).toContain('the control reached the sink 0 times')
     }
     if (name === 'gate-kept') expect(detail('C10')).toContain('this cell still has its gate')
+    if (name === 'gate-asks-nobody') expect(detail('C6')).toContain('the door never asked in the room')
+    if (name === 'gate-silence-is-yes') expect(detail('C5v')).toContain('the tool ran with no verdict')
+    if (name === 'gate-runs-more') expect(detail('C6x')).toContain('runs-more.marker')
+    if (name === 'gate-no-path-check') {
+      expect(detail('W1')).toContain('a file outside the scratch folder was read')
+      expect(detail('W1')).toContain('a file was written outside the scratch folder')
+    }
+    if (name === 'gate-no-limits') {
+      expect(detail('L1')).toBe('a call ran on past the time limit')
+      expect(detail('L2')).toContain('output past the size limit reached the model')
+    }
   }, 900_000)
 })
 

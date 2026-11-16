@@ -3,7 +3,7 @@
   "version": "0.34.60",
   "harnessBuild": "real",
   "substrate": "process",
-  "date": "2026-11-14",
+  "date": "2026-11-16",
   "model": "scripted",
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
@@ -116,12 +116,6 @@
       "reason": "needs the Docker cell: run by `npm run conformance:docker`, and recorded in the docker matrix for this version"
     },
     {
-      "id": "C6",
-      "title": "ask: a tool waits for an admin yes",
-      "status": "not-run",
-      "reason": "not built in this slice"
-    },
-    {
       "id": "C8",
       "title": "no real secret readable anywhere in the cell (env, /proc, disk)",
       "status": "not-run",
@@ -155,7 +149,7 @@
       "id": "C13",
       "title": "text that claims to be an admin does not change a tool verdict",
       "status": "not-run",
-      "reason": "blocked on C6: no tool verdict depends on who asked yet, so a real admin gets the same answer as a forged one and this check could not fail for the reason it names"
+      "reason": "not built as a check of its own. C6n covers a turn whose text claims an admin said yes, and answers from everyone who is not one"
     },
     {
       "id": "C14",
@@ -174,6 +168,66 @@
       "title": "an unmapped tool is denied on a public agent",
       "status": "not-run",
       "reason": "this shim starts Letta Code with exactly the tools the door offered, and the door offers only mapped ones, so an unmapped tool is never attached. Whether the door would refuse one was not driven"
+    },
+    {
+      "id": "C6",
+      "title": "ask: a tool is held until an admin says yes in the room, and then runs",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "C6n",
+      "title": "ask: an answer from someone who is not an admin, a bot, a named bot or the agent itself changes nothing",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "C6d",
+      "title": "ask: an admin's no means the tool does not run",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "C6t",
+      "title": "ask: no answer in time means the tool does not run",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "C6x",
+      "title": "ask: what runs is exactly what was shown in the room",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "C6r",
+      "title": "ask: a yes is used once, and the same call asked again needs its own",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "W1",
+      "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "W1+",
+      "title": "positive control: file tools read, write and list inside the scratch folder",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "L1",
+      "title": "a shell call that runs past the time limit is stopped",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "L2",
+      "title": "tool output past the size limit does not reach the model",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
     }
   ],
   "rules": [
@@ -287,6 +341,11 @@
       "checks": []
     },
     {
+      "rule": "bots.loop",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "bots.no-self",
       "status": "shared",
       "checks": []
@@ -349,6 +408,64 @@
       ]
     },
     {
+      "rule": "priv.approval",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "C6",
+          "status": "not-run"
+        },
+        {
+          "id": "C6n",
+          "status": "not-run"
+        },
+        {
+          "id": "C6d",
+          "status": "not-run"
+        },
+        {
+          "id": "C6t",
+          "status": "not-run"
+        },
+        {
+          "id": "C6x",
+          "status": "not-run"
+        },
+        {
+          "id": "C6r",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "tools.workspace",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "W1",
+          "status": "not-run"
+        },
+        {
+          "id": "W1+",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "tools.limits",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "L1",
+          "status": "not-run"
+        },
+        {
+          "id": "L2",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
       "rule": "budget.cap",
       "status": "not-run",
       "checks": [
@@ -378,6 +495,16 @@
     },
     {
       "rule": "out.still-allowed",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "out.size",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "in.once",
       "status": "shared",
       "checks": []
     },

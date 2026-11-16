@@ -6,6 +6,7 @@ import type { PolicyRecord } from '../../core/policy/types.ts'
 import type { SurfaceConnector } from '../connector.ts'
 import { createDiscordConnector, type DiscordOptions } from '../connectors/discord.ts'
 import { createDoor, type Door, type DoorOptions } from '../door.ts'
+import type { Capabilities } from '../protocol.ts'
 import { createReceiptLog, type ReceiptLog } from '../receipts.ts'
 import { createSanitizer } from '../sanitizer.ts'
 import { startEchoShim, type EchoMode, type EchoShim } from './echo-shim.ts'
@@ -48,6 +49,9 @@ export async function startDiscordRig(policy: PolicyRecord, opts: {
   connector?: Partial<DiscordOptions>
   heartbeatMs?: number
   env?: Record<string, string | undefined>
+  /** What the echo shim says of itself at hello, on top of its usual capabilities, and how long it waits for a verdict. */
+  shimCaps?: Partial<Capabilities>
+  verdictTimeoutMs?: number
 } = {}): Promise<DiscordRig> {
   const fake = await startFakeDiscord({ heartbeatMs: opts.heartbeatMs })
   try {
@@ -74,7 +78,7 @@ export async function startDiscordRig(policy: PolicyRecord, opts: {
   }).catch(async (err) => { await fake.close(); throw err })
   let shim: EchoShim | undefined
   if (!opts.noShim) {
-    shim = await startEchoShim({ port: door.brainPort, token: brainToken, mode: opts.mode })
+    shim = await startEchoShim({ port: door.brainPort, token: brainToken, mode: opts.mode, caps: opts.shimCaps, verdictTimeoutMs: opts.verdictTimeoutMs })
     await door.shimConnected()
   }
   const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))

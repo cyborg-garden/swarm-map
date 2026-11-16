@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 import { piArgs, piEnv, sessionDirFor, systemPromptProblem } from '../shim.ts'
 
-const base = { agentDir: '/cell/agent', homeDir: '/cell/home' }
+const base = { agentDir: '/cell/agent', homeDir: '/cell/home', workDir: '/cell/work' }
 
 describe('the environment the shim gives Pi', () => {
   it('[U:pi-env] tells Pi to stay offline: no fetching, no telemetry, no version check', () => {
@@ -24,11 +24,17 @@ describe('the environment the shim gives Pi', () => {
     process.env.PI_ENV_TEST_CANARY = 'from-the-host'
     try {
       expect(Object.keys(piEnv(base)).sort()).toEqual([
-        'HOME', 'PATH', 'PI_CODING_AGENT_DIR', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'SWARM_GATE_TIMEOUT_MS',
+        'HOME', 'PATH', 'PI_CODING_AGENT_DIR', 'PI_OFFLINE', 'PI_SKIP_VERSION_CHECK', 'PI_TELEMETRY', 'SWARM_GATE_TIMEOUT_MS', 'SWARM_WORKSPACE',
       ])
+      // The two limits are named only when they are given.
+      expect(piEnv({ ...base, toolLimits: { callSeconds: 5, outputBytes: 900 } })).toMatchObject({ SWARM_TOOL_SECONDS: '5', SWARM_TOOL_OUTPUT_BYTES: '900' })
     } finally {
       delete process.env.PI_ENV_TEST_CANARY
     }
+  })
+
+  it('[U:pi-env] the scratch folder the gate keeps file tools in is the folder Pi is started in', () => {
+    expect(piEnv(base).SWARM_WORKSPACE).toBe('/cell/work')
   })
 
   it('[U:pi-env] HOME and PATH are the cell\'s own, never the host\'s', () => {
