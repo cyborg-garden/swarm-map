@@ -1,5 +1,5 @@
-<!-- 譯自 README.md @ fbe08cc；如有出入，以英文版為準。 -->
-<!-- Translated from README.md @ fbe08cc. The English README is authoritative. -->
+<!-- 譯自 README.md @ 127071f；如有出入，以英文版為準。 -->
+<!-- Translated from README.md @ 127071f. The English README is authoritative. -->
 
 # Swarm Map
 
@@ -30,7 +30,7 @@ Swarm Map 就是這個控制平面。一個介面即可部署、設定和管理�
 
 ## 大家用它做什麼
 
-**獨立開發者**執行 3 個代理：Telegram 上的客服機器人、Signal 上的研究助理，以及透過 API 呼叫的程式設計助手。每個都有自己的模型級聯（複雜任務用 Claude，簡單任務用 Gemini Flash）、自己的預算上限和自己的人格。SM 在一個儀表板裡管理這三個。
+**獨立開發者**執行 3 個代理：Telegram 上的客服機器人、Signal 上的研究助理，以及透過 API 呼叫的程式設計助手。每個都有自己的模型級聯（複雜任務用 Claude，簡單任務用 Gemini Flash）、自己的預算和自己的人格。SM 在一個儀表板裡管理這三個。
 
 **小團隊**在 Mattermost 上給每位成員配一個專屬 AI 助手。記憶按頻道隔離——工程頻道討論的內容只留在工程頻道。團隊負責人在 SM 裡管理 API 金鑰、監控成本、審核新的群組連線。
 
@@ -48,7 +48,7 @@ Swarm Map 就是這個控制平面。一個介面即可部署、設定和管理�
 
 🔌 **平台連線** —— 將代理連線到 Signal、Telegram、Mattermost，或透過 API 對外提供。在介面上管理各連線管道。
 
-💰 **預算約束** —— 為每個 API 金鑰設定每月花費上限。超出預算時代理會自行節流。
+💰 **預算追蹤** —— 為每個 API 金鑰設定每月預算，並查看花費對照。預算目前不會強制執行；硬性上限已列入[路線圖](docs/ROADMAP.md)。
 
 🧩 **單一執行環境介面** —— Hermes（每個代理一個容器）是受支援的執行環境。未來計畫在相同規則下納入更多 harness；最新狀態見 [Runtimes](docs/runtimes.md)。
 
@@ -65,7 +65,7 @@ Swarm Map 目前驅動一種代理執行環境。
 | 啟動 / 停止 / 重啟 / 重建 | 支援 |
 | 訊息平台（Signal / Telegram / Mattermost / Discord） | 支援，直連 |
 | 群組審核 + 稽核 | 支援 |
-| 預算約束 | 支援 |
+| 預算追蹤（尚未強制執行） | 支援 |
 
 舊的 Letta 整合（一個針對 Letta 已退役自託管伺服器的用戶端，以及一個向其轉送請求的 Hermes 前端）已移除。標記為已退役或未知執行環境的已儲存資料列會單獨列出，絕不會被當成 Hermes 處理，只能被遺忘（forget）。
 
