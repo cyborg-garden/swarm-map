@@ -13,8 +13,10 @@ change). The rule is in `lib/services/state-volume.ts`:
 
 1. **An agent whose databases are already on the volume keeps the layout.** Its
    data dir holds symlinks into `/state`; a compose file without the `/state`
-   mount would leave them pointing at nothing. This holds whatever the setting
-   below says. To take such an agent off the volume, do the Rollback below first.
+   mount would leave them pointing at nothing. The same applies when the data
+   dir cannot be read, and on a regeneration when the compose file being
+   replaced already mounts the volume. This holds whatever the setting below
+   says. To take such an agent off the volume, do the Rollback below first.
 2. Otherwise **`useStateVolume` in settings** decides, when it is set:
    `PUT /api/settings` with `{"useStateVolume": true}` or `false`. Send `null` to
    go back to automatic.
@@ -22,10 +24,16 @@ change). The rule is in `lib/services/state-volume.ts`:
    - **on** when the engine runs in a VM, so the bind mount crosses a
      file-sharing layer: any engine on macOS or Windows, and Docker Desktop,
      OrbStack, Rancher Desktop or WSL seen from a Linux process;
-   - **on** when the engine cannot be identified (it does not answer, or the
-     `docker` CLI points at another machine);
+   - **on** when the engine cannot be identified: it does not answer, the
+     `docker` CLI points at another machine, Swarm Map itself runs in a
+     container, or the engine or context is named for Colima, Lima, Rancher or
+     Podman;
    - **off** on native Linux, where a bind mount is an ordinary local directory
-     and the layout protects nothing (#273).
+     and the layout is unnecessary (#273).
+
+   Docker installed inside WSL and a Podman `docker` shim on native Linux both
+   count as "cannot be identified", so they get the layout. If the host is known
+   to need none, turn it off with `{"useStateVolume": false}`.
 
 An agent with plain database files that is regenerated with the layout on is
 migrated by `state-init` at its next start, the same way the route below does it.
