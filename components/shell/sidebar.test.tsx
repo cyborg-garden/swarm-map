@@ -30,6 +30,15 @@ describe('navigation', () => {
   })
 })
 
+describe('the line under the app\'s name', () => {
+  it('says what Swarm Map does without naming one harness: it runs agents on more than one', () => {
+    const { container } = render(<Sidebar />)
+    expect(screen.getByText('Swarm Map')).toBeInTheDocument()
+    expect(screen.getByText('Agent orchestration')).toBeInTheDocument()
+    expect(container.querySelector('aside > div')!.textContent).not.toMatch(/Hermes|\bPi\b|Letta/)
+  })
+})
+
 describe('Topbar', () => {
   it('does not advertise a search that is not there', () => {
     render(<Topbar />)

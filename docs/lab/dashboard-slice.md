@@ -8,8 +8,12 @@ Every id on this page is a placeholder.
 
 ## In short
 
-- **A door agent is a fleet row.** It carries `runtime: "pi"`, shows a runtime badge, and its
-  status comes from the door: running or stopped, and whether the cell was shown sealed.
+- **A door agent is a fleet row.** It carries `runtime: "pi"` or `runtime: "letta-code"`, shows a
+  runtime badge that names the harness, and its status comes from the door: running or stopped,
+  and whether the cell was shown sealed.
+- **It is made from a small form.** A name, a harness and one line about what it is for. The
+  name is checked while it is typed, by the rule the server uses. The new agent's page opens on
+  its Rules tab.
 - **Swarm Map owns the rules.** One typed record per agent, in Swarm Map's data folder. The door's
   config and its start script are written from that record on every save. Nobody edits them by hand.
 - **Start is checked first.** Start runs the launcher's dry run and refuses unless it ends
@@ -34,11 +38,13 @@ Everything for one agent lives in `<data dir>/door-agents/<id>/`:
 | `config.json` | The launcher's config | Rendered from the record |
 | `start.sh` | The command a supervisor runs. Paths only | Rendered from the record |
 | `dry-run.json` | The last dry run: when, the result, the rules it checked | Swarm Map |
+| `started-by-page.json` | The pid of the door Swarm Map itself started last | Swarm Map |
 | `door.log` | What the door printed | The door |
 | `state/` | `receipts.jsonl`, `spend.json`, `run.json` | The door |
 
-The fleet's `harnesses.json` also keeps one row for the agent, `{ id, name, runtime: "pi" }`. That
-row reserves the name. Because Hermes code has no adapter for `pi`, every Hermes path already
+The fleet's `harnesses.json` also keeps one row for the agent, `{ id, name, runtime }`, where
+`runtime` is `pi` or `letta-code`. That row reserves the name. Because Hermes code has no adapter
+for either tag, every Hermes path already
 leaves such a row alone: it is not listed as a Hermes agent, not matched to a container, and not
 changed. This slice reuses that guard and adds the door paths beside it.
 
@@ -59,13 +65,17 @@ changed. This slice reuses that guard and adds the door paths beside it.
 
    | Route | Does |
    |---|---|
-   | `POST /api/harnesses/door` | Create a draft door agent from a name |
+   | `POST /api/harnesses/door` | Create a draft door agent from a name, a harness (`runtime`) and a one-line description |
    | `GET /api/harnesses/:id/door` | The record, status, usage and supervisor command |
    | `PUT /api/harnesses/:id/door/rules` | Save the rules and apply them |
    | `GET /api/harnesses/:id/door/receipts` | The decision log, newest first |
    | `GET /api/harnesses` and `GET`, `DELETE`, `start`, `stop`, `logs`, `usage` under `:id` | Now also answer for a door agent |
 
 6. **The agent page** for a door agent: Overview, Rules, Receipts, Logs. No other tab is drawn.
+   The Overview says which harness is in the cell and the one version of it that is pinned, when
+   the cell's seal was last checked (or that it never was), whether the running door is on the
+   rules now on record, and who started it: this page, a supervisor, or something else.
+   `?tab=rules` in the address opens the page on that tab.
 7. **The fleet table and the home page**: a runtime badge, Start and Stop, and no drift or
    database chip, since neither applies to a door agent.
 
@@ -92,6 +102,25 @@ time. So an agent whose `start.sh` still names an old path picks up the new one 
 is started from Swarm Map, or its rules are saved. A supervisor that restarts a door on its own
 runs the file as it was last written.
 
+## The harness
+
+The record's `runtime` is the harness, fixed when the agent is made. The launcher's config is
+rendered with `"harness": "letta-code"` for a Letta Code agent and with no `harness` key for a
+Pi agent, which is how the launcher has always read Pi: a Pi agent's `config.json` is written
+exactly as before. An edit of the rules cannot change the harness.
+
+What a harness cannot do is read from what its shim declares (`lib/lab/pi-discord/harnesses.ts`)
+and shown in three places: the create form, the Overview, and for Letta Code beside the channel
+field on the Rules tab. Letta Code keeps one memory for the whole agent, so it has one room
+only. The rules enforce that at the door (`mem.one-scope`); the pages only say so.
+
+## Who started the door
+
+Start on the page runs `start.sh` as a plain background process, and Swarm Map writes down the
+pid it started. When the door on record runs under that pid, the Overview says "this page" and
+that nothing restarts it. When the door's parent process is pm2, it says "a supervisor". When
+neither is true, as for a door started from a command line, it says "not this page".
+
 ## How Save applies
 
 1. The rules are checked. A problem is listed and nothing is stored.
@@ -103,10 +132,10 @@ runs the file as it was last written.
 
 ## What is out
 
-- No create wizard. A door agent is made from a name, then filled in on its Rules tab.
-- No Discord app set-up. That stays manual: the page links to the [runbook](pi-discord.md).
+- No create wizard. A door agent is made from a three-field form, then filled in on its Rules tab.
+- No Discord app set-up. That stays manual: the form and the page link to the [runbook](pi-discord.md).
 - No secret entry. The two files are made by hand, as the runbook says.
-- No Letta Code launcher. The type and the badge have room for `letta-code`. Creating one is refused.
+- No changing an agent's harness or name after it is made.
 - No adopting an agent that was started from the command line.
 - No keys page, surfaces page, analytics, tiers, tools, duplicate or restart-all for door agents.
 - No new compose generator. The cell is still built by the launcher.
@@ -143,11 +172,13 @@ HOME="$TRY_HOME" HSM_OPERATOR_TOKEN=try npx next dev --port 3947
 ```
 
 1. Open `http://localhost:3947/login` and sign in with `try`.
-2. **Harnesses**, then **Add door agent**, and give it a name. Its page opens.
+2. **Harnesses**, then **Add door agent**. Give it a name, pick Pi or Letta Code, and add a line
+   about what it is for. Its page opens on the Rules tab.
 3. **Rules**: fill in the ids, the model and the two file paths, then **Save**. The Overview tab
    lists what is still missing.
 4. **Start**. It needs Docker and the launcher's two images
-   (`node lib/lab/pi-discord/cli.ts build`), and the two secret files in place. The dry run takes
+   (`node lib/lab/pi-discord/cli.ts build`, with `--harness letta-code` for a Letta Code agent),
+   and the two secret files in place. The dry run takes
    a few seconds. If it does not end "ready to start", the page shows the checks that failed and
    nothing is started.
 5. **Receipts** and **Logs** fill in once the door is running.
@@ -158,6 +189,13 @@ HOME="$TRY_HOME" HSM_OPERATOR_TOKEN=try npx next dev --port 3947
   state folder. The launcher adapter is tested against a stand-in command that touches no Docker.
 - One real dry run was made by hand through the adapter, on one machine, and ended "ready to
   start". No test starts a real door, connects to Discord or calls a model.
+- A Letta Code agent made on the page is tested the same way: with a stubbed launcher. The
+  launcher itself is run end to end with Letta Code in the cell by
+  `conformance/suites/letta-code-discord.docker.test.ts`, against a fake Discord and a scripted
+  model, on a machine with Docker. No test joins the two: a Letta Code door started from the
+  page's Start button.
+- "A supervisor" is read from the door's parent process, and only pm2 is recognised. A door under
+  another supervisor is shown as "not this page".
 - Under `pm2`, a restart after an error exit goes straight to the launcher. The launcher still
   refuses a cell that is not sealed, but the dashboard's dry run is not run again.
 - The dashboard cannot redact the door's log, because it never reads the secrets. The launcher
