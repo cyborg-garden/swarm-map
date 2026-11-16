@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { DockerService } from '../docker'
+import fs from 'fs'
+import { DockerService, HOST_INFO_TIMEOUT_MS } from '../docker'
 
 // DockerService is shell-free: it invokes execFileSync/spawn with an argv array
 // (see docker-injection.test.ts for the security property). These tests mock
@@ -58,40 +59,75 @@ describe('DockerService', () => {
   })
 
   describe('hostInfo (what the engine is; read by the state-volume decision)', () => {
-    const INFO = JSON.stringify({ OperatingSystem: 'Ubuntu 24.04.1 LTS', KernelVersion: '6.8.0-45-generic', OSType: 'linux', Containers: 3 })
+    const INFO = JSON.stringify({ OperatingSystem: 'Ubuntu 24.04.1 LTS', KernelVersion: '6.8.0-45-generic', OSType: 'linux', Name: 'build-box', Containers: 3 })
+    const CONTEXT = 'default unix:///var/run/docker.sock\n'
     const saved = process.env.DOCKER_HOST
-    beforeEach(() => { delete process.env.DOCKER_HOST })
+    let inContainer: string[]
+    beforeEach(() => {
+      // mockReset, not the outer clearAllMocks: a queued once-value left by one
+      // case must not be read by the next.
+      mockExecFileSync.mockReset()
+      delete process.env.DOCKER_HOST
+      inContainer = []
+      vi.spyOn(fs, 'existsSync').mockImplementation((p) => inContainer.includes(String(p)))
+    })
     afterEach(() => {
+      vi.restoreAllMocks()
       if (saved === undefined) delete process.env.DOCKER_HOST
       else process.env.DOCKER_HOST = saved
     })
 
-    it('reads the engine from `docker info` and the endpoint from the active context', () => {
-      mockExecFileSync
-        .mockReturnValueOnce(Buffer.from(INFO))
-        .mockReturnValueOnce(Buffer.from('unix:///var/run/docker.sock\n'))
+    it('reads the engine from `docker info` and the endpoint and name from the active context', () => {
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO)).mockReturnValueOnce(Buffer.from(CONTEXT))
       expect(docker.hostInfo()).toEqual({
         operatingSystem: 'Ubuntu 24.04.1 LTS',
         kernelVersion: '6.8.0-45-generic',
         osType: 'linux',
         endpoint: 'unix:///var/run/docker.sock',
+        name: 'build-box',
+        contextName: 'default',
+        containerised: false,
       })
       expect(joined(mockExecFileSync.mock.calls[0])).toBe('docker info --format {{json .}}')
-      expect(joined(mockExecFileSync.mock.calls[1])).toBe('docker context inspect --format {{.Endpoints.docker.Host}}')
+      expect(joined(mockExecFileSync.mock.calls[1])).toBe('docker context inspect --format {{.Name}} {{.Endpoints.docker.Host}}')
     })
 
-    it('DOCKER_HOST wins over the context, as it does for the CLI', () => {
+    it('both probes carry the timeout, so a hung engine cannot hang a deploy', () => {
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO)).mockReturnValueOnce(Buffer.from(CONTEXT))
+      docker.hostInfo()
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2)
+      for (const call of mockExecFileSync.mock.calls) {
+        expect((call[2] as { timeout?: number }).timeout).toBe(HOST_INFO_TIMEOUT_MS)
+      }
+      expect(HOST_INFO_TIMEOUT_MS).toBeGreaterThan(0)
+      expect(HOST_INFO_TIMEOUT_MS).toBeLessThanOrEqual(10000)
+    })
+
+    it('DOCKER_HOST wins over the context endpoint, as it does for the CLI', () => {
       process.env.DOCKER_HOST = 'tcp://10.0.0.5:2376'
-      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO))
-      expect(docker.hostInfo()?.endpoint).toBe('tcp://10.0.0.5:2376')
-      expect(mockExecFileSync).toHaveBeenCalledTimes(1)
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO)).mockReturnValueOnce(Buffer.from(CONTEXT))
+      expect(docker.hostInfo()).toMatchObject({ endpoint: 'tcp://10.0.0.5:2376', contextName: 'default' })
     })
 
-    it('a CLI without context support leaves the endpoint empty', () => {
+    it.each([
+      ['docker: \'context\' is not a docker command.'],
+      ['unknown command "context" for "docker"'],
+    ])('a CLI with no context command (%s) leaves the endpoint empty', (stderr) => {
       mockExecFileSync
         .mockReturnValueOnce(Buffer.from(INFO))
-        .mockImplementationOnce(() => { throw new Error('unknown command "context"') })
-      expect(docker.hostInfo()).toMatchObject({ operatingSystem: 'Ubuntu 24.04.1 LTS', endpoint: '' })
+        .mockImplementationOnce(() => { throw Object.assign(new Error('Command failed: docker context inspect'), { stderr: Buffer.from(stderr) }) })
+      expect(docker.hostInfo()).toMatchObject({ operatingSystem: 'Ubuntu 24.04.1 LTS', endpoint: '', contextName: '' })
+    })
+
+    it.each([
+      ['timed out', Object.assign(new Error('spawnSync docker ETIMEDOUT'), { code: 'ETIMEDOUT' })],
+      ['failed for another reason', Object.assign(new Error('Command failed: docker context inspect'), { stderr: Buffer.from('context "work": context not found') })],
+      ['threw something that is not an Error', 'boom'],
+    ])('is null when `docker context inspect` %s: the endpoint is unknown, not local', (_label, thrown) => {
+      mockExecFileSync
+        .mockReturnValueOnce(Buffer.from(INFO))
+        .mockImplementationOnce(() => { throw thrown })
+      expect(docker.hostInfo()).toBeNull()
     })
 
     it('is null when the engine does not answer or answers something unreadable', () => {
@@ -106,8 +142,17 @@ describe('DockerService', () => {
     it('missing or non-string fields come back empty, never undefined', () => {
       mockExecFileSync
         .mockReturnValueOnce(Buffer.from(JSON.stringify({ OperatingSystem: 7, ServerErrors: ['down'] })))
-        .mockReturnValueOnce(Buffer.from('unix:///var/run/docker.sock'))
-      expect(docker.hostInfo()).toEqual({ operatingSystem: '', kernelVersion: '', osType: '', endpoint: 'unix:///var/run/docker.sock' })
+        .mockReturnValueOnce(Buffer.from(CONTEXT))
+      expect(docker.hostInfo()).toEqual({
+        operatingSystem: '', kernelVersion: '', osType: '', endpoint: 'unix:///var/run/docker.sock',
+        name: '', contextName: 'default', containerised: false,
+      })
+    })
+
+    it.each([['/.dockerenv'], ['/run/.containerenv']])('reports this process as containerised when %s exists', (marker) => {
+      inContainer = [marker]
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO)).mockReturnValueOnce(Buffer.from(CONTEXT))
+      expect(docker.hostInfo()?.containerised).toBe(true)
     })
   })
 
