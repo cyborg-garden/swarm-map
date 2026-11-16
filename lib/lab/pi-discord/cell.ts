@@ -237,8 +237,12 @@ export function cellUp(file: LiveFile, composePath: string, services: string[] =
 
 /** Stop one run's cell container, or start it again, by name. The same container, so what Docker gave it is unchanged. */
 export function cellStopStart(project: string, what: 'stop' | 'start'): boolean {
+  return docker(cellStopStartArgs(project, what)).ok
+}
+/** What Docker is asked for that. `-t`, not `--time`: Docker no longer lists the long spelling. */
+export function cellStopStartArgs(project: string, what: 'stop' | 'start'): string[] {
   if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
-  return docker(what === 'stop' ? ['stop', '--time', '1', `${project}-cell-1`] : ['start', `${project}-cell-1`]).ok
+  return what === 'stop' ? ['stop', '-t', '1', `${project}-cell-1`] : ['start', `${project}-cell-1`]
 }
 
 /** Stop and remove one run's containers, networks and volume. By project name, and nothing else. */

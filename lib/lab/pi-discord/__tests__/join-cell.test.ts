@@ -5,6 +5,7 @@
 // door and Docker are all handed in, so every wait is exact and nothing is
 // slept through. Needs no Docker.
 import { describe, expect, it } from 'vitest'
+import { cellStopStartArgs } from '../cell.ts'
 import { joinCell, type JoinDeps } from '../launch.ts'
 
 const WAITS = { redialMs: 3_000, readyMs: 60_000 }
@@ -146,5 +147,17 @@ describe('the cell joins the door', () => {
     // It gave the door five seconds, and no longer.
     expect(w.clock()).toBeGreaterThanOrEqual(100 + 300 + 5_000)
     expect(w.clock()).toBeLessThan(100 + 300 + 5_000 + 100)
+  })
+})
+
+describe('what Docker is asked, to stop the cell and to start it again', () => {
+  it('names the run\'s one cell container, and gives the stop one second, by the flag every Docker takes', () => {
+    // `--time` is the old spelling: Docker no longer lists it, and will drop it. `-t` is in every version.
+    expect(cellStopStartArgs('smlab-0badf00d', 'stop')).toEqual(['stop', '-t', '1', 'smlab-0badf00d-cell-1'])
+    expect(cellStopStartArgs('smlab-0badf00d', 'start')).toEqual(['start', 'smlab-0badf00d-cell-1'])
+  })
+
+  it('refuses a name that is not a lab project', () => {
+    for (const bad of ['smlab-0badf00d; rm -rf /', '--all', 'other-0badf00d', '']) expect(() => cellStopStartArgs(bad, 'stop')).toThrow(/REFUSING TO RUN: F5/)
   })
 })
