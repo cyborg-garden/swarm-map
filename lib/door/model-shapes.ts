@@ -196,6 +196,9 @@ export const ANTHROPIC_MESSAGES: ModelShape = {
       && typeof (tool as { type?: unknown }).type === 'string' && (tool as { type: string }).type !== 'custom')
     if (served) return 'the call asks for a tool the provider runs and bills by the use, which the usage figure does not show'
     if (Array.isArray(body.mcp_servers) && body.mcp_servers.length > 0) return 'the call asks the provider to reach other servers'
+    // The route has one price for a model. A call that asks for the same model at another price is not that call.
+    if (body.speed !== undefined && body.speed !== 'standard') return 'the call asks for a faster mode, which is billed at another price'
+    if (body.inference_geo !== undefined && body.inference_geo !== 'global') return 'the call asks for a region, which is billed at another price'
     return undefined
   },
   usage(json, call) {

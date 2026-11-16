@@ -176,6 +176,25 @@ describe('the Claude Agent SDK shim: sessions', () => {
   })
 })
 
+describe('the Claude Agent SDK shim: an install that cannot say what it is', () => {
+  it('[U:claude-sdk-version] an SDK that fails when asked its version is sent nothing either: an error is a no', async () => {
+    const stub = stubSdk(echo)
+    stub.sdk.version = async () => { throw new Error('the program would not start') }
+    got = []
+    const ready = new Promise<void>((resolve) => {
+      void createBrainServer({ token: TOKEN, onShim: (l) => { link = l; l.onMessage((m) => got.push(m)); resolve() } })
+        .then((b) => { brain = b; return startClaudeSdkShim({ host: '127.0.0.1', port: b.port, token: TOKEN, sdk: stub.sdk, ...BASE }) })
+        .then((s) => { shim = s })
+    })
+    await ready
+    await until(() => shim !== undefined)
+    link.send({ t: 'turn', env: envelope({ tools: [] }) })
+    await until(settled(1))
+    expect(stub.started).toEqual([])
+    expect(got.filter((m) => m.t === 'error')).toEqual([{ t: 'error', turnId: 'turn-1', message: 'this is not the pinned Claude Agent SDK, so it is sent no turn' }])
+  })
+})
+
 describe('the Claude Agent SDK shim: who is speaking', () => {
   it('[U:claude-sdk-preamble] who is speaking is written into the prompt in a frame the sender cannot forge', async () => {
     const stub = await start(echo)

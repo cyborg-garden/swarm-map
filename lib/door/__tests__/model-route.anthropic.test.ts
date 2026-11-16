@@ -121,6 +121,26 @@ describe('model route, Anthropic Messages: the key swap', () => {
     expect(events(raw).find((e) => e.data.delta?.type === 'input_json_delta')!.data.delta!.partial_json).toContain(REDACTED)
   })
 
+  it('[U:key-swap] every run of text a block can stream is watched for a key cut in two: its text, its thinking, and the arguments of a tool call', () => {
+    const delta = (type: string, field: string, value: string) => ({ type: 'content_block_delta', index: 2, delta: { type, [field]: value } })
+    for (const [type, field] of [['text_delta', 'text'], ['thinking_delta', 'thinking'], ['input_json_delta', 'partial_json']]) {
+      const event = delta(type, field, 'a piece')
+      const pieces = ANTHROPIC_MESSAGES.streamText(event)
+      expect(pieces.map((p) => [p.key, p.text, p.last]), type).toEqual([[`2/${type}`, 'a piece', false]])
+      pieces[0].set('changed')
+      expect(event.delta[field]).toBe('changed')
+      // What is held back for that run when the stream just stops goes out as an event of the same kind.
+      expect(ANTHROPIC_MESSAGES.textEvent(`2/${type}`, 'held')).toEqual(delta(type, field, 'held'))
+    }
+    // The end of a block closes all three runs, and hands back an event for any that still holds text.
+    const stop = ANTHROPIC_MESSAGES.streamText({ type: 'content_block_stop', index: 2 })
+    expect(stop.map((p) => [p.key, p.last])).toEqual([['2/text_delta', true], ['2/thinking_delta', true], ['2/input_json_delta', true]])
+    expect(stop[1].set('held')).toEqual(delta('thinking_delta', 'thinking', 'held'))
+    expect(stop[1].set('')).toBeUndefined()
+    // A delta of a kind that carries no text of its own (a signature, say) is no run.
+    expect(ANTHROPIC_MESSAGES.streamText({ type: 'content_block_delta', index: 2, delta: { type: 'signature_delta', signature: 'x' } })).toEqual([])
+  })
+
   it('[U:model-shape] what the provider needs of the request is passed on, and nothing else: the version headers, and the one query parameter', async () => {
     await start()
     const res = await ask(user('CANARY-m'), { 'x-api-key': PLACEHOLDER, ...VERSION, 'anthropic-beta': 'some-beta', 'x-extra': 'nope' }, '/messages?beta=true&other=1')
@@ -234,10 +254,19 @@ describe('model route, Anthropic Messages: metering', () => {
     expect((await res.json()).error.message).toContain('cannot be metered')
     expect((await ask(user('CANARY-m', { mcp_servers: [{ type: 'url', url: 'https://example.invalid', name: 'x' }] }))).status).toBe(400)
     expect(model!.requests).toEqual([])
+    // Nor is a call that asks for the same model at another price: the route has one price for a model.
+    for (const extra of [{ speed: 'fast' }, { inference_geo: 'us' }]) {
+      const priced = await ask(user('CANARY-m', extra))
+      expect(priced.status, JSON.stringify(extra)).toBe(400)
+      expect((await priced.json()).error.message).toContain('billed at another price')
+    }
+    expect(model!.requests).toEqual([])
+    // The plain values are the plain price, and go through.
+    expect((await ask(user('CANARY-m', { speed: 'standard', inference_geo: 'global' }))).status).toBe(200)
     // Positive control: a tool the harness runs itself is an ordinary call.
     const own = [{ name: 'Bash', description: 'run', input_schema: { type: 'object' } }, { type: 'custom', name: 'Read', input_schema: { type: 'object' } }]
     expect((await ask(user('CANARY-m', { tools: own }))).status).toBe(200)
-    expect(model!.requests).toHaveLength(1)
+    expect(model!.requests).toHaveLength(2)
   })
 
   it('[U:model-shape] "how many tokens is this?" is answered by the route itself, as an estimate: nothing is forwarded, charged or answered without the placeholder', async () => {

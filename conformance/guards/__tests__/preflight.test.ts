@@ -126,10 +126,17 @@ describe('F2: a harness that reads its key and its model address from fixed name
   })
 
   it.each([
-    'https://api.anthropic.com', 'http://api.anthropic.com', 'http://127.0.0.1:4010/v1', 'http://user:pw@127.0.0.1:4010',
+    'https://api.anthropic.com', 'http://api.anthropic.com', 'https://127.0.0.1:4010', 'http://127.0.0.1:4010/v1', 'http://user:pw@127.0.0.1:4010',
     'http://127.0.0.1', 'http://127.0.0.1:4010@evil.example', 'http://10.0.0.5:4010', 'http://door.example:4010',
   ])('[U:named-fakes] refuses %s where the route goes', (value) => {
     expect(() => assertNoCredentials({ ...good, ANTHROPIC_BASE_URL: value }, { nonce, named })).toThrow(/^REFUSING TO RUN: F2 .*ANTHROPIC_BASE_URL/)
+  })
+
+  it('[U:named-fakes] the fakes of another run are refused under the lab\'s own names too', () => {
+    for (const value of ['PLACEHOLDER-0badf00d', 'UPSTREAM-0badf00d', 'FAKECHAT-0badf00d']) {
+      expect(() => assertNoCredentials({ SWARMLAB_THING: value }, { nonce }), value).toThrow(/SWARMLAB_THING/)
+    }
+    expect(() => assertNoCredentials({ SWARMLAB_THING: `PLACEHOLDER-${nonce}` }, { nonce })).not.toThrow()
   })
 
   it('[U:named-fakes] every other name is still judged as before, and a refused value is never printed', () => {
