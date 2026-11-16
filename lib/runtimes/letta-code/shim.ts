@@ -41,6 +41,11 @@ export interface LettaCodeShimOptions {
   homeDir: string
   workDir: string
   model?: string
+  /**
+   * What the agent is told it is, in place of Letta Code's own introduction. It is set once,
+   * when the shim's one agent is made. Left out, Letta Code keeps its own.
+   */
+  systemPrompt?: string
   verdictTimeoutMs?: number
   /** How long a tool call waits in the cell for its answer before the answer is no. */
   vetoTimeoutMs?: number
@@ -57,13 +62,28 @@ export interface LettaCodeShimOptions {
 
 export interface LettaCodeShim { close(): void }
 
-export function lettaCodeArgs(o: { tools: string[]; model: string; agentId?: string; conversationId?: string }): string[] {
+/**
+ * Why a system prompt cannot be handed to Letta Code, or undefined if it can. It goes on
+ * the command line as one argument, so it is plain text that cannot be read as a flag.
+ */
+export function lettaCodeSystemPromptProblem(prompt: string): string | undefined {
+  if (prompt === '') return 'the system prompt is empty'
+  if (prompt.length > 4000) return 'the system prompt is too long'
+  if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(prompt)) return 'the system prompt is not plain text'
+  if (prompt.trimStart().startsWith('-')) return 'the system prompt could be read as a flag'
+  return undefined
+}
+
+export function lettaCodeArgs(o: { tools: string[]; model: string; agentId?: string; conversationId?: string; systemPrompt?: string }): string[] {
+  const makesAgent = o.conversationId === undefined && o.agentId === undefined
   return [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
     '--backend', 'local',
     // A conversation names its agent, and Letta Code refuses to be told both.
     ...(o.conversationId !== undefined ? ['--conversation', o.conversationId]
       : o.agentId !== undefined ? ['--agent', o.agentId, '--new'] : ['--new-agent']),
+    // An agent's system prompt is set when it is made. One that exists already has it.
+    ...(makesAgent && o.systemPrompt !== undefined ? ['--system-custom', o.systemPrompt] : []),
     '--model', `openai-compatible/${o.model}`,
     '--permission-mode', 'strict',
     '--toolset', 'default',
@@ -122,6 +142,8 @@ interface Slot { queue: Promise<void>; live?: Live; conversationId?: string }
 const toolsKey = (tools: string[]): string => [...new Set(tools)].sort().join(',')
 
 export async function startLettaCodeShim(opts: LettaCodeShimOptions): Promise<LettaCodeShim> {
+  const promptProblem = opts.systemPrompt === undefined ? undefined : lettaCodeSystemPromptProblem(opts.systemPrompt)
+  if (promptProblem) throw new Error(promptProblem)
   const client: ShimClient = await connectShim({
     host: opts.host, port: opts.port, token: opts.token, caps: { ...LETTA_CODE_CAPS, ...opts.rigCaps }, verdictTimeoutMs: opts.verdictTimeoutMs,
   })
@@ -144,7 +166,7 @@ export async function startLettaCodeShim(opts: LettaCodeShimOptions): Promise<Le
     const agentId = agent ? await agent : undefined
     const tools = toolsKey(turn.tools)
     const offered = new Set(tools === '' ? [] : tools.split(','))
-    const args = lettaCodeArgs({ tools: [...offered], model: opts.model ?? 'scripted', agentId, conversationId: slot.conversationId })
+    const args = lettaCodeArgs({ tools: [...offered], model: opts.model ?? 'scripted', agentId, conversationId: slot.conversationId, systemPrompt: opts.systemPrompt })
     const child = spawn(bin, [...prefix, ...args], { cwd: opts.workDir, env, stdio: ['pipe', 'pipe', 'ignore'] })
     child.stdin.on('error', () => {})
     const proc: LettaCodeProcess = {

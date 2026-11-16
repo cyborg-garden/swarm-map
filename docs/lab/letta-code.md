@@ -1,9 +1,11 @@
 # Letta Code through the door: what is proven, and what is not
 
 Letta Code is the second harness put through the lab's shared checks, after Pi
-([`pi-slice.md`](pi-slice.md)). The contracts are in [`primitives.md`](primitives.md). Nothing here
-is wired into the Swarm Map app, the UI or any running agent. It is a library, a test rig and two
-commands.
+([`pi-slice.md`](pi-slice.md)). The contracts are in [`primitives.md`](primitives.md). This page is
+about the library, the test rig and its two commands. Running Letta Code as an agent in one
+Discord channel, from the launcher or from the dashboard, is in
+[`pi-discord.md`](pi-discord.md#letta-code-in-the-cell) and
+[`dashboard-slice.md`](dashboard-slice.md).
 
 The earlier Letta integration was removed before this work. This is not that code brought back. It
 talks to Letta Code, a different program, in a different way.

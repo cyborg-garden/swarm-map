@@ -373,8 +373,18 @@ describe('pi-discord: one message, end to end, through real Pi in the sealed cel
   }, 60_000)
 
   it('if the cell dies the door answers nobody; if the door dies its cell stays sealed and silent, and the next start removes it', async () => {
-    const again = (): Promise<Running> => start({ config, secrets, stateDir, log: () => {}, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
-    const first = await again()
+    const said: string[] = []
+    const again = (o: { redialCell?: boolean } = {}): Promise<Running> => start({ config, secrets, stateDir, log: (l) => said.push(l), discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl }, ...o })
+    // A cell that has to be started again after the door is up: the harder way, where it had reached the door, so
+    // the door still holds its link when it is stopped. The cell that comes back is the same sealed cell, the door
+    // takes it, and it answers.
+    const first = await again({ redialCell: true })
+    expect(said.filter((l) => l.includes('started again'))).toHaveLength(1)
+    expect(said.at(-1)).toMatch(/^live: agent pi-lab-test, policy [0-9a-f]{12}, one channel$/)
+    expect(runningCellProblems(readRun(stateDir)!.project, networksWritten(JSON.parse(readFileSync(path.join(stateDir, 'compose.json'), 'utf8')) as LiveFile))).toEqual([])
+    const heardBefore = fake.posted.length
+    say('CANARY-hello')
+    await until(() => fake.posted.length === heardBefore + 1)
     const left = readRun(stateDir)!.project
     const posts = fake.posted.length
     const asked = model.requests.length

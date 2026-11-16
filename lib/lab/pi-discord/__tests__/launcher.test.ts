@@ -12,6 +12,7 @@ import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subne
 import { decide } from '../../../core/decide.ts'
 import { CELL_ENV, launcherImages, networksWritten, renderCell, sealProblems, type CellOptions } from '../cell.ts'
 import { approvalSecondsOf, botsLine, parseConfig, policyFor, systemPromptFor, toolModes, toolsLine } from '../config.ts'
+import { harnessFacts } from '../harnesses.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
 import { readSecretFile, secretFileProblem } from '../secrets.ts'
 
@@ -136,6 +137,8 @@ describe('pi-discord config', () => {
     }
     // Only the three settings are kept: a note written beside them in the file is not carried into the record.
     expect(withTools({ $comment: 'a note', enabled: ['shell'] }).config!.tools).toEqual({ enabled: ['shell'], mode: {}, approvalSeconds: 120 })
+    // With no class switched on, the config that is kept has no tools key at all: it is written as it was before there were tools.
+    for (const tools of [undefined, {}, { enabled: [], mode: { shell: 'allow' }, approvalSeconds: 45 }]) expect('tools' in withTools(tools).config!).toBe(false)
     // A config from before there were tools is read as one with none, and makes the same record as before.
     expect(policyFor(parseConfig(good()).config!).hash).toBe(policyFor(withTools({ enabled: [] }).config!).hash)
   })
@@ -174,6 +177,19 @@ describe('pi-discord config', () => {
       expect(decide(forced, { kind: 'tool', surface: 'discord', room: { id: '710000000000000001', kind: 'channel' }, actor: sender, toolClass, toolName: 't', argsDigest: '' }, {}))
         .toMatchObject({ verdict: 'deny', rule: 'tools.posture' })
     }
+  })
+
+  it('tools are for the default harness only: a config that names another and switches one on is refused', () => {
+    const letta = (tools: unknown) => parseConfig({ ...good(), harness: 'letta-code', tools })
+    expect(letta({ enabled: ['file_read'] }).errors).toEqual(['tools.enabled: tools are built for Pi only. Switch the tools off, or leave the harness as it is'])
+    expect(letta({ enabled: ['shell'], mode: { shell: 'ask' } }).config).toBeUndefined()
+    // With none switched on it is accepted as before, and its record holds no tool.
+    const off = letta({ enabled: [] })
+    expect(off.errors).toEqual([])
+    expect(policyFor(off.config!).tools).toEqual({ allow: [], ask: [], deny: [], browserGuard: 'off' })
+    // What each harness is said to be able to do matches: the default one may be given tools, the other may not.
+    expect(harnessFacts('pi').limits.join('\n')).toContain('No tools unless its rules switch one on')
+    expect(harnessFacts('letta-code').limits.join('\n')).toContain('No tools: it reads the messages it is sent and answers in text.')
   })
 
   it('an agent with tools is told which it has, where they work, which wait for an admin, and what it still cannot do', () => {

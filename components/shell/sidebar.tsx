@@ -27,7 +27,7 @@ export function Sidebar() {
     <aside className="hidden md:flex flex-col w-56 border-r border-[var(--border)] bg-[var(--surface)] h-screen sticky top-0">
       <div className="px-4 py-5">
         <h1 className="text-base font-semibold">Swarm Map</h1>
-        <p className="text-xs text-muted-foreground mt-0.5">Hermes Orchestration</p>
+        <p className="text-xs text-muted-foreground mt-0.5">Agent orchestration</p>
       </div>
       <nav className="flex-1 px-2 space-y-0.5">
         {NAV_ITEMS.map((item) => {

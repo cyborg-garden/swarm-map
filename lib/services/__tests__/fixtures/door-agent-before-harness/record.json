@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "id": "h_pi_one",
+  "name": "pi-one",
+  "runtime": "pi",
+  "version": 2,
+  "updatedAt": "2026-11-01T12:00:00.000Z",
+  "rules": {
+    "agentId": "pi-one",
+    "persona": {
+      "name": "Pi",
+      "description": "Answers questions."
+    },
+    "discord": {
+      "allowedUserIds": [],
+      "allowedRoleIds": [],
+      "anyoneInChannel": false,
+      "mentionRequired": true,
+      "bots": "none",
+      "allowedBotIds": [],
+      "botLoopLimit": 4,
+      "readAllMessages": false,
+      "guildId": "100000000000000000",
+      "channelId": "100000000000000001",
+      "adminUserIds": [
+        "100000000000000002"
+      ]
+    },
+    "budget": {
+      "monthlyUsd": 5
+    },
+    "model": {
+      "baseUrl": "https://model.example/v1",
+      "id": "provider/model-a",
+      "usdPerMTokIn": 1,
+      "usdPerMTokOut": 5
+    }
+  },
+  "secrets": {
+    "discordTokenFile": "__TMP__/keys/token",
+    "modelKeyFile": "__TMP__/keys/key"
+  }
+}
