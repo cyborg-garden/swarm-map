@@ -359,19 +359,35 @@ describe('generateStandaloneCompose', () => {
     })
   })
 
-  describe('state-volume layout (named volume + state-init service, #204 PR2) — OFF by default', () => {
+  describe('state-volume layout (named volume + state-init service, #204 PR2)', () => {
     const vol = `hermes-state-${agentName}`
 
-    it('non-VPN default: no state-init service, no named-volume mount, no depends_on, no volumes trailer', () => {
-      const result = generateStandaloneCompose(agentName, port, dataDir)
+    // A caller that passes nothing gets the layout: the generator cannot see
+    // the Docker engine, and the layout is the side that cannot tear a
+    // database. Call sites pass resolveUseStateVolume's answer.
+    it.each([
+      ['no options', undefined],
+      ['non-VPN', {}],
+      ['VPN', { vpnEnabled: true }],
+      ['bundled ollama', { bundledOllama: true }],
+    ])('%s with useStateVolume left out: the layout is ON', (_label, opts) => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, opts)
+      expect(result).toContain(`  state-init-${agentName}:`)
+      expect(result).toContain(`- ${vol}:/state`)
+      expect(result).toMatch(new RegExp(`state-init-${agentName}:\\s*\\n\\s*condition: service_completed_successfully`))
+      expect(result).toMatch(/^volumes:\s*$/m)
+    })
+
+    it('non-VPN off (useStateVolume: false): no state-init service, no named-volume mount, no depends_on, no volumes trailer', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { useStateVolume: false })
       expect(result).not.toContain('state-init-')
       expect(result).not.toContain(`${vol}:/state`)
       expect(result).not.toContain('depends_on:')
       expect(result).not.toMatch(/^volumes:\s*$/m)
     })
 
-    it('VPN default: no state-init service or state volume, but the wireguard gate remains', () => {
-      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
+    it('VPN off (useStateVolume: false): no state-init service or state volume, but the wireguard gate remains', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true, useStateVolume: false })
       expect(result).not.toContain('state-init-')
       expect(result).not.toContain(`${vol}:/state`)
       expect(result).not.toMatch(/^volumes:\s*$/m)
@@ -381,7 +397,7 @@ describe('generateStandaloneCompose', () => {
       expect(hermesBlock).not.toContain('state-init-')
     })
 
-    it('non-VPN opt-in (useStateVolume: true): init service, volume mount, gate, and trailer', () => {
+    it('non-VPN on (useStateVolume: true): init service, volume mount, gate, and trailer', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { useStateVolume: true })
       expect(result).toContain(`  state-init-${agentName}:`)
       expect(result).toContain(`- ${vol}:/state`)
@@ -389,7 +405,7 @@ describe('generateStandaloneCompose', () => {
       expect(result).toMatch(/^volumes:\s*$/m)
     })
 
-    it('VPN opt-in (useStateVolume: true): init service, volume, and gate coexist with wireguard', () => {
+    it('VPN on (useStateVolume: true): init service, volume, and gate coexist with wireguard', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true, useStateVolume: true })
       expect(result).toContain(`  state-init-${agentName}:`)
       expect(result).toContain(`- ${vol}:/state`)
@@ -400,7 +416,7 @@ describe('generateStandaloneCompose', () => {
     })
 
     it('bundled ollama without the state volume keeps a depends_on: gate on the sidecar only', () => {
-      const result = generateStandaloneCompose(agentName, port, dataDir, { bundledOllama: true })
+      const result = generateStandaloneCompose(agentName, port, dataDir, { bundledOllama: true, useStateVolume: false })
       expect(result).not.toContain('state-init-')
       expect(result).not.toContain(`${vol}:/state`)
       const hermesBlock = result.split(`hermes-${agentName}:`).pop()!

@@ -346,12 +346,18 @@ export interface ComposeOptions {
    * onto native ext4 inside the VM, leaving dangling symlinks at the mount
    * paths.
    *
-   * OFF by default. On a native Linux bind mount there is no VirtioFS — the
-   * layout buys nothing and actively breaks agents: hermes-agent-mt's profile
-   * check (gateway/run_runtime.py) resolves the symlinked DB path, sees
-   * /state, and refuses a session DB outside the reserved profile /opt/data.
-   * Hosts that want the migrated layout use the explicit per-harness
-   * migrate-db route, which is independent of this setting.
+   * On a native Linux bind mount there is no VirtioFS: the layout buys nothing
+   * and gets in the way (#273) — hermes-agent-mt's profile check
+   * (gateway/run_runtime.py) resolves the symlinked DB path, sees /state, and
+   * refuses a session DB outside the reserved profile /opt/data.
+   *
+   * Callers pass the result of resolveUseStateVolume (state-volume.ts), which
+   * picks per agent: kept for an agent already on the volume, else the
+   * settings.useStateVolume override, else on for a VM-backed or unknown
+   * Docker engine and off for native Linux. Left out, the layout is ON: a
+   * call site that forgets to decide gets the layout that cannot tear a
+   * database. The explicit per-harness migrate-db route is independent of
+   * this option.
    */
   useStateVolume?: boolean
   /**
@@ -720,7 +726,7 @@ function generatePlainCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
-  useStateVolume = false,
+  useStateVolume = true,
 ): string {
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
@@ -731,8 +737,8 @@ function generatePlainCompose(
   // VirtioFS torn writes. On native Linux it buys nothing and trips the
   // hermes-agent-mt profile check (gateway/run_runtime.py): the symlinked DBs
   // resolve outside the reserved profile, so the gateway refuses to boot.
-  // OFF by default; the explicit migrate-db route remains for hosts that want
-  // the migrated layout.
+  // Callers decide per agent (resolveUseStateVolume); see
+  // ComposeOptions.useStateVolume.
   const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
   // depends_on in map form so the conditional entries merge (compose can't mix
   // list + map forms). With no sidecar or init service to gate, the whole key
@@ -800,7 +806,7 @@ function generateVpnCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
-  useStateVolume = false,
+  useStateVolume = true,
 ): string {
   const camofoxPort = port + 1000
   const vncPort = port + 2000

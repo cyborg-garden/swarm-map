@@ -165,8 +165,8 @@ describe('addStateMigrationToCompose', () => {
     expect(addStateMigrationToCompose(freshDeploy, 'sci', '/home/u/.hermes-sci')).toBe(freshDeploy)
   })
 
-  it('migrates a default (state-volume-off) fresh compose — the layout is inserted whole, then idempotent', () => {
-    const freshPlain = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', {})
+  it('migrates a fresh compose generated with the layout off — the layout is inserted whole, then idempotent', () => {
+    const freshPlain = generateStandaloneCompose('sci', 8642, '/home/u/.hermes-sci', { useStateVolume: false })
     expect(freshPlain).not.toContain('hermes-state-sci:')
     const migrated = addStateMigrationToCompose(freshPlain, 'sci', '/home/u/.hermes-sci')
     expect(migrated).toContain('  state-init-sci:')

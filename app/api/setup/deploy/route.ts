@@ -19,6 +19,7 @@ import {
   type Selection,
 } from '@/lib/services/base-package'
 import { generateEnvContent, generateAgentCompose } from '@/lib/services/agent-deploy-templates'
+import { resolveUseStateVolume } from '@/lib/services/state-volume'
 import { defaultKeyPath } from '@/lib/services/github-credential-check'
 import { RETIRED_RUNTIMES } from '@/lib/services/runtime-adapter'
 import fs from 'fs'
@@ -521,7 +522,14 @@ If this is your very first startup ever, introduce yourself briefly in your home
     const agentComposeDir = path.join(composeBaseDir, slug)
     fs.mkdirSync(agentComposeDir, { recursive: true })
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
-    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama, apiBindHost: settings.apiBindHost, useStateVolume: settings.useStateVolume }), 'utf-8')
+    // State-volume layout: the settings override if there is one, else decided
+    // from the Docker engine this deploy runs on (lib/services/state-volume.ts).
+    const { use: useStateVolume } = resolveUseStateVolume({
+      setting: settings.useStateVolume,
+      dataDir: agentDataDir,
+      hostInfo: () => services.docker.hostInfo(),
+    })
+    fs.writeFileSync(composePath, generateAgentCompose(slug, port, agentDataDir, imageOrBuild, { googleMcpDir, githubMcpEnabled, bundledOllama, apiBindHost: settings.apiBindHost, useStateVolume }), 'utf-8')
 
     // Start the container.
     //

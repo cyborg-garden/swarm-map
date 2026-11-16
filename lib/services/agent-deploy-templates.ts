@@ -266,7 +266,7 @@ export function generateAgentCompose(
     sharedVpn?: string | null
     /** Host address for the API port (settings.apiBindHost); loopback unless it is an IP address. */
     apiBindHost?: string
-    /** See ComposeOptions.useStateVolume (harness-compose.ts). OFF by default. */
+    /** See ComposeOptions.useStateVolume (harness-compose.ts). ON when left out. */
     useStateVolume?: boolean
   },
 ): string {
@@ -281,7 +281,7 @@ export function generateAgentCompose(
   // githubMcpEnabled is accepted for API compatibility but no longer used here:
   // the github MCP token is delivered via the agent .env (env_file), not a compose
   // `environment:` override (which resolves from the empty process env and blanks it).
-  const { googleMcpDir, bundledOllama, ollamaImage, memory, cpus, apiBindHost, useStateVolume } = options ?? {}
+  const { googleMcpDir, bundledOllama, ollamaImage, memory, cpus, apiBindHost, useStateVolume = true } = options ?? {}
   const sourceBlock = 'image' in imageOrBuild
     ? `    image: ${imageOrBuild.image}`
     : `    build:\n      context: ${imageOrBuild.build}\n      dockerfile: Dockerfile`
@@ -304,8 +304,9 @@ export function generateAgentCompose(
   const ollamaBlock = bundledOllama ? ollamaSidecar(slug, agentDataDir, ollamaImage, '') : ''
   // One-shot DB-migration init service (named-volume symlink pattern, #204 PR2)
   // — same shared definition as the standalone generator, single source of
-  // truth. OFF by default: the layout trips hermes-agent-mt's profile check on
-  // native Linux; see ComposeOptions.useStateVolume.
+  // truth. The caller decides per agent (resolveUseStateVolume): the layout
+  // trips hermes-agent-mt's profile check on native Linux; see
+  // ComposeOptions.useStateVolume.
   const initBlock = useStateVolume ? stateInitService(slug, agentDataDir, sourceBlock) : ''
   // depends_on in map form so the conditional entries merge (compose can't mix
   // list + map forms). With no sidecar or init service to gate, the whole key
