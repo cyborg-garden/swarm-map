@@ -166,7 +166,7 @@ HSM writes the allowed capability list to the agent's config. Hermes reads it an
 
 **Ship when:** An agent on a second harness is created, configured, and watched from the same dashboard as a Hermes agent, and every rule shown in the UI is one something actually enforces.
 
-The design is written up in [`docs/lab/primitives.md`](lab/primitives.md). The lab slices ([Pi](lab/pi-slice.md), [Pi in Discord](lab/pi-discord.md), [Letta Code](lab/letta-code.md)) prove it outside the dashboard. V3 brings it into the product.
+The design is written up in [`docs/lab/primitives.md`](lab/primitives.md). The lab slices ([Pi](lab/pi-slice.md), [Pi in Discord](lab/pi-discord.md), [Letta Code](lab/letta-code.md)) prove it outside the dashboard. V3 brings it into the product, starting with [one door agent in the dashboard](lab/dashboard-slice.md).
 
 ### The door
 

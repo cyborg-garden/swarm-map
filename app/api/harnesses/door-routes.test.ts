@@ -40,7 +40,7 @@ const RULES = {
 }
 const READY = { code: 0, output: 'RESULT: ready to start.\n' }
 const NOT_SEALED = { code: 1, output: '  FAIL  S1   only the door answers\nRESULT: not ready. The cell is not shown to be sealed.\n' }
-const SECRET = /FAKE-TOKEN-VALUE-1|FAKE-KEY-VALUE-22/
+const MADE_UP = /FAKE-TOKEN-VALUE-1|FAKE-KEY-VALUE-22/
 
 const keysDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'door-routes-keys-')))
 const repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'door-routes-repo-')))
@@ -161,6 +161,35 @@ describe('with no door agent', () => {
   })
 })
 
+describe('when something unexpected goes wrong', () => {
+  const broken = (verb: string) => {
+    (state.services.doorAgents as Record<string, unknown>)[verb] = () => { throw new Error('boom at /some/private/path') }
+  }
+
+  it('the fleet list still has every Hermes agent', async () => {
+    await create()
+    broken('list')
+    expect(await call('./route.ts', 'GET', undefined)).toEqual({ status: 200, json: HERMES })
+  })
+
+  it.each([
+    ['view', './[id]/door/route.ts', 'GET'],
+    ['saveRules', './[id]/door/rules/route.ts', 'PUT'],
+    ['receipts', './[id]/door/receipts/route.ts', 'GET'],
+    ['start', './[id]/start/route.ts', 'POST'],
+    ['stop', './[id]/stop/route.ts', 'POST'],
+    ['logs', './[id]/logs/route.ts', 'GET'],
+    ['usage', './[id]/usage/route.ts', 'GET'],
+    ['remove', './[id]/route.ts', 'DELETE'],
+  ])('%s answers 500 and does not pass the error on', async (verb, file, method) => {
+    await create()
+    broken(verb)
+    const res = await call(file, method, 'h_pi_one')
+    expect(res.status).toBe(500)
+    expect(JSON.stringify(res.json)).not.toMatch(/boom|private/)
+  })
+})
+
 describe('the rules', () => {
   it('are saved, versioned and given back with the two paths', async () => {
     await create()
@@ -275,10 +304,10 @@ describe('secrets', () => {
     const pasted = await call('./[id]/door/rules/route.ts', 'PUT', 'h_pi_one', { rules: RULES, secrets: { discordTokenFile: 'FAKE-TOKEN-VALUE-1', modelKeyFile: '' }, version: 2 })
     expect(pasted.status).toBe(422)
     expect(responses.length).toBeGreaterThan(9)
-    for (const text of responses) expect(text).not.toMatch(SECRET)
+    for (const text of responses) expect(text).not.toMatch(MADE_UP)
     for (const file of fs.readdirSync(DATA_DIR, { recursive: true }) as string[]) {
       const full = path.join(DATA_DIR, file)
-      if (fs.statSync(full).isFile()) expect(fs.readFileSync(full, 'utf8'), file).not.toMatch(SECRET)
+      if (fs.statSync(full).isFile()) expect(fs.readFileSync(full, 'utf8'), file).not.toMatch(MADE_UP)
     }
   })
 })

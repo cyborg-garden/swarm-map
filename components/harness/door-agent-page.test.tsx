@@ -60,7 +60,7 @@ beforeEach(() => {
     let status = 200
     let body: unknown = {}
     if (fail[`${method} ${url}`]) ({ status, body } = fail[`${method} ${url}`])
-    else if (url === '/api/harnesses') body = [HERMES, ROW]
+    else if (url === '/api/harnesses') body = [HERMES, { ...ROW, status: 'running' }]
     else if (url === '/api/harnesses/h_pi_one') body = ROW
     else if (url === '/api/harnesses/h_pi_one/door') body = current
     else if (url === '/api/harnesses/h_pi_one/door/rules') body = { applied: 'stored', record: current.record }
@@ -223,6 +223,7 @@ describe('a door agent in the fleet table', () => {
     expect(within(door).queryByRole('button', { name: 'Restart' })).toBeNull()
     expect(within(door).queryByTitle('Duplicate')).toBeNull()
     expect(within(door).getByTitle('Remove')).toBeInTheDocument()
+    expect(within(door).getByRole('button', { name: 'Stop' })).toBeInTheDocument()
   })
 
   it('is left out of "Restart all running"', async () => {

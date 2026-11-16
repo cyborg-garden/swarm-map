@@ -166,6 +166,18 @@ describe('the fleet row', () => {
     expect(svc.row('h_c')).toBeUndefined()
   })
 
+  it.each(['not json', '{}', '{"schema":1,"id":"h_pi_one"}', '{"schema":1,"id":"h_pi_one","name":"pi-one","rules":{"persona":null}}'])(
+    'still lists a door row whose record is damaged (%s), and refuses to act on it',
+    async (content) => {
+      svc.create('pi-one')
+      fs.writeFileSync(paths().record, content)
+      expect(svc.list()).toEqual([expect.objectContaining({ id: 'h_pi_one', name: 'pi-one', runtime: 'pi', status: 'stopped' })])
+      expect((await refusal(() => svc.view('h_pi_one'))).status).toBe(404)
+      expect((await refusal(() => svc.start('h_pi_one'))).status).toBe(404)
+      expect(calls).toEqual([])
+    },
+  )
+
   it('still lists a door row whose record is missing, as stopped', () => {
     storage.write('harnesses.json', [{ id: 'h_lost', name: 'lost', runtime: 'pi' }])
     expect(svc.list()).toEqual([expect.objectContaining({ id: 'h_lost', runtime: 'pi', status: 'stopped', costToday: null })])
@@ -184,6 +196,14 @@ describe('status', () => {
     expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', pid: 4242, startedAt: NOW.toISOString(), cellSealed: true, rulesInForce: true })
     livePids.clear() // the door died without cleaning up: run.json is still there
     expect(svc.status('h_pi_one')).toMatchObject({ state: 'stopped', rulesInForce: null })
+  })
+
+  it('says when the running door was started from other rules than the ones on record', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    const runFile = path.join(paths().stateDir, 'run.json')
+    fs.writeFileSync(runFile, JSON.stringify({ ...JSON.parse(fs.readFileSync(runFile, 'utf8')), policyHash: 'the-hash-of-older-rules' }))
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', rulesInForce: false })
   })
 
   it('says the cell is not sealed after a dry run that failed', async () => {

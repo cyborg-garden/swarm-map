@@ -1,6 +1,7 @@
-# The first door agent in the dashboard: plan
+# The first door agent in the dashboard
 
-This is the smallest slice that makes one door agent a normal row in Swarm Map. It builds on the
+This is the plan for the smallest slice that makes one door agent a normal row in Swarm Map, and
+how to try what was built from it. It builds on the
 [Pi in Discord launcher](pi-discord.md). Read that first if "door", "cell" or "dry run" are new.
 
 Every id on this page is a placeholder.
@@ -104,3 +105,37 @@ Each step starts with a test that fails for the right reason.
 6. Hermes unchanged: the fleet table and agent page for a Hermes agent render exactly as on
    `main`, held by stored snapshots taken before this change.
 7. Run the app on a spare port with a temporary data folder and read the pages and routes.
+
+## Try it
+
+This runs the dashboard against an empty home folder, so it sees none of your agents and writes
+nothing into your own Swarm Map data.
+
+```bash
+export TRY_HOME="$(mktemp -d)"
+mkdir -p "$TRY_HOME/.hermes-swarm-map"
+echo '{"onboarded":true}' > "$TRY_HOME/.hermes-swarm-map/settings.json"
+HOME="$TRY_HOME" HSM_OPERATOR_TOKEN=try npx next dev --port 3947
+```
+
+1. Open `http://localhost:3947/login` and sign in with `try`.
+2. **Harnesses**, then **Add door agent**, and give it a name. Its page opens.
+3. **Rules**: fill in the ids, the model and the two file paths, then **Save**. The Overview tab
+   lists what is still missing.
+4. **Start**. It needs Docker and the launcher's two images
+   (`node lib/lab/pi-discord/cli.ts build`), and the two secret files in place. The dry run takes
+   a few seconds. If it does not end "ready to start", the page shows the checks that failed and
+   nothing is started.
+5. **Receipts** and **Logs** fill in once the door is running.
+
+## What the tests cover, and what they do not
+
+- The record, the service, the routes and the pages are tested with a stubbed launcher and a fake
+  state folder. The launcher adapter is tested against a stand-in command that touches no Docker.
+- One real dry run was made by hand through the adapter, on one machine, and ended "ready to
+  start". No test starts a real door, connects to Discord or calls a model.
+- Under `pm2`, a restart after an error exit goes straight to the launcher. The launcher still
+  refuses a cell that is not sealed, but the dashboard's dry run is not run again.
+- The dashboard cannot redact the door's log, because it never reads the secrets. The launcher
+  redacts what it prints.
+

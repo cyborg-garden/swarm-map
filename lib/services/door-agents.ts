@@ -109,7 +109,12 @@ export class DoorAgentService implements DoorRuntimeAdapter {
   private readRecord(id: string): DoorRulesRecord | undefined {
     try {
       const record = JSON.parse(fs.readFileSync(doorAgentPaths(this.dataDir, id).record, 'utf8')) as DoorRulesRecord
-      return record?.schema === 1 && record.id === id ? record : undefined
+      // A record that is not whole is treated as missing: nothing is read out of half of one.
+      const isObject = (v: unknown): boolean => v !== null && typeof v === 'object' && !Array.isArray(v)
+      const whole = record?.schema === 1 && record.id === id && typeof record.name === 'string' && typeof record.version === 'number'
+        && isObject(record.secrets) && isObject(record.rules)
+        && [record.rules.persona, record.rules.discord, record.rules.budget, record.rules.model].every(isObject)
+      return whole ? record : undefined
     } catch { return undefined }
   }
 
