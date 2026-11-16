@@ -31,6 +31,9 @@
 //   while the ledger refuses a write, or again in this process once it has
 //   lost a charge. A restart forgets that, and the lost charge stays lost.
 //
+// The real key goes to the provider that was named and nowhere else: a
+// redirect from the provider is refused, not followed, with a receipt.
+//
 // What it cannot do: tell a figure that is false but could be true. A provider
 // that reports one token for a long reply is believed.
 import http from 'node:http'
@@ -224,8 +227,17 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
           headers: { ...passed, 'content-type': 'application/json', ...shape.upstreamAuth(opts.upstreamKey) },
           body: forward,
           signal: AbortSignal.timeout(opts.upstreamTimeoutMs ?? 600_000),
+          // The key is for the provider that was named, at the path that is metered. A redirect
+          // is never followed: a client that follows one sends `x-api-key` on to wherever it points.
+          redirect: 'manual',
         })
         billable = upstream.ok
+        if (upstream.status >= 300 && upstream.status < 400) {
+          await upstream.body?.cancel().catch(() => {})
+          const REDIRECT = 'The provider answered with a redirect. It was not followed, and the key went nowhere else.'
+          receipt('deny', REDIRECT, 0, 'redirect')
+          return fail(res, 502, `model route: ${REDIRECT}`)
+        }
         await relay(upstream, res, Boolean(body.stream), {
           // One event, or the whole of a plain reply. A figure that can be believed stands. A
           // figure covers what came before it, so output that comes with no such figure, or

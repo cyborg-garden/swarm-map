@@ -4,6 +4,8 @@
 // SDK uses. The same three promises as for the OpenAI format (the key is
 // swapped, every forwarded call is metered, the cap refuses), shown again
 // here because each of them depends on the wire format.
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, tripwireAttempts } from '../../../conformance/guards/tripwire.ts'
 import { startScriptedModel, type ScriptedModel, type ScriptEntry } from '../../../conformance/rig/scripted-model.ts'
@@ -278,5 +280,100 @@ describe('model route, Anthropic Messages: metering', () => {
     expect((await ask(body, VERSION, '/messages/count_tokens')).status).toBe(401)
     expect(model!.requests).toEqual([])
     expect(route!.meter()).toEqual({ requests: 0, inTokens: 0, outTokens: 0, usd: 0 })
+  })
+})
+
+// The provider is whoever the operator named, and the real key is for that host alone. A
+// redirect is the provider saying "ask somewhere else". Followed, it would carry the key
+// there: `x-api-key` is not a header an HTTP client drops when a redirect leaves the host.
+describe('model route: what reaches the provider, and where', () => {
+  const listen = (handler: http.RequestListener): Promise<{ url: string; close(): Promise<void> }> => new Promise((resolve) => {
+    const server = http.createServer(handler)
+    server.listen(0, '127.0.0.1', () => resolve({
+      url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      close: () => new Promise<void>((done) => { server.closeAllConnections(); server.close(() => done()) }),
+    }))
+  })
+
+  it('[U:model-shape] no header of the cell\'s reaches the provider but the ones the format names: not its other credentials, not what it says it is', async () => {
+    let seen: http.IncomingHttpHeaders = {}
+    const provider = await listen((req, res) => {
+      seen = req.headers
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } }))
+    })
+    receipts = createReceiptLog()
+    route = await startModelRoute({
+      upstream: `${provider.url}/v1`, upstreamKey: UPSTREAM, placeholder: PLACEHOLDER, shape: ANTHROPIC_MESSAGES,
+      policy: () => policy(), receipts, prices: PRICES, ledger: createMemoryLedger(),
+    })
+    try {
+      const res = await ask(user('CANARY-m'), {
+        'x-api-key': PLACEHOLDER, ...VERSION, 'anthropic-beta': 'one,two',
+        // Put together here, so no string shaped like a credential is committed.
+        authorization: ['Bearer', 'something-of-the-cells'].join(' '), cookie: ['session', 'of-the-cells'].join('='), 'x-forwarded-for': '203.0.113.9',
+        'user-agent': 'a-harness/1.0', 'x-app': 'cli', 'anthropic-dangerous-direct-browser-access': 'true',
+      })
+      expect(res.status).toBe(200)
+      // What the route's own HTTP client adds (a host, a length, what it accepts) is not the cell's.
+      const own = ['host', 'connection', 'content-length', 'accept', 'accept-language', 'accept-encoding', 'sec-fetch-mode', 'user-agent']
+      expect(Object.keys(seen).filter((name) => !own.includes(name)).sort()).toEqual(['anthropic-beta', 'anthropic-version', 'content-type', 'x-api-key'])
+      expect(seen).toMatchObject({ 'x-api-key': UPSTREAM, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'one,two', 'content-type': 'application/json' })
+      expect(seen['user-agent']).not.toBe('a-harness/1.0')
+      expect(JSON.stringify(seen)).not.toContain('of-the-cells')
+      expect(JSON.stringify(seen)).not.toContain(PLACEHOLDER)
+    } finally {
+      await provider.close()
+    }
+  })
+
+  it.each([
+    ['anthropic-messages', ANTHROPIC_MESSAGES, { 'x-api-key': PLACEHOLDER, ...VERSION }, '/messages'],
+    ['openai-chat', OPENAI_CHAT, { authorization: `Bearer ${PLACEHOLDER}` }, '/chat/completions'],
+  ] as const)('[U:key-swap] %s: the real key is not sent on to where a redirect points, whether that is another host or another path of the provider', async (_id, shape, headers, callPath) => {
+    const elsewhere: { url: string; headers: http.IncomingHttpHeaders }[] = []
+    const answer: http.RequestListener = (req, res) => {
+      elsewhere.push({ url: req.url ?? '', headers: req.headers })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ content: [{ type: 'text', text: 'from somewhere else' }], usage: { input_tokens: 1, output_tokens: 1, prompt_tokens: 1, completion_tokens: 1 } }))
+    }
+    const other = await listen(answer)
+    let location = ''
+    let status = 307
+    let asked = 0
+    const provider = await listen((req, res) => {
+      if (req.url?.startsWith('/v1/elsewhere')) return answer(req, res)
+      asked++
+      res.writeHead(status, { location })
+      res.end()
+    })
+    receipts = createReceiptLog()
+    route = await startModelRoute({
+      upstream: `${provider.url}/v1`, upstreamKey: UPSTREAM, placeholder: PLACEHOLDER, shape,
+      policy: () => policy(), receipts, prices: PRICES, ledger: createMemoryLedger(),
+    })
+    try {
+      for (const to of [`${other.url}/steal`, '/v1/elsewhere']) {
+        for (const code of [301, 302, 303, 307, 308]) {
+          location = to
+          status = code
+          const res = await fetch(`${route.baseUrl}${callPath}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(user('CANARY-m')) })
+          expect(res.status, `${code} to ${to}`).toBe(502)
+          const text = await res.text()
+          expect(text).toContain('redirect')
+          expect(text).not.toContain('from somewhere else')
+          expect(text).not.toContain(UPSTREAM)
+        }
+      }
+      expect(asked).toBe(10)
+      expect(elsewhere).toEqual([])
+      // Nothing was run, so nothing is charged, and each refusal is written down.
+      expect(route.meter()).toMatchObject({ inTokens: 0, outTokens: 0, usd: 0 })
+      expect(route.unmetered).toBe(0)
+      expect(receipts.all().filter((r) => r.verdict === 'deny' && r.note === 'redirect')).toHaveLength(10)
+    } finally {
+      await other.close()
+      await provider.close()
+    }
   })
 })
