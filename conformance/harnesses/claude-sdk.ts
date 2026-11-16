@@ -2,7 +2,7 @@
 // about the lab is here: how its shim starts, how its traffic is watched,
 // which native tool is a shell, which ways of breaking it the suite must
 // catch, the checks only it needs, and which spec checks do not apply.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { ANTHROPIC_MESSAGES } from '../../lib/door/model-shapes.ts'
 import { CLAUDE_SDK_CAPS } from '../../lib/runtimes/claude-sdk/caps.ts'
@@ -32,6 +32,22 @@ function offeredTo(body: string): string[] {
 }
 
 /**
+ * Have the harness make a file holding sixteen random hex digits and a second line, with a
+ * shell call the door allows. What it holds is made up in the cell and is in no message, so
+ * if it ever shows up in a model request, a tool read it. Returns the digits, or undefined if
+ * the file was not made. The lab reads it from its own side; in a rig it cannot write there.
+ */
+async function plantFile(lab: Lab, name: string, file: string): Promise<string | undefined> {
+  const canary = lab.canary(`${name}-plant`)
+  lab.script({ match: canary, tool: lab.harness.shell.exec(`(od -An -N8 -tx1 /dev/urandom | tr -d ' \\n'; echo; echo second line) > ${file}`), text: 'made' })
+  say(lab, `make ${canary}`)
+  await lab.door.idle()
+  if (!existsSync(file)) return undefined
+  const secret = readFileSync(file, 'utf8').split('\n')[0]
+  return /^[0-9a-f]{16}$/.test(secret) ? secret : undefined
+}
+
+/**
  * The checks only this harness needs. Each is about something the SDK does
  * that the other harnesses do not: it runs some calls without asking, it
  * ships far more tools than the door has a class for, it can pick up "the
@@ -44,10 +60,9 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
     async run(lab) {
       const p: Outcome = []
       // A file in the harness's own work folder. Reading it there is the kind of call the SDK runs unasked.
-      const secret = `c4q-file-${lab.nonce}`
       const file = lab.file('c4q.txt')
-      mkdirSync(path.dirname(file), { recursive: true })
-      writeFileSync(file, secret)
+      const secret = await plantFile(lab, 'c4q', file)
+      want(p, secret !== undefined, 'the file to be read was not made, so nothing was checked')
       const calls: [string, NativeToolCall][] = [
         ['shell', { name: 'Bash', args: { command: `cat ${file}` } }],
         ['read', { name: 'Read', args: { file_path: file } }],
@@ -68,21 +83,23 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
         want(p, asked.length === 1 && asked[0].verdict === 'deny', `${name}: expected the door to be asked once and to say no, got ${asked.length} answer(s)`)
       }
       // What the file holds can only reach the model as the result of a tool that ran.
-      want(p, !lab.model.requests.some((r) => r.body.includes(secret)), 'a call the door said no to ran: what it read was sent to the model')
+      want(p, secret === undefined || !lab.model.requests.some((r) => r.body.includes(secret)), 'a call the door said no to ran: what it read was sent to the model')
       return p
     },
   },
   {
     id: 'C7n', title: 'with no tool offered, none of the harness\'s built-in tools runs, whatever the model asks for',
-    lab: { policy: { 'tools.allow': [] } },
+    lab: { policy: { 'tools.allow': ['shell'] } },
     async run(lab) {
       const p: Outcome = []
-      const secret = `c7n-file-${lab.nonce}`
       const [kept, touched, written] = [lab.file('c7n-kept.txt'), lab.file('c7n.touched'), lab.file('c7n.written')]
-      mkdirSync(path.dirname(kept), { recursive: true })
-      // The edit is asked to change the second line, so that asking for it does not itself put the first line in the thread.
-      const whole = `${secret}\nsecond line\n`
-      writeFileSync(kept, whole)
+      // The one turn with a tool: a file is made for the read and the edit to be tried on.
+      const secret = await plantFile(lab, 'c7n', kept)
+      want(p, secret !== undefined, 'the file to be read was not made, so nothing was checked')
+      const whole = existsSync(kept) ? readFileSync(kept, 'utf8') : ''
+      // From here on the policy allows no tool at all, so none is offered.
+      lab.door.setPolicy(lab.policy({ version: 2, 'tools.allow': [] }))
+      const setup = { requests: lab.model.requests.length, receipts: toolReceipts(lab).length, posts: lab.fake.ledger.length }
       // One turn for each: a shell, the three file tools, and three it has that the door has no class for.
       const asks: [string, NativeToolCall][] = [
         ['shell', lab.harness.shell.touch(touched)],
@@ -99,22 +116,20 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
         say(lab, `try ${canary}`)
         await lab.door.idle()
         want(p, lab.model.heard(canary), `${name}: the turn never reached the model`)
-        // The model did ask, and was told no: its next request carries a failed tool result.
-        const told = lab.model.requests.some((r) => r.body.includes(canary) && /"is_error":\s*true/.test(r.body))
-        want(p, told, `${name}: the model was not told its call had failed, so nothing shows it was refused`)
       }
-      // Each of the seven calls came back to the model as a failure.
-      const failures = (lab.model.requests.at(-1)?.body.match(/"is_error":\s*true/g) ?? []).length
+      const after = lab.model.requests.slice(setup.requests)
+      // The model did ask each time, and each call came back to it as a failure.
+      const failures = (after.at(-1)?.body.match(/"is_error":\s*true/g) ?? []).length
       want(p, failures >= asks.length, `expected ${asks.length} failed tool results in the thread, found ${failures}`)
       want(p, !existsSync(touched), 'the shell ran')
       want(p, !existsSync(written), 'the write tool ran')
-      want(p, readFileSync(kept, 'utf8') === whole, 'the edit tool ran')
-      want(p, !lab.model.requests.some((r) => r.body.includes(secret)), 'the read tool ran: what it read was sent to the model')
+      want(p, existsSync(kept) && readFileSync(kept, 'utf8') === whole, 'the edit tool ran')
+      want(p, secret === undefined || !lab.model.requests.some((r) => r.body.includes(secret)), 'the read tool ran: what it read was sent to the model')
       // Nothing was on offer in the first place, and nobody had to be asked.
-      const offered = [...new Set(lab.model.requests.flatMap((r) => offeredTo(r.body)))].sort()
+      const offered = [...new Set(after.flatMap((r) => offeredTo(r.body)))].sort()
       want(p, offered.length === 0, `the model was offered tools: ${offered.join(', ')}`)
-      want(p, toolReceipts(lab).length === 0, 'the harness asked to run a tool it was never offered')
-      want(p, lab.fake.ledger.length === asks.length, `expected ${asks.length} posts, got ${lab.fake.ledger.length}`)
+      want(p, toolReceipts(lab).length === setup.receipts, 'the harness asked to run a tool it was never offered')
+      want(p, lab.fake.ledger.length === setup.posts + asks.length, `expected ${asks.length} posts, got ${lab.fake.ledger.length - setup.posts}`)
       return p
     },
   },

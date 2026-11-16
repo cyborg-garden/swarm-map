@@ -2,7 +2,8 @@
 # `npm run conformance:docker:build`. A test run never builds and never pulls.
 #
 #   cell   the harness, its shim and its gate, and the lab's probe. One stage
-#          per harness: `cell` holds Pi, `cell-letta-code` holds Letta Code
+#          per harness: `cell` holds Pi, `cell-letta-code` holds Letta Code,
+#          `cell-claude-sdk` holds the Claude Agent SDK
 #   rig    the sidecar's side (door, model route, scripted model), the sink
 #          and the control
 #
@@ -55,6 +56,30 @@ COPY conformance/broken/letta-code-wrapped.ts /opt/swarm/conformance/broken/
 COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
 COPY conformance/docker/letta-code/cell-main.ts /opt/swarm/conformance/docker/letta-code/
 RUN chmod -R a-w /opt/swarm /opt/letta-code
+USER node
+WORKDIR /tmp/smlab
+
+FROM base AS cell-claude-sdk
+# The third harness, built the same way: pinned by version and by the
+# integrity hash of every package in its lock file, with no install script run.
+# The SDK is a JavaScript package and a Claude Code program for this platform,
+# which the package starts. The lock file names the program for every
+# platform; npm installs the one that fits this image.
+COPY conformance/docker/claude-sdk/package.json conformance/docker/claude-sdk/package-lock.json /opt/claude-sdk/
+RUN cd /opt/claude-sdk && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+ && ln -s "$(ls /opt/claude-sdk/node_modules/@anthropic-ai/claude-agent-sdk-*/claude)" /usr/local/bin/claude \
+ && rm -rf /root/.npm
+COPY lib/core /opt/swarm/lib/core
+COPY lib/door/framing.ts lib/door/protocol.ts lib/door/shim-client.ts /opt/swarm/lib/door/
+COPY lib/runtimes/claude-sdk /opt/swarm/lib/runtimes/claude-sdk
+# The two files of Pi's that this cell also reads: how a sender is framed in a prompt, and a version the rig file names.
+COPY lib/runtimes/pi/preamble.ts lib/runtimes/pi/caps.ts /opt/swarm/lib/runtimes/pi/
+# The guard, and the two files the broken SDK below reads to send a request the way the SDK would.
+COPY conformance/guards/preflight.ts conformance/guards/watch-proxy.ts conformance/guards/tripwire.ts /opt/swarm/conformance/guards/
+COPY conformance/broken/claude-sdk-wrapped.ts /opt/swarm/conformance/broken/
+COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
+COPY conformance/docker/claude-sdk/cell-main.ts conformance/docker/claude-sdk/version.ts /opt/swarm/conformance/docker/claude-sdk/
+RUN chmod -R a-w /opt/swarm /opt/claude-sdk
 USER node
 WORKDIR /tmp/smlab
 

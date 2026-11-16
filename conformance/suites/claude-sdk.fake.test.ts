@@ -114,3 +114,47 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(c9p.detail).toBe('no tripwire was armed inside the harness process, so nothing was checked')
   }, 30_000)
 })
+
+// The matrix file is evidence from a real SDK run, and only `npm run
+// conformance -- claude-sdk` may write it. CI cannot repeat that run, but it
+// can tell when the file no longer matches the suite: a check or a broken
+// shim added since means the evidence is out of date and the run has to be
+// done again.
+describe('the committed matrix for the pinned Claude Agent SDK', () => {
+  const file = path.resolve(import.meta.dirname, '..', 'matrix', `claude-sdk-${CLAUDE_SDK_VERSION}.process.json`)
+  const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
+  const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
+
+  it('[U:claude-sdk-matrix] is from a real SDK of the pinned version, run as a plain process', () => {
+    expect(committed).toMatchObject({ harness: 'claude-sdk', version: CLAUDE_SDK_VERSION, harnessBuild: 'real', substrate: 'process' })
+  })
+
+  it('[U:claude-sdk-matrix] has a result for every check the suite runs today, under today\'s title', () => {
+    // Every check anyone knows of has a row, run or not, plus this harness's own, and there is no row for one nobody knows.
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...CLAUDE_SDK_CHECKS.map((c) => c.id)])].sort())
+    for (const check of ALL_CHECKS) {
+      expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance -- claude-sdk`).toBeDefined()
+      expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)
+      expect(rows[check.id].title, check.id).toBe(check.title)
+    }
+  })
+
+  it('[U:claude-sdk-matrix] names every broken shim the suite has today, with the checks each must fail today', () => {
+    const today = Object.fromEntries(Object.entries(brokenVariants(harness)).map(([shim, v]) => [shim, v.red]))
+    expect(Object.fromEntries(committed.mustFail.map((m) => [m.shim, m.mustFail]))).toEqual(today)
+    for (const m of committed.mustFail) for (const id of m.mustFail) expect(m.failed, `${m.shim} must fail ${id}`).toContain(id)
+    expect(committed.suiteTrusted).toBe(true)
+  })
+
+  it('[U:claude-sdk-matrix] says what it does not show: how its traffic was watched, no wall at process level, and no chat of its own to switch off', () => {
+    // The watcher on this harness is a proxy it is told to use, and the file says so in so many words.
+    expect(committed.caveats.join(' ')).toContain('watched by a proxy it is told to use, not from inside its process')
+    expect(rows.C7).toMatchObject({ status: 'not-run' })
+    expect(rows.C11).toMatchObject({ status: 'not-run' })
+    expect(rows.C16).toMatchObject({ status: 'n/a' })
+    for (const id of ['S1', 'C8', 'C9', 'C10']) expect(rows[id], id).toMatchObject({ status: 'not-run' })
+    const rule = Object.fromEntries(committed.rules.map((r) => [r.rule, r.status]))
+    // Neither wall of the model route, nor the posture rule, is claimed without a sealed cell.
+    for (const id of ['budget.cap', 'keys.model-route', 'tools.posture']) expect(rule[id], id).toBe('not-run')
+  })
+})

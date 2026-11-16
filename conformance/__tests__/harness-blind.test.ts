@@ -9,8 +9,10 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { HARNESSES } from '../../lib/door/protocol.ts'
+import { claudeSdkHarness } from '../harnesses/claude-sdk.ts'
 import { fakeLettaCodeCommand, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { fakePiCommand, piHarness } from '../harnesses/pi.ts'
+import { fakeClaudeSdk } from '../rig/fake-claude-sdk.ts'
 import { CHECKS } from '../suites/checks.ts'
 import { brokenVariants } from '../suites/harness.ts'
 
@@ -29,11 +31,12 @@ describe('the shared shim suite names no harness', () => {
 
   it.each(SHARED)('[U:harness-blind] %s holds no harness name and no native tool name', (file) => {
     const literals = [...code(file).matchAll(/'([^'\n]*)'/g)].map((m) => m[1])
-    const nativeTools = [piHarness(fakePiCommand(), 'fake'), lettaCodeHarness(fakeLettaCodeCommand(), 'fake')].flatMap((h) => Object.keys(h.caps.toolMap))
+    const nativeTools = [piHarness(fakePiCommand(), 'fake'), lettaCodeHarness(fakeLettaCodeCommand(), 'fake'), claudeSdkHarness(fakeClaudeSdk(), 'fake')].flatMap((h) => Object.keys(h.caps.toolMap))
     const named = literals.filter((l) => (HARNESSES as string[]).includes(l) || nativeTools.includes(l))
     expect(named).toEqual([])
     expect(code(file)).not.toMatch(/\bpi[A-Z]\w*|\bPi\b|\bPI_/)
     expect(code(file)).not.toMatch(/Letta/i)
+    expect(code(file)).not.toMatch(/Claude|Anthropic|\bSDK\b/i)
   })
 
   it('[U:harness-blind] a second harness can be put through the checks by writing an adapter and nothing else', () => {
@@ -45,5 +48,10 @@ describe('the shared shim suite names no harness', () => {
     // The second one did it: one more optional key (a patch to the lab's starting policy), and nothing else.
     const second = lettaCodeHarness(fakeLettaCodeCommand(), 'fake')
     expect(Object.keys(second).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'policy', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
+    // And the third: no patch to the policy, and two optional keys of its own. One names the variables it must read its
+    // placeholder and its route from, for the credential guard. The other is what a reader of its matrix has to be told.
+    const third = claudeSdkHarness(fakeClaudeSdk(), 'fake')
+    expect(Object.keys(third).sort()).toEqual(['broken', 'build', 'caps', 'caveats', 'cellEnv', 'modelShape', 'namedEnv', 'rows', 'shell', 'start', 'tripwire', 'workFile'])
+    for (const v of Object.values(brokenVariants(third))) for (const id of v.red) expect([...ids, 'C4q', 'C7n', 'C11r', 'C11d']).toContain(id)
   })
 })

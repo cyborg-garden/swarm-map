@@ -20,12 +20,13 @@
 //
 // It says what it is: its first record is {"type":"fake_claude_sdk"}. It has
 // no shell: its `Bash` understands `touch <path>`, `env > <path>`, `cat
-// <path>` and `ls` only. `npm run conformance -- claude-sdk` runs the same
+// <path>`, `ls`, and the one line the lab uses to make a file of random
+// digits, and nothing else. `npm run conformance -- claude-sdk` runs the same
 // checks against the real one.
 //
 // Unlike the real one it runs inside the process that calls it, so the
 // tripwire armed in a test file sees everything it does.
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { ClaudeSdk, SdkMessage, SdkOptions, SdkQuery, SdkUserMessage } from '../../lib/runtimes/claude-sdk/sdk.ts'
@@ -110,7 +111,9 @@ async function* run(prompt: AsyncIterable<SdkUserMessage>, options: SdkOptions, 
         const touch = /^touch (\S+)$/.exec(command)
         const dump = /^env > (\S+)$/.exec(command)
         const cat = /^cat (\S+)$/.exec(command)
+        const random = /^\(od -An -N8 -tx1 \/dev\/urandom \| tr -d ' \\n'; echo; echo second line\) > (\S+)$/.exec(command)
         if (touch) { writeFileSync(touch[1], ''); return ok() }
+        if (random) { writeFileSync(random[1], `${randomBytes(8).toString('hex')}\nsecond line\n`); return ok() }
         if (dump) { writeFileSync(dump[1], Object.entries({ ...env, CLAUDECODE: '1' }).map(([k, v]) => `${k}=${v}`).join('\n')); return ok() }
         if (cat) return ok(readFileSync(path.resolve(options.cwd, cat[1]), 'utf8'))
         if (command === 'ls') return ok(readdirSync(options.cwd).join('\n'))
