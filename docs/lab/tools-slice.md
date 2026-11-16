@@ -200,6 +200,13 @@ matrix lists each of the ten tool checks as not run, with that reason. The launc
 config that names Letta Code and switches a tool on, and the dashboard's Tools card is switched
 off for such an agent.
 
+## The Claude Agent SDK
+
+Not built here either, for the same reason: its shim ([`claude-sdk.md`](claude-sdk.md)) puts every
+tool call to the door and takes a plain yes or no, and does not say it can hold a call. Its two
+matrices list the ten tool checks as not run, with that reason. It is not one of the launcher's
+harnesses, so no config can switch a tool on for it.
+
 ## A later tool: fetch through the door
 
 Not built. The shape, so that nothing here has to change for it:
@@ -231,10 +238,13 @@ room throughout. No real model, no real chat platform, no real credential.
 |---|---|
 | Real Pi 1.5.2 as a process | 24 checks pass: the 14 shared ones and the 10 tool checks. 13 shims and rigs broken on purpose each turned its named checks red and left the others green |
 | Real Pi 1.5.2 in the sealed Docker cell | 30 checks pass: 4 on the seal, 13 shared, C8, C9, C10 and the 10 tool checks. 16 rigs broken on purpose each turned its named checks red, 5 of them cells with a broken gate |
-| The launcher's own cell, with a fake Discord | All 18 tests of the Pi launcher's Docker suite pass in one run, and all 15 of the Letta Code launcher's. In them a shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
+| The launcher's own cell, with a fake Discord | All 19 tests of the Pi launcher's Docker suite pass in one run, and all 15 of the Letta Code launcher's. In them a shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. A file write waited for the admin's tick too. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
 | The scratch folder's size | 72 MB written to a 64 MB folder: no more than 64 MB landed. With the mount left out on purpose, all of it landed and three checks went red |
+| The cell's own folder | Before the audit, 200 MB written there from a shell landed on Docker's disk. Now 264 MB written to it lands no more than 256 MB, and 300 MB from a shell stopped at 256 MB. With it left a plain volume on purpose, three checks went red |
 | Hand mutations | 77 lines broken one at a time in `decide()`, the door, the gate, the shim, the connector, the launcher and the page. 76 turned a named test red. One changes nothing the code does |
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
+| Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
+| Audit mutations | 28 lines broken one at a time in `decide()`, the door's answer handling, the scratch-folder check, the gate, the launcher's config, the cell and the Tools card. All 28 turned a named test red |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
 "Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.
