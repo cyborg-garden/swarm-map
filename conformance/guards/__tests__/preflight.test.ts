@@ -95,6 +95,55 @@ describe('F2: no real credential is present', () => {
   })
 })
 
+describe('F2: a harness that reads its key and its model address from fixed names', () => {
+  const named = { ANTHROPIC_API_KEY: 'placeholder', ANTHROPIC_BASE_URL: 'route' } as const
+  const nonce = 'deadbeef'
+  const good = { PATH: '/usr/bin', ANTHROPIC_API_KEY: `PLACEHOLDER-${nonce}`, ANTHROPIC_BASE_URL: 'http://127.0.0.1:4010' }
+
+  it('[U:named-fakes] accepts this run\'s placeholder and a plain local route under the names it was told to expect', () => {
+    expect(() => assertNoCredentials(good, { nonce, named })).not.toThrow()
+    // In a rig the route is the door's, by the name the cell knows it by.
+    expect(() => assertNoCredentials({ ...good, ANTHROPIC_BASE_URL: 'http://door:7002' }, { nonce, named })).not.toThrow()
+  })
+
+  it('[U:named-fakes] the same env is refused when nobody said those names were expected', () => {
+    expect(() => assertNoCredentials(good, { nonce })).toThrow(/^REFUSING TO RUN: F2 .*ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL/)
+  })
+
+  it.each([
+    ['the real upstream key of this run', `UPSTREAM-${nonce}`],
+    ['another run\'s placeholder', 'PLACEHOLDER-0badf00d'],
+    ['the placeholder with something after it', `PLACEHOLDER-${nonce}-and-more`],
+    ['anything else', 'x'],
+    ['a key-shaped value', ['sk', 'ant', 'api03', 'A'.repeat(24)].join('-')],
+  ])('[U:named-fakes] refuses %s where the placeholder goes', (_what, value) => {
+    expect(() => assertNoCredentials({ ...good, ANTHROPIC_API_KEY: value }, { nonce, named })).toThrow(/^REFUSING TO RUN: F2 .*ANTHROPIC_API_KEY/)
+  })
+
+  it('[U:named-fakes] refuses the placeholder when the run has no nonce to check it against', () => {
+    expect(() => assertNoCredentials(good, { named })).toThrow(/ANTHROPIC_API_KEY/)
+    expect(() => assertNoCredentials({ ...good, ANTHROPIC_API_KEY: 'PLACEHOLDER-' }, { nonce: '', named })).toThrow(/ANTHROPIC_API_KEY/)
+  })
+
+  it.each([
+    'https://api.anthropic.com', 'http://api.anthropic.com', 'http://127.0.0.1:4010/v1', 'http://user:pw@127.0.0.1:4010',
+    'http://127.0.0.1', 'http://127.0.0.1:4010@evil.example', 'http://10.0.0.5:4010', 'http://door.example:4010',
+  ])('[U:named-fakes] refuses %s where the route goes', (value) => {
+    expect(() => assertNoCredentials({ ...good, ANTHROPIC_BASE_URL: value }, { nonce, named })).toThrow(/^REFUSING TO RUN: F2 .*ANTHROPIC_BASE_URL/)
+  })
+
+  it('[U:named-fakes] every other name is still judged as before, and a refused value is never printed', () => {
+    expect(() => assertNoCredentials({ ...good, GITHUB_TOKEN: 'x' }, { nonce, named })).toThrow(/GITHUB_TOKEN/)
+    const shaped = ['sk', 'ant', 'api03', 'B'.repeat(24)].join('-')
+    try {
+      assertNoCredentials({ ...good, ANTHROPIC_API_KEY: shaped }, { nonce, named })
+      expect.unreachable()
+    } catch (err) {
+      expect((err as Error).message).not.toContain(shaped)
+    }
+  })
+})
+
 describe('F5: a work dir is judged by where it really is', () => {
   let scratch: string
   beforeEach(() => { scratch = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-f5-')) })
