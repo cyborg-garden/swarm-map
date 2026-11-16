@@ -25,6 +25,8 @@ export interface DoorLauncher {
   stop(o: { configPath: string; stateDir: string }): Promise<{ ok: boolean; output: string }>
   /** Whether `pid` is a running door. */
   alive(pid: number): boolean
+  /** The process supervisor that `pid` runs under, when its parent is one. Undefined when it is not, or cannot be told. */
+  supervisor?(pid: number): 'pm2' | undefined
 }
 
 const DRY_RUN_TIMEOUT_MS = 5 * 60_000
@@ -103,5 +105,11 @@ export function createCliLauncher(o: { execPath?: string; version?: string; prob
       return { ok: code === 0, output }
     },
     alive,
+    supervisor(pid) {
+      // pm2 starts what it runs as a child of its own daemon, which names itself in its process title.
+      const ps = (of: string, field: string): string => spawnSync('ps', ['-p', of, '-o', `${field}=`], { encoding: 'utf8' }).stdout.trim()
+      const parent = ps(String(pid), 'ppid')
+      return /^\d+$/.test(parent) && parent !== '1' && /\bPM2\b/.test(ps(parent, 'command')) ? 'pm2' : undefined
+    },
   }
 }
