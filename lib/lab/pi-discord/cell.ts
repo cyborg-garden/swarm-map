@@ -7,8 +7,11 @@
 // The cell is the lab's own cell image, started the way the conformance rig
 // starts it: read-only disk, non-root, every capability dropped, no host
 // folder, no published port. It is handed a run nonce, a cell token, two
-// timeouts, the model's name and what the harness is told it is. Not a key,
-// not a token.
+// timeouts, two limits for its tools, the model's name and what the harness
+// is told it is. Not a key, not a token.
+//
+// The folder the harness is started in is the scratch folder for its tools: a
+// mount that lives in memory, of a fixed size, and is gone when the cell is.
 //
 // The relay is the one container with a route out, because it has to reach
 // the door on this machine. It carries bytes and holds nothing.
@@ -23,6 +26,7 @@ import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, p
 import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig } from '../../../conformance/docker/report.ts'
 import { inSubnet, labNetwork, writtenNetworkProblems, type LabNetwork } from '../../../conformance/docker/subnets.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
+import { DEFAULT_TOOL_LIMITS, type ToolLimits } from '../../core/tools/call.ts'
 
 // The same two images the conformance rig uses, built from the same Dockerfile and named the
 // same way: for the code they were built from. So a run can only start from an image of the
@@ -54,9 +58,18 @@ export interface CellOptions {
   images?: LabImages
   /** Dry run only: add the sink and its control, so "nothing got out" can be read from outside. */
   withSink?: boolean
+  /** The limits on the cell's tools. Left out, the defaults. */
+  limits?: ToolLimits
+  /** How long the door waits for an admin to answer a request, when a class of tool asks. The cell is told to wait a little longer. */
+  approvalMs?: number
   /** Tests only: break the seal in one named way, to show the checks go red. */
-  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet'
+  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped'
 }
+
+/** The scratch folder: where the harness is started, and the one place its file tools reach. */
+export const SCRATCH_DIR = `${LAB_DIR}/work`
+/** The scratch folder as a mount: in memory, capped, owned by the user the cell runs as (`node`, 1000). */
+export const scratchMount = (mb: number): string => `${SCRATCH_DIR}:size=${mb}m,mode=0700,uid=1000,gid=1000`
 
 export interface LiveFile {
   name: string
@@ -70,7 +83,7 @@ export const networksWritten = (file: Pick<LiveFile, 'networks'>): Record<string
   Object.fromEntries(Object.entries(file.networks).map(([name, n]) => [name, { internal: n.internal, subnet: n.ipam.config[0].subnet }]))
 
 /** Every name the cell's environment may hold. Listed by hand; nothing is inherited. */
-export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_SYSTEM_PROMPT', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
+export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_SYSTEM_PROMPT', 'SMLAB_TOOL_OUTPUT_BYTES', 'SMLAB_TOOL_SECONDS', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
 const FORBIDDEN_KEYS = ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices', 'dns']
 
 function service(image: string, script: string, networks: string[], environment: Record<string, string>): Service {
@@ -89,14 +102,20 @@ export function renderCell(o: CellOptions): LiveFile {
   if (o.systemPrompt === '' || o.systemPrompt.length > 4000) throw new RefusingToRun('F5', 'not a system prompt')
   const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages()
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
+  const limits = o.limits ?? DEFAULT_TOOL_LIMITS
+  const whole = (n: number, max: number): number => { if (!Number.isInteger(n) || n < 1 || n > max) throw new RefusingToRun('F5', 'not a limit'); return n }
+  // The shim waits this long for the door's answer on a tool, and the gate a little longer than the shim. A real model
+  // is slower than a scripted one, and where a tool waits for an admin the door has to be the first to give up.
+  const wait = Math.max(30_000, whole(o.approvalMs ?? 1, 3_600_000) + 10_000)
   const cell: Service = {
     ...service(CELL_IMAGE, 'conformance/docker/cell-main.ts', ['cell'], {
       SWARMLAB_NONCE: o.cellNonce, SWARMLAB_BRAIN: o.brainToken, SMLAB_GATE: 'real',
-      // A real model is slower than a scripted one: the shim waits this long for the door's answer on a tool.
-      SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000', SMLAB_MODEL: o.model, SMLAB_SYSTEM_PROMPT: o.systemPrompt,
+      SMLAB_VERDICT_MS: String(wait), SMLAB_VETO_MS: String(wait + 5000), SMLAB_MODEL: o.model, SMLAB_SYSTEM_PROMPT: o.systemPrompt,
+      SMLAB_TOOL_SECONDS: String(whole(limits.callSeconds, 3600)), SMLAB_TOOL_OUTPUT_BYTES: String(whole(limits.outputBytes, 1_000_000)),
     }),
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'],
   }
+  cell.tmpfs = ['/tmp', scratchMount(whole(limits.workspaceMb, 1024))]
   const relay = service(RIG_IMAGE, 'lib/door/relay.ts', ['cell', 'egress'], {
     SMLAB_RELAY: `${BRAIN_PORT}=host.docker.internal:${port(o.brainPort)},${ROUTE_PORT}=host.docker.internal:${port(o.routePort)}`,
   })
@@ -114,6 +133,8 @@ export function renderCell(o: CellOptions): LiveFile {
   }
   if (o.broken === 'cell-on-egress') cell.networks = ['cell', 'egress']
   if (o.broken === 'cell-writable') cell.read_only = false
+  // The scratch folder is left as a plain folder of the cell's volume: writable, and with no size of its own.
+  if (o.broken === 'cell-scratch-uncapped') cell.tmpfs = ['/tmp']
   // The two networks are made on each other's blocks. As written this is still a sealed cell: only Docker can show the difference.
   if (o.broken === 'cell-other-subnet') {
     file.networks.cell = labNetwork(true, o.subnets.egress)
@@ -137,6 +158,8 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
   if (cell.read_only !== true) p.push('the cell can write its own disk')
   if (cell.user !== 'node') p.push(`the cell runs as ${cell.user}`)
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) p.push('the cell mounts something other than its own folder')
+  // Two places in memory and no more: /tmp, and the scratch folder with a size written on it.
+  if (cell.tmpfs.length !== 2 || cell.tmpfs[0] !== '/tmp' || !/^\/tmp\/smlab\/work:size=([1-9]\d{0,3})m,mode=0700,uid=1000,gid=1000$/.test(cell.tmpfs[1])) p.push('the cell\'s scratch folder is not a capped mount of its own')
   if (Object.keys(cell.environment).sort().join(',') !== CELL_ENV.join(',')) p.push('the cell is handed something that is not on its list')
   try { assertNoCredentials(cell.environment, { nonce: cell.environment.SWARMLAB_NONCE }) } catch (err) { p.push((err as Error).message) }
   if (door.volumes !== undefined) p.push('the relay mounts something')
@@ -238,7 +261,7 @@ export function runningCellProblems(project: string, written: Record<string, { i
     Config: { Env: string[]; User: string }
     Mounts: { Type: string; Name?: string; Destination: string }[]
     NetworkSettings: { Networks: Record<string, { IPAddress?: string }>; Ports?: Record<string, unknown> }
-    HostConfig: HostConfig & { ReadonlyRootfs: boolean }
+    HostConfig: HostConfig & { ReadonlyRootfs: boolean; Tmpfs?: Record<string, string> | null }
   }]
   if (!c.State.Running) p.push('the cell is not running')
   const networks = Object.keys(c.NetworkSettings.Networks).sort()
@@ -263,6 +286,9 @@ export function runningCellProblems(project: string, written: Record<string, { i
   p.push(...given.net, ...given.privilege, ...given.mounts)
   if (c.Config.User !== 'node') p.push(`the cell runs as ${c.Config.User || 'root'}`)
   if (c.Mounts.length !== 1 || c.Mounts[0].Type !== 'volume' || c.Mounts[0].Name !== `${project}_lab`) p.push('the cell mounts something other than its own folder')
+  // What Docker says it mounted in memory: /tmp, and the scratch folder with a size.
+  const inMemory = c.HostConfig.Tmpfs ?? {}
+  if (Object.keys(inMemory).sort().join(',') !== `/tmp,${SCRATCH_DIR}` || !/(^|,)size=[1-9]\d*m(,|$)/.test(inMemory[SCRATCH_DIR] ?? '')) p.push('the cell\'s scratch folder is not a capped mount of its own')
   // Names only. What the image itself sets is not ours to list.
   const ours = c.Config.Env.map((e) => e.slice(0, e.indexOf('='))).filter((n) => /^(SMLAB_|SWARMLAB_)/.test(n) || /TOKEN|KEY|SECRET|PASS/i.test(n))
   if (ours.sort().join(',') !== CELL_ENV.join(',')) p.push('the cell\'s environment is not the list it was given')
@@ -288,4 +314,21 @@ export async function probeCell(project: string, cellNonce: string, sinkIp: stri
     { id: 'S2', title: 'the shim, the gate and Pi cannot be changed from inside the cell', problems: report ? writeProblems(report) : none },
     { id: 'S3', title: 'no folder of this machine is in the cell', problems: report ? [...mountProblems(report), ...secretProblems(report).filter((x) => x.startsWith('the search'))] : none },
   ]
+}
+
+/**
+ * The scratch folder, tried from inside the running cell: it can be written,
+ * and it takes no more than its size. A little more than the size is written
+ * to it, and what landed is counted.
+ */
+export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): string[] {
+  const file = `${SCRATCH_DIR}/.fill`
+  const r = docker(['exec', `${project}-cell-1`, 'sh', '-c',
+    `touch ${SCRATCH_DIR}/.ok && echo WROTE; rm -f ${SCRATCH_DIR}/.ok; head -c ${(mb + 8) * 1024 * 1024} /dev/zero > ${file} 2>/dev/null; echo "LANDED $(wc -c < ${file})"; rm -f ${file}`], 60_000)
+  const landed = Number(/LANDED\s+(\d+)/.exec(r.out)?.[1] ?? Number.NaN)
+  const p: string[] = []
+  if (!r.out.includes('WROTE')) p.push('the scratch folder cannot be written')
+  if (!Number.isFinite(landed)) p.push('the scratch folder could not be tried, so nothing was checked')
+  else if (landed > mb * 1024 * 1024) p.push(`the scratch folder took ${landed} bytes, which is more than its ${mb} MB`)
+  return p
 }
