@@ -70,7 +70,7 @@ export const DOCKER_CHECKS: Check[] = [
       }
       for (const file of filesHolding(lab.dir, Object.values(real))) p.push(`a secret of this run is in the cell's folder at ${file}`)
       // And the swap happened: the cell only ever presented the placeholder, the model only ever saw the key.
-      want(p, lab.model.requests.length >= 2 && lab.model.requests.every((r) => r.authorization === `Bearer ${lab.secrets.upstream}`), 'the model did not see the real key on every call')
+      want(p, lab.model.requests.length >= 2 && lab.model.requests.every((r) => r.key === lab.secrets.upstream), 'the model did not see the real key on every call')
       want(p, lab.route.presented.length === lab.model.requests.length, 'a model call did not come through the route')
       want(p, lab.route.refused === 0, 'the cell presented something other than its placeholder')
       return p

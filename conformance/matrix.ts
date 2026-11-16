@@ -28,6 +28,7 @@ export interface MatrixHarness {
   rows: MatrixRowInput[]
   /** Why the tool checks are not run for this harness. A harness that runs them hands in their results instead. */
   noTools?: string
+  caveats?: string[]
 }
 
 export interface MatrixRow { id: string; title: string; status: 'pass' | 'fail' | 'not-run' | 'n/a'; reason?: string }
@@ -154,6 +155,8 @@ export function buildMatrix(
         ? 'The harness ran as a plain process on this machine: no wall. Nothing here shows the cell is sealed.'
         : `The harness ran in a Docker cell on one machine${meta.runner ? ` (${meta.runner.host}, Docker ${meta.runner.server})` : ''}. Another Docker host, or another version, is not shown.`,
       'A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell.',
+      // What only this harness's adapter can say about its own run. A process-level caveat is not carried into a cell.
+      ...(meta.substrate === 'process' ? harness.caveats ?? [] : []),
     ],
     rows,
     rules: ruleProof(rules, rows),

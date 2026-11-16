@@ -126,15 +126,15 @@ export const RULES: Rule[] = [
     klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'gate', tests: ['P:tool-limit'], checks: ['L1', 'L2'] },
 
   // Both model-route rules hold only for a harness whose model wire format has
-  // a ModelShape (lib/door/model-shapes.ts). One exists: OpenAI chat-completions.
-  // A harness that speaks the Anthropic Messages API has neither rule yet.
+  // a ModelShape (lib/door/model-shapes.ts). Two exist: OpenAI chat-completions
+  // and Anthropic Messages. A harness that speaks anything else has neither rule.
   // Both are walls, and the route is only half of each. C12 and C8p show the
   // route does its part. That the harness has no other way to a model (C9) or
   // to a key (C8) needs a sealed cell, so neither rule is claimed without one.
-  { id: 'budget.cap', statement: 'Monthly spend is capped, for a harness that talks to its model in the OpenAI chat format.',
+  { id: 'budget.cap', statement: 'Monthly spend is capped, for a harness that talks to its model in a format the model route can meter: OpenAI chat or Anthropic Messages.',
     klass: 'security', kind: 'wall', reads: ['budget.monthlyUsd', 'budget.onExceed'], surfaces: 'all', enforcer: 'model-route', tests: ['D:budget.cap/spent', 'D:budget.cap/warn-only', 'U:budget-meter', 'U:budget-unmetered', 'U:budget-parallel', 'U:budget-ledger', 'U:model-shape'], checks: ['C12', 'C9'] },
 
-  { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key. This holds for a harness that talks to its model in the OpenAI chat format.',
+  { id: 'keys.model-route', statement: 'The harness holds a placeholder. Only the sidecar holds the real model key. This holds for a harness that talks to its model in a format the model route can read: OpenAI chat or Anthropic Messages.',
     klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'model-route', tests: ['U:key-swap', 'U:model-shape'], checks: ['C8p', 'C8'] },
 
   { id: 'out.still-allowed', statement: 'A reply is dropped if the policy changed mid-turn.',

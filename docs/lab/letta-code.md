@@ -158,8 +158,9 @@ cell.
    accepted for it and every one is dropped with a receipt. In practice it is a one-room harness.
 3. **A reset does not clear what it learned.** `reset` starts a new conversation of the same
    agent. Its memory folder is untouched.
-4. **Spend caps on Anthropic's own format.** It reaches the model route in the OpenAI chat format,
-   which is the one format the route can meter. Its Anthropic provider was not tried.
+4. **Spend caps on Anthropic's own format.** It reaches the model route in the OpenAI chat format.
+   The route has since learned Anthropic's format too ([`claude-sdk.md`](claude-sdk.md)), but
+   Letta Code's Anthropic provider was not tried.
 
 ## What was checked against the real thing
 

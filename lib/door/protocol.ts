@@ -90,7 +90,7 @@ export interface Capabilities {
    */
   sessionIsolation: 'none' | 'sealed'
   /** The model wire format the harness speaks to the model route. See model-shapes.ts. */
-  modelShape: 'openai-chat' | 'none'
+  modelShape: 'openai-chat' | 'anthropic-messages' | 'none'
 }
 
 export const HARNESSES: Capabilities['harness'][] = ['pi', 'letta-code', 'claude-sdk', 'hermes', 'openclaw', 'echo']

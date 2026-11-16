@@ -6,6 +6,7 @@
 import type { ModelShape } from '../../lib/door/model-shapes.ts'
 import type { Capabilities } from '../../lib/door/protocol.ts'
 import type { LabOptions } from './lab.ts'
+import type { NamedFake } from '../guards/preflight.ts'
 
 /** One native tool call, as the scripted model should ask for it. */
 export interface NativeToolCall { name: string; args: unknown }
@@ -82,6 +83,11 @@ export interface HarnessUnderTest {
   noTools?: string
   /** Where a tool started by this harness would write `name` so the lab can see it. */
   workFile(cell: Cell, name: string): string
+  /**
+   * Names in that environment that look like credentials and are not: where this harness reads
+   * its placeholder and its model route from. The F2 guard lets each hold that one thing only.
+   */
+  namedEnv?: Record<string, NamedFake>
   /** The exact environment the harness process will get, for the F2 preflight. */
   cellEnv(cell: Cell, variant: string): Record<string, string>
   /**
@@ -96,6 +102,8 @@ export interface HarnessUnderTest {
   broken: Record<string, BrokenVariant>
   /** Spec checks this suite does not run for this harness, with the reason. */
   rows: MatrixRowInput[]
+  /** What a reader of this harness's matrix must know that the shared caveats do not say. */
+  caveats?: string[]
 }
 
 /** The must-fail shim every harness shares: it has no harness behind it at all. */
