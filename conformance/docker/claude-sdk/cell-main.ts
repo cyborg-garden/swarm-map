@@ -34,8 +34,10 @@ for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
 const real = await loadClaudeSdk(CLAUDE_SDK_DIR)
 const options: ClaudeSdkShimOptions = {
   host: 'door', port: BRAIN_PORT, token: process.env.SWARMLAB_BRAIN ?? '',
-  // "The gate removed", for this harness: every session started in the mode where it asks nobody.
-  sdk: process.env.SMLAB_GATE === 'allows-all' ? wrappedSdk(real, 'unrestricted') : real,
+  // "The gate removed", for this harness: every call is still put to the door, and runs whatever it says.
+  // (Started in the mode that asks nobody instead, the shim sees each result of a call nobody asked about
+  // and stops the session, so no reply comes back and C10 cannot show its last half.)
+  sdk: process.env.SMLAB_GATE === 'allows-all' ? wrappedSdk(real, 'ignores-answers') : real,
   homeDir: dirs.home, workDir: dirs.work, startMs: 60_000,
   // The SDK is pointed at the door's model route and given a placeholder, never a key.
   modelBaseUrl: `http://door:${ROUTE_PORT}/v1`, placeholder: `PLACEHOLDER-${nonce}`,
