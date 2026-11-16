@@ -14,6 +14,7 @@ import type { Harness } from '@/lib/types'
 import type { DoorAgentView } from '@/lib/services/door-agents'
 import type { DoorRulesRecord } from '@/lib/services/door-record'
 import type { Receipt } from '@/lib/door/receipts'
+import { DoorToolsCard } from './door-tools-card'
 
 /**
  * The page of an agent that runs behind a door. It shows the four things
@@ -373,6 +374,7 @@ function RulesForm({ view, running, saving, onSave }: {
             <Field label="USD per million tokens out"><Amount name="model.usdPerMTokOut" value={r.model.usdPerMTokOut} onChange={(usdPerMTokOut) => model({ usdPerMTokOut })} /></Field>
           </div>
         </Card>
+        <DoorToolsCard rules={r} onChange={(tools) => set({ ...r, tools })} />
         <Card title="Secret files">
           <p className="text-xs text-muted-foreground">
             The bot token and the model key stay in two files that only you can read, outside the repo. Give their paths here.
@@ -398,15 +400,21 @@ function RulesForm({ view, running, saving, onSave }: {
 
 function Receipts({ id }: { id: string }) {
   const { data, loading, refetch } = useApi<{ receipts: Receipt[] }>(`/api/harnesses/${id}/door/receipts?last=100`)
-  const receipts = data?.receipts ?? []
+  const [approvalsOnly, setApprovalsOnly] = useState(false)
+  // An approval is every step of a tool call that waited for an admin: asked, each answer, and how it ended.
+  const receipts = (data?.receipts ?? []).filter((r) => !approvalsOnly || r.rule === 'priv.approval')
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
         <button onClick={() => refetch()} className="text-sm px-3 py-1 rounded-md border border-[var(--border)] bg-[var(--surface)] hover:bg-muted">Refresh</button>
+        <label className="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" checked={approvalsOnly} onChange={(e) => setApprovalsOnly(e.target.checked)} />
+          Approvals only
+        </label>
         <span className="text-xs text-muted-foreground">Every decision the door made, newest first. Receipts hold ids and sizes, never message text.</span>
       </div>
       {receipts.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{loading ? 'Loading...' : 'No receipts yet. The door writes one for every message it sees.'}</p>
+        <p className="text-sm text-muted-foreground">{loading ? 'Loading...' : approvalsOnly ? 'No tool call has waited for an admin yet.' : 'No receipts yet. The door writes one for every message it sees.'}</p>
       ) : (
         <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] overflow-x-auto">
           <table className="w-full text-sm">
@@ -422,7 +430,7 @@ function Receipts({ id }: { id: string }) {
               {receipts.map((r, i) => (
                 <tr key={`${r.ts}-${i}`} className="border-b border-[var(--border)] last:border-0">
                   <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{when(r.ts)}</td>
-                  <td className="px-4 py-2 whitespace-nowrap">{r.event.kind} · {r.verdict}</td>
+                  <td className="px-4 py-2 whitespace-nowrap">{r.event.kind} · {r.verdict}{r.event.kind === 'approval' && r.event.sender ? ` · answer from ${r.event.sender}` : ''}</td>
                   <td className="px-4 py-2 font-mono text-xs">{r.rule}</td>
                   <td className="px-4 py-2">{r.why}{r.note ? ` (${r.note})` : ''}</td>
                 </tr>

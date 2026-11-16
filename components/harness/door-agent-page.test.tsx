@@ -11,6 +11,8 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import HarnessDetailPage from '@/app/(dashboard)/harnesses/[id]/page'
 import HarnessesPage from '@/app/(dashboard)/harnesses/page'
 import { usd } from './door-agent-page'
+import { modeOf, TOOL_ROWS, withMode } from './door-tools-card'
+import { parseConfig, toolModes } from '@/lib/lab/pi-discord/config'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() } }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
@@ -45,11 +47,13 @@ const RECEIPTS = [
 ]
 
 let current: ReturnType<typeof view>
+let receipts: unknown[]
 let requests: Array<{ url: string; method: string; body?: unknown }>
 let fail: Record<string, { status: number; body: unknown }>
 
 beforeEach(() => {
   current = view()
+  receipts = RECEIPTS
   requests = []
   fail = {}
   HTMLDialogElement.prototype.showModal = vi.fn()
@@ -64,7 +68,7 @@ beforeEach(() => {
     else if (url === '/api/harnesses/h_pi_one') body = ROW
     else if (url === '/api/harnesses/h_pi_one/door') body = current
     else if (url === '/api/harnesses/h_pi_one/door/rules') body = { applied: 'stored', record: current.record }
-    else if (url.startsWith('/api/harnesses/h_pi_one/door/receipts')) body = { receipts: RECEIPTS }
+    else if (url.startsWith('/api/harnesses/h_pi_one/door/receipts')) body = { receipts }
     else if (url.startsWith('/api/harnesses/h_pi_one/logs')) body = { logs: 'cell up and sealed', lines: 100, source: 'door' }
     else if (url === '/api/fleet/drift') body = { checkedAt: 0, agents: [] }
     else if (url === '/api/integrity') body = { harnesses: [] }
@@ -165,6 +169,58 @@ describe('the page of a door agent', () => {
     })
   })
 
+  it('has a Tools card with every class off, and saves a class that is switched on with the rest of the rules', async () => {
+    await openPage()
+    await openTab('Rules')
+    const card = await screen.findByTestId('door-tools-card')
+    const selects = within(card).getAllByRole('combobox') as HTMLSelectElement[]
+    expect(selects.map((el) => [el.getAttribute('aria-label'), el.value, el.disabled])).toEqual([['Read files', 'never', false], ['Write files', 'never', false], ['Shell', 'never', false]])
+    // Nothing asks yet, so there is no time to answer to set.
+    expect(document.querySelector('input[name="tools.approvalSeconds"]')).toBeNull()
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Shell' }), { target: { value: 'ask' } })
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Read files' }), { target: { value: 'allow' } })
+    fireEvent.change(document.querySelector('input[name="tools.approvalSeconds"]')!, { target: { value: '90' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT')).toBe(true))
+    expect((requests.find((r) => r.method === 'PUT')!.body as { rules: unknown }).rules).toEqual({
+      ...RULES, tools: { enabled: ['file_read', 'shell'], mode: { shell: 'ask', file_read: 'allow' }, approvalSeconds: 90 },
+    })
+  })
+
+  it('shows the tools a record has, and none as switchable for an agent that hears anyone in the channel', async () => {
+    current = view()
+    current.record.rules = { ...RULES, tools: { enabled: ['shell', 'file_write'], mode: { file_write: 'ask' }, approvalSeconds: 60 } } as typeof RULES
+    await openPage()
+    await openTab('Rules')
+    const card = await screen.findByTestId('door-tools-card')
+    const values = () => (within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])
+    // Shell with no mode of its own asks: that is its default.
+    expect(values()).toEqual([['never', false], ['ask', false], ['ask', false]])
+    expect((document.querySelector('input[name="tools.approvalSeconds"]') as HTMLInputElement).value).toBe('60')
+    fireEvent.click(screen.getByRole('switch', { name: 'Anyone in the channel' }))
+    expect(values()).toEqual([['never', true], ['never', true], ['never', true]])
+    expect(within(card).getByRole('note')).toHaveTextContent('hears anyone in the channel, so it gets no tools')
+  })
+
+  it('the Tools card reads a record the way the launcher does, and what it writes is a config the launcher takes', () => {
+    const base = { agentId: 'pi-one', discord: RULES.discord, budget: RULES.budget, model: RULES.model }
+    const cases = [undefined, { enabled: [], mode: {}, approvalSeconds: 120 }, { enabled: ['shell'], mode: {}, approvalSeconds: 120 },
+      { enabled: ['shell', 'file_read', 'file_write'], mode: { shell: 'allow', file_read: 'never', file_write: 'ask' }, approvalSeconds: 30 },
+      { enabled: [], mode: { shell: 'allow' }, approvalSeconds: 120 }]
+    for (const tools of cases) {
+      const config = parseConfig({ ...base, ...(tools ? { tools } : {}) }).config!
+      for (const row of TOOL_ROWS) expect(modeOf(config.tools, row.key), JSON.stringify(tools)).toBe(toolModes(config)[row.key])
+    }
+    expect(TOOL_ROWS.map((r) => r.key).sort()).toEqual(Object.keys(toolModes(parseConfig(base).config!)).sort())
+    // Every choice on the card, from every starting point, is a config the launcher accepts and reads back the same.
+    for (const start of cases) for (const row of TOOL_ROWS) for (const mode of ['never', 'ask', 'allow'] as const) {
+      const next = withMode(start as never, row.key, mode)
+      const parsed = parseConfig({ ...base, tools: next })
+      expect(parsed.errors).toEqual([])
+      expect(toolModes(parsed.config!)[row.key]).toBe(mode)
+    }
+  })
+
   it('shows every reason a save was refused', async () => {
     fail['PUT /api/harnesses/h_pi_one/door/rules'] = { status: 422, body: { error: 'Not saved. The rules were refused', details: ['budget.monthlyUsd: must be a number above 0'] } }
     await openPage()
@@ -194,6 +250,29 @@ describe('the page of a door agent', () => {
     const rows = screen.getAllByRole('row').slice(1)
     expect(rows.map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual(['adm.users', 'addr.mention'])
     expect(rows[1]).toHaveTextContent('A listed person mentioned the bot.')
+  })
+
+  it('shows approvals in the receipts: who asked, who answered, how it ended, and can show those alone', async () => {
+    receipts = [
+      { ts: '2026-11-16T10:00:09.000Z', agentId: 'pi-one', policyHash: 'h', event: { kind: 'tool', sender: '100000000000000003' }, verdict: 'allow', rule: 'priv.approval', why: 'An admin said yes, so the call runs.', note: 'tool=bash call=3fa9c1d2e4b6' },
+      { ts: '2026-11-16T10:00:08.000Z', agentId: 'pi-one', policyHash: 'h', event: { kind: 'approval', sender: '100000000000000002' }, verdict: 'allow', rule: 'priv.approval', why: 'An admin answered.', note: 'answer=approve tool=bash call=3fa9c1d2e4b6' },
+      { ts: '2026-11-16T10:00:07.000Z', agentId: 'pi-one', policyHash: 'h', event: { kind: 'approval', sender: '100000000000000003' }, verdict: 'deny', rule: 'priv.approval', why: 'Only an admin can answer a request to run a tool.', note: 'tool=bash call=3fa9c1d2e4b6' },
+      { ts: '2026-11-16T10:00:06.000Z', agentId: 'pi-one', policyHash: 'h', event: { kind: 'tool', sender: '100000000000000003' }, verdict: 'ask', rule: 'priv.approval', why: 'shell tools need an admin\'s yes in the room.', note: 'tool=bash call=3fa9c1d2e4b6 request=555' },
+      ...RECEIPTS,
+    ]
+    await openPage()
+    await openTab('Receipts')
+    await screen.findByText(/An admin said yes, so the call runs\./)
+    const rows = () => screen.getAllByRole('row').slice(1)
+    expect(rows()).toHaveLength(6)
+    expect(rows()[1]).toHaveTextContent('approval · allow · answer from 100000000000000002')
+    expect(rows()[2]).toHaveTextContent('approval · deny · answer from 100000000000000003')
+    expect(rows()[3]).toHaveTextContent('tool · ask')
+    expect(rows()[0]).toHaveTextContent('call=3fa9c1d2e4b6')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Approvals only' }))
+    expect(rows().map((r) => within(r).getAllByRole('cell')[2].textContent)).toEqual(Array(4).fill('priv.approval'))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Approvals only' }))
+    expect(rows()).toHaveLength(6)
   })
 
   it('shows the door\'s log', async () => {
