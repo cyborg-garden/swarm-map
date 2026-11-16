@@ -15,8 +15,11 @@ change). The rule is in `lib/services/state-volume.ts`:
    data dir holds symlinks into `/state`; a compose file without the `/state`
    mount would leave them pointing at nothing. The same applies when the data
    dir cannot be read, and on a regeneration when the compose file being
-   replaced already mounts the volume. This holds whatever the setting below
-   says. To take such an agent off the volume, do the Rollback below first.
+   replaced already mounts the volume and the data dir holds no regular
+   `state.db` (a `state-init` run that was interrupted). This holds whatever
+   the setting below says. To take such an agent off the volume, do the
+   Rollback below first. An agent whose data dir holds a regular `state.db`
+   and no symlinks is not on the volume, whatever its old compose file mounts.
 2. Otherwise **`useStateVolume` in settings** decides, when it is set:
    `PUT /api/settings` with `{"useStateVolume": true}` or `false`. Send `null` to
    go back to automatic.
@@ -26,8 +29,11 @@ change). The rule is in `lib/services/state-volume.ts`:
      OrbStack, Rancher Desktop or WSL seen from a Linux process;
    - **on** when the engine cannot be identified: it does not answer, the
      `docker` CLI points at another machine, Swarm Map itself runs in a
-     container, or the engine or context is named for Colima, Lima, Rancher or
-     Podman;
+     container, or the docker context name or socket path contains `colima`,
+     `lima`, `rancher` or `podman` as a whole word (`lima-default`,
+     `rancher-desktop`, `~/.colima/default/docker.sock`; not `lima01`). The
+     machine's hostname is not looked at. `{"useStateVolume": false}` overrides
+     this rule like any other automatic result;
    - **off** on native Linux, where a bind mount is an ordinary local directory
      and the layout is unnecessary (#273).
 
