@@ -119,7 +119,9 @@ only. The rules enforce that at the door (`mem.one-scope`); the pages only say s
 Start on the page runs `start.sh` as a plain background process, and Swarm Map writes down the
 pid it started. When the door on record runs under that pid, the Overview says "this page" and
 that nothing restarts it. When the door's parent process is pm2, it says "a supervisor". When
-neither is true, as for a door started from a command line, it says "not this page".
+neither is true, as for a door started from a command line, it says that Swarm Map has no note
+that it started this door and saw no supervisor. That is what it knows, and no more: a door the
+page started before Swarm Map kept that note is shown the same way until it is next started.
 
 ## How Save applies
 
@@ -195,7 +197,7 @@ HOME="$TRY_HOME" HSM_OPERATOR_TOKEN=try npx next dev --port 3947
   model, on a machine with Docker. No test joins the two: a Letta Code door started from the
   page's Start button.
 - "A supervisor" is read from the door's parent process, and only pm2 is recognised. A door under
-  another supervisor is shown as "not this page".
+  another supervisor is shown as one Swarm Map has no note of starting.
 - Under `pm2`, a restart after an error exit goes straight to the launcher. The launcher still
   refuses a cell that is not sealed, but the dashboard's dry run is not run again.
 - The dashboard cannot redact the door's log, because it never reads the secrets. The launcher

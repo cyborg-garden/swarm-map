@@ -182,8 +182,9 @@ export interface DoorStatus {
    * Who started the door that is running, and so who starts it again if it
    * exits. `page`: Swarm Map started it, as a plain background process that
    * nothing restarts. `supervisor`: its parent is a process supervisor.
-   * `elsewhere`: Swarm Map did not start it and no supervisor was seen, as
-   * when it was started from a command line. Null when stopped.
+   * `elsewhere`: Swarm Map has no note that it started it and no supervisor
+   * was seen, as when it was started from a command line, or from the page
+   * before Swarm Map kept that note. Null when stopped.
    */
   startedBy: 'page' | 'supervisor' | 'elsewhere' | null
 }

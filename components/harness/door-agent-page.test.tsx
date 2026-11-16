@@ -265,11 +265,14 @@ describe('what the Overview says about the door, plainly', () => {
   it.each([
     ['page', /this page, as a background process\. Nothing restarts it if it exits/],
     ['supervisor', /a supervisor\. It is started again if it exits with an error/],
-    ['elsewhere', /not this page/],
+    // It is what Swarm Map knows, and no more: a door it started before it kept such a note is shown this way too.
+    ['elsewhere', /Swarm Map has no note that it started this door, and saw no supervisor\. Whatever started it decides whether it is started again/],
   ])('says who started a running door: %s', async (startedBy, says) => {
     current = view({ status: { ...RUNNING, startedBy } })
     await openPage()
     expect(row('Started by')).toHaveTextContent(says)
+    // It never says a flat "not this page": that is more than it knows.
+    expect(row('Started by')).not.toHaveTextContent('not this page')
     for (const [other, text] of [['page', 'this page, as'], ['supervisor', 'a supervisor.']] as const) {
       if (other !== startedBy) expect(row('Started by')).not.toHaveTextContent(text)
     }

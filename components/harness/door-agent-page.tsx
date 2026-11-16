@@ -251,7 +251,8 @@ function Overview({ view }: { view: DoorAgentView }) {
   const startedBy = {
     page: 'this page, as a background process. Nothing restarts it if it exits',
     supervisor: 'a supervisor. It is started again if it exits with an error',
-    elsewhere: 'not this page. Whatever started it decides whether it is started again',
+    // What is known, and no more. A door this page started before it kept a note of that is shown this way too.
+    elsewhere: 'Swarm Map has no note that it started this door, and saw no supervisor. Whatever started it decides whether it is started again',
   }
   const todo = [...problems.rules, ...problems.secrets]
   return (
