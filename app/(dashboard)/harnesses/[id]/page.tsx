@@ -34,6 +34,8 @@ import { TIER_LABELS } from '@/lib/constants'
 import { ModelsTab, cascadeSaveConflict, type ModelConfig } from '@/components/harness/models-tab'
 import { BUDGET_HINT, BUDGET_LABEL } from '@/lib/budget-copy'
 import { failedRestarts, requestRestart, restartFailureMessage } from '@/lib/restart-outcome'
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
+import { DoorAgentPage } from '@/components/harness/door-agent-page'
 
 type PairingUser = {
   userId: string
@@ -586,6 +588,8 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
 
   if (loading) return <p className="text-muted-foreground">Loading...</p>
   if (!harness) return <p className="text-destructive">Harness not found.</p>
+  // An agent behind a door has a page of its own, with only the tabs that apply to it.
+  if (isDoorRuntime(harness.runtime)) return <DoorAgentPage harness={harness} />
 
   const allToolsEnabled = harness.tools.length === 0
   const harnessTools = allToolsEnabled ? (tools ?? []) : tools?.filter((t) => harness.tools.includes(t.id)) ?? []

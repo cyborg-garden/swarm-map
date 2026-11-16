@@ -1,5 +1,6 @@
 'use client'
 
+import { isDoorRuntime } from '@/lib/services/runtime-adapter'
 import { useApi } from '@/lib/hooks/use-api'
 import { HarnessCard } from '@/components/harness/harness-card'
 import { DriftBanner, type DriftSummary } from '@/components/shared/drift-chip'
@@ -126,7 +127,7 @@ export default function DashboardPage() {
           <div className="space-y-1">
             {hLoading && <p className="text-sm text-muted-foreground">Loading harnesses...</p>}
             {harnesses?.map((h) => (
-              <HarnessCard key={h.id} harness={h} drift={drift ? driftById.get(h.id) ?? null : undefined} />
+              <HarnessCard key={h.id} harness={h} drift={drift && !isDoorRuntime(h.runtime) ? driftById.get(h.id) ?? null : undefined} />
             ))}
           </div>
         </div>
