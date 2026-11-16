@@ -134,6 +134,7 @@ discarding committed transactions — that's your signal this assumption broke.
    ```
    docker run --rm -v hermes-state-<name>:/state -v <DATA_DIR>:/opt/data \
      <agent-image> sh -c 'for db in state.db response_store.db kanban.db; do
+       [ -L /opt/data/$db ] && rm -f /opt/data/$db
        [ -f /state/$db ] || continue
        for suf in "" -wal -shm; do rm -f /opt/data/$db$suf; done
        for suf in "" -wal -shm; do [ -f /state/$db$suf ] && cp -p /state/$db$suf /opt/data/$db$suf; done
