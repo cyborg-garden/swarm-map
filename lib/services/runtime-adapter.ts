@@ -147,3 +147,58 @@ export interface RetiredHarnessRow {
   /** One plain sentence for the UI. */
   note: string
 }
+
+// --- Door agents -------------------------------------------------------------
+//
+// A door agent's harness sits in a sealed cell, and a small guard process (the
+// door) owns its chat connection, its keys and its rules. It has no container
+// adapter, on purpose: every Hermes path treats its stored row like any other
+// tag it cannot drive and leaves it alone. Door agents are listed and driven
+// through DoorRuntimeAdapter instead (lib/services/door-agents.ts).
+
+/** Runtime tags of agents that run behind a door. */
+export const DOOR_RUNTIMES = ['pi', 'letta-code'] as const
+export type DoorRuntime = (typeof DOOR_RUNTIMES)[number]
+
+export function isDoorRuntime(runtime: unknown): runtime is DoorRuntime {
+  return typeof runtime === 'string' && (DOOR_RUNTIMES as readonly string[]).includes(runtime)
+}
+
+/** What the door says about itself. Nothing here is guessed. */
+export interface DoorStatus {
+  /** Running means the door's own process is alive and on record. */
+  state: 'running' | 'stopped'
+  pid?: number
+  startedAt?: string
+  /**
+   * Whether the cell was shown sealed by the last dry run: true, false, or
+   * null when no dry run has been made yet.
+   */
+  cellSealed: boolean | null
+  sealCheckedAt?: string
+  /** Whether the running door was started from the rules now on record. Null when stopped. */
+  rulesInForce: boolean | null
+}
+
+/** Spend from the door's ledger. Null means the door keeps no such figure, or has none yet. */
+export interface DoorUsage {
+  /** The calendar month the figures are for, in UTC, as `2026-11`. */
+  month: string
+  spentThisMonthUsd: number | null
+  budgetMonthlyUsd: number | null
+  costToday: null
+  invocations: null
+}
+
+/** The lifecycle seam for door agents: one implementation per launcher. */
+export interface DoorRuntimeAdapter {
+  /** Run the dry run, and start the door only if it ends ready. */
+  start(id: string): Promise<void>
+  stop(id: string): Promise<void>
+  status(id: string): DoorStatus
+  /** The tail of the door's own log. */
+  logs(id: string, lines: number): string
+  /** The door's decisions, newest first. Ids and sizes, never message text. */
+  receipts(id: string, last: number): unknown[]
+  usage(id: string): DoorUsage
+}

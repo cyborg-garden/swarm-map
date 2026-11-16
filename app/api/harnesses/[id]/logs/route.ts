@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import path from 'path'
 import { services } from '@/lib/services'
 import { guessDataDir, tailLogFile } from '@/lib/services/harness'
-import { requireHarness } from '@/lib/harness-ref'
+import { doorAgentId, doorErrorResponse, requireHarness } from '@/lib/harness-ref'
 
 // Map the `?source=` query param to the file written inside the agent
 // container under /opt/data/logs (host bind-mount <dataDir>/logs). The
@@ -28,6 +28,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+  const door = doorAgentId(id)
+  if (door) {
+    // A door agent has one log: what its door printed.
+    const wanted = parseInt(new URL(_request.url).searchParams.get('lines') ?? '200', 10)
+    const doorLines = Number.isFinite(wanted) && wanted > 0 ? Math.min(wanted, 2000) : 200
+    try {
+      return NextResponse.json({ logs: services.doorAgents.logs(door, doorLines) ?? '', lines: doorLines, source: 'door' })
+    } catch (err) {
+      return doorErrorResponse(err)
+    }
+  }
   const { harness, refusal } = requireHarness(id)
   if (refusal) return refusal
   const url = new URL(_request.url)
