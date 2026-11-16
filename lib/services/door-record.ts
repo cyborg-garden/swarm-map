@@ -16,7 +16,7 @@
  */
 import path from 'path'
 import { parseConfig, type LabConfig } from '@/lib/lab/pi-discord/config'
-import { secretFileProblem, MODEL_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
+import { secretFilePlaceProblem, MODEL_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
 import type { DoorRuntime } from './runtime-adapter'
 
 export interface DoorSecretPaths {
@@ -135,15 +135,17 @@ export function checkRecordInput(
 }
 
 /**
- * Why the two secret files cannot be used, by the launcher's own check: not
- * there, readable by others, a link, or inside the repo. Says where, never
- * what. Empty when both are in place.
+ * Why the two secret files cannot be used, by the launcher's own check of
+ * where they are: not there, readable by others, a link, or inside the repo.
+ * Says where, never what. Empty when both are in place. The files are not
+ * opened here: what they hold is checked by the launcher's dry run, in the
+ * launcher's process.
  */
 export function secretProblems(record: DoorRulesRecord, repoRoot: string): string[] {
   const problems: string[] = []
   for (const key of Object.keys(SECRET_LABELS) as Array<keyof DoorSecretPaths>) {
     const name = SECRET_ENV[key]
-    const problem = secretFileProblem(name, { [name]: record.secrets[key] || undefined }, repoRoot)
+    const problem = secretFilePlaceProblem(name, { [name]: record.secrets[key] || undefined }, repoRoot)
     if (problem) problems.push(problem.replace(name, `The ${SECRET_LABELS[key]}`).replace('Point it at', 'Give the path of'))
   }
   return problems

@@ -112,6 +112,21 @@ describe('the secret files', () => {
     expect(problems.join('\n')).not.toMatch(/FAKE-/)
   })
 
+  it('are checked for where they are and who can read them, and are never opened', () => {
+    // What a file holds is judged by the launcher's dry run, in its own process.
+    // Here a file that could not be a secret (two lines) passes: nothing looked inside.
+    const record = withFiles(0o600)
+    fs.writeFileSync(record.secrets.discordTokenFile, 'line one\nline two\n')
+    expect(secretProblems(record, elsewhere())).toEqual([])
+  })
+
+  it('are refused when one is a link', () => {
+    const record = withFiles(0o600)
+    const link = path.join(tmp, 'link')
+    fs.symlinkSync(record.secrets.modelKeyFile, link)
+    expect(secretProblems({ ...record, secrets: { ...record.secrets, modelKeyFile: link } }, elsewhere()).join('\n')).toMatch(/model key file points at a link/)
+  })
+
   it('are refused inside the repo', () => {
     expect(secretProblems(withFiles(0o600), tmp).join('\n')).toMatch(/inside the repo/)
   })

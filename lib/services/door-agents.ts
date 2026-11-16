@@ -28,6 +28,7 @@ import { policyFor } from '@/lib/lab/pi-discord/config'
 import type { Harness } from '@/lib/types'
 import type { AuditService } from './audit'
 import type { DoorLauncher } from './door-launcher'
+import { tailLogFile } from './harness'
 import {
   checkRecordInput, doorAgentPaths, draftRecord, renderConfig, renderStartScript, rulesProblems, secretProblems,
   supervisorCommand, type DoorRulesRecord,
@@ -68,6 +69,20 @@ export interface DoorAgentView {
 }
 
 type Row = { id?: string; name?: string; runtime?: string | null }
+
+/**
+ * Whether an agent already answers to `name`: a stored row, or a Hermes agent
+ * that is listed from its running container and has no stored row. Without
+ * the second, a door agent made under that name would take the Hermes agent's
+ * id, and the Hermes agent would drop out of the fleet.
+ */
+export function agentNameTaken(
+  hermes: { nameTaken(name: string): boolean; list(): Array<{ id: string; name: string }> },
+  name: string,
+): boolean {
+  const id = 'h_' + name.replace(/-/g, '_')
+  return hermes.nameTaken(name) || hermes.list().some((h) => h.id === id || h.name === name)
+}
 
 export class DoorAgentService implements DoorRuntimeAdapter {
   private storage: Storage
@@ -250,26 +265,34 @@ export class DoorAgentService implements DoorRuntimeAdapter {
 
   logs(id: string, lines: number): string {
     this.doorRow(id)
-    let text: string
-    try { text = fs.readFileSync(doorAgentPaths(this.dataDir, id).log, 'utf8') } catch { return '' }
-    const all = text.split('\n')
-    if (all.at(-1) === '') all.pop()
-    return (lines > 0 ? all.slice(-lines) : all).join('\n')
+    // Read from the end: a log that has grown for months is not loaded whole.
+    return tailLogFile(doorAgentPaths(this.dataDir, id).log, lines)
   }
 
-  /** The door's decisions, newest first. A line that is not a receipt is skipped. */
+  /**
+   * The door's decisions, newest first, read from the end of the file. A line
+   * that is not a receipt is skipped, and only a receipt's own fields are
+   * handed on, each as text or a number: a page draws them as they are.
+   */
   receipts(id: string, last: number): Receipt[] {
     this.doorRow(id)
-    let text: string
-    try { text = fs.readFileSync(path.join(doorAgentPaths(this.dataDir, id).stateDir, 'receipts.jsonl'), 'utf8') } catch { return [] }
+    const lines = tailLogFile(path.join(doorAgentPaths(this.dataDir, id).stateDir, 'receipts.jsonl'), 0).split('\n')
+    const text = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined)
     const out: Receipt[] = []
-    const lines = text.split('\n')
     for (let i = lines.length - 1; i >= 0 && out.length < last; i--) {
       if (lines[i].trim() === '') continue
-      try {
-        const r = JSON.parse(lines[i]) as Receipt
-        if (typeof r?.ts === 'string' && typeof r.verdict === 'string' && typeof r.rule === 'string' && typeof r.why === 'string' && r.event && typeof r.event === 'object') out.push(r)
-      } catch { /* a half-written last line */ }
+      let r: Record<string, unknown>
+      try { r = JSON.parse(lines[i]) } catch { continue /* a half-written last line */ }
+      const e = r?.event as Record<string, unknown> | null | undefined
+      const [ts, verdict, rule, why, kind] = [text(r?.ts), text(r?.verdict), text(r?.rule), text(r?.why), text(e?.kind)]
+      if (ts === undefined || verdict === undefined || rule === undefined || why === undefined || kind === undefined || !e) continue
+      const event: Record<string, unknown> = { kind }
+      for (const key of ['surface', 'room', 'sender', 'messageId', 'turnId']) if (text(e[key]) !== undefined) event[key] = e[key]
+      if (typeof e.bytes === 'number') event.bytes = e.bytes
+      out.push({
+        ts, agentId: text(r.agentId) ?? '', policyHash: text(r.policyHash) ?? '', event, verdict, rule, why,
+        ...(text(r.note) !== undefined ? { note: r.note } : {}),
+      } as Receipt)
     }
     return out
   }
@@ -297,6 +320,9 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       const problems = rulesProblems(record)
       if (problems.length > 0) throw new DoorError(422, 'Not started. Fill in the rules first', problems)
       if (this.statusOf(id, record).state === 'running') throw new DoorError(409, 'This agent is already running')
+      // The launcher checks the two files again, and what they hold. This is the cheap refusal, before a dry run.
+      const misplaced = secretProblems(record, this.repoRoot)
+      if (misplaced.length > 0) throw new DoorError(422, 'Not started. The secret files are not in place', misplaced)
       const p = this.render(record)
       await this.dryRunOrRefuse(record, p.config, 'Not started')
       await this.startDoor(record)
@@ -318,7 +344,9 @@ export class DoorAgentService implements DoorRuntimeAdapter {
    * Save an edit of the rules and apply it. On a stopped door the record is
    * stored and the files are rendered. On a running door the new rules are
    * dry-run first: only if that ends ready is anything stored, and then the
-   * door is stopped and started on the new rules.
+   * door is stopped and started on the new rules. A door that cannot be
+   * stopped keeps its old rules, so nothing is stored: the record never says
+   * something else than the door that is running.
    */
   async saveRules(id: string, input: { rules: unknown; secrets: unknown; version: unknown }): Promise<{ record: DoorRulesRecord; applied: 'stored' | 'restarted' }> {
     const current = this.record(id)
@@ -332,15 +360,19 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       const running = this.statusOf(id, current).state === 'running'
       const p = doorAgentPaths(this.dataDir, id)
       if (running) {
+        const misplaced = secretProblems(next, this.repoRoot)
+        if (misplaced.length > 0) throw new DoorError(422, 'Not saved. The door keeps running on the rules it had. The secret files are not in place', misplaced)
         fs.writeFileSync(p.candidateConfig, renderConfig(next), { mode: 0o600 })
         try { await this.dryRunOrRefuse(next, p.candidateConfig, 'Not saved. The door keeps running on the rules it had') } finally { fs.rmSync(p.candidateConfig, { force: true }) }
+        try { await this.stopDoor(current) } catch {
+          throw new DoorError(500, 'Not saved. The door could not be stopped cleanly, so the rules on record are unchanged. The Logs tab and the launcher\'s `stop` command say more')
+        }
       }
       this.writeRecord(next)
       this.render(next)
       this.audit.append({ who: 'admin', what: 'door:rules', target: next.name, meta: { version: next.version, policy: policyFor(next.rules).hash.slice(0, 12) } })
       if (!running) return { record: next, applied: 'stored' as const }
       try {
-        await this.stopDoor(current)
         await this.startDoor(next)
       } catch (err) {
         throw new DoorError(500, `The rules were saved, but the door did not come back up: ${err instanceof Error ? err.message : 'unknown error'}`)

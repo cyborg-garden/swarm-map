@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { HarnessService } from '../harness'
+import { agentNameTaken } from '../door-agents'
 import { Storage } from '../storage'
 import { DockerService } from '../docker'
 import { AuditService } from '../audit'
@@ -90,6 +91,17 @@ describe('HarnessService beside door agents', () => {
   it('keeps the name a door agent has', () => {
     storage.write('harnesses.json', [...HERMES_ROWS, ...DOOR_ROWS])
     expect(service.nameTaken('pi-one')).toBe(true)
+  })
+
+  it('counts a running Hermes agent\'s name as taken even when it has no stored row', () => {
+    // hermes-pi-one is live and listed, and nothing about it is in harnesses.json.
+    // A door agent made under that name would take its id and hide it.
+    storage.write('harnesses.json', HERMES_ROWS)
+    expect(service.list().map((h) => h.id)).toContain('h_pi_one')
+    expect(service.nameTaken('pi-one')).toBe(false)
+    expect(agentNameTaken(service, 'pi-one')).toBe(true)
+    expect(agentNameTaken(service, 'iris')).toBe(true)
+    expect(agentNameTaken(service, 'nobody-yet')).toBe(false)
   })
 
   it('reports an unknown runtime as retired, and a door agent not', () => {

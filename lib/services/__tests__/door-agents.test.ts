@@ -6,7 +6,7 @@
  * state folder is written by the test, and the launcher is a stub that
  * records what it was asked. No Docker, no chat platform, no model, no secret.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -39,6 +39,7 @@ let storage: Storage
 let calls: string[]
 let dryRunResult: { code: number | null; output: string }
 let startFails: string | undefined
+let stopFails: boolean
 let livePids: Set<number>
 let svc: DoorAgentService
 let secrets: { discordTokenFile: string; modelKeyFile: string }
@@ -69,6 +70,7 @@ function stubLauncher(): DoorLauncher {
     },
     async stop(o) {
       calls.push('stop')
+      if (stopFails) return { ok: false, output: 'these containers are still there' }
       livePids.clear()
       fs.rmSync(path.join(o.stateDir, 'run.json'), { force: true })
       return { ok: true, output: 'stopped' }
@@ -90,6 +92,7 @@ beforeEach(() => {
   calls = []
   dryRunResult = READY
   startFails = undefined
+  stopFails = false
   livePids = new Set()
   svc = new DoorAgentService({
     storage, audit: new AuditService(storage), dataDir, launcher: stubLauncher(),
@@ -222,6 +225,17 @@ describe('status', () => {
 })
 
 describe('start', () => {
+  it('is refused before any dry run when a secret file is somewhere it must not be', async () => {
+    await filled()
+    fs.chmodSync(secrets.discordTokenFile, 0o644)
+    calls.length = 0
+    const err = await refusal(() => svc.start('h_pi_one'))
+    expect(err.status).toBe(422)
+    expect(err.details?.join('\n')).toMatch(/bot token file points at a file others can read/)
+    expect(calls).toEqual([])
+    expect(svc.status('h_pi_one').state).toBe('stopped')
+  })
+
   it('runs the dry run first, and starts the door only after it', async () => {
     await filled()
     await svc.start('h_pi_one')
@@ -362,6 +376,35 @@ describe('saving the rules', () => {
     expect(fs.existsSync(paths().candidateConfig)).toBe(false)
   })
 
+  it('on a running door: new secret paths that must not be used change nothing, with no dry run', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    calls.length = 0
+    const before = fs.readFileSync(paths().record, 'utf8')
+    const link = path.join(tmp, 'keys', 'link')
+    fs.symlinkSync(secrets.modelKeyFile, link)
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets: { ...secrets, modelKeyFile: link }, version: 2 }))
+    expect(err.status).toBe(422)
+    expect(err.details?.join('\n')).toMatch(/model key file points at a link/)
+    expect(calls).toEqual([])
+    expect(fs.readFileSync(paths().record, 'utf8')).toBe(before)
+    expect(svc.status('h_pi_one').state).toBe('running')
+  })
+
+  it('on a running door that cannot be stopped: stores nothing, so the record and the running door stay in step', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    const before = fs.readFileSync(paths().record, 'utf8')
+    const configBefore = fs.readFileSync(paths().config, 'utf8')
+    stopFails = true
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(500)
+    expect(err.message).toMatch(/^Not saved/)
+    expect(fs.readFileSync(paths().record, 'utf8')).toBe(before)
+    expect(fs.readFileSync(paths().config, 'utf8')).toBe(configBefore)
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', rulesInForce: true })
+  })
+
   it('says so when the rules were saved but the door did not come back', async () => {
     await filled()
     await svc.start('h_pi_one')
@@ -394,6 +437,50 @@ describe('receipts', () => {
     expect(svc.receipts('h_pi_one', 20)).toEqual([])
     writeState('receipts.jsonl', `not json\n${receipt(1, 'drop', 'adm.rooms', 'Not the allowed channel.')}\n{"half":`)
     expect(svc.receipts('h_pi_one', 20).map((r) => r.rule)).toEqual(['adm.rooms'])
+  })
+})
+
+describe('receipts that are not what the door writes', () => {
+  const line = (over: Record<string, unknown>) =>
+    JSON.stringify({ ts: '2026-11-16T10:00:01.000Z', agentId: 'pi-one', policyHash: 'h', event: { kind: 'inbound' }, verdict: 'drop', rule: 'adm.users', why: 'The sender is not on the list.', ...over })
+
+  it('hand a page only text and numbers, whatever a line holds', async () => {
+    await filled()
+    writeState('receipts.jsonl', [
+      line({ note: { html: '<img src=x onerror=alert(1)>' } }),
+      line({ event: { kind: { nested: true }, room: ['x'], bytes: 'many' } }),
+      line({ event: { kind: 'inbound', bytes: 12 }, note: 'count 3', extra: { anything: true } }),
+    ].join('\n') + '\n')
+    const got = svc.receipts('h_pi_one', 20)
+    for (const r of got) {
+      for (const v of [r.ts, r.verdict, r.rule, r.why, r.event.kind]) expect(typeof v).toBe('string')
+      for (const v of [r.note, r.event.room, r.event.sender, r.event.messageId]) expect(['string', 'undefined']).toContain(typeof v)
+      expect(['number', 'undefined']).toContain(typeof r.event.bytes)
+      expect(Object.keys(r)).not.toContain('extra')
+    }
+    expect(got[0]).toMatchObject({ note: 'count 3', event: { kind: 'inbound', bytes: 12 } })
+  })
+
+  it('are read from the end of a large file, not the whole of it', async () => {
+    await filled()
+    const old = line({ rule: 'old.rule' }) + '\n'
+    writeState('receipts.jsonl', old.repeat(Math.ceil((5 * 1024 * 1024) / old.length)) + line({ rule: 'new.rule' }) + '\n')
+    const read = vi.spyOn(fs, 'readFileSync')
+    const got = svc.receipts('h_pi_one', 500)
+    expect(read.mock.calls.some(([file]) => String(file).endsWith('receipts.jsonl'))).toBe(false)
+    read.mockRestore()
+    expect(got).toHaveLength(500)
+    expect(got[0].rule).toBe('new.rule')
+  })
+
+  it('and the log is read from its end too', async () => {
+    await filled()
+    fs.writeFileSync(paths().log, 'old line\n'.repeat(600_000) + 'the last line\n')
+    const read = vi.spyOn(fs, 'readFileSync')
+    const got = svc.logs('h_pi_one', 2)
+    expect(read.mock.calls.some(([file]) => String(file).endsWith('door.log'))).toBe(false)
+    read.mockRestore()
+    expect(got).toBe('old line\nthe last line')
   })
 })
 

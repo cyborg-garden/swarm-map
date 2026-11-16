@@ -12,7 +12,7 @@ import { SurfaceAdminService } from './surface-admins'
 import { CascadeLibraryService } from './cascades'
 import { ModelFreshnessService } from './model-freshness'
 import { DATA_DIR } from './data-dir'
-import { DoorAgentService } from './door-agents'
+import { DoorAgentService, agentNameTaken } from './door-agents'
 import { createCliLauncher } from './door-launcher'
 
 
@@ -64,6 +64,6 @@ export const services = {
     dataDir: DATA_DIR,
     launcher: createCliLauncher(),
     repoRoot: process.cwd(),
-    nameTaken: (name) => harness.nameTaken(name),
+    nameTaken: (name) => agentNameTaken(harness, name),
   }),
 }

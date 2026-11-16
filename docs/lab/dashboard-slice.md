@@ -14,8 +14,8 @@ Every id on this page is a placeholder.
   config and its start script are written from that record on every save. Nobody edits them by hand.
 - **Start is checked first.** Start runs the launcher's dry run and refuses unless it ends
   "ready to start".
-- **Secrets stay in two files.** The record holds the two paths. No route reads, returns or logs
-  what the files hold.
+- **Secrets stay in two files.** The record holds the two paths. Swarm Map checks where each file is
+  and who can read it, and never opens one. Only the launcher does, in its own process.
 - **Hermes agents are untouched.** Hermes code never sees a door agent, and a Hermes-only route
   refuses a door agent's id.
 
@@ -74,8 +74,9 @@ changed. This slice reuses that guard and adds the door paths beside it.
 1. The rules are checked. A problem is listed and nothing is stored.
 2. If the door is stopped: store the record, write `config.json` and `start.sh`. Done.
 3. If the door is running: write the new config beside the old one, dry-run it, and only if it
-   ends "ready to start" store the record, write the files, stop the door and start it again.
-   If the dry run fails, the door keeps running on the old rules and the page says why.
+   ends "ready to start" stop the door, store the record, write the files and start it again.
+   If the dry run fails, or the door cannot be stopped, nothing is stored: the door keeps the old
+   rules, the record still says the old rules, and the page says why.
 
 ## What is out
 
