@@ -346,20 +346,18 @@ export interface ComposeOptions {
    * onto native ext4 inside the VM, leaving dangling symlinks at the mount
    * paths.
    *
-   * On a native Linux bind mount there is no VirtioFS: the layout buys nothing
-   * and gets in the way (#273) — hermes-agent-mt's profile check
-   * (gateway/run_runtime.py) resolves the symlinked DB path, sees /state, and
-   * refuses a session DB outside the reserved profile /opt/data.
+   * On a native Linux bind mount there is no VirtioFS, so the layout is
+   * unnecessary there and is left off (#273).
    *
    * Callers pass the result of resolveUseStateVolume (state-volume.ts), which
    * picks per agent: kept for an agent already on the volume, else the
    * settings.useStateVolume override, else on for a VM-backed or unknown
-   * Docker engine and off for native Linux. Left out, the layout is ON: a
-   * call site that forgets to decide gets the layout that cannot tear a
-   * database. The explicit per-harness migrate-db route is independent of
+   * Docker engine and off for native Linux. Only an explicit `false` turns
+   * it off: left out or null, the layout is ON, so a call site that forgets
+   * to decide gets the layout that cannot tear a database. The explicit per-harness migrate-db route is independent of
    * this option.
    */
-  useStateVolume?: boolean
+  useStateVolume?: boolean | null
   /**
    * Extra host→container bind mounts for the hermes service, beyond the data
    * dir and state volume. Persisted on the harness so they survive every
@@ -726,17 +724,17 @@ function generatePlainCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
-  useStateVolume = true,
+  stateVolumeOption?: boolean | null,
 ): string {
+  // Only an explicit false turns the layout off; undefined and null are ON.
+  const useStateVolume = stateVolumeOption !== false
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
   const ollamaBlock = bundledOllama
     ? ollamaSidecar(agentName, agentDataDir, ollamaImage, '')
     : ''
   // The state-init/named-volume layout (#204 PR2) exists to escape macOS
-  // VirtioFS torn writes. On native Linux it buys nothing and trips the
-  // hermes-agent-mt profile check (gateway/run_runtime.py): the symlinked DBs
-  // resolve outside the reserved profile, so the gateway refuses to boot.
+  // VirtioFS torn writes. Where there is no such layer it is unnecessary.
   // Callers decide per agent (resolveUseStateVolume); see
   // ComposeOptions.useStateVolume.
   const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
@@ -806,8 +804,10 @@ function generateVpnCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
-  useStateVolume = true,
+  stateVolumeOption?: boolean | null,
 ): string {
+  // Only an explicit false turns the layout off; undefined and null are ON.
+  const useStateVolume = stateVolumeOption !== false
   const camofoxPort = port + 1000
   const vncPort = port + 2000
 

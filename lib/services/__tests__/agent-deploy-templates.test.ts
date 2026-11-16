@@ -264,6 +264,7 @@ describe('generateAgentCompose', () => {
     ['set', { useStateVolume: true }],
     ['left out', {}],
     ['no options at all', undefined],
+    ['null', { useStateVolume: null }],
   ])('emits the state-volume layout when useStateVolume is %s', (_label, opts) => {
     const c = generateAgentCompose(args.slug, args.port, args.agentDataDir, args.imageOrBuild, opts)
     expect(c).toContain('  state-init-sci:')

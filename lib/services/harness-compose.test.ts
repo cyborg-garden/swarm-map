@@ -370,6 +370,10 @@ describe('generateStandaloneCompose', () => {
       ['non-VPN', {}],
       ['VPN', { vpnEnabled: true }],
       ['bundled ollama', { bundledOllama: true }],
+      // Only an explicit false turns it off: null (a cleared setting passed
+      // straight through) is ON too.
+      ['non-VPN, null', { useStateVolume: null }],
+      ['VPN, null', { vpnEnabled: true, useStateVolume: null }],
     ])('%s with useStateVolume left out: the layout is ON', (_label, opts) => {
       const result = generateStandaloneCompose(agentName, port, dataDir, opts)
       expect(result).toContain(`  state-init-${agentName}:`)
