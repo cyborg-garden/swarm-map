@@ -485,5 +485,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     if (!fs.existsSync(p.config)) this.render(record)
     const { ok } = await this.launcher.stop({ configPath: p.config, stateDir: p.stateDir })
     if (!ok) throw new DoorError(500, 'The door could not be stopped cleanly. The Logs tab and the launcher\'s `stop` command say more')
+    // Nothing this page started is running any more.
+    fs.rmSync(p.startedByPage, { force: true })
   }
 }

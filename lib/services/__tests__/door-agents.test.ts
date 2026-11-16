@@ -211,6 +211,18 @@ describe('what the page is told about the harness and who started the door', () 
     expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'page' })
   })
 
+  it('forgets which process it started once that door is stopped, so a later door under the same pid is not taken for it', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    expect(fs.existsSync(paths().startedByPage)).toBe(true)
+    await svc.stop('h_pi_one')
+    expect(fs.existsSync(paths().startedByPage)).toBe(false)
+    // The same pid, started by something else.
+    livePids = new Set([4242])
+    writeState('run.json', JSON.stringify({ pid: 4242, project: 'smlab-fake0002', agentId: 'pi-one', policyHash: policyHashOf(RULES), startedAt: NOW.toISOString() }))
+    expect(svc.status('h_pi_one').startedBy).toBe('elsewhere')
+  })
+
   it('a door that is running under a process Swarm Map did not start is said to be under a supervisor, or started elsewhere', async () => {
     await filled()
     await svc.start('h_pi_one')

@@ -21,7 +21,7 @@ import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
-import { cellDown, cellRestart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
+import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
 import { harnessOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
@@ -84,6 +84,8 @@ export interface StartOptions {
   cellReadyMs?: number
   /** How long the cell has to reach the door before it is started again, once. */
   cellRedialMs?: number
+  /** Tests only: start the cell again even though it reached the door, to show the door takes the cell that comes back. The command line never sets this. */
+  redialCell?: boolean
 }
 
 /** Bring one agent up. Either everything is up when this returns, or nothing is left running. */
@@ -175,11 +177,18 @@ export async function start(o: StartOptions): Promise<Running> {
     // does not dial again. If it is not heard from soon after the door is up, it is started again, by
     // name, and looked at again before anything else.
     const ready = (ms: number): Promise<boolean> => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false)
-    if (!(await ready(o.cellRedialMs ?? 3_000))) {
-      if (!cellRestart(project)) throw new Error('the cell did not reach the door, and could not be started again')
+    const reached = await ready(o.cellRedialMs ?? 3_000)
+    if (!reached || o.redialCell === true) {
+      if (!cellStopStart(project, 'stop')) throw new Error('the cell did not reach the door, and could not be stopped to be started again')
+      // The door takes one shim at a time. If the cell got through just as it was stopped, the door is given
+      // time to read what it sent and to see its link close, so the cell that starts next is not turned away.
+      const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+      await pause(300)
+      for (const until = Date.now() + 5_000; Date.now() < until && await ready(0);) await pause(50)
+      if (!cellStopStart(project, 'start')) throw new Error('the cell did not reach the door, and could not be started again')
       const again = runningCellProblems(project, networksWritten(file))
       if (again.length > 0) throw new Error(`the cell is not sealed: ${again.join('; ')}`)
-      o.log('the cell dialled before the door was listening, so it was started again')
+      o.log(reached ? 'the cell was started again' : 'the cell had not reached the door, so it was started again')
       if (!(await ready(o.cellReadyMs ?? 60_000))) throw new Error('the cell did not reach the door in time')
     }
     o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)

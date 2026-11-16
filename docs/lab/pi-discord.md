@@ -172,9 +172,9 @@ node lib/lab/pi-discord/cli.ts start --config /path/to/config.json
 ```
 
 It stays in the foreground and prints one line per state change. In order: the cell comes up and is
-checked from outside, then the door connects to Discord, then the cell joins the door. A cell that
-dialled before the door was listening is started again once, by name, and checked from outside
-again; the log says so. If any step fails, everything is taken down again and nothing is left
+checked from outside, then the door connects to Discord, then the cell joins the door. A cell that has
+not reached the door a few seconds after the door is up is started again once, by name, and
+checked from outside again; the log says so. If any step fails, everything is taken down again and nothing is left
 running. To keep it running after you
 close the terminal, start it under `nohup` or your own process manager.
 

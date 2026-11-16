@@ -235,10 +235,10 @@ export function cellUp(file: LiveFile, composePath: string, services: string[] =
   if (!r.ok) throw Object.assign(new Error(`the cell did not start: ${r.out.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`), { stderr: r.out })
 }
 
-/** Start one run's cell container again, by name. The same container, so what Docker gave it is unchanged. */
-export function cellRestart(project: string): boolean {
+/** Stop one run's cell container, or start it again, by name. The same container, so what Docker gave it is unchanged. */
+export function cellStopStart(project: string, what: 'stop' | 'start'): boolean {
   if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
-  return docker(['restart', '--time', '1', `${project}-cell-1`]).ok
+  return docker(what === 'stop' ? ['stop', '--time', '1', `${project}-cell-1`] : ['start', `${project}-cell-1`]).ok
 }
 
 /** Stop and remove one run's containers, networks and volume. By project name, and nothing else. */

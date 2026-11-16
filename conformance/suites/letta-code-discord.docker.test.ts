@@ -286,10 +286,11 @@ describe('letta-code in the launcher: one message, end to end, through real Lett
 
   it('if the cell dies the door answers nobody; if the door dies its cell stays sealed and silent, and the next start removes it', async () => {
     const said: string[] = []
-    const again = (o: { cellRedialMs?: number } = {}): Promise<Running> => start({ config, secrets, stateDir, log: (l) => said.push(l), discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl }, ...o })
-    // Given no time at all to reach the door, the cell is started again, is still the sealed cell, and then reaches it.
-    const first = await again({ cellRedialMs: 0 })
-    expect(said.join('\n')).toContain('the cell dialled before the door was listening, so it was started again')
+    const again = (o: { redialCell?: boolean } = {}): Promise<Running> => start({ config, secrets, stateDir, log: (l) => said.push(l), discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl }, ...o })
+    // The harder of the two ways a cell can need starting again: it had reached the door, so the door still
+    // holds its link when it is stopped. The cell that comes back is the same sealed cell, and the door takes it.
+    const first = await again({ redialCell: true })
+    expect(said.filter((l) => l.includes('started again'))).toHaveLength(1)
     expect(said.at(-1)).toMatch(/^live: agent lc-lab-test on Letta Code/)
     expect(runningCellProblems(readRun(stateDir)!.project, networksWritten(JSON.parse(readFileSync(path.join(stateDir, 'compose.json'), 'utf8')) as LiveFile))).toEqual([])
     const heardBefore = fake.posted.length
