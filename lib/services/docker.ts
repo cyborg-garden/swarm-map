@@ -57,20 +57,22 @@ export class DockerService {
 
   /**
    * What the Docker engine behind the `docker` CLI is: its operating system,
-   * kernel, name and endpoint, and whether this process is itself in a
-   * container. Read by the state-volume decision (state-volume.ts), which
-   * needs to know whether the engine runs in a VM. Null when any of it cannot
-   * be read; the caller treats that as "unknown".
+   * kernel and endpoint, the active context's name, and whether this process
+   * is itself in a container. Read by the state-volume decision
+   * (state-volume.ts), which needs to know whether the engine runs in a VM.
+   * Null when any of it cannot be read; the caller treats that as "unknown".
    *
-   * The endpoint is DOCKER_HOST when set (the CLI gives it precedence), else
-   * the active context's. Only a CLI that has no `context` command at all
-   * leaves it empty: such a CLI can only be using its built-in local socket.
-   * Any other failure of that call (a timeout on a slow remote context, a
-   * broken context store) leaves the endpoint unknown, and the answer is null
-   * rather than a guess that it is local.
+   * With DOCKER_HOST set, that is the endpoint (the CLI gives it precedence
+   * over any context) and the context is not asked at all, so the probe never
+   * blocks twice. Otherwise the endpoint and name come from the active
+   * context. Only a CLI that has no `context` command leaves them empty: such
+   * a CLI can only be using its built-in local socket. Any other failure of
+   * that call (a timeout on a slow remote context, a broken context store)
+   * leaves the endpoint unknown, and the answer is null rather than a guess
+   * that it is local.
    */
   hostInfo(): DockerHostInfo | null {
-    let info: { OperatingSystem?: unknown; KernelVersion?: unknown; OSType?: unknown; Name?: unknown }
+    let info: { OperatingSystem?: unknown; KernelVersion?: unknown; OSType?: unknown }
     try {
       const out = execFileSync('docker', ['info', '--format', '{{json .}}'], { stdio: 'pipe', timeout: HOST_INFO_TIMEOUT_MS }).toString()
       info = JSON.parse(out)
@@ -80,19 +82,21 @@ export class DockerService {
     if (typeof info !== 'object' || info === null) return null
     let endpoint = process.env.DOCKER_HOST ?? ''
     let contextName = ''
-    try {
-      const out = execFileSync(
-        'docker',
-        ['context', 'inspect', '--format', '{{.Name}} {{.Endpoints.docker.Host}}'],
-        { stdio: 'pipe', timeout: HOST_INFO_TIMEOUT_MS },
-      ).toString().trim()
-      const sep = out.indexOf(' ')
-      contextName = sep < 0 ? out : out.slice(0, sep)
-      if (!endpoint) endpoint = sep < 0 ? '' : out.slice(sep + 1).trim()
-    } catch (err) {
-      const e = err as { message?: unknown; stderr?: unknown } | undefined
-      const text = `${typeof e?.message === 'string' ? e.message : ''}\n${e?.stderr ? String(e.stderr) : ''}`
-      if (!/unknown command|is not a docker command/i.test(text)) return null
+    if (!endpoint) {
+      try {
+        const out = execFileSync(
+          'docker',
+          ['context', 'inspect', '--format', '{{.Name}} {{.Endpoints.docker.Host}}'],
+          { stdio: 'pipe', timeout: HOST_INFO_TIMEOUT_MS },
+        ).toString().trim()
+        const sep = out.indexOf(' ')
+        contextName = sep < 0 ? out : out.slice(0, sep)
+        endpoint = sep < 0 ? '' : out.slice(sep + 1).trim()
+      } catch (err) {
+        const e = err as { message?: unknown; stderr?: unknown } | undefined
+        const text = `${typeof e?.message === 'string' ? e.message : ''}\n${e?.stderr ? String(e.stderr) : ''}`
+        if (!/unknown command|is not a docker command/i.test(text)) return null
+      }
     }
     let containerised = false
     try {
@@ -106,7 +110,6 @@ export class DockerService {
       kernelVersion: str(info.KernelVersion),
       osType: str(info.OSType),
       endpoint,
-      name: str(info.Name),
       contextName,
       containerised,
     }

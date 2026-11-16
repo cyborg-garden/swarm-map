@@ -84,7 +84,6 @@ describe('DockerService', () => {
         kernelVersion: '6.8.0-45-generic',
         osType: 'linux',
         endpoint: 'unix:///var/run/docker.sock',
-        name: 'build-box',
         contextName: 'default',
         containerised: false,
       })
@@ -103,10 +102,21 @@ describe('DockerService', () => {
       expect(HOST_INFO_TIMEOUT_MS).toBeLessThanOrEqual(10000)
     })
 
-    it('DOCKER_HOST wins over the context endpoint, as it does for the CLI', () => {
+    it('DOCKER_HOST is the endpoint, as it is for the CLI, and the context is not asked (one blocking call, not two)', () => {
       process.env.DOCKER_HOST = 'tcp://10.0.0.5:2376'
-      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO)).mockReturnValueOnce(Buffer.from(CONTEXT))
-      expect(docker.hostInfo()).toMatchObject({ endpoint: 'tcp://10.0.0.5:2376', contextName: 'default' })
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO))
+      // If the context were asked, this is what would come back.
+      mockExecFileSync.mockReturnValue(Buffer.from(CONTEXT))
+      expect(docker.hostInfo()).toMatchObject({ endpoint: 'tcp://10.0.0.5:2376', contextName: '' })
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1)
+      expect(joined(mockExecFileSync.mock.calls[0])).toBe('docker info --format {{json .}}')
+    })
+
+    it('DOCKER_HOST set: a context that would fail to read does not make the engine unknown', () => {
+      process.env.DOCKER_HOST = 'unix:///var/run/docker.sock'
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO))
+      mockExecFileSync.mockImplementation(() => { throw new Error('spawnSync docker ETIMEDOUT') })
+      expect(docker.hostInfo()).toMatchObject({ endpoint: 'unix:///var/run/docker.sock' })
     })
 
     it.each([
@@ -145,7 +155,7 @@ describe('DockerService', () => {
         .mockReturnValueOnce(Buffer.from(CONTEXT))
       expect(docker.hostInfo()).toEqual({
         operatingSystem: '', kernelVersion: '', osType: '', endpoint: 'unix:///var/run/docker.sock',
-        name: '', contextName: 'default', containerised: false,
+        contextName: 'default', containerised: false,
       })
     })
 
