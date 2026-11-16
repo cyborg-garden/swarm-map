@@ -76,7 +76,7 @@ export interface CellOptions {
   /** How long the door waits for an admin to answer a request, when a class of tool asks. The cell is told to wait a little longer. */
   approvalMs?: number
   /** Tests only: break the seal in one named way, to show the checks go red. */
-  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped'
+  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped' | 'cell-folder-uncapped'
 }
 
 /** The scratch folder: where the harness is started, and the one place its file tools reach. */
@@ -88,8 +88,17 @@ export interface LiveFile {
   name: string
   services: Record<string, Service>
   networks: Record<string, LabNetwork>
-  volumes: { lab: Record<string, never> }
+  volumes: { lab: { driver: 'local'; driver_opts: { type: 'tmpfs'; device: 'tmpfs'; o: string } } }
 }
+
+/**
+ * The cell's own folder (its harness's settings, sessions and home, with the scratch folder mounted inside):
+ * in memory, with a size. On Docker's disk it had none, and a shell in the cell could fill the disk every
+ * container on this machine shares. It is gone when the cell stops, as the scratch folder is.
+ */
+export const CELL_FOLDER_MB = 256
+export const cellFolder = (): LiveFile['volumes']['lab'] =>
+  ({ driver: 'local', driver_opts: { type: 'tmpfs', device: 'tmpfs', o: `size=${CELL_FOLDER_MB}m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev` } })
 
 /** What each network of a file is written down as: whether it has a way out, and its block. */
 export const networksWritten = (file: Pick<LiveFile, 'networks'>): Record<string, { internal: boolean; subnet: string }> =>
@@ -138,7 +147,7 @@ export function renderCell(o: CellOptions): LiveFile {
     // The relay takes the name the cell dials: `door`.
     services: { door: relay, cell },
     networks: { cell: labNetwork(true, o.subnets?.cell), egress: labNetwork(false, o.subnets?.egress) },
-    volumes: { lab: {} },
+    volumes: { lab: cellFolder() },
   }
   if (o.withSink) {
     file.networks.outside = labNetwork(true, o.subnets?.outside)
@@ -149,6 +158,8 @@ export function renderCell(o: CellOptions): LiveFile {
   if (o.broken === 'cell-writable') cell.read_only = false
   // The scratch folder is left as a plain folder of the cell's volume: writable, and with no size of its own.
   if (o.broken === 'cell-scratch-uncapped') cell.tmpfs = ['/tmp']
+  // The cell's own folder is a plain Docker volume: on Docker's disk, with no size.
+  if (o.broken === 'cell-folder-uncapped') file.volumes.lab = {} as never
   // The two networks are made on each other's blocks. As written this is still a sealed cell: only Docker can show the difference.
   if (o.broken === 'cell-other-subnet') {
     file.networks.cell = labNetwork(true, o.subnets.egress)
@@ -174,6 +185,7 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) p.push('the cell mounts something other than its own folder')
   // Two places in memory and no more: /tmp, and the scratch folder with a size written on it.
   if (cell.tmpfs.length !== 2 || cell.tmpfs[0] !== '/tmp' || !/^\/tmp\/smlab\/work:size=([1-9]\d{0,3})m,mode=0700,uid=1000,gid=1000$/.test(cell.tmpfs[1])) p.push('the cell\'s scratch folder is not a capped mount of its own')
+  if (JSON.stringify(file.volumes?.lab) !== JSON.stringify(cellFolder())) p.push('the cell\'s own folder is not in memory with a size')
   if (Object.keys(cell.environment).sort().join(',') !== CELL_ENV.join(',')) p.push('the cell is handed something that is not on its list')
   try { assertNoCredentials(cell.environment, { nonce: cell.environment.SWARMLAB_NONCE }) } catch (err) { p.push((err as Error).message) }
   if (door.volumes !== undefined) p.push('the relay mounts something')
@@ -310,6 +322,11 @@ export function runningCellProblems(project: string, written: Record<string, { i
   p.push(...given.net, ...given.privilege, ...given.mounts)
   if (c.Config.User !== 'node') p.push(`the cell runs as ${c.Config.User || 'root'}`)
   if (c.Mounts.length !== 1 || c.Mounts[0].Type !== 'volume' || c.Mounts[0].Name !== `${project}_lab`) p.push('the cell mounts something other than its own folder')
+  // What Docker made of the cell's own folder: in memory, with the size written for it.
+  const folder = docker(['volume', 'inspect', '--format', '{{json .Options}}', `${project}_lab`])
+  let made: Record<string, string> = {}
+  try { made = JSON.parse(folder.out) ?? {} } catch { /* not there */ }
+  if (made.type !== 'tmpfs' || made.o !== cellFolder().driver_opts.o) p.push('the cell\'s own folder is not in memory with a size')
   // What Docker says it mounted in memory: /tmp, and the scratch folder with a size.
   const inMemory = c.HostConfig.Tmpfs ?? {}
   if (Object.keys(inMemory).sort().join(',') !== `/tmp,${SCRATCH_DIR}` || !/(^|,)size=[1-9]\d*m(,|$)/.test(inMemory[SCRATCH_DIR] ?? '')) p.push('the cell\'s scratch folder is not a capped mount of its own')
@@ -346,13 +363,16 @@ export async function probeCell(project: string, cellNonce: string, sinkIp: stri
  * to it, and what landed is counted.
  */
 export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): string[] {
-  const file = `${SCRATCH_DIR}/.fill`
-  const r = docker(['exec', `${project}-cell-1`, 'sh', '-c',
-    `touch ${SCRATCH_DIR}/.ok && echo WROTE; rm -f ${SCRATCH_DIR}/.ok; head -c ${(mb + 8) * 1024 * 1024} /dev/zero > ${file} 2>/dev/null; echo "LANDED $(wc -c < ${file})"; rm -f ${file}`], 60_000)
-  const landed = Number(/LANDED\s+(\d+)/.exec(r.out)?.[1] ?? Number.NaN)
   const p: string[] = []
-  if (!r.out.includes('WROTE')) p.push('the scratch folder cannot be written')
-  if (!Number.isFinite(landed)) p.push('the scratch folder could not be tried, so nothing was checked')
-  else if (landed > mb * 1024 * 1024) p.push(`the scratch folder took ${landed} bytes, which is more than its ${mb} MB`)
+  // The scratch folder, then the cell's own folder outside it: each takes no more than its size.
+  for (const [where, what, size] of [[SCRATCH_DIR, 'the scratch folder', mb], [`${LAB_DIR}/home`, 'the cell\'s own folder', CELL_FOLDER_MB]] as const) {
+    const file = `${where}/.fill`
+    const r = docker(['exec', `${project}-cell-1`, 'sh', '-c',
+      `touch ${where}/.ok && echo WROTE; rm -f ${where}/.ok; head -c ${(size + 8) * 1024 * 1024} /dev/zero > ${file} 2>/dev/null; echo "LANDED $(wc -c < ${file})"; rm -f ${file}`], 60_000)
+    const landed = Number(/LANDED\s+(\d+)/.exec(r.out)?.[1] ?? Number.NaN)
+    if (!r.out.includes('WROTE')) p.push(`${what} cannot be written`)
+    if (!Number.isFinite(landed)) p.push(`${what} could not be tried, so nothing was checked`)
+    else if (landed > size * 1024 * 1024) p.push(`${what} took ${landed} bytes, which is more than its ${size} MB`)
+  }
   return p
 }

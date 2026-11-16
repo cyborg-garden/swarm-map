@@ -285,7 +285,7 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
       const sinkHits = docker(['logs', `${project}-sink-1`]).out.split('\n').filter((l) => l.startsWith('SINK-HIT '))
       const outside = [...sinkProblems(sinkHits, nonce), ...host.hits.slice(seen).map((url) => `a listener on this machine was reached from inside the cell (${url})`)]
       for (const c of probed) add(c.id, c.title, c.id === 'S1' ? [...c.problems, ...outside] : c.problems)
-      add('S4', 'the scratch folder can be written, and takes no more than its size', scratchProblems(project))
+      add('S4', 'the scratch folder and the cell\'s own folder can be written, and each takes no more than its size', scratchProblems(project))
     }
   } finally {
     await door.close()
