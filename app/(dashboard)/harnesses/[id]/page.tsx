@@ -145,8 +145,22 @@ function fmtUsd(v: number | null | undefined, costStatus?: 'estimated' | 'partia
   return `${costStatus === 'estimated' ? '~' : ''}$${v.toFixed(2)}`
 }
 
+/**
+ * The page of one agent. Which page that is depends on the agent's runtime,
+ * so the agent is looked up first, and only the page that fits is mounted:
+ * a door agent's page asks for nothing a Hermes agent has, and the other way
+ * round.
+ */
 export default function HarnessDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const { data: harness, loading } = useApi<Harness>(`/api/harnesses/${id}`)
+  if (loading) return <p className="text-muted-foreground">Loading...</p>
+  // An agent behind a door has a page of its own, with only the tabs that apply to it.
+  if (harness && isDoorRuntime(harness.runtime)) return <DoorAgentPage harness={harness} />
+  return <HermesHarnessDetailPage id={id} />
+}
+
+function HermesHarnessDetailPage({ id }: { id: string }) {
   const router = useRouter()
 
   const { data: harness, loading, refetch } = useApi<Harness>(`/api/harnesses/${id}`)
@@ -588,8 +602,6 @@ export default function HarnessDetailPage({ params }: { params: Promise<{ id: st
 
   if (loading) return <p className="text-muted-foreground">Loading...</p>
   if (!harness) return <p className="text-destructive">Harness not found.</p>
-  // An agent behind a door has a page of its own, with only the tabs that apply to it.
-  if (isDoorRuntime(harness.runtime)) return <DoorAgentPage harness={harness} />
 
   const allToolsEnabled = harness.tools.length === 0
   const harnessTools = allToolsEnabled ? (tools ?? []) : tools?.filter((t) => harness.tools.includes(t.id)) ?? []

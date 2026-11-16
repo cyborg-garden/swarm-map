@@ -98,6 +98,19 @@ describe('the page of a door agent', () => {
     expect(screen.queryByText('Duplicate')).toBeNull()
   })
 
+  it('asks the server only for what applies to a door agent', async () => {
+    await openPage()
+    await openTab('Receipts')
+    await openTab('Logs')
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)) })
+    expect([...new Set(requests.map((r) => r.url))].sort()).toEqual([
+      '/api/harnesses/h_pi_one',
+      '/api/harnesses/h_pi_one/door',
+      '/api/harnesses/h_pi_one/door/receipts?last=100',
+      '/api/harnesses/h_pi_one/logs?lines=100',
+    ])
+  })
+
   it('shows the door\'s status, the model, and a dash for spend it does not know', async () => {
     await openPage()
     const row = (label: string) => screen.getByText(label).parentElement!
