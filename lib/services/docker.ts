@@ -4,6 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import type { RestartMode } from '@/lib/types'
+import type { DockerHostInfo } from './state-volume'
 
 const execFileAsync = promisify(execFile)
 
@@ -48,6 +49,41 @@ export class DockerService {
       return true
     } catch {
       return false
+    }
+  }
+
+  /**
+   * What the Docker engine behind the `docker` CLI is: its operating system,
+   * kernel and endpoint. Read by the state-volume decision (state-volume.ts),
+   * which needs to know whether the engine runs in a VM. Null when the engine
+   * does not answer; the caller treats that as "unknown".
+   *
+   * The endpoint is DOCKER_HOST when set (the CLI gives it precedence), else
+   * the active context's. A CLI without context support leaves it empty.
+   */
+  hostInfo(): DockerHostInfo | null {
+    let info: { OperatingSystem?: unknown; KernelVersion?: unknown; OSType?: unknown }
+    try {
+      const out = execFileSync('docker', ['info', '--format', '{{json .}}'], { stdio: 'pipe', timeout: 5000 }).toString()
+      info = JSON.parse(out)
+    } catch {
+      return null
+    }
+    if (typeof info !== 'object' || info === null) return null
+    let endpoint = process.env.DOCKER_HOST ?? ''
+    if (!endpoint) {
+      try {
+        endpoint = execFileSync('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], { stdio: 'pipe', timeout: 5000 }).toString().trim()
+      } catch {
+        endpoint = ''
+      }
+    }
+    const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+    return {
+      operatingSystem: str(info.OperatingSystem),
+      kernelVersion: str(info.KernelVersion),
+      osType: str(info.OSType),
+      endpoint,
     }
   }
 

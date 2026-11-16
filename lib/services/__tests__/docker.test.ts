@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { DockerService } from '../docker'
 
 // DockerService is shell-free: it invokes execFileSync/spawn with an argv array
@@ -55,6 +55,60 @@ describe('DockerService', () => {
   it('returns false when docker is not available', () => {
     mockExecFileSync.mockImplementationOnce(() => { throw new Error('not found') })
     expect(docker.isAvailable()).toBe(false)
+  })
+
+  describe('hostInfo (what the engine is; read by the state-volume decision)', () => {
+    const INFO = JSON.stringify({ OperatingSystem: 'Ubuntu 24.04.1 LTS', KernelVersion: '6.8.0-45-generic', OSType: 'linux', Containers: 3 })
+    const saved = process.env.DOCKER_HOST
+    beforeEach(() => { delete process.env.DOCKER_HOST })
+    afterEach(() => {
+      if (saved === undefined) delete process.env.DOCKER_HOST
+      else process.env.DOCKER_HOST = saved
+    })
+
+    it('reads the engine from `docker info` and the endpoint from the active context', () => {
+      mockExecFileSync
+        .mockReturnValueOnce(Buffer.from(INFO))
+        .mockReturnValueOnce(Buffer.from('unix:///var/run/docker.sock\n'))
+      expect(docker.hostInfo()).toEqual({
+        operatingSystem: 'Ubuntu 24.04.1 LTS',
+        kernelVersion: '6.8.0-45-generic',
+        osType: 'linux',
+        endpoint: 'unix:///var/run/docker.sock',
+      })
+      expect(joined(mockExecFileSync.mock.calls[0])).toBe('docker info --format {{json .}}')
+      expect(joined(mockExecFileSync.mock.calls[1])).toBe('docker context inspect --format {{.Endpoints.docker.Host}}')
+    })
+
+    it('DOCKER_HOST wins over the context, as it does for the CLI', () => {
+      process.env.DOCKER_HOST = 'tcp://10.0.0.5:2376'
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(INFO))
+      expect(docker.hostInfo()?.endpoint).toBe('tcp://10.0.0.5:2376')
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1)
+    })
+
+    it('a CLI without context support leaves the endpoint empty', () => {
+      mockExecFileSync
+        .mockReturnValueOnce(Buffer.from(INFO))
+        .mockImplementationOnce(() => { throw new Error('unknown command "context"') })
+      expect(docker.hostInfo()).toMatchObject({ operatingSystem: 'Ubuntu 24.04.1 LTS', endpoint: '' })
+    })
+
+    it('is null when the engine does not answer or answers something unreadable', () => {
+      mockExecFileSync.mockImplementationOnce(() => { throw new Error('Cannot connect to the Docker daemon') })
+      expect(docker.hostInfo()).toBeNull()
+      mockExecFileSync.mockReturnValueOnce(Buffer.from('not json'))
+      expect(docker.hostInfo()).toBeNull()
+      mockExecFileSync.mockReturnValueOnce(Buffer.from('null'))
+      expect(docker.hostInfo()).toBeNull()
+    })
+
+    it('missing or non-string fields come back empty, never undefined', () => {
+      mockExecFileSync
+        .mockReturnValueOnce(Buffer.from(JSON.stringify({ OperatingSystem: 7, ServerErrors: ['down'] })))
+        .mockReturnValueOnce(Buffer.from('unix:///var/run/docker.sock'))
+      expect(docker.hostInfo()).toEqual({ operatingSystem: '', kernelVersion: '', osType: '', endpoint: 'unix:///var/run/docker.sock' })
+    })
   })
 
   it('lists containers from compose file', () => {
