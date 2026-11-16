@@ -1,10 +1,22 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import net from 'net'
 import type { Settings, Model, Person, Surface, ModelAutoUpdateSettings } from '@/lib/types'
 import type { Storage } from './storage'
 import { assertNoNewline } from '@/lib/env-helpers'
 import { isCatalogRetired } from '@/lib/model-catalog'
+
+/**
+ * True when `value` is a bare IPv4 or IPv6 address (Node's net.isIP): the only
+ * shape a compose `host_ip` is given for the agent API port. No brackets, no
+ * hostname, no surrounding space, and no zone id: net.isIP accepts
+ * `fe80::1%en0`, docker answers "invalid ip address" to it. The settings check below and the compose
+ * generators (resolveApiBindHost) both go through this one function.
+ */
+export function isIpAddress(value: unknown): value is string {
+  return typeof value === 'string' && !value.includes('%') && net.isIP(value) !== 0
+}
 
 /**
  * Validate a settings patch against an explicit allowlist before it is merged
@@ -28,6 +40,18 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         if (typeof value !== 'string') throw new Error(`${key} must be a string`)
         assertNoNewline(value, key)
         out[key] = value
+        break
+      case 'apiBindHost':
+        // Stricter than the two above: the value goes into every generated
+        // compose file as `host_ip`, and docker refuses anything that is not an
+        // address ("[::1]", "localhost", "a: b") only at `up` — after a
+        // regenerate has already replaced a working file. Empty means "use the
+        // default" (loopback).
+        if (typeof value !== 'string') throw new Error('apiBindHost must be a string')
+        if (value !== '' && !isIpAddress(value)) {
+          throw new Error('apiBindHost must be an IP address (for example 127.0.0.1 or ::1), or empty for the default')
+        }
+        out.apiBindHost = value
         break
       case 'theme':
         if (value !== 'light' && value !== 'dark') throw new Error('theme must be "light" or "dark"')
@@ -166,6 +190,7 @@ const DEFAULT_SETTINGS: Settings = {
   useLocalBuild: false,
   vncBindHost: '127.0.0.1',
   controlBindHost: '127.0.0.1',
+  apiBindHost: '127.0.0.1',
 }
 
 // Agent data directory mapping

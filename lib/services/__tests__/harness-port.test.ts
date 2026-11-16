@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { collectUsedPorts, nextAvailablePort } from '../harness'
+import { collectUsedPorts, nextAvailablePort, parseDockerPublishedPorts } from '../harness'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
@@ -121,5 +121,22 @@ describe('nextAvailablePort', () => {
     const assigned = nextAvailablePort({ composeBaseDir, homeDir, dockerPorts: () => [] })
     expect(assigned).not.toBe(8642)
     expect(assigned).toBe(8652)
+  })
+})
+
+describe('parseDockerPublishedPorts', () => {
+  it('reads ports published on every interface', () => {
+    expect(parseDockerPublishedPorts('0.0.0.0:8642->8642/tcp, [::]:8642->8642/tcp\n0.0.0.0:8652->8642/tcp')).toEqual(
+      expect.arrayContaining([8642, 8652]),
+    )
+  })
+
+  it('reads ports published on one address, loopback included', () => {
+    const out = '127.0.0.1:8662->8642/tcp\n100.64.0.5:8672->8642/tcp, 127.0.0.1:10672->6080/tcp\n[::1]:8682->8642/tcp'
+    expect(parseDockerPublishedPorts(out).sort()).toEqual([10672, 8662, 8672, 8682])
+  })
+
+  it('ignores ports a container exposes but does not publish', () => {
+    expect(parseDockerPublishedPorts('8642/tcp, 11434/tcp\n')).toEqual([])
   })
 })

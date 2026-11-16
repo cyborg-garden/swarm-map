@@ -434,6 +434,43 @@ describe('driftTargets', () => {
     expect(targets.find((t) => t.name === 'ghost')).toBeTruthy()
     expect(targets.find((t) => t.name === 'ghost')!.running).toBe(false)
   })
+
+  it('does not count a leftover folder whose name is not an agent name', () => {
+    // A folder set aside by hand still holds a docker-compose.yml, but its name
+    // could never be an agent's: no route accepts the id it would be given.
+    for (const leftover of ['iris.removed-20260826', 'iris.bak', 'old iris']) {
+      fs.mkdirSync(path.join(composeBaseDir, leftover), { recursive: true })
+      fs.writeFileSync(
+        path.join(composeBaseDir, leftover, 'docker-compose.yml'),
+        ['services:', '  hermes-iris:', '    build: /src/hermes-agent-mt'].join('\n'),
+      )
+    }
+    const targets = driftTargets({ harnesses: [], composeBaseDir })
+    expect(targets.map((t) => t.name).sort()).toEqual(['iris', 'seraph-doer', 'seraph-thinker'])
+  })
+
+  it('still counts a validly named folder with no registry row and no container', () => {
+    fs.mkdirSync(path.join(composeBaseDir, 'never_started-2'), { recursive: true })
+    fs.writeFileSync(
+      path.join(composeBaseDir, 'never_started-2', 'docker-compose.yml'),
+      ['services:', '  hermes-never_started-2:', '    image: example/agent:1'].join('\n'),
+    )
+    const targets = driftTargets({ harnesses: [], composeBaseDir })
+    const t = targets.find((x) => x.name === 'never_started-2')
+    expect(t).toBeTruthy()
+    expect(t!.running).toBe(false)
+    expect(t!.service).toBe('hermes-never_started-2')
+  })
+
+  it('keeps a registry row whatever its name looks like', () => {
+    // The name rule filters the folder sweep only. What the registry lists is
+    // always a target.
+    const targets = driftTargets({
+      harnesses: [harness({ id: 'h_odd', name: 'odd.name', serviceName: 'hermes-odd', status: 'stopped' })],
+      composeBaseDir,
+    })
+    expect(targets.find((t) => t.name === 'odd.name')).toBeTruthy()
+  })
 })
 
 describe('resolveBuildSourceDir', () => {

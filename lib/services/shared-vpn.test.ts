@@ -116,7 +116,7 @@ describe('applySharedVpnToCompose on a deploy-born compose', () => {
     expect(isDeployBornCompose(out)).toBe(true)
     // Only networking lines differ: every non-networking line survives in order.
     const kept = (s: string) =>
-      s.split('\n').filter((l) => !/extra_hosts|host-gateway|ports:|published:|target: 8642|shared-vpn|network_mode|^ {4}#~|environment:|API_SERVER_PORT/.test(l))
+      s.split('\n').filter((l) => !/extra_hosts|host-gateway|ports:|host_ip:|published:|target: 8642|shared-vpn|network_mode|^ {4}#~|environment:|API_SERVER_PORT/.test(l))
     expect(kept(out)).toEqual(kept(before))
   })
 
@@ -603,7 +603,9 @@ describe('comments and forbidden keys inside the service', () => {
   })
 
   it('a comment between list items does not split a stashed key', () => {
-    const c = deployBorn().replace('      - published: 8722\n', '  # odd comment\n      - published: 8722\n')
+    const born = deployBorn()
+    expect(born).toContain('        published: 8722\n')
+    const c = born.replace('        published: 8722\n', '  # odd comment\n        published: 8722\n')
     const on = applySharedVpnToCompose(c, NAME, PORT, 'private')
     expect(on).not.toMatch(/^ {6}- published/m)
     expect(removeSharedVpnFromCompose(on, NAME)).toBe(c)
