@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   nameTaken: vi.fn<(name: string) => boolean>(() => false),
   dockerStart: vi.fn(),
   healthCheck: vi.fn(() => false),
+  hostInfo: vi.fn<() => Record<string, string> | null>(() => null),
 }))
 
 vi.mock('child_process', () => ({
@@ -50,7 +51,7 @@ vi.mock('@/lib/services/usecase-templates', () => ({
 
 vi.mock('@/lib/services', () => ({
   services: {
-    docker: { isAvailable: () => true, pullImage: () => ({ ok: true }), healthCheck: h.healthCheck, start: h.dockerStart },
+    docker: { isAvailable: () => true, pullImage: () => ({ ok: true }), healthCheck: h.healthCheck, start: h.dockerStart, hostInfo: h.hostInfo },
     config: { getSettings: () => ({ ...h.settings, dataDir: h.tmpData }) },
     keys: { getDecryptedValue: h.getDecryptedValue, list: h.list, update: h.update, setAssignment: h.setAssignment, add: h.add },
     harness: { createOverlay: h.createOverlay, list: () => [], nameTaken: h.nameTaken },
@@ -84,6 +85,8 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     h.dockerStart.mockClear()
     h.healthCheck.mockReset()
     h.healthCheck.mockReturnValue(false)
+    h.hostInfo.mockReset()
+    h.hostInfo.mockReturnValue(null)
     tmpl.get.mockReset()
     tmpl.install.mockReset()
     tmpl.install.mockResolvedValue([])
@@ -140,6 +143,60 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     const b = await deploy({ name: 'bind-b', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
     expect((await b.json()).ok).toBe(true)
     expect(read('bind-b')).toMatch(/- host_ip: "100\.64\.0\.9"\n {8}published: \d+\n {8}target: 8642/)
+  })
+
+  // The state-volume layout follows the Docker ENGINE the deploy runs on
+  // (lib/services/state-volume.ts): off on native Linux (#273), on for an
+  // engine in a VM or one that cannot be identified, with settings.useStateVolume
+  // as the override either way.
+  describe('state-volume layout', () => {
+    const NATIVE = { operatingSystem: 'Ubuntu 24.04.1 LTS', kernelVersion: '6.8.0-45-generic', osType: 'linux', endpoint: 'unix:///var/run/docker.sock' }
+    const realPlatform = process.platform
+    const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true })
+    afterEach(() => setPlatform(realPlatform))
+
+    const deployed = async (name: string) => {
+      const res = await deploy({ name, provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
+      expect((await res.json()).ok).toBe(true)
+      const compose = fs.readFileSync(path.join(h.tmpData, 'compose', name, 'docker-compose.yml'), 'utf-8')
+      const on = compose.includes(`  state-init-${name}:`)
+      expect(compose.includes(`- hermes-state-${name}:/state`)).toBe(on)
+      expect(/^volumes:\s*$/m.test(compose)).toBe(on)
+      return on
+    }
+
+    it('native Linux engine: plain bind mounts', async () => {
+      setPlatform('linux')
+      h.hostInfo.mockReturnValue(NATIVE)
+      expect(await deployed('sv-native')).toBe(false)
+    })
+
+    it('Linux process, VM engine: the layout', async () => {
+      setPlatform('linux')
+      h.hostInfo.mockReturnValue({ ...NATIVE, operatingSystem: 'Docker Desktop', kernelVersion: '6.10.14-linuxkit' })
+      expect(await deployed('sv-desktop')).toBe(true)
+    })
+
+    it('Linux process, engine not answering: the layout (the safe side)', async () => {
+      setPlatform('linux')
+      expect(await deployed('sv-unknown')).toBe(true)
+    })
+
+    it('macOS: the layout', async () => {
+      setPlatform('darwin')
+      h.hostInfo.mockReturnValue(NATIVE)
+      expect(await deployed('sv-mac')).toBe(true)
+    })
+
+    it('settings.useStateVolume overrides in both directions', async () => {
+      setPlatform('linux')
+      h.hostInfo.mockReturnValue(NATIVE)
+      h.settings = { ...h.settings, useStateVolume: true }
+      expect(await deployed('sv-forced-on')).toBe(true)
+      setPlatform('darwin')
+      h.settings = { ...h.settings, useStateVolume: false }
+      expect(await deployed('sv-forced-off')).toBe(false)
+    })
   })
 
   // ── Base package (v1) ─────────────────────────────────────────────────────

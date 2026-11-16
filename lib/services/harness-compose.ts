@@ -339,6 +339,26 @@ export interface ComposeOptions {
    */
   cpus?: string
   /**
+   * Mount the agent's SQLite state DBs on a Docker named volume
+   * (`hermes-state-<name>:/state`) wired through symlinks created by a
+   * one-shot state-init service. This is the VirtioFS torn-write escape hatch
+   * (#204 PR2, docs/runbooks/db-named-volume-migration.md): it moves the DBs
+   * onto native ext4 inside the VM, leaving dangling symlinks at the mount
+   * paths.
+   *
+   * On a native Linux bind mount there is no VirtioFS, so the layout is
+   * unnecessary there and is left off (#273).
+   *
+   * Callers pass the result of resolveUseStateVolume (state-volume.ts), which
+   * picks per agent: kept for an agent already on the volume, else the
+   * settings.useStateVolume override, else on for a VM-backed or unknown
+   * Docker engine and off for native Linux. Only an explicit `false` turns
+   * it off: left out or null, the layout is ON, so a call site that forgets
+   * to decide gets the layout that cannot tear a database. The explicit per-harness migrate-db route is independent of
+   * this option.
+   */
+  useStateVolume?: boolean | null
+  /**
    * Extra host→container bind mounts for the hermes service, beyond the data
    * dir and state volume. Persisted on the harness so they survive every
    * regeneration — the whole point (see Harness.extraMounts). Defaults to 'ro'
@@ -535,7 +555,7 @@ export function generateStandaloneCompose(
   agentDataDir: string,
   options?: ComposeOptions,
 ): string {
-  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, apiBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn } = options ?? {}
+  const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, apiBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn, useStateVolume } = options ?? {}
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -552,15 +572,15 @@ export function generateStandaloneCompose(
   if (sharedVpn !== undefined && sharedVpn !== null) {
     assertSharedVpnCompatible({ vpnEnabled, bundledOllama })
     return applySharedVpnToCompose(
-      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost),
+      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume),
       agentName, port, sharedVpn)
   }
 
   if (vpnEnabled) {
-    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost)
+    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume)
   }
 
-  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost)
+  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume)
 }
 
 /**
@@ -704,19 +724,28 @@ function generatePlainCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
+  stateVolumeOption?: boolean | null,
 ): string {
+  // Only an explicit false turns the layout off; undefined and null are ON.
+  const useStateVolume = stateVolumeOption !== false
   // Sidecars share the default (named) network, so the hermes service reaches
   // ollama at http://ollama-<name>:11434 — no network_mode needed.
   const ollamaBlock = bundledOllama
     ? ollamaSidecar(agentName, agentDataDir, ollamaImage, '')
     : ''
-  const initBlock = stateInitService(agentName, agentDataDir, sourceBlock)
-  // depends_on is always emitted now (init gate); map form so the conditional
-  // ollama entry can merge in (compose can't mix list + map forms).
-  const hermesDepends =
-    `    depends_on:\n` +
-    (bundledOllama ? `      ollama-${agentName}:\n        condition: service_healthy\n` : '') +
-    `      state-init-${agentName}:\n        condition: service_completed_successfully\n`
+  // The state-init/named-volume layout (#204 PR2) exists to escape macOS
+  // VirtioFS torn writes. Where there is no such layer it is unnecessary.
+  // Callers decide per agent (resolveUseStateVolume); see
+  // ComposeOptions.useStateVolume.
+  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
+  // depends_on in map form so the conditional entries merge (compose can't mix
+  // list + map forms). With no sidecar or init service to gate, the whole key
+  // is omitted rather than emitted empty.
+  const hermesDepends = (bundledOllama || useStateVolume)
+    ? `    depends_on:\n` +
+      (bundledOllama ? `      ollama-${agentName}:\n        condition: service_healthy\n` : '') +
+      (useStateVolume ? `      state-init-${agentName}:\n        condition: service_completed_successfully\n` : '')
+    : ''
 
   return `# Generated by hermes-swarm-map — agent: ${agentName}
 services:
@@ -741,8 +770,8 @@ ${extraEnvLines}    ports:
         target: 8642
     volumes:
       - ${agentDataDir}:/opt/data
-      - ${stateVolumeName(agentName)}:/state
-${extraMountLines}    command: gateway
+${useStateVolume ? `      - ${stateVolumeName(agentName)}:/state
+` : ''}${extraMountLines}    command: gateway
     cap_drop:
       - ALL
     cap_add:
@@ -756,7 +785,7 @@ ${resourcesBlock(memory, cpus)}
 networks:
   default:
     name: hermes-${agentName}
-${stateVolumeBlock(agentName)}`
+${useStateVolume ? stateVolumeBlock(agentName) : ''}`
 }
 
 function generateVpnCompose(
@@ -775,7 +804,10 @@ function generateVpnCompose(
   extraEnvLines: string = '',
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
+  stateVolumeOption?: boolean | null,
 ): string {
+  // Only an explicit false turns the layout off; undefined and null are ON.
+  const useStateVolume = stateVolumeOption !== false
   const camofoxPort = port + 1000
   const vncPort = port + 2000
 
@@ -790,16 +822,16 @@ function generateVpnCompose(
   const ollamaBlock = bundledOllama
     ? '\n' + ollamaSidecar(agentName, agentDataDir, ollamaImage, ollamaNetworkBlock)
     : ''
-  // The state-init gate is unconditional, so depends_on is ALWAYS map form now
-  // (compose can't mix list + map forms; `- wireguard` can't coexist with the
-  // init condition entry).
+  // The state-init gate is conditional on the STATE volume being used; map
+  // form so the wireguard/ollama/init entries merge (compose can't mix list +
+  // map forms; `- wireguard` can't coexist with the init condition entry).
   const hermesDepends =
     `    depends_on:\n      wireguard:\n        condition: service_started\n` +
     (bundledOllama ? `      ollama-${agentName}:\n        condition: service_healthy\n` : '') +
-    `      state-init-${agentName}:\n        condition: service_completed_successfully\n`
+    (useStateVolume ? `      state-init-${agentName}:\n        condition: service_completed_successfully\n` : '')
   // Init runs on the default network (no wireguard namespace) — it only touches
   // the two mounts and must not depend on VPN bring-up.
-  const initBlock = stateInitService(agentName, agentDataDir, sourceBlock)
+  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
 
   return `# Generated by hermes-swarm-map — agent: ${agentName} (VPN mode)
 services:
@@ -868,8 +900,8 @@ ${hermesDepends}    extra_hosts:
       - HERMES_HOME=/opt/data
 ${extraEnvLines}    volumes:
       - ${agentDataDir}:/opt/data
-      - ${stateVolumeName(agentName)}:/state
-${extraMountLines}    command: gateway
+${useStateVolume ? `      - ${stateVolumeName(agentName)}:/state
+` : ''}${extraMountLines}    command: gateway
     cap_drop:
       - ALL
     cap_add:
@@ -883,7 +915,7 @@ ${resourcesBlock(memory, cpus)}
 networks:
   default:
     name: hermes-${agentName}
-${stateVolumeBlock(agentName)}`
+${useStateVolume ? stateVolumeBlock(agentName) : ''}`
 }
 
 /**

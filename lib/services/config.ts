@@ -70,6 +70,14 @@ export function validateSettingsPatch(input: unknown): Partial<Settings> {
         if (typeof value !== 'boolean') throw new Error(`${key} must be a boolean`)
         out[key] = value
         break
+      case 'useStateVolume':
+        // Three states: true/false force the layout on/off, null goes back to
+        // automatic (decided from the Docker engine, see state-volume.ts).
+        // null is stored as an absent key: updateSettings spreads this patch
+        // over the stored settings and JSON drops an undefined value.
+        if (value !== null && typeof value !== 'boolean') throw new Error('useStateVolume must be true, false, or null for automatic')
+        out.useStateVolume = value === null ? undefined : value
+        break
       case 'localApiPort':
         if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65535) {
           throw new Error('localApiPort must be an integer between 1 and 65535')
@@ -188,6 +196,9 @@ const DEFAULT_SETTINGS: Settings = {
   // Pull the published image by default — a fresh install has no local hermes
   // source checkout to build from. Local build is an opt-in dev toggle (Settings).
   useLocalBuild: false,
+  // useStateVolume is deliberately absent: unset means "decide from the Docker
+  // engine" (state-volume.ts). A default here would turn that into a forced
+  // value on every install with no settings file.
   vncBindHost: '127.0.0.1',
   controlBindHost: '127.0.0.1',
   apiBindHost: '127.0.0.1',
