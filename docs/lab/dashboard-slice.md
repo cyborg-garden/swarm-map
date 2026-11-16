@@ -69,6 +69,29 @@ changed. This slice reuses that guard and adds the door paths beside it.
 7. **The fleet table and the home page**: a runtime badge, Start and Stop, and no drift or
    database chip, since neither applies to a door agent.
 
+## Which Node the start script names
+
+`start.sh` ends by running the launcher with a Node named by its full path. A supervisor runs
+that file again after a crash or a reboot, so the path has to keep working after Node is
+upgraded. It is chosen in this order (`lib/services/door-node.ts`):
+
+1. `SWARM_MAP_NODE`, when it is set in Swarm Map's environment: the full path of a Node binary.
+2. The stable Homebrew path, when Swarm Map's own Node runs from a versioned Homebrew folder.
+   `<prefix>/Cellar/<formula>/<version>/bin/node` is removed by `brew upgrade`.
+   `<prefix>/opt/<formula>/bin/node` is the link Homebrew keeps pointed at the installed
+   version, so that is written instead, if it is there and is the same major version.
+3. Otherwise the Node Swarm Map runs on, as it is.
+
+Before a start, and before a save is applied to a running door, the chosen Node is checked: it
+must be there, be executable, and be new enough to run the launcher's TypeScript directly
+(22.18 or newer). If not, nothing is run or stopped, and the refusal says which path and why. The
+page shows it in the same place as a failed dry run.
+
+`start.sh` is written again on every save and every start, and the Node is chosen again each
+time. So an agent whose `start.sh` still names an old path picks up the new one the next time it
+is started from Swarm Map, or its rules are saved. A supervisor that restarts a door on its own
+runs the file as it was last written.
+
 ## How Save applies
 
 1. The rules are checked. A problem is listed and nothing is stored.

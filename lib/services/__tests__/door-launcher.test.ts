@@ -44,7 +44,7 @@ let stateDir: string
 let startScript: string
 let logPath: string
 let started: number | undefined
-const saved = { launcher: process.env.SWARM_MAP_DOOR_LAUNCHER, token: process.env.HSM_OPERATOR_TOKEN }
+const saved = { launcher: process.env.SWARM_MAP_DOOR_LAUNCHER, token: process.env.HSM_OPERATOR_TOKEN, node: process.env.SWARM_MAP_NODE }
 
 beforeEach(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'door-launcher-')))
@@ -58,6 +58,7 @@ beforeEach(() => {
   startScript = path.join(tmp, 'start.sh')
   process.env.SWARM_MAP_DOOR_LAUNCHER = cli
   process.env.HSM_OPERATOR_TOKEN = 'operator-token-that-must-not-travel'
+  delete process.env.SWARM_MAP_NODE
   launcher = createCliLauncher()
   fs.writeFileSync(startScript, `#!/bin/sh\nexport SMLAB_STATE_DIR='${stateDir}'\nexec '${launcher.command().node}' '${cli}' start --config x\n`, { mode: 0o700 })
   started = undefined
@@ -65,7 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   if (started) { try { process.kill(started, 'SIGKILL') } catch { /* already gone */ } }
-  for (const [name, value] of [['SWARM_MAP_DOOR_LAUNCHER', saved.launcher], ['HSM_OPERATOR_TOKEN', saved.token]] as const) {
+  for (const [name, value] of [['SWARM_MAP_DOOR_LAUNCHER', saved.launcher], ['HSM_OPERATOR_TOKEN', saved.token], ['SWARM_MAP_NODE', saved.node]] as const) {
     if (value === undefined) delete process.env[name]
     else process.env[name] = value
   }
@@ -75,8 +76,27 @@ afterEach(() => {
 const runPid = (): number => (JSON.parse(fs.readFileSync(path.join(stateDir, 'run.json'), 'utf8')) as { pid: number }).pid
 
 describe('the launcher adapter', () => {
-  it('runs the command it was pointed at, with this Node', () => {
+  it('runs the command it was pointed at, with the Node that was chosen', () => {
+    process.env.SWARM_MAP_NODE = process.execPath
     expect(launcher.command()).toEqual({ node: process.execPath, cli: path.join(tmp, 'pi-discord', 'cli.ts') })
+    expect(launcher.nodeProblem()).toBeUndefined()
+  })
+
+  it('names the stable Homebrew path, not the versioned one this Node runs from', () => {
+    const cellar = path.join(tmp, 'Cellar', 'node@99', '99.1.0_1', 'bin', 'node')
+    const opt = path.join(tmp, 'opt', 'node@99', 'bin', 'node')
+    for (const p of [cellar, opt]) { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.symlinkSync(process.execPath, p) }
+    const brewed = createCliLauncher({ execPath: cellar })
+    expect(brewed.command().node).toBe(opt)
+    // The keg is replaced by an upgrade: the path already written still runs.
+    fs.rmSync(path.join(tmp, 'Cellar', 'node@99', '99.1.0_1'), { recursive: true })
+    expect(brewed.nodeProblem()).toBeUndefined()
+  })
+
+  it('says so when the Node it would use is gone', () => {
+    process.env.SWARM_MAP_NODE = path.join(tmp, 'gone', 'node')
+    expect(launcher.command().node).toBe(path.join(tmp, 'gone', 'node'))
+    expect(launcher.nodeProblem()).toMatch(/Node was not found at .*gone\/node/)
   })
 
   it('gives back the dry run\'s exit code and everything it printed', async () => {

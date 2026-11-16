@@ -41,6 +41,7 @@ let dryRunResult: { code: number | null; output: string }
 let startFails: string | undefined
 let stopFails: boolean
 let livePids: Set<number>
+let nodeProblem: string | undefined
 let svc: DoorAgentService
 let secrets: { discordTokenFile: string; modelKeyFile: string }
 
@@ -54,6 +55,7 @@ const policyHashOf = (rules: unknown) => policyFor(parseConfig(rules).config!).h
 function stubLauncher(): DoorLauncher {
   return {
     command: () => ({ node: '/fake/node', cli: '/fake/repo/lib/lab/pi-discord/cli.ts' }),
+    nodeProblem: () => nodeProblem,
     async dryRun(o) {
       calls.push(`dryRun ${path.basename(o.configPath)}`)
       // The stub proves what the real launcher would be handed: paths, never a secret.
@@ -94,6 +96,7 @@ beforeEach(() => {
   startFails = undefined
   stopFails = false
   livePids = new Set()
+  nodeProblem = undefined
   svc = new DoorAgentService({
     storage, audit: new AuditService(storage), dataDir, launcher: stubLauncher(),
     repoRoot: path.join(tmp, 'repo'), now: () => NOW,
@@ -254,6 +257,44 @@ describe('start', () => {
     expect(err.status).toBe(422)
     expect(calls).toEqual(['dryRun config.json'])
     expect(svc.status('h_pi_one').state).toBe('stopped')
+  })
+
+  it('is refused before any dry run when the Node the start script names cannot be used, and the page is told why', async () => {
+    await filled()
+    nodeProblem = 'Node was not found at /fake/node, or it cannot be run.'
+    const err = await refusal(() => svc.start('h_pi_one'))
+    expect(err.status).toBe(422)
+    expect(err.message).toBe('Not started. Node cannot be used to run the door')
+    expect(err.details).toEqual([nodeProblem])
+    expect(calls).toEqual([])
+    const view = svc.view('h_pi_one')
+    expect(view.dryRun).toEqual({ at: NOW.toISOString(), result: 'node-unusable', lines: [`FAIL  ${nodeProblem}`] })
+    // Nothing was learned about the cell, so the seal is not reported either way.
+    expect(view.status).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null })
+  })
+
+  it('starts again once that Node is back, on a start script written with the path it names now', async () => {
+    await filled()
+    nodeProblem = 'gone'
+    await refusal(() => svc.start('h_pi_one'))
+    nodeProblem = undefined
+    await svc.start('h_pi_one')
+    expect(calls).toEqual(['dryRun config.json', 'start start.sh'])
+    expect(fs.readFileSync(paths().startScript, 'utf8')).toContain("exec '/fake/node' ")
+    expect(svc.view('h_pi_one').dryRun?.result).toBe('ready')
+  })
+
+  it('on a running door: a save is refused, and the door keeps running, when Node cannot be used', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    calls = []
+    nodeProblem = 'gone'
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: { ...RULES, budget: { monthlyUsd: 9 } }, secrets, version: 2 }))
+    expect(err.status).toBe(422)
+    expect(err.details).toEqual(['gone'])
+    expect(calls).toEqual([])
+    expect(svc.status('h_pi_one').state).toBe('running')
+    expect(svc.view('h_pi_one').record.version).toBe(2)
   })
 
   it('says which checks failed', async () => {

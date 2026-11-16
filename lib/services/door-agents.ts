@@ -53,7 +53,8 @@ export class DoorError extends Error {
 
 export interface DryRunRecord {
   at: string
-  result: 'ready' | 'secrets-missing' | 'not-ready'
+  /** `node-unusable`: the dry run was not run, because the Node that would run it cannot be used. */
+  result: 'ready' | 'secrets-missing' | 'not-ready' | 'node-unusable'
   /** The lines that say what failed, and the result line. */
   lines: string[]
 }
@@ -222,7 +223,8 @@ export class DoorAgentService implements DoorRuntimeAdapter {
   private statusOf(id: string, record: DoorRulesRecord | undefined): DoorStatus {
     const p = doorAgentPaths(this.dataDir, id)
     const dryRun = this.readDryRun(id)
-    const seal = dryRun
+    // A dry run that never ran says nothing about the cell.
+    const seal = dryRun && dryRun.result !== 'node-unusable'
       ? { cellSealed: dryRun.result !== 'not-ready', sealCheckedAt: dryRun.at }
       : { cellSealed: null }
     let run: { pid?: unknown; startedAt?: unknown; policyHash?: unknown } | undefined
@@ -412,13 +414,20 @@ export class DoorAgentService implements DoorRuntimeAdapter {
   private readDryRun(id: string): DryRunRecord | null {
     try {
       const d = JSON.parse(fs.readFileSync(doorAgentPaths(this.dataDir, id).dryRun, 'utf8')) as DryRunRecord
-      return typeof d?.at === 'string' && ['ready', 'secrets-missing', 'not-ready'].includes(d.result) && Array.isArray(d.lines) ? d : null
+      return typeof d?.at === 'string' && ['ready', 'secrets-missing', 'not-ready', 'node-unusable'].includes(d.result) && Array.isArray(d.lines) ? d : null
     } catch { return null }
   }
 
   /** Run the dry run on a config, keep its result, and refuse unless it ended ready. */
   private async dryRunOrRefuse(record: DoorRulesRecord, configPath: string, refusedAs: string): Promise<void> {
     const p = doorAgentPaths(this.dataDir, record.id)
+    // The start script names a Node by path. If that Node is gone or too old the door would
+    // only crash, so say so here, where the page shows it, before anything is run or stopped.
+    const noNode = this.launcher.nodeProblem()
+    if (noNode) {
+      this.writeFile(p.dryRun, JSON.stringify({ at: this.now().toISOString(), result: 'node-unusable', lines: [`FAIL  ${noNode}`] } satisfies DryRunRecord, null, 2) + '\n', 0o600)
+      throw new DoorError(422, `${refusedAs}. Node cannot be used to run the door`, [noNode])
+    }
     const { code, output } = await this.launcher.dryRun({
       configPath,
       env: { SMLAB_DISCORD_TOKEN_FILE: record.secrets.discordTokenFile, SMLAB_MODEL_KEY_FILE: record.secrets.modelKeyFile, SMLAB_STATE_DIR: p.stateDir },
