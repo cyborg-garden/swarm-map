@@ -572,13 +572,32 @@ describe('Settings PUT — shared VPN', () => {
       expect(await regenerate()).toBe(false)
     })
 
-    it('native Linux: a compose file that already mounts the volume KEEPS the layout with no symlink in the data dir', async () => {
-      // state-init interrupted between removing the database from the data dir
+    it('native Linux: interrupted state-init (compose mounts the volume, no state.db in the data dir) KEEPS the layout', async () => {
+      // state-init stopped between removing the database from the data dir
       // and writing the symlink: nothing in the data dir says "migrated".
       setPlatform('linux')
       holder.hostInfo = NATIVE
       writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
       expect(await regenerate()).toBe(true)
+    })
+
+    // The symlinks were removed by hand and the agent has been writing real
+    // files since, under a compose file that still mounts the volume. The live
+    // database is in the data dir, so the layout follows the engine and the
+    // setting and the files are left alone.
+    it.each([
+      ['automatic', {}],
+      ['setting false', { useStateVolume: false }],
+    ])('native Linux: regular state.db under an old compose that mounts the volume goes plain (%s)', async (_label, settings) => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      holder.settings = settings
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'the live database')
+      expect(await regenerate()).toBe(false)
+      expect(fs.readFileSync(path.join(agentDir, 'state.db'), 'utf-8')).toBe('the live database')
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/state-volume/))
     })
   })
 })

@@ -10,6 +10,7 @@ import path from 'path'
 import os from 'os'
 import {
   agentHasStateVolumeLayout,
+  stateVolumeLayout,
   composeMountsStateVolume,
   engineNeedsStateVolume,
   resolveUseStateVolume,
@@ -76,37 +77,49 @@ describe('engineNeedsStateVolume', () => {
 })
 
 // These engines run in a VM but report the guest distro, so OperatingSystem
-// and KernelVersion look native. The strings below are FIXTURES written from
-// each tool's naming conventions, not output captured from those engines.
+// and KernelVersion look native. They are recognised from the docker context
+// name and the socket path. The strings below are FIXTURES written from each
+// tool's naming conventions, not output captured from those engines.
 describe('engineNeedsStateVolume: VM engines that look native, and containerised processes', () => {
-  const GUEST = { ...NATIVE, operatingSystem: 'Ubuntu 24.04.1 LTS', kernelVersion: '6.8.0-45-generic' }
+  const GUEST = { ...NATIVE, operatingSystem: 'Ubuntu 24.04.1 LTS', kernelVersion: '6.8.0-45-generic', contextName: 'default' }
 
   it.each([
-    ['Colima, by engine name (fixture)', { name: 'colima' }],
-    ['Colima profile, by engine name (fixture)', { name: 'colima-work' }],
     ['Colima, by context name (fixture)', { contextName: 'colima' }],
+    ['Colima profile, by context name (fixture)', { contextName: 'colima-work' }],
+    ['Colima, capitalised context name (fixture)', { contextName: 'Colima' }],
     ['Colima, by socket path (fixture)', { endpoint: 'unix:///home/u/.colima/default/docker.sock' }],
-    ['Lima, by engine name (fixture)', { name: 'lima-default' }],
+    ['Lima, by context name (fixture)', { contextName: 'lima-default' }],
+    ['Lima, capitalised context name (fixture)', { contextName: 'Lima-default' }],
+    ['Lima, bare context name (fixture)', { contextName: 'lima' }],
     ['Lima, by socket path (fixture)', { endpoint: 'unix:///home/u/.lima/docker/sock/docker.sock' }],
-    ['Rancher Desktop on Lima, by engine name (fixture)', { name: 'lima-rancher-desktop' }],
     ['Rancher Desktop, by context name (fixture)', { contextName: 'rancher-desktop' }],
-    ['Podman machine, by engine name (fixture)', { name: 'podman-machine-default' }],
-    ['Podman machine, by socket path (fixture)', { endpoint: 'unix:///run/user/1000/podman/podman.sock' }],
+    ['Rancher Desktop, by socket path (fixture)', { endpoint: 'unix:///home/u/.rd/rancher/docker.sock' }],
+    ['Podman machine, by context name (fixture)', { contextName: 'podman-machine-default' }],
+    ['Podman, by socket path (fixture)', { endpoint: 'unix:///run/user/1000/podman/podman.sock' }],
   ])('Linux process, %s: on, as unknown', (_label, engine) => {
     expect(engineNeedsStateVolume('linux', { ...GUEST, ...engine })).toEqual({ use: true, reason: 'unknown-engine' })
   })
 
+  // The tool name must be a whole word. These are ordinary context names and
+  // socket paths that merely contain one (fixtures).
+  it.each([
+    ['lima01'], ['limassol'], ['ranchero'], ['podmanager'], ['sublimate'], ['climate-lab'], ['mycolimax'], ['default'],
+    // preceded by a letter, then ending or followed by a separator
+    ['mycolima'], ['antipodman'], ['prelima-1'], ['xrancher-desktop'],
+  ])('native Linux with a context called "%s" stays off', (contextName) => {
+    expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName })).toEqual({ use: false, reason: 'native-linux' })
+    expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', endpoint: `unix:///srv/${contextName}/docker.sock` }))
+      .toEqual({ use: false, reason: 'native-linux' })
+  })
+
   it('Linux process inside a container: on, as unknown, even when the engine reads as native', () => {
-    expect(engineNeedsStateVolume('linux', { ...NATIVE, name: 'build-box', contextName: 'default', containerised: true }))
+    expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', containerised: true }))
       .toEqual({ use: true, reason: 'unknown-engine' })
   })
 
-  it('native Debian/Ubuntu on a local socket stays off, whatever the host is called', () => {
-    for (const name of ['build-box', 'ubuntu-server', 'debian', 'sublimate', 'climate-lab', 'default']) {
-      expect(engineNeedsStateVolume('linux', { ...NATIVE, name, contextName: 'default', containerised: false }))
-        .toEqual({ use: false, reason: 'native-linux' })
-    }
-    expect(engineNeedsStateVolume('linux', { ...NATIVE, operatingSystem: 'Debian GNU/Linux 12 (bookworm)', name: 'deb12', contextName: 'default', containerised: false }).use).toBe(false)
+  it('native Debian/Ubuntu on a local socket stays off', () => {
+    expect(engineNeedsStateVolume('linux', { ...NATIVE, contextName: 'default', containerised: false })).toEqual({ use: false, reason: 'native-linux' })
+    expect(engineNeedsStateVolume('linux', { ...NATIVE, operatingSystem: 'Debian GNU/Linux 12 (bookworm)', contextName: 'default', containerised: false }).use).toBe(false)
   })
 })
 
@@ -137,20 +150,33 @@ describe('agentHasStateVolumeLayout / resolveUseStateVolume', () => {
     expect(agentHasStateVolumeLayout(dataDir)).toBe(true)
   })
 
-  it('a data dir that cannot be read counts as migrated (the safe side); only "not there" counts as absent', () => {
-    const real = fs.lstatSync
+  it('a data dir that cannot be read: layout on, under its own reason, with a log line that says what happened', () => {
     for (const code of ['EACCES', 'EPERM', 'EIO', 'ELOOP']) {
       const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(stateVolumeLayout(dataDir)).toBe('unreadable')
       expect(agentHasStateVolumeLayout(dataDir)).toBe(true)
-      expect(resolveUseStateVolume({ setting: false, dataDir, platform: 'linux', hostInfo: native }).reason).toBe('existing-layout')
+      for (const setting of [undefined, true, false]) {
+        expect(resolveUseStateVolume({ setting, dataDir, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'layout-unknown' })
+      }
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not read/))
+      // It must not claim the databases are on the volume: that is not known.
+      expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/databases are on its named volume/))
       spy.mockRestore()
+      warn.mockRestore()
     }
+  })
+
+  it('only "not there" counts as absent', () => {
     for (const code of ['ENOENT', 'ENOTDIR']) {
       const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
+      expect(stateVolumeLayout(dataDir)).toBe('not-on-volume')
       expect(agentHasStateVolumeLayout(dataDir)).toBe(false)
       spy.mockRestore()
     }
-    expect(fs.lstatSync).toBe(real)
+    expect(stateVolumeLayout(dataDir)).toBe('not-on-volume')
+    migrate()
+    expect(stateVolumeLayout(dataDir)).toBe('on-volume')
   })
 
   it('composeMountsStateVolume: reads the /state mount from a compose file', () => {
@@ -159,20 +185,55 @@ describe('agentHasStateVolumeLayout / resolveUseStateVolume', () => {
     // A bind mount of some host dir at /state, or a comment, is not the volume.
     expect(composeMountsStateVolume('      - /srv/state:/state\n')).toBe(false)
     expect(composeMountsStateVolume('      # - hermes-state-sci:/state\n')).toBe(false)
+    // The mount point must be exactly /state.
+    expect(composeMountsStateVolume('      - hermes-state-x:/state-old\n')).toBe(false)
+    expect(composeMountsStateVolume('      - hermes-state-x:/state/sub\n')).toBe(false)
     expect(composeMountsStateVolume('')).toBe(false)
   })
 
-  it('regeneration: a compose file that already mounts the volume keeps the layout, with no symlink to read', () => {
-    // state-init interrupted after removing the database from the data dir and
-    // before writing the symlink: the database is on the volume, the data dir
-    // shows nothing.
+  describe('regeneration over a compose file that already mounts the volume', () => {
     const existingCompose = '    volumes:\n      - /d:/opt/data\n      - hermes-state-sci:/state\n'
-    expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(resolveUseStateVolume({ setting: false, dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
-    // A compose file without the mount decides nothing.
-    expect(resolveUseStateVolume({ dataDir, existingCompose: '      - /d:/opt/data\n', platform: 'linux', hostInfo: native }).use).toBe(false)
-    expect(resolveUseStateVolume({ dataDir, existingCompose: null, platform: 'linux', hostInfo: native }).use).toBe(false)
+
+    it('interrupted state-init (state.db absent from the data dir): keeps the layout', () => {
+      // state-init removed state.db from the data dir and stopped before
+      // writing the symlink: the database is on the volume.
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(resolveUseStateVolume({ setting: false, dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/may be on the volume/))
+      // Other databases left as plain files do not change that: state-init
+      // handles state.db first.
+      fs.writeFileSync(path.join(dataDir, 'kanban.db'), 'not yet moved')
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native }).reason).toBe('existing-layout')
+    })
+
+    it('symlinks removed by hand and real files written since (regular state.db): follows the engine and the setting', () => {
+      // The data dir holds the live database; the old compose file's mount
+      // says nothing about where the data is.
+      fs.writeFileSync(path.join(dataDir, 'state.db'), 'the live database')
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: false, reason: 'native-linux' })
+      expect(resolveUseStateVolume({ setting: false, dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: false, reason: 'setting' })
+      expect(resolveUseStateVolume({ setting: false, dataDir, existingCompose, platform: 'darwin', hostInfo: native })).toEqual({ use: false, reason: 'setting' })
+      expect(warn).not.toHaveBeenCalled()
+      // The engine still decides when nothing is forced.
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'darwin', hostInfo: native }).use).toBe(true)
+    })
+
+    it('only a REGULAR state.db counts as live data in the data dir', () => {
+      // Something else at that path (a link that is not ours, a directory) is
+      // not a database the agent has been writing: the mount still counts.
+      fs.symlinkSync('/somewhere/else.db', path.join(dataDir, 'state.db'))
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
+      fs.rmSync(path.join(dataDir, 'state.db'))
+      fs.mkdirSync(path.join(dataDir, 'state.db'))
+      expect(resolveUseStateVolume({ dataDir, existingCompose, platform: 'linux', hostInfo: native })).toEqual({ use: true, reason: 'existing-layout' })
+    })
+
+    it('a compose file without the mount decides nothing', () => {
+      expect(resolveUseStateVolume({ dataDir, existingCompose: '      - /d:/opt/data\n', platform: 'linux', hostInfo: native }).use).toBe(false)
+      expect(resolveUseStateVolume({ dataDir, existingCompose: null, platform: 'linux', hostInfo: native }).use).toBe(false)
+    })
   })
 
   it('automatic: follows the engine', () => {
