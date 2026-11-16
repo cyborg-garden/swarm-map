@@ -407,6 +407,8 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? { hash } : { reason }) })
         }
         const refuse = (rule: string, why: string): void => { receipt(tag, { verdict: 'deny', rule, why }, note); verdict(false, why) }
+        // Whether this call stopped its turn's clock. Only a call that did may start it again: no other request moves a turn's deadline.
+        let stopped = false
         void factsFor(turn.connector, e).then(async (facts) => {
           // The lookup took time. A turn that ended meanwhile gets a no, whatever the policy says.
           if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
@@ -437,6 +439,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           const out = decide(policy, { kind: 'outbound', surface: e.surface, room: e.room, turnId: turn.turnId, text }, { ...facts, turnLive: true })
           if (out.verdict !== 'allow') return no(`The request could not be posted: ${out.why}`)
           clearTimeout(turn.timer) // the turn's clock stops while a person is asked
+          stopped = true
           let requestId: string
           try {
             requestId = (await turn.connector.send(e.room, { text, turnId: turn.turnId, inReplyTo: e.messageId })).id
@@ -456,7 +459,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           receipt({ ...tag, bytes: Buffer.byteLength(text) }, d, `${note} request=${requestId}`)
         }).catch(() => {
           // No facts, or no decision: that is no verdict, and no verdict is a no.
-          startClock(turn)
+          if (stopped) startClock(turn)
           refuse('tools.no-verdict', 'The tool could not be decided, so it does not run.')
         })
         return

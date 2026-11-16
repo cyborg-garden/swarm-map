@@ -625,6 +625,26 @@ describe('door: tool verdicts', () => {
     shim.client.close()
   })
 
+  it('[P:tool-verdict] a tool request does not move its turn\'s deadline, whether it is decided or cannot be', async () => {
+    const brainToken = 'cell-test-token'
+    rig = await startRig(team({ 'tools.allow': ['shell'] }), { noShim: true, door: { brainToken, turnDeadlineMs: 300 } })
+    const shim = await idleShim(rig, brainToken)
+    const started = Date.now()
+    rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hi' })
+    const env = await shim.turn
+    // A request every 60 ms, past the deadline: first ones that are decided, then ones whose lookup fails.
+    const asking = setInterval(() => {
+      rig!.fake.facts.fail = Date.now() - started > 120
+      void shim.client.requestTool(env.turnId, 'bash', {})
+    }, 60)
+    await rig.door.idle()
+    clearInterval(asking)
+    expect(Date.now() - started).toBeLessThan(600)
+    expect(rig.receipts.all().some((r) => r.why === 'The harness did not finish the turn in time.')).toBe(true)
+    expect(rig.receipts.all().some((r) => r.rule === 'tools.no-verdict')).toBe(true)
+    shim.client.close()
+  })
+
   it('[P:tool-verdict] with the door told to stay silent, the shim treats it as no', async () => {
     rig = await startRig(team({ 'tools.allow': ['shell'] }), { door: { silentVerdicts: true }, verdictTimeoutMs: 60 })
     rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: '!tool bash' })
