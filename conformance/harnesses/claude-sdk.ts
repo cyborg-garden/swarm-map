@@ -4,7 +4,7 @@
 // catch, the checks only it needs, and which spec checks do not apply.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { NOTICES } from '../../lib/door/door.ts'
+import { isNotice } from '../../lib/door/door.ts'
 import { ANTHROPIC_MESSAGES } from '../../lib/door/model-shapes.ts'
 import { CLAUDE_SDK_CAPS } from '../../lib/runtimes/claude-sdk/caps.ts'
 import type { ClaudeSdk } from '../../lib/runtimes/claude-sdk/sdk.ts'
@@ -140,8 +140,9 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       say(lab, `wait for ${stuck}`)
       await lab.door.idle()
       want(p, lab.model.heard(stuck), 'the turn never reached the model, so nothing was checked')
-      // The one line in the room is the door's, saying the turn was stopped: nothing from the model.
-      want(p, lab.fake.ledger.map((post) => post.text).join() === NOTICES.timeout, 'a turn the model never answered was answered, or the room was not told it was stopped')
+      // The one line in the room is the door's, saying there is no answer: nothing from the model. This shim gives up
+      // at the same deadline as the door, so which of the door's lines it is depends on which gets there first.
+      want(p, lab.fake.ledger.length === 1 && isNotice(lab.fake.ledger[0].text), 'a turn the model never answered was answered, or the room was not told it had no answer')
       const gaveUp = lab.receipts.all().filter((r) => r.event.kind === 'outbound' && r.verdict === 'drop').length
       want(p, gaveUp === 1, `expected one receipt for the turn that was given up on, got ${gaveUp}`)
       // From here the model answers. The next message of the same room must not be left waiting behind the first.
