@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { execSync } from 'child_process'
-import type { Harness, HarnessStatus, HabitatTier, RestartMode } from '@/lib/types'
+import type { Harness, HarnessStatus, HabitatTier, RestartMode, Settings } from '@/lib/types'
 import { generateDefaultConfig } from '@/lib/templates/config-yaml'
 import type { Storage } from './storage'
 import type { DockerService } from './docker'
@@ -28,6 +28,7 @@ import { checkBasePackageDrift, type DriftReport } from './base-package-drift'
 import { GITHUB_BROKER_CONFIG, GITHUB_BROKER_MARKER } from './keys'
 import { getUseCaseTemplate, reapplyUseCaseTemplate as reapplyTemplateToDataDir } from './usecase-templates'
 import type { ToolsService } from './tools'
+import { resolveUseStateVolume } from './state-volume'
 import { generateStandaloneCompose, setComposeImage, readComposeImage, readComposeBuildContext, stateVolumeName, MIGRATED_DB_FILES } from './harness-compose'
 import { isStateDbMigrated } from './db-path'
 import { RegistryService, parseImageRef } from './registry'
@@ -996,6 +997,20 @@ export class HarnessService {
     private config?: ConfigService,
   ) {}
 
+  /**
+   * Whether a compose file generated now for the agent at `dataDir` gets the
+   * state-volume layout: kept if its databases are already on the volume, else
+   * the settings override, else decided from the Docker engine. See
+   * state-volume.ts.
+   */
+  private useStateVolumeFor(dataDir: string, settings?: Settings): boolean {
+    return resolveUseStateVolume({
+      setting: settings?.useStateVolume,
+      dataDir,
+      hostInfo: () => this.docker.hostInfo(),
+    }).use
+  }
+
   /** Inject ToolsService after construction to break circular init dependency */
   setToolsService(toolsService: ToolsService): void {
     this.toolsService = toolsService
@@ -1842,7 +1857,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, newId)
-      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }), 'utf-8')
+      fs.writeFileSync(composePath, dupAdapter.generateCompose(newName, port, newDataDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost, useStateVolume: this.useStateVolumeFor(newDataDir, settings) }), 'utf-8')
     }
 
     // A duplicate must NOT inherit the source's host bind mounts, nor the env
@@ -2135,7 +2150,7 @@ export class HarnessService {
     const composePath = path.join(agentComposeDir, 'docker-compose.yml')
     if (!fs.existsSync(composePath)) {
       assertPortAvailable(overlays, port, id)
-      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }), 'utf-8')
+      fs.writeFileSync(composePath, adapter.generateCompose(input.name, port, agentDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost, useStateVolume: this.useStateVolumeFor(agentDir, settings) }), 'utf-8')
     }
 
     const overlay: Partial<Harness> = {
@@ -2320,7 +2335,7 @@ If this is your very first startup ever, introduce yourself briefly in your home
       fs.mkdirSync(agentComposeDir, { recursive: true })
       fs.writeFileSync(
         composePath,
-        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost }),
+        hermesAdapter.generateCompose(slug, port, workDir, { imageOrBuild: resolveImageOrBuild(settings), defaultImage: settings?.defaultImage, apiBindHost: settings?.apiBindHost, useStateVolume: this.useStateVolumeFor(workDir, settings) }),
         'utf-8'
       )
       composeGenerated = true

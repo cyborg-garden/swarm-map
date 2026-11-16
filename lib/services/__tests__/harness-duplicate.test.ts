@@ -296,3 +296,75 @@ describe('HarnessService.duplicate — host access is not inherited', () => {
     expect(result!.parentId).toBe('h_iris')
   })
 })
+
+// A duplicate's compose file goes through the same state-volume decision as
+// every other generated one (lib/services/state-volume.ts).
+describe('HarnessService.duplicate — state-volume layout', () => {
+  const NATIVE = { operatingSystem: 'Ubuntu 24.04.1 LTS', kernelVersion: '6.8.0-45-generic', osType: 'linux', endpoint: 'unix:///var/run/docker.sock' }
+  const realPlatform = process.platform
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true })
+  let tmpDir: string
+  let homeDir: string
+  let docker: DockerService
+  let config: ConfigService
+  let service: HarnessService
+
+  const composeOf = (name: string) => fs.readFileSync(path.join(tmpDir, 'compose', name, 'docker-compose.yml'), 'utf-8')
+  const hasLayout = (compose: string, name: string) => {
+    const on = compose.includes(`  state-init-${name}:`)
+    expect(compose.includes(`- hermes-state-${name}:/state`)).toBe(on)
+    expect(/^volumes:\s*$/m.test(compose)).toBe(on)
+    return on
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-dupsv-'))
+    homeDir = path.join(tmpDir, 'home')
+    fs.mkdirSync(homeDir, { recursive: true })
+    vi.spyOn(os, 'homedir').mockReturnValue(homeDir)
+    const storage = new Storage(tmpDir)
+    storage.write('settings.json', { dataDir: tmpDir })
+    docker = new DockerService()
+    config = new ConfigService(storage)
+    service = new HarnessService(storage, docker, new AuditService(storage), config)
+    storage.write('harnesses.json', [{ id: 'h_srcagent', name: 'srcagent', tier: 'team' }])
+    const srcDir = path.join(homeDir, '.hermes-srcagent')
+    fs.mkdirSync(srcDir, { recursive: true })
+    fs.writeFileSync(path.join(srcDir, '.env'), 'HERMES_AGENT_NAME=srcagent\nAPI_SERVER_PORT=8642\n', { mode: 0o600 })
+    fs.writeFileSync(path.join(srcDir, 'SOUL.md'), '# srcagent')
+  })
+
+  afterEach(() => {
+    setPlatform(realPlatform)
+    vi.restoreAllMocks()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('macOS: the duplicate gets the /state mount and the state-init service', async () => {
+    setPlatform('darwin')
+    await service.duplicateOverlay('h_srcagent', 'copy-mac')
+    const compose = composeOf('copy-mac')
+    expect(compose).toContain('  state-init-copy-mac:')
+    expect(compose).toContain('      - hermes-state-copy-mac:/state')
+    expect(hasLayout(compose, 'copy-mac')).toBe(true)
+  })
+
+  it('native Linux engine: the duplicate gets plain bind mounts', async () => {
+    setPlatform('linux')
+    vi.mocked(docker.hostInfo).mockReturnValue(NATIVE)
+    await service.duplicateOverlay('h_srcagent', 'copy-linux')
+    expect(hasLayout(composeOf('copy-linux'), 'copy-linux')).toBe(false)
+  })
+
+  it('settings.useStateVolume overrides in both directions', async () => {
+    setPlatform('linux')
+    vi.mocked(docker.hostInfo).mockReturnValue(NATIVE)
+    config.updateSettings({ useStateVolume: true })
+    await service.duplicateOverlay('h_srcagent', 'copy-on')
+    expect(hasLayout(composeOf('copy-on'), 'copy-on')).toBe(true)
+    setPlatform('darwin')
+    config.updateSettings({ useStateVolume: false })
+    await service.duplicateOverlay('h_srcagent', 'copy-off')
+    expect(hasLayout(composeOf('copy-off'), 'copy-off')).toBe(false)
+  })
+})

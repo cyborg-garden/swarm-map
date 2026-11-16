@@ -266,6 +266,8 @@ export function generateAgentCompose(
     sharedVpn?: string | null
     /** Host address for the API port (settings.apiBindHost); loopback unless it is an IP address. */
     apiBindHost?: string
+    /** See ComposeOptions.useStateVolume (harness-compose.ts). ON when left out. */
+    useStateVolume?: boolean | null
   },
 ): string {
   if (options?.sharedVpn !== undefined && options?.sharedVpn !== null) {
@@ -280,6 +282,8 @@ export function generateAgentCompose(
   // the github MCP token is delivered via the agent .env (env_file), not a compose
   // `environment:` override (which resolves from the empty process env and blanks it).
   const { googleMcpDir, bundledOllama, ollamaImage, memory, cpus, apiBindHost } = options ?? {}
+  // Only an explicit false turns the layout off; undefined and null are ON.
+  const useStateVolume = options?.useStateVolume !== false
   const sourceBlock = 'image' in imageOrBuild
     ? `    image: ${imageOrBuild.image}`
     : `    build:\n      context: ${imageOrBuild.build}\n      dockerfile: Dockerfile`
@@ -301,13 +305,18 @@ export function generateAgentCompose(
   // as the standalone generator (harness-compose.ts) — single source of truth.
   const ollamaBlock = bundledOllama ? ollamaSidecar(slug, agentDataDir, ollamaImage, '') : ''
   // One-shot DB-migration init service (named-volume symlink pattern, #204 PR2)
-  // — same shared definition as the standalone generator, single source of truth.
-  const initBlock = stateInitService(slug, agentDataDir, sourceBlock)
-  // Always emitted (init gate); map form so the conditional ollama entry merges.
-  const hermesDepends =
-    `    depends_on:\n` +
-    (bundledOllama ? `      ollama-${slug}:\n        condition: service_healthy\n` : '') +
-    `      state-init-${slug}:\n        condition: service_completed_successfully\n`
+  // — same shared definition as the standalone generator, single source of
+  // truth. The caller decides per agent (resolveUseStateVolume); see
+  // ComposeOptions.useStateVolume.
+  const initBlock = useStateVolume ? stateInitService(slug, agentDataDir, sourceBlock) : ''
+  // depends_on in map form so the conditional entries merge (compose can't mix
+  // list + map forms). With no sidecar or init service to gate, the whole key
+  // is omitted rather than emitted empty.
+  const hermesDepends = (bundledOllama || useStateVolume)
+    ? `    depends_on:\n` +
+      (bundledOllama ? `      ollama-${slug}:\n        condition: service_healthy\n` : '') +
+      (useStateVolume ? `      state-init-${slug}:\n        condition: service_completed_successfully\n` : '')
+    : ''
 
   // The API port is published on loopback unless settings.apiBindHost says
   // otherwise (see AGENT_API_BIND_HOST).
@@ -327,8 +336,8 @@ ${hermesDepends}    extra_hosts:
         target: 8642
 ${googleMcpPorts}    volumes:
       - ${agentDataDir}:/opt/data
-      - ${stateVolumeName(slug)}:/state
-${googleMcpVolumes}    command: gateway
+${useStateVolume ? `      - ${stateVolumeName(slug)}:/state
+` : ''}${googleMcpVolumes}    command: gateway
     cap_drop:
       - ALL
     cap_add:
@@ -358,5 +367,5 @@ ${googleMcpVolumes}    command: gateway
 networks:
   default:
     name: hermes-${slug}
-${stateVolumeBlock(slug)}`
+${useStateVolume ? stateVolumeBlock(slug) : ''}`
 }
