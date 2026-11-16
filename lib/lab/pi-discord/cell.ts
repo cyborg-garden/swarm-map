@@ -2,7 +2,7 @@
 //
 //   this machine      the door: Discord in and out, the model route, both secrets
 //   relay container   a pipe under the door's name: two ports through to the door
-//   cell container    the shim and Pi. Its only network has no way out
+//   cell container    the shim and the harness. Its only network has no way out
 //
 // The cell is the lab's own cell image, started the way the conformance rig
 // starts it: read-only disk, non-root, every capability dropped, no host
@@ -19,20 +19,33 @@
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, probeArgs, readSource, sourceProblems, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
+import { CELL_KINDS } from '../../../conformance/docker/cells.ts'
+import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, probeArgs, readSource, sourceProblems, type CellKind, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
 import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig } from '../../../conformance/docker/report.ts'
 import { inSubnet, labNetwork, writtenNetworkProblems, type LabNetwork } from '../../../conformance/docker/subnets.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
+import { DEFAULT_HARNESS, harnessFacts, isLauncherHarness, type LauncherHarness } from './harnesses.ts'
 
 // The same two images the conformance rig uses, built from the same Dockerfile and named the
 // same way: for the code they were built from. So a run can only start from an image of the
 // code it is run from, and an image left by an older checkout is never picked up by its name.
 // They carry a prefix of their own, so cleaning up after a test run cannot remove them.
 export const IMAGE_PREFIX = 'smlabpd'
-/** The two images for the code on disk now. */
-export const launcherImages = (): LabImages => labImages({ SWARMLAB_DOCKER_PREFIX: IMAGE_PREFIX })
+/** The lab's own description of a harness's cell: its image, its entry script. The same one the conformance rig starts. */
+export function cellKind(harness: LauncherHarness = DEFAULT_HARNESS): CellKind {
+  const kind = isLauncherHarness(harness) ? CELL_KINDS[harness] : undefined
+  if (!kind) throw new RefusingToRun('F5', `not a harness the launcher has a cell for: ${String(harness)}`)
+  return kind
+}
+/** The two images for the code on disk now: the cell that holds this harness, and the rig, which is the same for every harness. */
+export const launcherImages = (harness: LauncherHarness = DEFAULT_HARNESS): LabImages => labImages({ SWARMLAB_DOCKER_PREFIX: IMAGE_PREFIX }, undefined, cellKind(harness))
+/** The command that builds the images a harness needs. Pi's is the one it always was. */
+export const buildHint = (harness: LauncherHarness = DEFAULT_HARNESS): string =>
+  `Run: node lib/lab/pi-discord/cli.ts build${harness === DEFAULT_HARNESS ? '' : ` --harness ${harness}`}`
 
 export interface CellOptions {
+  /** Which harness the cell holds. Left out, it is Pi. */
+  harness?: LauncherHarness
   /** Eight hex digits. Names the compose project, and anyone on this machine can read it. */
   nonce: string
   /**
@@ -87,10 +100,11 @@ export function renderCell(o: CellOptions): LiveFile {
   if (!PROJECT_NAME.test(name)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
   if (o.systemPrompt === '' || o.systemPrompt.length > 4000) throw new RefusingToRun('F5', 'not a system prompt')
-  const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages()
+  const kind = cellKind(o.harness)
+  const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages(o.harness)
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
   const cell: Service = {
-    ...service(CELL_IMAGE, 'conformance/docker/cell-main.ts', ['cell'], {
+    ...service(CELL_IMAGE, `conformance/docker/${kind.entry}`, ['cell'], {
       SWARMLAB_NONCE: o.cellNonce, SWARMLAB_BRAIN: o.brainToken, SMLAB_GATE: 'real',
       // A real model is slower than a scripted one: the shim waits this long for the door's answer on a tool.
       SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000', SMLAB_MODEL: o.model, SMLAB_SYSTEM_PROMPT: o.systemPrompt,
@@ -170,15 +184,15 @@ const dockerAsync = (args: string[], timeoutMs = 120_000): Promise<string> => ne
   execFile('docker', args, { env: dockerEnv(), encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (_err, stdout, stderr) => resolve(`${stdout}${stderr}`))
 })
 
-/** Build the two images, named for the code they are built from. The only step that uses the network to fetch anything, and never part of a start. */
-export function buildImages(): boolean {
+/** Build the two images a harness needs, named for the code they are built from. The only step that uses the network to fetch anything, and never part of a start. */
+export function buildImages(harness: LauncherHarness = DEFAULT_HARNESS): boolean {
   const repo = path.resolve(import.meta.dirname, '..', '..', '..')
-  const images = launcherImages()
-  const built = ([['cell', images.cell], ['rig', images.rig]] as const).every(([target, tag]) =>
+  const images = launcherImages(harness)
+  const built = ([[cellKind(harness).target, images.cell], ['rig', images.rig]] as const).every(([target, tag]) =>
     spawnSync('docker', ['build', '--target', target, '--tag', tag, '--label', `${SOURCE_LABEL}=${images.source}`, '--file', path.join(repo, 'conformance', 'docker', 'Dockerfile'), repo],
       { env: dockerEnv(), stdio: 'inherit', timeout: 900_000 }).status === 0)
   // A file saved during the build would leave images that are not what their name says.
-  return built && launcherImages().source === images.source
+  return built && launcherImages(harness).source === images.source
 }
 
 /** What an image says it was built from, and the hash of every file it really holds under the lab's folder. */
@@ -193,19 +207,19 @@ function seeImage(image: string): { label: string; listing: string } {
  * Docker is this machine's, and both images hold exactly the code this run is started from:
  * the label each carries and the hash of every file in it are compared with the code on disk.
  */
-export function dockerProblems(images: LabImages = launcherImages()): string[] {
+export function dockerProblems(images: LabImages = launcherImages(), harness: LauncherHarness = DEFAULT_HARNESS): string[] {
   const endpoint = docker(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']).out.trim()
   try {
     assertLocalDocker({ dockerHost: process.env.DOCKER_HOST, contextEndpoint: process.env.DOCKER_HOST ? process.env.DOCKER_HOST : endpoint })
   } catch (err) { return [(err as Error).message] }
   if (!docker(['info', '--format', '{{.ServerVersion}}']).ok) return ['the Docker daemon is not answering']
-  const build = 'Run: node lib/lab/pi-discord/cli.ts build'
+  const build = buildHint(harness)
   const expected = readSource()
   if (expected.hash !== images.source) return [`the code changed since the images were named. ${build}`]
   const p: string[] = []
   for (const [kind, image] of [['cell', images.cell], ['rig', images.rig]] as const) {
     if (!docker(['image', 'inspect', '--format', '{{.Id}}', image]).ok) { p.push(`image ${image} is not built for this code. ${build}`); continue }
-    p.push(...sourceProblems(kind, image, seeImage(image), expected).map((problem) => `${problem}. ${build}`))
+    p.push(...sourceProblems(kind, image, seeImage(image), expected, cellKind(harness).entry).map((problem) => `${problem}. ${build}`))
   }
   return p
 }
@@ -219,6 +233,12 @@ export function cellUp(file: LiveFile, composePath: string, services: string[] =
   const r = compose(file.name, ['--file', composePath, 'up', '--detach', '--no-build', '--pull', 'never', ...services])
   // All of what Docker said goes along, so a caller can tell a block that was taken from any other failure.
   if (!r.ok) throw Object.assign(new Error(`the cell did not start: ${r.out.trim().split('\n').slice(-3).join(' | ').slice(0, 400)}`), { stderr: r.out })
+}
+
+/** Start one run's cell container again, by name. The same container, so what Docker gave it is unchanged. */
+export function cellRestart(project: string): boolean {
+  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
+  return docker(['restart', '--time', '1', `${project}-cell-1`]).ok
 }
 
 /** Stop and remove one run's containers, networks and volume. By project name, and nothing else. */
@@ -279,13 +299,13 @@ export function findTargets(images: LabImages = launcherImages()): ProbeTargets 
 }
 
 /** Run the lab's probe inside the cell: it tries every way out it knows and reports what happened. */
-export async function probeCell(project: string, cellNonce: string, sinkIp: string, hostPort: number, targets: ProbeTargets): Promise<{ id: string; title: string; problems: string[] }[]> {
+export async function probeCell(project: string, cellNonce: string, sinkIp: string, hostPort: number, targets: ProbeTargets, harness: LauncherHarness = DEFAULT_HARNESS): Promise<{ id: string; title: string; problems: string[] }[]> {
   const out = await dockerAsync(['exec', `${project}-cell-1`, 'node', `${SWARM_ROOT}/conformance/docker/probe.ts`, ...probeArgs(cellNonce, sinkIp, hostPort, targets)], 90_000)
   const report = parseReport(out)
   const none = ['the probe did not run in the cell, so nothing was checked']
   return [
     { id: 'S1', title: 'the cell reaches the door and nothing else: not the internet, not this machine', problems: report ? netProblems(report) : none },
-    { id: 'S2', title: 'the shim, the gate and Pi cannot be changed from inside the cell', problems: report ? writeProblems(report) : none },
+    { id: 'S2', title: `the shim, the gate and ${harnessFacts(harness).label} cannot be changed from inside the cell`, problems: report ? writeProblems(report) : none },
     { id: 'S3', title: 'no folder of this machine is in the cell', problems: report ? [...mountProblems(report), ...secretProblems(report).filter((x) => x.startsWith('the search'))] : none },
   ]
 }

@@ -1,8 +1,9 @@
-// Start, check and stop one Pi agent in one Discord channel.
+// Start, check and stop one agent in one Discord channel. The harness in the
+// cell is Pi unless the config names another.
 //
 // The door runs in this process, on this machine: it holds the bot token and
 // the model key, talks to Discord and to the model, and writes a receipt for
-// every decision. Pi runs in the sealed cell and reaches the door through
+// every decision. The harness runs in the sealed cell and reaches the door through
 // the relay. Nothing here puts a secret in a container, a log or an error.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -20,8 +21,9 @@ import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
-import { cellDown, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
-import { policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { cellDown, cellRestart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, sealProblems, type CellOptions } from './cell.ts'
+import { harnessOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 
@@ -80,6 +82,8 @@ export interface StartOptions {
   /** Called if Discord closes the gateway for good. The caller should stop. */
   onFatal?: (code: number) => void
   cellReadyMs?: number
+  /** How long the cell has to reach the door before it is started again, once. */
+  cellRedialMs?: number
 }
 
 /** Bring one agent up. Either everything is up when this returns, or nothing is left running. */
@@ -88,8 +92,9 @@ export async function start(o: StartOptions): Promise<Running> {
   const previous = readRun(stateDir)
   if (previous && alive(previous.pid)) throw new Error(`this agent is already running (pid ${previous.pid}). Stop it first`)
   // Named once, checked against the code on disk, and the cell is started from exactly these.
-  const images = launcherImages()
-  const dockerIssues = dockerProblems(images)
+  const harness = harnessOf(o.config)
+  const images = launcherImages(harness)
+  const dockerIssues = dockerProblems(images, harness)
   if (dockerIssues.length > 0) throw new Error(dockerIssues.join('; '))
   // A run on record whose door is gone was killed before it could clean up. Its cell is sealed and
   // silent, but it is still there, and once this start writes its own record nothing would name it.
@@ -111,7 +116,7 @@ export async function start(o: StartOptions): Promise<Running> {
   const cellHeld = [brainToken, `PLACEHOLDER-${cellNonce}`, cellNonce]
 
   // Rendered here on three blocks of the lab's range, to be judged before anything is started. It is started on blocks that are free then.
-  const cellOptions: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])) }
+  const cellOptions: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])) }
   const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
 
@@ -165,8 +170,19 @@ export async function start(o: StartOptions): Promise<Running> {
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
       receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: 180_000,
     })
-    await withTimeout(door.shimConnected(), o.cellReadyMs ?? 60_000, 'the cell did not reach the door in time')
-    o.log(`live: agent ${policy.agentId}, policy ${policy.hash.slice(0, 12)}, one channel`)
+    // The cell was started before the door was listening, so that it could be looked at first. The relay
+    // takes the cell's dial whether or not the door is there yet, and a cell that said hello to nobody
+    // does not dial again. If it is not heard from soon after the door is up, it is started again, by
+    // name, and looked at again before anything else.
+    const ready = (ms: number): Promise<boolean> => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false)
+    if (!(await ready(o.cellRedialMs ?? 3_000))) {
+      if (!cellRestart(project)) throw new Error('the cell did not reach the door, and could not be started again')
+      const again = runningCellProblems(project, networksWritten(file))
+      if (again.length > 0) throw new Error(`the cell is not sealed: ${again.join('; ')}`)
+      o.log('the cell dialled before the door was listening, so it was started again')
+      if (!(await ready(o.cellReadyMs ?? 60_000))) throw new Error('the cell did not reach the door in time')
+    }
+    o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)
     return { project, door, stop }
   } catch (err) {
     await stop()
@@ -181,14 +197,15 @@ export async function start(o: StartOptions): Promise<Running> {
  * a sink and a listener on this machine say what they saw from outside.
  * Nothing is connected to Discord and no model is called.
  */
-export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken'] }): Promise<Check[]> {
-  const images = launcherImages()
+export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken']; harness?: LauncherHarness }): Promise<Check[]> {
+  const harness = o.harness ?? DEFAULT_HARNESS
+  const images = launcherImages(harness)
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
   const cellNonce = randomBytes(16).toString('hex')
   const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const options: CellOptions = { nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken, subnets: cellSubnets(pickSubnets(3, [])) }
+  const options: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken, subnets: cellSubnets(pickSubnets(3, [])) }
   const checks: Check[] = []
   const add = (id: string, title: string, problems: string[]): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok' }) }
 
@@ -221,7 +238,7 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
     add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project, written))
     if (reached) {
       const seen = host.hits.length
-      const probed = await probeCell(project, cellNonce, sinkIp, host.port, targets)
+      const probed = await probeCell(project, cellNonce, sinkIp, host.port, targets, harness)
       await new Promise((resolve) => setTimeout(resolve, 300)) // let this process hear anything that reached its listener
       const sinkHits = docker(['logs', `${project}-sink-1`]).out.split('\n').filter((l) => l.startsWith('SINK-HIT '))
       const outside = [...sinkProblems(sinkHits, nonce), ...host.hits.slice(seen).map((url) => `a listener on this machine was reached from inside the cell (${url})`)]
