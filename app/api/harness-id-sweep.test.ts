@@ -185,7 +185,7 @@ const OTHER_FIELDS: Record<string, string> = {
   './harnesses/[id]/tools/route.ts': 'tools',
   './harnesses/[id]/tuning/route.ts': 'expected values',
   './harnesses/[id]/usecase/reapply/route.ts': 'templateId',
-  './harnesses/door/route.ts': 'name runtime',
+  './harnesses/door/route.ts': 'name runtime description',
   './harnesses/create/route.ts': 'action channel keyId models name packs platform provider surface tier',
   './harnesses/import/route.ts': 'action dataDir keyId name packs provider surface',
   './health/docker/route.ts': 'data ts',

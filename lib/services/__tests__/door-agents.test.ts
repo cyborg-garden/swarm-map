@@ -42,6 +42,7 @@ let startFails: string | undefined
 let stopFails: boolean
 let livePids: Set<number>
 let nodeProblem: string | undefined
+let supervisorOf: (pid: number) => 'pm2' | undefined
 let svc: DoorAgentService
 let secrets: { discordTokenFile: string; modelKeyFile: string }
 
@@ -78,6 +79,7 @@ function stubLauncher(): DoorLauncher {
       return { ok: true, output: 'stopped' }
     },
     alive: (pid) => livePids.has(pid),
+    supervisor: (pid) => supervisorOf(pid),
   }
 }
 
@@ -97,6 +99,7 @@ beforeEach(() => {
   stopFails = false
   livePids = new Set()
   nodeProblem = undefined
+  supervisorOf = () => undefined
   svc = new DoorAgentService({
     storage, audit: new AuditService(storage), dataDir, launcher: stubLauncher(),
     repoRoot: path.join(tmp, 'repo'), now: () => NOW,
@@ -140,9 +143,88 @@ describe('creating a door agent', () => {
     expect(storage.read('harnesses.json', [])).toEqual([])
   })
 
-  it('refuses a runtime that has no launcher yet', async () => {
-    expect((await refusal(() => svc.create('lc-one', 'letta-code'))).status).toBe(400)
+  it('refuses a runtime the launcher does not have', async () => {
+    for (const runtime of ['hermes', 'openclaw', 'claude-sdk', '', null, 7]) {
+      expect((await refusal(() => svc.create('x-one', runtime))).status, String(runtime)).toBe(400)
+    }
     expect(storage.read('harnesses.json', [])).toEqual([])
+  })
+
+  it('makes a Letta Code agent: the row and the record carry the harness, and the config the launcher reads names it', async () => {
+    const record = svc.create('lc-one', 'letta-code')
+    expect(record).toMatchObject({ id: 'h_lc_one', name: 'lc-one', runtime: 'letta-code' })
+    expect(storage.read('harnesses.json', [])).toEqual([{ id: 'h_lc_one', name: 'lc-one', runtime: 'letta-code' }])
+    expect(svc.row('h_lc_one')).toMatchObject({ runtime: 'letta-code', status: 'stopped' })
+    await svc.saveRules('h_lc_one', { rules: { ...RULES, agentId: 'lc-one' }, secrets, version: 1 })
+    const config = JSON.parse(fs.readFileSync(paths('h_lc_one').config, 'utf8'))
+    expect(config).toMatchObject({ agentId: 'lc-one', harness: 'letta-code' })
+    expect(parseConfig(config).errors).toEqual([])
+    expect(svc.view('h_lc_one').problems.rules).toEqual([])
+  })
+
+  it('a Pi agent\'s config is written exactly as it was before the harness was a setting: no harness key', async () => {
+    await filled()
+    const config = JSON.parse(fs.readFileSync(paths().config, 'utf8'))
+    expect(Object.keys(config)).toEqual(['$generated', 'agentId', 'persona', 'discord', 'budget', 'model'])
+    expect('harness' in svc.view('h_pi_one').record.rules).toBe(false)
+  })
+
+  it('the harness is fixed when the agent is made: an edit that names another is not taken', async () => {
+    svc.create('lc-one', 'letta-code')
+    await svc.saveRules('h_lc_one', { rules: { ...RULES, agentId: 'lc-one', harness: 'pi' }, secrets, version: 1 })
+    expect(JSON.parse(fs.readFileSync(paths('h_lc_one').config, 'utf8')).harness).toBe('letta-code')
+    await filled()
+    await svc.saveRules('h_pi_one', { rules: { ...RULES, harness: 'letta-code' }, secrets, version: 2 })
+    expect('harness' in JSON.parse(fs.readFileSync(paths().config, 'utf8'))).toBe(false)
+    expect((await refusal(() => svc.saveRules('h_pi_one', { rules: { ...RULES, harness: 'hermes' }, secrets, version: 3 }))).status).not.toBe(200)
+  })
+
+  it('takes one line about what the agent is for, and refuses anything that is not one line', async () => {
+    expect(svc.create('pi-one', 'pi', '  Answers questions about the garden.  ').rules.persona).toEqual({ name: 'pi-one', description: 'Answers questions about the garden.' })
+    for (const bad of ['line one\nline two', 'x'.repeat(601), 7, ['a']]) {
+      expect((await refusal(() => svc.create('pi-two', 'pi', bad))).status, String(bad).slice(0, 12)).toBe(400)
+    }
+    expect(storage.read<unknown[]>('harnesses.json', [])).toHaveLength(1)
+    // Left out, it is empty, as before.
+    expect(svc.create('pi-three').rules.persona.description).toBe('')
+  })
+})
+
+describe('what the page is told about the harness and who started the door', () => {
+  it('names the harness and the one version that is pinned, and its limits', async () => {
+    await filled()
+    expect(svc.view('h_pi_one').harness).toMatchObject({ runtime: 'pi', label: 'Pi', version: '1.5.2', oneRoomOnly: false })
+    svc.create('lc-one', 'letta-code')
+    const lc = svc.view('h_lc_one').harness
+    expect(lc).toMatchObject({ runtime: 'letta-code', label: 'Letta Code', version: '0.34.60', oneRoomOnly: true })
+    expect(lc.limits.join('\n')).toMatch(/One room only/)
+  })
+
+  it('says nothing about who started a door that is stopped', async () => {
+    await filled()
+    expect(svc.status('h_pi_one').startedBy).toBeNull()
+  })
+
+  it('a door started from Swarm Map is said to be started from this page', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'page' })
+  })
+
+  it('a door that is running under a process Swarm Map did not start is said to be under a supervisor, or started elsewhere', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    // The door exits and something else starts it again, under another pid: Swarm Map did not start this one.
+    livePids = new Set([5151])
+    writeState('run.json', JSON.stringify({ pid: 5151, project: 'smlab-fake0001', agentId: 'pi-one', policyHash: policyHashOf(RULES), startedAt: NOW.toISOString() }))
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', pid: 5151, startedBy: 'elsewhere' })
+    supervisorOf = (pid) => (pid === 5151 ? 'pm2' : undefined)
+    expect(svc.status('h_pi_one').startedBy).toBe('supervisor')
+    // A supervisor that restarts the very door the page started is still a supervisor.
+    supervisorOf = () => 'pm2'
+    livePids = new Set([4242])
+    writeState('run.json', JSON.stringify({ pid: 4242, project: 'smlab-fake0000', agentId: 'pi-one', policyHash: policyHashOf(RULES), startedAt: NOW.toISOString() }))
+    expect(svc.status('h_pi_one').startedBy).toBe('supervisor')
   })
 })
 
@@ -193,7 +275,7 @@ describe('the fleet row', () => {
 describe('status', () => {
   it('is stopped, with the seal not yet checked, before anything has run', async () => {
     await filled()
-    expect(svc.status('h_pi_one')).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null })
+    expect(svc.status('h_pi_one')).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null, startedBy: null })
   })
 
   it('is running only while the door\'s own process is alive', async () => {
@@ -270,7 +352,7 @@ describe('start', () => {
     const view = svc.view('h_pi_one')
     expect(view.dryRun).toEqual({ at: NOW.toISOString(), result: 'node-unusable', lines: [`FAIL  ${nodeProblem}`] })
     // Nothing was learned about the cell, so the seal is not reported either way.
-    expect(view.status).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null })
+    expect(view.status).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null, startedBy: null })
   })
 
   it('starts again once that Node is back, on a start script written with the path it names now', async () => {

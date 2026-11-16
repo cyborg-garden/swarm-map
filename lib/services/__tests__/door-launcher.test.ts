@@ -9,6 +9,7 @@
  * handed, where its output goes, and how a running door is recognised.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -145,5 +146,30 @@ describe('the launcher adapter', () => {
   it('does not take some other live process for a door', () => {
     expect(launcher.alive(process.ppid)).toBe(false)
     expect(launcher.alive(2 ** 22 + 12345)).toBe(false)
+  })
+
+  it('says a door runs under a supervisor only when its parent process is one', async () => {
+    // A stand-in for pm2's daemon: a process that names itself as pm2's does, with one child.
+    const daemon = path.join(tmp, 'daemon.js')
+    fs.writeFileSync(daemon, `
+      const { spawn } = require('child_process')
+      process.title = 'PM2 v0.0.0: God Daemon (stand-in)'
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+      console.log(child.pid)
+      process.on('SIGTERM', () => { child.kill('SIGKILL'); process.exit(0) })
+      setInterval(() => {}, 1000)
+    `)
+    const parent = spawn(process.execPath, [daemon], { stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      const childPid = Number(await new Promise<string>((resolve) => parent.stdout.once('data', (d) => resolve(String(d).trim()))))
+      expect(childPid).toBeGreaterThan(1)
+      expect(launcher.supervisor!(childPid)).toBe('pm2')
+      // The stand-in daemon itself, this test's own process and a pid nobody has are under no supervisor.
+      expect(launcher.supervisor!(parent.pid!)).toBeUndefined()
+      expect(launcher.supervisor!(process.pid)).toBeUndefined()
+      expect(launcher.supervisor!(2 ** 22 + 12345)).toBeUndefined()
+    } finally {
+      parent.kill('SIGTERM')
+    }
   })
 })

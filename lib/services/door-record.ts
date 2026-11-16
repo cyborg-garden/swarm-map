@@ -16,8 +16,20 @@
  */
 import path from 'path'
 import { parseConfig, type LabConfig } from '@/lib/lab/pi-discord/config'
+import { isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
 import { secretFilePlaceProblem, MODEL_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
 import type { DoorRuntime } from './runtime-adapter'
+
+/**
+ * The rules as the launcher is handed them: under the record's own name, and
+ * with the record's own harness. Neither is taken from an edit. A Pi agent's
+ * rules name no harness, which is how the launcher reads Pi.
+ */
+function launcherRules(record: Pick<DoorRulesRecord, 'name' | 'runtime'>, rules: object): Record<string, unknown> {
+  const { harness: _dropped, ...rest } = rules as Record<string, unknown>
+  void _dropped
+  return { ...rest, agentId: record.name, ...(record.runtime === 'pi' ? {} : { harness: record.runtime }) }
+}
 
 export interface DoorSecretPaths {
   /** Path of the file that holds the bot token. Empty until it is set. */
@@ -63,6 +75,8 @@ export function doorAgentPaths(dataDir: string, id: string) {
     candidateConfig: path.join(dir, 'config.next.json'),
     startScript: path.join(dir, 'start.sh'),
     dryRun: path.join(dir, 'dry-run.json'),
+    /** Which process Swarm Map itself started last, by pid. Written by Swarm Map, beside the door's own state and not in it. */
+    startedByPage: path.join(dir, 'started-by-page.json'),
     log: path.join(dir, 'door.log'),
     stateDir: path.join(dir, 'state'),
   }
@@ -72,12 +86,13 @@ export function doorAgentPaths(dataDir: string, id: string) {
  * A new record: named, closed, and not startable until the ids, the budget
  * and the model are filled in. Every switch starts at its closed setting.
  */
-export function draftRecord(id: string, name: string, runtime: DoorRuntime, now: Date = new Date()): DoorRulesRecord {
+export function draftRecord(id: string, name: string, runtime: DoorRuntime, now: Date = new Date(), description = ''): DoorRulesRecord {
   return {
     schema: 1, id, name, runtime, version: 1, updatedAt: now.toISOString(),
     rules: {
       agentId: name,
-      persona: { name, description: '' },
+      ...(runtime === 'pi' ? {} : { harness: runtime }),
+      persona: { name, description },
       discord: {
         guildId: '', channelId: '', adminUserIds: [], allowedUserIds: [], allowedRoleIds: [],
         anyoneInChannel: false, mentionRequired: true, bots: 'none', allowedBotIds: [], botLoopLimit: 4, readAllMessages: false,
@@ -91,7 +106,7 @@ export function draftRecord(id: string, name: string, runtime: DoorRuntime, now:
 
 /** Why the record's rules cannot be started, in the launcher's words. Empty when they can. */
 export function rulesProblems(record: DoorRulesRecord): string[] {
-  return parseConfig({ ...record.rules, agentId: record.name }).errors
+  return parseConfig(launcherRules(record, record.rules)).errors
 }
 
 /**
@@ -107,8 +122,13 @@ export function checkRecordInput(
     v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
 
   const rulesIn = asObject(input.rules)
-  // The agent id is fixed when the record is made: it names the state folder.
-  const parsed = rulesIn ? parseConfig({ ...rulesIn, agentId: record.name }) : { errors: ['rules: must be an object'] }
+  // The agent id is fixed when the record is made: it names the state folder. So is the harness: it names the cell.
+  // A harness the launcher does not have is refused as any other setting it does not have would be.
+  const parsed = rulesIn
+    ? rulesIn.harness !== undefined && !isLauncherHarness(rulesIn.harness)
+      ? { errors: [`harness: must be one of ${LAUNCHER_HARNESSES.join(', ')}`] }
+      : parseConfig(launcherRules(record, rulesIn))
+    : { errors: ['rules: must be an object'] }
   errors.push(...parsed.errors)
 
   const secretsIn = asObject(input.secrets)
@@ -155,8 +175,7 @@ export function secretProblems(record: DoorRulesRecord, repoRoot: string): strin
 export function renderConfig(record: DoorRulesRecord): string {
   return JSON.stringify({
     $generated: 'Written by Swarm Map from the rules record. Do not edit: it is written again on every save and every start.',
-    ...record.rules,
-    agentId: record.name,
+    ...launcherRules(record, record.rules),
   }, null, 2) + '\n'
 }
 
