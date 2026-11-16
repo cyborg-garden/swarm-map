@@ -555,5 +555,30 @@ describe('Settings PUT — shared VPN', () => {
       writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
       expect(await regenerate()).toBe(true)
     })
+
+    it('settings.useStateVolume true forces the layout on a native-Linux engine', async () => {
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      holder.settings = { useStateVolume: true }
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      expect(await regenerate()).toBe(true)
+    })
+
+    it('settings.useStateVolume false keeps a plain agent plain on macOS', async () => {
+      setPlatform('darwin')
+      holder.settings = { useStateVolume: false }
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: false }))
+      fs.writeFileSync(path.join(agentDir, 'state.db'), 'a real database')
+      expect(await regenerate()).toBe(false)
+    })
+
+    it('native Linux: a compose file that already mounts the volume KEEPS the layout with no symlink in the data dir', async () => {
+      // state-init interrupted between removing the database from the data dir
+      // and writing the symlink: nothing in the data dir says "migrated".
+      setPlatform('linux')
+      holder.hostInfo = NATIVE
+      writeAgent(generateStandaloneCompose(NAME, PORT, agentDir, { useStateVolume: true }))
+      expect(await regenerate()).toBe(true)
+    })
   })
 })

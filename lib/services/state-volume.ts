@@ -7,8 +7,7 @@
  * Docker Desktop for macOS), and SQLite writes through that layer can tear. A
  * named volume lives inside the VM and never crosses it. Where the engine runs
  * on the host's own kernel (native Linux) a bind mount is an ordinary local
- * directory, the layout protects nothing, and its symlinked DB paths get in
- * the way (#273).
+ * directory and the layout is unnecessary, so it is left off there (#273).
  *
  * So the question is about the DOCKER ENGINE, not about where this Node
  * process runs. Swarm Map always drives the engine through the local `docker`
@@ -23,7 +22,9 @@
  * Order of precedence (resolveUseStateVolume):
  *   1. An agent whose databases already live on the volume keeps the layout.
  *      Its data dir holds only symlinks into /state; a compose file without
- *      the /state mount would leave them pointing at nothing.
+ *      the /state mount would leave them pointing at nothing. The same holds
+ *      when its data dir cannot be read, or when the compose file being
+ *      replaced already mounts the volume.
  *   2. settings.useStateVolume, when it is true or false.
  *   3. The engine: on for a VM-backed or unknown engine, off for native Linux.
  */
@@ -41,6 +42,16 @@ export type DockerHostInfo = {
   osType: string
   /** DOCKER_HOST, else the active context's endpoint, else '' when the CLI has no contexts. */
   endpoint: string
+  /** `docker info` .Name: the engine host's name, e.g. "colima", "lima-default". */
+  name?: string
+  /** The active docker context's name, e.g. "default", "colima", "rancher-desktop". */
+  contextName?: string
+  /**
+   * True when this Node process itself runs inside a container. The engine it
+   * reaches through a mounted socket then belongs to a host this process
+   * cannot see, so nothing `docker info` says proves that host is native Linux.
+   */
+  containerised?: boolean
 }
 
 export type StateVolumeReason =
@@ -61,9 +72,17 @@ export type StateVolumeDecision = { use: boolean; reason: StateVolumeReason }
 // against OperatingSystem and KernelVersion: Docker Desktop reports itself as
 // the operating system on every host (macOS, Windows and Linux alike) and runs
 // a linuxkit kernel; OrbStack, Rancher Desktop and WSL name themselves in one
-// field or the other. Colima and Lima report the guest distro and are only
-// recognisable from the macOS side, which the platform check below covers.
+// field or the other.
 const VM_ENGINE = /docker desktop|orbstack|rancher desktop|linuxkit|microsoft|wsl/i
+
+// Engines that run in a VM but report the GUEST distro as their operating
+// system (Colima, Lima, Rancher Desktop's Lima backend, a Podman machine), so
+// the fields above look native. They give themselves away in the engine host's
+// name, the context name, or the socket path. A Linux process only meets them
+// through a forwarded socket; their host is unknown, so the layout stays on.
+// Anchored at a word start so an ordinary host name containing "lima" inside
+// another word does not match.
+const VM_ENGINE_NAME = /(^|[^a-z])(colima|lima|rancher|podman)/i
 
 /**
  * Whether bind mounts on this engine need the state-volume layout.
@@ -87,6 +106,11 @@ export function engineNeedsStateVolume(
   if (info.endpoint && !info.endpoint.startsWith('unix://')) return { use: true, reason: 'unknown-engine' }
   if (!info.osType || info.osType.toLowerCase() !== 'linux') return { use: true, reason: 'unknown-engine' }
   if (!info.operatingSystem && !info.kernelVersion) return { use: true, reason: 'unknown-engine' }
+  // This process is in a container: the engine belongs to a host it cannot see.
+  if (info.containerised) return { use: true, reason: 'unknown-engine' }
+  if ([info.name, info.contextName, info.endpoint].some((v) => !!v && VM_ENGINE_NAME.test(v))) {
+    return { use: true, reason: 'unknown-engine' }
+  }
   if (VM_ENGINE.test(info.operatingSystem) || VM_ENGINE.test(info.kernelVersion)) return { use: true, reason: 'vm-engine' }
   return { use: false, reason: 'native-linux' }
 }
@@ -97,17 +121,33 @@ export function engineNeedsStateVolume(
  * that behind every time it runs, and the rollback in the migration runbook
  * replaces the symlinks with real files, so this is an exact reading of where
  * the databases are. lstat, not existsSync: from the host the link dangles.
+ *
+ * Only "not there" (ENOENT, ENOTDIR) counts as absent. Any other failure, such
+ * as a data dir this process may not read, leaves the question open, and the
+ * answer is then "yes": dropping the /state mount from an agent whose
+ * databases are on the volume is the outcome to avoid.
  */
 export function agentHasStateVolumeLayout(dataDir: string): boolean {
   for (const db of MIGRATED_DB_FILES) {
     try {
       const p = path.join(dataDir, db)
       if (fs.lstatSync(p).isSymbolicLink() && fs.readlinkSync(p).startsWith('/state/')) return true
-    } catch {
-      // absent or unreadable: not a migrated path
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return true
     }
   }
   return false
+}
+
+/**
+ * True when a compose file already mounts a state volume at /state. Used on
+ * regeneration: a state-init run interrupted after it removed a database from
+ * the data dir and before it wrote the symlink leaves no symlink to read, yet
+ * the database is on the volume.
+ */
+export function composeMountsStateVolume(compose: string): boolean {
+  return /^\s*- hermes-state-[^\s:]+:\/state\s*$/m.test(compose)
 }
 
 /**
@@ -124,11 +164,13 @@ export function resolveUseStateVolume(opts: {
   setting?: boolean | null
   /** The agent's host data dir (the one bind-mounted at /opt/data). */
   dataDir: string
+  /** The compose file about to be replaced, when there is one (regeneration). */
+  existingCompose?: string | null
   hostInfo: () => DockerHostInfo | null | undefined
   /** Defaults to process.platform; a parameter so tests can cover every host. */
   platform?: NodeJS.Platform
 }): StateVolumeDecision {
-  if (agentHasStateVolumeLayout(opts.dataDir)) {
+  if (agentHasStateVolumeLayout(opts.dataDir) || (!!opts.existingCompose && composeMountsStateVolume(opts.existingCompose))) {
     if (opts.setting === false) {
       console.warn(`[state-volume] ${opts.dataDir}: useStateVolume is off, but this agent's databases are on its named volume; keeping the layout. Move them back first (docs/runbooks/db-named-volume-migration.md, "Rollback").`)
     }
