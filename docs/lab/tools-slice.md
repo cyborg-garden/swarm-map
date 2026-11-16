@@ -213,9 +213,9 @@ room throughout. No real model, no real chat platform, no real credential.
 |---|---|
 | Real Pi 1.5.2 as a process | 24 checks pass: the 14 shared ones and the 10 tool checks. 13 shims and rigs broken on purpose each turned its named checks red and left the others green |
 | Real Pi 1.5.2 in the sealed Docker cell | 30 checks pass: 4 on the seal, 13 shared, C8, C9, C10 and the 10 tool checks. 16 rigs broken on purpose each turned its named checks red, 5 of them cells with a broken gate |
-| The launcher's own cell, with a fake Discord | A shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
+| The launcher's own cell, with a fake Discord | All 18 tests of the Pi launcher's Docker suite pass in one run, and all 15 of the Letta Code launcher's. In them a shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
 | The scratch folder's size | 72 MB written to a 64 MB folder: no more than 64 MB landed. With the mount left out on purpose, all of it landed and three checks went red |
-| Hand mutations | 76 lines broken one at a time in `decide()`, the door, the gate, the shim, the connector, the launcher and the page. 75 turned a named test red. One changes nothing the code does |
+| Hand mutations | 77 lines broken one at a time in `decide()`, the door, the gate, the shim, the connector, the launcher and the page. 76 turned a named test red. One changes nothing the code does |
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
@@ -235,6 +235,3 @@ What this does not show:
   and is tested there.
 - **In the conformance rig the scratch folder is a shared volume**, so the suite can see what a
   tool touched. The capped mount is the launcher's, and is checked in the launcher's own runs.
-- **The launcher's Docker runs were repeated until a start went through.** With other Docker
-  work going on at the same time, a start sometimes ended with "the cell did not reach the door in
-  time" and left nothing running. The same was seen on this machine without this change.
