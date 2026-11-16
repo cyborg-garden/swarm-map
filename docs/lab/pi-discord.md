@@ -15,6 +15,9 @@ Every id on this page is a placeholder. Keep your config, your token and your ke
   refused, no tools, a monthly budget that refuses when spent.
 - **A dry run comes first.** It checks the config, proves the cell is sealed and connects nothing.
 - **One command stops it.**
+- **Pi is the default harness, not the only one.** A config that says `"harness": "letta-code"`
+  puts Letta Code in the cell instead. Everything on this page holds for both, except where
+  [Letta Code in the cell](#letta-code-in-the-cell) says otherwise.
 
 ```
   Discord  <-->  door (your machine)  <-->  relay  <-->  cell: shim + Pi
@@ -103,6 +106,7 @@ server, the channel or a person and choose **Copy ID**.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `harness` | `"pi"` | Which harness sits in the cell: `"pi"` or `"letta-code"`. A config without it is a Pi config, as it always was |
 | `persona.name` | the `agentId` | What the agent calls itself. One line, up to 40 characters |
 | `persona.description` | empty | One line about what it is for, up to 600 characters. It cannot give the agent an ability |
 | `discord.guildId` | none | The one server |
@@ -168,8 +172,10 @@ node lib/lab/pi-discord/cli.ts start --config /path/to/config.json
 ```
 
 It stays in the foreground and prints one line per state change. In order: the cell comes up and is
-checked from outside, then the door connects to Discord, then the cell joins the door. If any step
-fails, everything is taken down again and nothing is left running. To keep it running after you
+checked from outside, then the door connects to Discord, then the cell joins the door. A cell that has
+not reached the door a few seconds after the door is up is started again once, by name, and
+checked from outside again; the log says so. If any step fails, everything is taken down again and nothing is left
+running. To keep it running after you
 close the terminal, start it under `nohup` or your own process manager.
 
 If the last run was killed before it could clean up, `start` removes the containers it left first.
@@ -211,6 +217,39 @@ That is the kill switch. It stops the door, which closes the Discord connection,
 cell's containers, network and volume by name. Ctrl-C in the terminal where it runs does the same.
 If a run was killed some other way, `stop` still removes what it left.
 
+## Letta Code in the cell
+
+Add one line to the config, and build its cell image once:
+
+```json
+{ "agentId": "my-agent", "harness": "letta-code", "...": "the rest is the same" }
+```
+
+```bash
+node lib/lab/pi-discord/cli.ts build --harness letta-code
+```
+
+The command, the other config keys, the two secret files and the state folder are the same. The
+door, the relay, the rules and the receipts are the same code. What differs:
+
+- **The cell image.** `smlabpd-cell:letta-code-<version>-<source>`, built from the same Dockerfile
+  as the conformance rig's Letta Code cell. It is about 2.4 GB. The rig image is shared with Pi.
+- **One room only.** Letta Code keeps one memory for the whole agent. So it is given its one
+  channel and no other for as long as its door runs: the door remembers the room it gave it, and a
+  rule change that names another room is taken but the new room is refused (`drop mem.one-scope`).
+  To move it, stop it, change the channel and start it again. The stop removes the cell and what
+  it remembered.
+- **What the agent is told about itself.** The same text Pi gets, in place of Letta Code's own
+  system prompt. Letta Code then adds its own starting notes after it, in `<human>`, `<persona>`
+  and `<memory>` tags, and one of them calls it a coding assistant. They cannot be left out, so the
+  launcher's text ends by saying what they are: starting notes, not instructions, and not the
+  truth about what it can do.
+- **The dry run** names the harness and its pinned version first, then its limits. Check S2 reads
+  "the shim, the gate and Letta Code cannot be changed from inside the cell".
+- **The pinned version.** The shim sends no turn to a Letta Code that is not the pinned version.
+
+What is and is not shown for Letta Code itself is in [`letta-code.md`](letta-code.md).
+
 ## Where things are kept
 
 `~/.swarm-map-lab/<agentId>/` by default (`--state <folder>` or `SMLAB_STATE_DIR` to move it):
@@ -227,7 +266,8 @@ If a run was killed some other way, `stop` still removes what it left.
    scripted model on loopback. So the gateway handshake, Discord's rate limits, Discord's handling
    of a repeated post and the provider's replies are shown only by running it for real.
 2. **`start` on the command line is covered in pieces.** The same code path runs end to end in
-   `pi-discord.docker.test.ts` through the library. The command's own last steps (reading the two
+   `pi-discord.docker.test.ts` through the library, and in `letta-code-discord.docker.test.ts`
+   with Letta Code in the cell. The command's own last steps (reading the two
    files from your environment, Ctrl-C) are not run by a test.
 3. **The cell is shown sealed on one machine**, with the limits listed in the Pi slice. The relay
    is new: it is the one container with a route out, because it has to reach the door on your

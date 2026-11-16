@@ -134,9 +134,23 @@ describe('creating a door agent', () => {
     expect(fs.existsSync(path.join(DATA_DIR, 'harnesses.json'))).toBe(false)
   })
 
-  it('refuses a runtime with no launcher, and one it has never heard of', async () => {
-    expect((await create('lc-one', 'letta-code')).status).toBe(400)
+  it('makes a Letta Code agent, and refuses a runtime the launcher does not have', async () => {
+    expect(await create('lc-one', 'letta-code')).toMatchObject({ status: 201, json: { id: 'h_lc_one', name: 'lc-one', runtime: 'letta-code' } })
     expect((await create('x-one', 'hermes')).status).toBe(400)
+    expect((await create('y-one', 'claude-sdk')).status).toBe(400)
+    const list = (await call('./route.ts', 'GET', undefined)).json
+    expect(list.slice(2)).toEqual([expect.objectContaining({ id: 'h_lc_one', runtime: 'letta-code', status: 'stopped' })])
+    // Its page is told which harness it is, the pinned version, and that it has one room only.
+    const view = (await call('./[id]/door/route.ts', 'GET', 'h_lc_one')).json
+    expect(view.harness).toMatchObject({ runtime: 'letta-code', label: 'Letta Code', oneRoomOnly: true })
+    expect(view.harness.version).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  it('takes a one-line description with the name, and refuses one that is not a line', async () => {
+    const made = await call('./door/route.ts', 'POST', undefined, { name: 'pi-one', description: 'Answers questions.' })
+    expect(made.status).toBe(201)
+    expect((await call('./[id]/door/route.ts', 'GET', 'h_pi_one')).json.record.rules.persona.description).toBe('Answers questions.')
+    expect((await call('./door/route.ts', 'POST', undefined, { name: 'pi-two', description: 'a\nb' })).status).toBe(400)
   })
 })
 
@@ -200,7 +214,7 @@ describe('the rules', () => {
     expect(view.record.rules.discord.channelId).toBe('100000000000000001')
     expect(view.record.secrets).toEqual(secrets)
     expect(view.problems).toEqual({ rules: [], secrets: [] })
-    expect(view.status).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null })
+    expect(view.status).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null, startedBy: null })
   })
 
   it('are refused with every reason when the launcher would refuse them', async () => {

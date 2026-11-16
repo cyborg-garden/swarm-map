@@ -6,6 +6,8 @@ import { toast } from 'sonner'
 import { useApi } from '@/lib/hooks/use-api'
 import { StatusDot } from '@/components/shared/status-dot'
 import { RuntimeBadge } from '@/components/shared/runtime-badge'
+import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+import { DOOR_RUNBOOK } from '@/components/harness/add-door-agent-dialog'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { TagInput } from '@/components/ui/tag-input'
@@ -27,7 +29,19 @@ import type { Receipt } from '@/lib/door/receipts'
  *  POST /api/harnesses/:id/start | stop
  */
 
-const RUNBOOK = 'https://github.com/cyborg-garden/swarm-map/blob/main/docs/lab/pi-discord.md'
+const RUNBOOK = DOOR_RUNBOOK
+const TABS = ['overview', 'rules', 'receipts', 'logs'] as const
+
+/**
+ * The tab the address asks for (`?tab=rules`), or the Overview. A new agent's
+ * page is opened on its Rules tab, since that is what is filled in next. Read
+ * once, in the browser: this page is only drawn after the agent was fetched.
+ */
+function tabFromAddress(): (typeof TABS)[number] {
+  if (typeof window === 'undefined') return 'overview'
+  const asked = new URLSearchParams(window.location.search).get('tab')
+  return TABS.find((tab) => tab === asked) ?? 'overview'
+}
 const SNOWFLAKE = /^\d{15,22}$/
 
 type Rules = DoorRulesRecord['rules']
@@ -55,6 +69,9 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
   const { data: view, refetch } = useApi<DoorAgentView>(`/api/harnesses/${id}/door`, 5000)
   const [busy, setBusy] = useState<'start' | 'stop' | 'save' | 'remove' | null>(null)
   const [problem, setProblem] = useState<{ error: string; details: string[] } | null>(null)
+  // Stop cuts off a conversation and Remove forgets the rules, so each is asked about first.
+  const [asking, setAsking] = useState<'stop' | 'remove' | null>(null)
+  const [firstTab] = useState(tabFromAddress)
 
   const status = view?.status
   const running = (status?.state ?? harness.status) === 'running'
@@ -80,10 +97,6 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
   }
 
   async function remove() {
-    const ok = window.confirm(
-      `Remove "${harness.name}"?\n\nThis stops its door and forgets its rules, its receipts and its spend record. The two secret files are left where they are.`,
-    )
-    if (!ok) return
     setBusy('remove')
     try {
       const res = await fetch(`/api/harnesses/${id}`, { method: 'DELETE' })
@@ -114,11 +127,11 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={remove} disabled={busy !== null} className="text-destructive border-destructive/30 hover:bg-destructive/10">
+          <Button variant="outline" size="sm" onClick={() => setAsking('remove')} disabled={busy !== null} className="text-destructive border-destructive/30 hover:bg-destructive/10">
             Remove
           </Button>
           {running ? (
-            <Button variant="outline" size="sm" onClick={() => act('stop')} disabled={busy !== null}>
+            <Button variant="outline" size="sm" onClick={() => setAsking('stop')} disabled={busy !== null}>
               {busy === 'stop' ? 'Stopping…' : 'Stop'}
             </Button>
           ) : (
@@ -140,7 +153,23 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
         </div>
       )}
 
-      <Tabs defaultValue="overview">
+      <ConfirmDialog
+        open={asking !== null}
+        title={asking === 'remove' ? `Remove ${harness.name}?` : `Stop ${harness.name}?`}
+        description={asking === 'remove'
+          ? 'This stops its door and forgets its rules, its receipts and its spend record. The two secret files are left where they are.'
+          : 'It drops the conversation it is in the middle of, its cell is removed, and it stays offline until you start it again.'}
+        confirmLabel={asking === 'remove' ? 'Remove' : 'Stop'}
+        onCancel={() => setAsking(null)}
+        onConfirm={() => {
+          const what = asking
+          setAsking(null)
+          if (what === 'remove') remove()
+          else if (what === 'stop') act('stop')
+        }}
+      />
+
+      <Tabs defaultValue={firstTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="rules">Rules</TabsTrigger>
@@ -217,18 +246,32 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 function Overview({ view }: { view: DoorAgentView }) {
-  const { status, usage, record, problems, dryRun } = view
-  const sealed = status.cellSealed === null ? 'not checked yet' : status.cellSealed ? 'yes' : 'no'
+  const { status, usage, record, problems, dryRun, harness } = view
+  const sealed = status.cellSealed === null ? 'not checked yet. It is checked at every Start' : status.cellSealed ? 'yes' : 'no'
+  const startedBy = {
+    page: 'this page, as a background process. Nothing restarts it if it exits',
+    supervisor: 'a supervisor. It is started again if it exits with an error',
+    // What is known, and no more. A door this page started before it kept a note of that is shown this way too.
+    elsewhere: 'Swarm Map has no note that it started this door, and saw no supervisor. Whatever started it decides whether it is started again',
+  }
   const todo = [...problems.rules, ...problems.secrets]
   return (
     <div className="grid grid-cols-2 gap-4">
       <Card title="Status">
         <Row label="Door" value={status.state === 'running' ? `running since ${when(status.startedAt)}` : 'stopped'} />
+        <Row label="Harness" value={`${harness.label} ${harness.version}, pinned`} />
         <Row label="Cell sealed" value={status.sealCheckedAt ? `${sealed} (checked ${when(status.sealCheckedAt)})` : sealed} />
         {status.state === 'running' && (
-          <Row label="Rules in force" value={status.rulesInForce ? 'the rules on record' : 'older rules. Save or restart to apply'} />
+          <Row label="Rules in force" value={status.rulesInForce ? 'the rules on record' : 'older rules than the ones on record. Save the rules, or stop and start, to apply them'} />
         )}
+        {status.state === 'running' && status.startedBy && <Row label="Started by" value={startedBy[status.startedBy]} />}
         <Row label="Model" value={record.rules.model.id || '—'} />
+        <div className="text-xs text-muted-foreground">
+          <p>What {harness.label} cannot do here:</p>
+          <ul className="list-disc pl-5 space-y-0.5">
+            {harness.limits.map((limit) => <li key={limit}>{limit}</li>)}
+          </ul>
+        </div>
       </Card>
       <Card title={`Budget, ${usage.month}`}>
         <Row label="Spent this month" value={usd(usage.spentThisMonthUsd)} />
@@ -283,8 +326,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 const inputClass = 'w-full rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
-function Text({ value, onChange, name, placeholder }: { value: string; onChange: (v: string) => void; name: string; placeholder?: string }) {
-  return <input type="text" name={name} value={value} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} className={inputClass} />
+function Text({ value, onChange, name, placeholder, describedBy }: { value: string; onChange: (v: string) => void; name: string; placeholder?: string; describedBy?: string }) {
+  return <input type="text" name={name} value={value} placeholder={placeholder} aria-describedby={describedBy} onChange={(e) => onChange(e.target.value)} className={inputClass} />
 }
 
 function Amount({ value, onChange, name }: { value: number; onChange: (v: number) => void; name: string }) {
@@ -307,6 +350,8 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
     </div>
   )
 }
+
+const ONE_ROOM_NOTE = 'door-one-room-note'
 
 function RulesForm({ view, running, saving, onSave }: {
   view: DoorAgentView; running: boolean; saving: boolean; onSave: (draft: Draft) => Promise<boolean>
@@ -333,8 +378,14 @@ function RulesForm({ view, running, saving, onSave }: {
         <Card title="Where">
           <Field label="Server id"><Text name="discord.guildId" value={d.guildId} onChange={(guildId) => discord({ guildId })} placeholder="digits only" /></Field>
           <Field label="Channel id" hint="The one channel. Its threads count as part of it.">
-            <Text name="discord.channelId" value={d.channelId} onChange={(channelId) => discord({ channelId })} placeholder="digits only" />
+            <Text name="discord.channelId" value={d.channelId} onChange={(channelId) => discord({ channelId })} placeholder="digits only" describedBy={view.harness.oneRoomOnly ? ONE_ROOM_NOTE : undefined} />
           </Field>
+          {/* Said beside the field it is about, for a harness that has the limit. The rules enforce it either way. */}
+          {view.harness.oneRoomOnly && (
+            <p id={ONE_ROOM_NOTE} className="text-xs text-muted-foreground">
+              <span className="font-medium text-[var(--foreground)]">{view.harness.label}:</span> {view.harness.limits[0]}
+            </p>
+          )}
         </Card>
         <Card title="Who it hears">
           <Field label="Admins" hint="At least one. Admins are also heard.">

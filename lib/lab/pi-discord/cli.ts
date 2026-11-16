@@ -1,6 +1,8 @@
-// One Pi agent in one Discord channel: check it, start it, stop it.
+// One agent in one Discord channel: check it, start it, stop it. The harness
+// is Pi unless the config says `"harness": "letta-code"`.
 //
 //   node lib/lab/pi-discord/cli.ts build                         once, and again after you pull
+//   node lib/lab/pi-discord/cli.ts build --harness letta-code    the same, for a Letta Code agent
 //   node lib/lab/pi-discord/cli.ts dry-run  --config <file>
 //   node lib/lab/pi-discord/cli.ts start    --config <file>
 //   node lib/lab/pi-discord/cli.ts stop     --config <file>      the kill switch
@@ -13,9 +15,10 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { botsLine, parseConfig, policyFor, type LabConfig } from './config.ts'
+import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, type LabConfig } from './config.ts'
+import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
-import { buildImages, dockerProblems, docker } from './cell.ts'
+import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, secretFileProblem, TOKEN_FILE_ENV } from './secrets.ts'
 import { monthOf } from '../../door/spend-ledger.ts'
 import type { Receipt } from '../../door/receipts.ts'
@@ -42,7 +45,9 @@ async function dryRun(): Promise<void> {
   const config = loadConfig()
   const policy = policyFor(config)
   const d = config.discord
+  const harness = harnessOf(config)
   say('config')
+  for (const line of harnessLines(config)) say(line)
   say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
   say(`  ok    it introduces itself as "${config.persona.name}", and is told it has no tools`)
   say(`  ok    heard: ${d.adminUserIds.length} admin(s), ${d.allowedUserIds.length} other people, ${d.allowedRoleIds.length} role(s)${d.anyoneInChannel ? ', and anyone in the channel' : ''}`)
@@ -63,14 +68,14 @@ async function dryRun(): Promise<void> {
   }
 
   say('docker')
-  const dockerIssues = dockerProblems()
+  const dockerIssues = dockerProblems(launcherImages(harness), harness)
   for (const p of dockerIssues) say(`  FAIL  ${p}`)
   let checks: Check[] = []
   if (dockerIssues.length === 0) {
     say('  ok    this machine\'s Docker, both lab images built')
     say('containment (the real cell is started, probed from inside and watched from outside, then removed)')
     const workDir = mkdtempSync(path.join(os.tmpdir(), 'smlab-dry-'))
-    try { checks = await sealChecks({ model: config.model.id, workDir, log: () => {} }) } finally { rmSync(workDir, { recursive: true, force: true }) }
+    try { checks = await sealChecks({ model: config.model.id, workDir, log: () => {}, harness }) } finally { rmSync(workDir, { recursive: true, force: true }) }
     for (const c of checks) say(mark(c))
   }
   const sealed = dockerIssues.length === 0 && checks.length > 0 && checks.every((c) => c.pass)
@@ -141,11 +146,16 @@ function receipts(): void {
 }
 
 switch (command) {
-  case 'build': process.exit(buildImages() ? 0 : 1); break
+  case 'build': {
+    const harness = flag('harness') ?? DEFAULT_HARNESS
+    if (!isLauncherHarness(harness)) fail(`build: --harness must be one of ${LAUNCHER_HARNESSES.join(', ')}`, 2)
+    else process.exit(buildImages(harness) ? 0 : 1)
+    break
+  }
   case 'dry-run': await dryRun(); process.exit(0); break
   case 'start': await run(); break
   case 'stop': process.exit(await stopRun(stateDirFor(loadConfig()), say) ? 0 : 1); break
   case 'status': await status(); break
   case 'receipts': receipts(); break
-  default: fail('usage: cli.ts build | dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
+  default: fail('usage: cli.ts build [--harness <name>] | dry-run|start|stop|status|receipts --config <file> [--state <folder>]', 2)
 }

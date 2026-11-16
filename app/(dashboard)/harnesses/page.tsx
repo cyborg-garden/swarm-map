@@ -10,6 +10,7 @@ import { RetiredRows } from '@/components/fleet/retired-rows'
 import { RuntimeBadge } from '@/components/shared/runtime-badge'
 import { isDoorRuntime } from '@/lib/services/runtime-adapter'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
+import { AddDoorAgentDialog } from '@/components/harness/add-door-agent-dialog'
 import { Button } from '@/components/ui/button'
 import type { Harness } from '@/lib/types'
 import Link from 'next/link'
@@ -22,9 +23,9 @@ type FleetDrift = {
 }
 
 // Stop and restart cut off whatever an agent is doing, so each is asked about
-// before it runs.
+// before it runs. So is removing a door agent, which forgets its rules.
 type PendingAction =
-  | { kind: 'restart' | 'stop'; id: string; name: string }
+  | { kind: 'restart' | 'stop' | 'remove-door'; id: string; name: string }
   | { kind: 'restart-all'; count: number }
 
 function confirmCopy(action: PendingAction): { title: string; description: string; confirmLabel: string } {
@@ -34,6 +35,13 @@ function confirmCopy(action: PendingAction): { title: string; description: strin
       title: `Restart ${agents}?`,
       description: 'Each one drops the conversation it is in the middle of and is unavailable until it comes back up.',
       confirmLabel: 'Restart all',
+    }
+  }
+  if (action.kind === 'remove-door') {
+    return {
+      title: `Remove ${action.name}?`,
+      description: 'This stops its door and forgets its rules, its receipts and its spend record. The two secret files are left where they are.',
+      confirmLabel: 'Remove',
     }
   }
   if (action.kind === 'stop') {
@@ -75,12 +83,14 @@ export default function HarnessesPage() {
   // Door agents are not restarted by "Restart all running": that route drives Hermes agents only.
   const running = harnesses?.filter((h) => h.status === 'running' && !isDoorRuntime(h.runtime)) ?? []
   const [pending, setPending] = useState<PendingAction | null>(null)
+  const [addingDoorAgent, setAddingDoorAgent] = useState(false)
 
   function runPending() {
     const action = pending
     setPending(null)
     if (!action) return
     if (action.kind === 'restart-all') restartAll()
+    else if (action.kind === 'remove-door') removeDoorAgent(action.id, action.name)
     else if (action.kind === 'stop') stopOne(action.id)
     else restartOne(action.id)
   }
@@ -147,32 +157,13 @@ export default function HarnessesPage() {
     }
   }
 
-  // A door agent is made from a name. Its rules are filled in on its own page.
-  async function addDoorAgent() {
-    const name = window.prompt('Name for the new door agent (a Pi agent in one Discord channel):')
-    if (!name?.trim()) return
-    try {
-      const res = await fetch('/api/harnesses/door', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim() }),
-      })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        toast.error(body.error ?? 'Could not add the door agent')
-        return
-      }
-      router.push(`/harnesses/${body.id}`)
-    } catch {
-      toast.error('Could not add the door agent')
-    }
+  // A door agent is made from a small form. Its rules are filled in on its own page, which opens on them.
+  function addDoorAgent() {
+    setAddingDoorAgent(true)
   }
 
+  // Asked about first, in the page's own dialog: see confirmCopy.
   async function removeDoorAgent(id: string, name: string) {
-    const confirmed = window.confirm(
-      `Remove "${name}"?\n\nThis stops its door and forgets its rules, its receipts and its spend record. The two secret files are left where they are.`
-    )
-    if (!confirmed) return
     try {
       const res = await fetch(`/api/harnesses/${id}`, { method: 'DELETE' })
       if (!res.ok) {
@@ -330,7 +321,7 @@ export default function HarnessesPage() {
                             Stop
                           </Button>
                         )}
-                        <Button variant="ghost" size="xs" onClick={() => removeDoorAgent(h.id, h.name)} title="Remove" className="text-destructive hover:text-destructive">
+                        <Button variant="ghost" size="xs" onClick={() => setPending({ kind: 'remove-door', id: h.id, name: h.name ?? h.id })} title="Remove" aria-label={`Remove ${h.name ?? h.id}`} className="text-destructive hover:text-destructive">
                           ✕
                         </Button>
                       </div>
@@ -365,6 +356,13 @@ export default function HarnessesPage() {
         {...(pending ? confirmCopy(pending) : { title: '', description: '', confirmLabel: '' })}
         onConfirm={runPending}
         onCancel={() => setPending(null)}
+      />
+
+      <AddDoorAgentDialog
+        open={addingDoorAgent}
+        agents={harnesses ?? []}
+        onClose={() => setAddingDoorAgent(false)}
+        onCreated={(id) => { setAddingDoorAgent(false); router.push(`/harnesses/${id}?tab=rules`) }}
       />
     </div>
   )

@@ -25,6 +25,8 @@ import path from 'path'
 import type { Receipt } from '@/lib/door/receipts'
 import { monthOf } from '@/lib/door/spend-ledger'
 import { policyFor } from '@/lib/lab/pi-discord/config'
+import { harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
+import { doorAgentName, doorNameClash, doorNameTaken } from '@/lib/door-agent-name'
 import type { Harness } from '@/lib/types'
 import type { AuditService } from './audit'
 import type { DoorLauncher } from './door-launcher'
@@ -37,10 +39,8 @@ import { isDoorRuntime, type DoorRuntime, type DoorRuntimeAdapter, type DoorStat
 import type { Storage } from './storage'
 
 const HARNESSES_FILE = 'harnesses.json'
-// Runtimes this build can start. `letta-code` has a tag and a badge, and no launcher yet.
-const LAUNCHABLE: readonly DoorRuntime[] = ['pi']
-const NAME = /^[A-Za-z0-9][A-Za-z0-9 -]*$/
-const AGENT_ID = /^[a-z0-9][a-z0-9-]{1,30}$/
+// One line of ordinary text, the launcher's own rule for what an agent says about itself.
+const ONE_LINE = /^[^\u0000-\u001f\u007f]*$/
 const READY_LINE = 'RESULT: ready to start.'
 
 /** A refusal with the HTTP status a route should answer with. */
@@ -67,6 +67,8 @@ export interface DoorAgentView {
   /** What still stands between this record and a start. */
   problems: { rules: string[]; secrets: string[] }
   supervisor: { command: string; startScript: string }
+  /** Which harness is in the cell, the one version of it that is pinned, and what it cannot do here. */
+  harness: { runtime: DoorRuntime; label: string; version: string; oneRoomOnly: boolean; limits: string[] }
 }
 
 type Row = { id?: string; name?: string; runtime?: string | null }
@@ -182,18 +184,23 @@ export class DoorAgentService implements DoorRuntimeAdapter {
   // --- create and remove ----------------------------------------------------
 
   /** Make a draft door agent from a name. Nothing is started. */
-  create(rawName: unknown, runtime: unknown = 'pi'): DoorRulesRecord {
-    if (!isDoorRuntime(runtime) || !LAUNCHABLE.includes(runtime)) {
-      throw new DoorError(400, `Swarm Map cannot start a "${String(runtime)}" agent yet. Only: ${LAUNCHABLE.join(', ')}`)
+  create(rawName: unknown, runtime: unknown = 'pi', rawDescription: unknown = ''): DoorRulesRecord {
+    // Only a harness the launcher has a cell for.
+    if (!isDoorRuntime(runtime) || !isLauncherHarness(runtime)) {
+      throw new DoorError(400, `Swarm Map cannot start a "${String(runtime)}" agent behind a door. Only: ${LAUNCHER_HARNESSES.join(', ')}`)
     }
-    const name = typeof rawName === 'string' && NAME.test(rawName.trim()) ? rawName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') : ''
-    if (!AGENT_ID.test(name)) throw new DoorError(400, 'Name: letters, digits, spaces and dashes, 2 to 31 characters')
-    const id = 'h_' + name.replace(/-/g, '_')
+    const named = doorAgentName(rawName)
+    if ('error' in named) throw new DoorError(400, named.error)
+    const { name, id } = named
+    const description = typeof rawDescription === 'string' ? rawDescription.trim() : undefined
+    if (description === undefined || description.length > 600 || !ONE_LINE.test(description)) {
+      throw new DoorError(400, 'Description: one line, up to 600 characters')
+    }
     const stored = this.storage.read<Row[]>(HARNESSES_FILE, [])
-    if (this.nameTaken(name) || stored.some((r) => r?.id === id || r?.name === name)) {
-      throw new DoorError(409, `An agent named "${name}" already exists`)
+    if (this.nameTaken(name) || doorNameTaken(named, Array.isArray(stored) ? stored : [])) {
+      throw new DoorError(409, doorNameClash(name))
     }
-    const record = draftRecord(id, name, runtime, this.now())
+    const record = draftRecord(id, name, runtime, this.now(), description)
     this.writeRecord(record)
     this.storage.write(HARNESSES_FILE, [...stored, { id, name, runtime }])
     this.audit.append({ who: 'admin', what: 'door:create', target: name, meta: { runtime } })
@@ -230,15 +237,29 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     let run: { pid?: unknown; startedAt?: unknown; policyHash?: unknown } | undefined
     try { run = JSON.parse(fs.readFileSync(path.join(p.stateDir, 'run.json'), 'utf8')) } catch { /* no run on record */ }
     if (!run || typeof run.pid !== 'number' || !this.launcher.alive(run.pid)) {
-      return { state: 'stopped', ...seal, rulesInForce: null }
+      return { state: 'stopped', ...seal, rulesInForce: null, startedBy: null }
     }
     let rulesInForce = false
     try { rulesInForce = record !== undefined && policyFor(record.rules).hash === run.policyHash } catch { /* rules that cannot be a policy are not in force */ }
     return {
       state: 'running', pid: run.pid,
       ...(typeof run.startedAt === 'string' ? { startedAt: run.startedAt } : {}),
-      ...seal, rulesInForce,
+      ...seal, rulesInForce, startedBy: this.startedBy(id, run.pid),
     }
+  }
+
+  /**
+   * Who started the door that runs as `pid`. A supervisor is asked first: one
+   * that restarts a door the page started keeps the same start script, and is
+   * then the one that starts it again.
+   */
+  private startedBy(id: string, pid: number): NonNullable<DoorStatus['startedBy']> {
+    if (this.launcher.supervisor?.(pid)) return 'supervisor'
+    try {
+      const started = JSON.parse(fs.readFileSync(doorAgentPaths(this.dataDir, id).startedByPage, 'utf8')) as { pid?: unknown }
+      if (started?.pid === pid) return 'page'
+    } catch { /* this page started nothing that is on record */ }
+    return 'elsewhere'
   }
 
   usage(id: string): DoorUsage {
@@ -310,7 +331,13 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       dryRun: this.readDryRun(id),
       problems: { rules: rulesProblems(record), secrets: secretProblems(record, this.repoRoot) },
       supervisor: { command: supervisorCommand(record, { startScript: p.startScript, logPath: p.log }), startScript: p.startScript },
+      harness: this.harnessOf(record),
     }
+  }
+
+  private harnessOf(record: DoorRulesRecord): DoorAgentView['harness'] {
+    const { label, version, oneRoomOnly, limits } = harnessFacts(record.runtime)
+    return { runtime: record.runtime, label, version, oneRoomOnly, limits }
   }
 
   // --- start, stop, save ------------------------------------------------------
@@ -444,7 +471,13 @@ export class DoorAgentService implements DoorRuntimeAdapter {
   private async startDoor(record: DoorRulesRecord): Promise<void> {
     const p = doorAgentPaths(this.dataDir, record.id)
     fs.mkdirSync(p.stateDir, { recursive: true, mode: 0o700 })
+    fs.rmSync(p.startedByPage, { force: true })
     await this.launcher.start({ startScript: p.startScript, logPath: p.log, stateDir: p.stateDir })
+    // Which process this page started, so the page can tell it from one a supervisor started later.
+    try {
+      const run = JSON.parse(fs.readFileSync(path.join(p.stateDir, 'run.json'), 'utf8')) as { pid?: unknown }
+      if (typeof run.pid === 'number') this.writeFile(p.startedByPage, JSON.stringify({ pid: run.pid, at: this.now().toISOString() }) + '\n', 0o600)
+    } catch { /* no run on record: the status says stopped */ }
   }
 
   private async stopDoor(record: DoorRulesRecord): Promise<void> {
@@ -452,5 +485,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     if (!fs.existsSync(p.config)) this.render(record)
     const { ok } = await this.launcher.stop({ configPath: p.config, stateDir: p.stateDir })
     if (!ok) throw new DoorError(500, 'The door could not be stopped cleanly. The Logs tab and the launcher\'s `stop` command say more')
+    // Nothing this page started is running any more.
+    fs.rmSync(p.startedByPage, { force: true })
   }
 }
