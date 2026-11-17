@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createMemoryStore, MEMORY_LIMITS, roomFolder } from '../memory.ts'
+import { ASKED_TO_REMEMBER, createMemoryStore, MEMORY_LIMITS, roomFolder } from '../memory.ts'
 import { createSanitizer } from '../sanitizer.ts'
 
 const dirs: string[] = []
@@ -158,4 +158,48 @@ describe('memory notes kept by the door', () => {
     }
     expect(s.render('fake:r-a')).toBeUndefined()
   })
+
+  it('[U:mem-consent] only an explicit ask about the speaker counts as consent', () => {
+    for (const t of ['remember me', 'Please remember me, I am Ada', 'remember that I like ferns', "remember that I'm learning Welsh", 'please remember my birthday is in May',
+      'remember I like moss', "don't forget that I water on Fridays", 'do not forget my name', '/remember I like ferns', '<@123> please remember my name']) {
+      expect(ASKED_TO_REMEMBER.test(t), t).toBe(true)
+    }
+    for (const t of ['do you remember what Bob said?', 'remember the seed swap', 'I remember the old garden', 'remember that Bob is unwell', 'can you remember me?',
+      'did you remember my order?', 'remembering is hard', 'note that the gate is open', 'remember this']) {
+      expect(ASKED_TO_REMEMBER.test(t), t).toBe(false)
+    }
+  })
+
+  it('[U:mem-consent] keeps a record of who asked and when, and "forget me" removes it', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'mem-'))
+    dirs.push(dir)
+    let now = new Date('2026-03-01T10:00:00Z')
+    const s = createMemoryStore({ dir: path.join(dir, 'memory'), sanitizer: createSanitizer(), now: () => now })
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes ferns' }, ADA_ASKED)
+    now = new Date('2026-03-02T10:00:00Z')
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'is learning Welsh' }, ADA_ASKED)
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes moss' }, BO_ASKED)
+    expect(s.rooms()[0].consent).toEqual([
+      { id: 'u-ada', display: 'Ada', askedAt: '2026-03-01T10:00:00.000Z' },
+      { id: 'u-bo', display: 'Bo', askedAt: '2026-03-02T10:00:00.000Z' },
+    ])
+    s.apply('fake:r-a', { file: 'people', op: 'remove' }, ADA)
+    expect(s.rooms()[0].consent).toEqual([{ id: 'u-bo', display: 'Bo', askedAt: '2026-03-02T10:00:00.000Z' }])
+    // A dashboard edit that takes down Bo's last note takes the record too.
+    expect(s.replace('fake:r-a', { people: '' })).toEqual([])
+    expect(s.rooms()[0].consent).toEqual([])
+  })
+
+  it('[U:mem-withheld] a person\'s notes are given only to that person or an admin; others are told they are withheld', () => {
+    const { s } = store()
+    s.apply('fake:r-a', { file: 'room', op: 'add', text: 'ferns on Fridays' }, ADA)
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes ferns' }, ADA_ASKED)
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes moss' }, BO_ASKED)
+    const withheld = (n: number) => `(Notes about ${n} other ${n === 1 ? 'person are' : 'people are'} withheld: each person's notes are given only to them or an admin.)`
+    expect(s.render('fake:r-a', { id: 'u-ada', admin: false })).toBe(`About this room:\n- ferns on Fridays\nPeople who asked to be remembered:\n- [u-ada] Ada: likes ferns\n${withheld(1)}`)
+    expect(s.render('fake:r-a', { id: 'u-cy', admin: false })).toBe(`About this room:\n- ferns on Fridays\nPeople who asked to be remembered:\n${withheld(2)}`)
+    expect(s.render('fake:r-a', { id: 'u-root', admin: true })).toContain('- [u-bo] Bo: likes moss')
+    expect(s.render('fake:r-a', { id: 'u-root', admin: true })).toContain('- [u-ada] Ada: likes ferns')
+  })
 })
+

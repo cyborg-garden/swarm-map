@@ -362,7 +362,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     let memory: string | undefined
     if (opts.memory) {
       let notes: string | undefined
-      try { notes = opts.memory.render(roomKey(e)) } catch { notes = undefined }
+      try { notes = opts.memory.render(roomKey(e), { id: e.sender.id, admin: d.privilege === 'admin' }) } catch { notes = undefined }
       const key = notes === undefined ? '' : createHash('sha256').update(notes).digest('hex')
       const now = noteLines(notes)
       let before = notesGiven.get(sessionKey)
@@ -523,7 +523,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             // is taken down later, it is started again (see inbound). Its notes are sent again on its next turn.
             if (done.ok) {
               let after: string | undefined
-              try { after = opts.memory.render(roomKey(e)) } catch { after = undefined }
+              try { after = opts.memory.render(roomKey(e), { id: e.sender.id, admin: d.privilege === 'admin' }) } catch { after = undefined }
               const held = notesGiven.get(turn.sessionKey)?.lines ?? new Set<string>()
               notesGiven.set(turn.sessionKey, { hash: 'written', lines: new Set([...held, ...noteLines(after)]) })
             }

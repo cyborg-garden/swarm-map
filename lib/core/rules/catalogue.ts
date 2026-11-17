@@ -166,7 +166,7 @@ export const RULES: Rule[] = [
 
   // The door's own notes (lib/door/memory.ts). The door keeps the rule for every harness, so it names no
   // shim check; the memory checks M1 to M6 put a harness that carries the door's tool through it end to end.
-  { id: 'mem.notes', statement: 'The door keeps notes for each room. One room\'s notes never reach another, a note changes only through the door\'s tool, a note that holds something secret-shaped, a mention, an id or an email address is refused, a note on a person\'s line is only ever about the person speaking, and a removed note is no longer given to the harness.',
+  { id: 'mem.notes', statement: 'The door keeps notes for each room. One room\'s notes never reach another, a note changes only through the door\'s tool, a note that holds something secret-shaped, a mention, an id or an email address is refused, a note on a person\'s line is only ever about the person speaking, kept only when they asked about themselves, and given only to them or an admin, and a removed note is no longer given to the harness.',
     klass: 'security', kind: 'wall', reads: ['tools.allow'], surfaces: 'all', enforcer: 'door', tests: ['U:mem', 'P:mem-notes', 'P:mem-wipe'], checks: [] },
 
   { id: 'san.in', statement: 'Pasted secrets are scrubbed before the harness sees them.',

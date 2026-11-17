@@ -82,10 +82,10 @@ export const MEMORY_TOOL_DEFINITION: Omit<PiToolDefinition, 'execute'> = {
   label: 'Memory note',
   description: [
     'Ask the door to change the notes it keeps for this room. They are given back to you when a conversation starts, after a restart too.',
-    'file: room (about this room), people (about the person speaking, only when they asked you to remember), threads (what is still going on).',
+    'file: room (about this room), people (about the person speaking, only when they asked you to remember them), threads (what is still going on).',
     'op: add a note, replace one (old is the exact note, text the new one), or remove one (old is the exact note).',
     'When a person asks you to forget them, use file people, op remove, with no old and no text: every note of theirs here is removed.',
-    'One short line per note. Notes name nobody, and hold no secret: the door refuses those and says why. Everyone you talk to in this room may be told what is in these notes.',
+    'One short line per note. Notes name nobody, and hold no secret: the door refuses those and says why. A person\'s notes are given only to them or an admin; the room and thread notes, to everyone here.',
   ].join(' '),
   parameters: {
     type: 'object',

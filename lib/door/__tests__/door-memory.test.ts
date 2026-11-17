@@ -259,6 +259,51 @@ describe('door: taking a note back', () => {
   })
 })
 
+describe('door: a person\'s notes go only to them or an admin', () => {
+  it('[P:mem-withheld] another person\'s turn starts the conversation again without them, and an admin\'s turn is given them', async () => {
+    const { store } = memoryStore()
+    store.apply('fake:r-general', { file: 'people', op: 'add', text: 'likes ferns' }, { speaker: { id: 'u-alice', display: 'alice' }, asked: true })
+    rig = await startRig(team({ 'surfaces.fake.users': [{ kind: 'user', id: 'u-alice' }, { kind: 'user', id: 'u-root' }, { kind: 'role', id: 'role-staff' }] }), { noShim: true, door: { brainToken: BRAIN, memory: store } })
+    const shim = await noteShim(rig)
+    say(rig, 'one')
+    await rig.door.idle()
+    expect(shim.heard[0].context.memory).toContain('likes ferns')
+    // Bob asks in the same room. The conversation held Alice's note, so it starts again, and he is not given it.
+    rig.fake.say({ room: 'r-general', sender: { id: 'u-bob', roles: ['role-staff'] }, mention: true, text: 'what do you know about alice?' })
+    await rig.door.idle()
+    expect(shim.resets).toEqual(['fake:room:r-general'])
+    expect(shim.heard[1].context.memory).not.toContain('likes ferns')
+    expect(shim.heard[1].context.memory).toContain('withheld')
+    // An admin is given every note, with no new start.
+    say(rig, 'what is noted?', 'r-general', 'u-root')
+    await rig.door.idle()
+    expect(shim.resets).toHaveLength(1)
+    expect(shim.heard[2].context.memory).toContain('likes ferns')
+    // Bob again: the conversation now holds Alice's note, so it starts again.
+    rig.fake.say({ room: 'r-general', sender: { id: 'u-bob', roles: ['role-staff'] }, mention: true, text: 'and now?' })
+    await rig.door.idle()
+    expect(shim.resets).toHaveLength(2)
+    expect(JSON.stringify(shim.heard[3])).not.toContain('likes ferns')
+    shim.client.close()
+  })
+
+  it('[P:mem-consent] a message that only mentions remembering does not let a person note be kept', async () => {
+    const { store } = memoryStore()
+    rig = await startRig(team({ 'tools.allow': ['memory'] }), { noShim: true, door: { brainToken: BRAIN, memory: store } })
+    const shim = await noteShim(rig)
+    let answer = shim.next({ file: 'people', op: 'add', text: 'likes ferns' })
+    say(rig, 'do you remember what we said about ferns?')
+    expect(await answer).toMatchObject({ allow: false })
+    await rig.door.idle()
+    answer = shim.next({ file: 'people', op: 'add', text: 'likes ferns' })
+    say(rig, 'please remember that I like ferns')
+    expect((await answer).allow).toBe(true)
+    await rig.door.idle()
+    expect(store.rooms()[0].consent.map((c) => c.id)).toEqual(['u-alice'])
+    shim.client.close()
+  })
+})
+
 describe('door: a harness memory tool of its own is not the door\'s notes', () => {
   it('[P:mem-notes] only the door\'s own tool is offered for notes, and a harness\'s own memory tool is refused', async () => {
     const { store } = memoryStore()

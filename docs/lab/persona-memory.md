@@ -63,6 +63,7 @@ ability.
                                  /people.md    People who asked to be remembered
                                  /threads.md   Ongoing threads
                                  /room.json    Which room this folder is
+                                 /consent.json Who asked to be remembered, and when
 ```
 
 The folder name is a hash of the room's key (`surface:room`; a thread uses its parent's room), so
@@ -97,7 +98,8 @@ The door's rules for a note:
 | Refused if it holds a mention, a platform id or an email address | A note cannot point at someone. A plain name is not caught: see the limits below |
 | Refused if it holds an invisible or direction-changing character | Nothing hidden from the checks or from a person reading it |
 | `people`: only about the person speaking. The door writes their id on the line; the agent cannot name anyone | Notes about a person are theirs |
-| `people`: only in a turn where that person's own message says "remember", "don't forget" or "note that" | Opt-in, in their own words |
+| `people`: only in a turn where that person's own message asks about themselves: "remember me", "remember that I…", "please remember my…", "don't forget that I…", or `/remember`. "Do you remember…?" or "remember that Bob…" does not count | Opt-in, in their own words |
+| `people`: who asked, and when they first asked, is kept in `consent.json` beside the notes, and removed with their last note | A record of consent |
 | `people`: anyone may remove their own note, without asking twice. A remove with no note named takes down every note of theirs in the room ("forget me") | Easy to take back |
 | `people`: at most 8 notes for one person in a room | One person cannot fill the file and keep everyone else from being remembered |
 | On an agent anyone can talk to, `room` and `threads` change only in a turn an admin started | A stranger cannot plant a note for the whole room |
@@ -112,12 +114,12 @@ that anyone in the room may be told what the notes say.
 
 ### Privacy limits the operator should know
 
-- **Everyone in the room can be told every note**, the people notes included. Person X can ask what
-  the agent knows about person Y, and it may say. The agent is told this, and told never to promise
-  privacy.
-- **Asking is a word check.** "Remember", "don't forget" or "note that" anywhere in the person's own
-  message counts, so "do you remember...?" counts too. The model is also told to keep a note about
-  a person only when they ask.
+- **A person's notes go only to that person or an admin.** When anyone else speaks, the door leaves
+  them out and tells the agent they are withheld. A conversation that held them is started again
+  first, so the harness has nothing of them to repeat. Room and thread notes go to everyone in the
+  room.
+- **Asking is still a word check**, but a narrow one: the message has to ask about the speaker
+  ("remember me", "remember that I…"). The model is also told to keep a note only when asked.
 - **A plain name is not caught.** The door stops mentions, ids and email addresses, and keeps a
   person's line to the person speaking. It cannot tell that "my coworker Sam is unwell" is about
   someone else. On an agent with a known list of people, anyone allowed may also add a note about

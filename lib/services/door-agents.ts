@@ -443,6 +443,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       for (const f of MEMORY_FILES) {
         lines.push('', `### ${MEMORY_HEADINGS[f]}`, '', room.files[f].trim() || '(none)')
       }
+      lines.push('', '### Who asked to be remembered, and when', '', room.consent.map((c) => `- [${c.id}] ${c.display}: ${c.askedAt}`).join('\n') || '(nobody)')
     }
     if (rooms.length === 0) lines.push('', 'No notes are kept.')
     return { name: `${record.name}-notes.md`, text: lines.join('\n') + '\n' }

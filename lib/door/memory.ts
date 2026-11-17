@@ -43,13 +43,13 @@ export const MEMORY_HEADINGS: Record<MemoryFile, string> = {
 export const MEMORY_TOOL = 'memory_note'
 
 /**
- * Words that count as a person asking to be remembered, in their own message.
- * Without one, a note about them is refused. It is a word check, not an
- * understanding: "do you remember..." passes it too, so the model is also told
- * to keep a note only when asked. "Forget" is not needed to remove your own
- * notes: anyone may take their own card down, one note or all of them at once.
+ * A person asking to be remembered, about themselves, in their own message: "remember me",
+ * "remember that I...", "please remember my...", "don't forget that I...", or a `/remember`
+ * command. A message that only mentions remembering ("do you remember...?", "remember the seed
+ * swap", "remember that Bob...") does not count, so a note about a person is refused. Removing
+ * your own notes needs no such words: anyone may take their own card down, one note or all at once.
  */
-export const ASKED_TO_REMEMBER = /\b(remember|don'?t forget|do not forget|note that)\b/i
+export const ASKED_TO_REMEMBER = /(?:^|\s)\/remember\b|(?<!\b(?:you|u)\s+)(?<![a-z])(?:remember|don['’]?t forget|do not forget)\s+(?:me\b|my\b|i\b|i['’]m\b|that\s+(?:i\b|i['’]m\b|my\b))/i
 
 export interface Speaker { id: string; display: string }
 export interface NoteContext {
@@ -72,16 +72,27 @@ export interface NoteResult {
   message: string
 }
 
+/** Who asked to be remembered in a room, and when they first asked. Removed when their last note is. */
+export interface Consent { id: string; display: string; askedAt: string }
+
 export interface RoomNotes {
   /** The room's key, as the door names it: `surface:room`. */
   key: string
   files: Record<MemoryFile, string>
   bytes: number
+  consent: Consent[]
 }
 
+/** Who a room's notes are being given to. A person's notes go only to that person or an admin. */
+export interface Viewer { id: string; admin: boolean }
+
 export interface MemoryStore {
-  /** A room's notes as the agent is given them, or undefined when there are none. Redacted. */
-  render(room: string): string | undefined
+  /**
+   * A room's notes as the agent is given them, or undefined when there are none. Redacted. With a
+   * viewer who is not an admin, other people's notes are left out and the agent is told they are
+   * withheld. Without one (the dashboard, the checks), everything.
+   */
+  render(room: string, viewer?: Viewer): string | undefined
   /** A change the agent asked for, checked and written. */
   apply(room: string, input: unknown, ctx: NoteContext): NoteResult
   /** Every room that has notes. Redacted. For the dashboard. */
@@ -141,8 +152,11 @@ export function createMemoryStore(o: {
    * (conformance/broken). Nothing a running agent is given can turn it off.
    */
   checks?: boolean
+  /** The clock, for the consent record. */
+  now?: () => Date
 }): MemoryStore {
   const checks = o.checks !== false
+  const now = o.now ?? (() => new Date())
   const folder = (room: string): string => path.join(o.dir, roomFolder(room))
   const fileOf = (room: string, f: MemoryFile): string => path.join(folder(room), `${f}.md`)
   const redact = (text: string): string => {
@@ -173,14 +187,37 @@ export function createMemoryStore(o: {
     writeFileSync(tmp, lines.length === 0 ? '' : `${lines.join('\n')}\n`, { mode: 0o600 })
     renameSync(tmp, target)
   }
+  // consent.json: who asked to be remembered here, and when. Kept in step with people.md on every write of it.
+  const consentFile = (room: string): string => path.join(folder(room), 'consent.json')
+  const readConsent = (room: string): Consent[] => {
+    try {
+      const v = JSON.parse(readFileSync(consentFile(room), 'utf8')) as unknown
+      return Array.isArray(v) ? v.filter((c): c is Consent => typeof c?.id === 'string' && typeof c?.display === 'string' && typeof c?.askedAt === 'string') : []
+    } catch { return [] }
+  }
+  const syncConsent = (room: string, peopleLines: string[], asked?: Speaker): void => {
+    const owners = new Set(peopleLines.map(ownerOf).filter((id): id is string => id !== undefined))
+    const kept = readConsent(room).filter((c) => owners.has(c.id))
+    if (asked && owners.has(asked.id) && !kept.some((c) => c.id === asked.id)) kept.push({ id: asked.id, display: cleanName(asked.display), askedAt: now().toISOString() })
+    ensure(room)
+    const tmp = `${consentFile(room)}.${process.pid}.tmp`
+    writeFileSync(tmp, JSON.stringify(kept) + '\n', { mode: 0o600 })
+    renameSync(tmp, consentFile(room))
+  }
   const refuse = (code: string, message: string): NoteResult => ({ ok: false, code, message: `Not saved: ${message}.` })
 
   return {
-    render(room) {
+    render(room, viewer) {
       const files = read(room)
       const parts = MEMORY_FILES.flatMap((f) => {
-        const lines = entries(files[f])
-        return lines.length === 0 ? [] : [`${MEMORY_HEADINGS[f]}:`, ...lines.map(redact)]
+        const all = entries(files[f])
+        if (f !== 'people' || viewer === undefined || viewer.admin) return all.length === 0 ? [] : [`${MEMORY_HEADINGS[f]}:`, ...all.map(redact)]
+        // A person's notes go only to them or an admin. The agent is told that others are withheld, never what they say.
+        const own = all.filter((line) => ownerOf(line) === viewer.id)
+        const others = new Set(all.map(ownerOf).filter((id) => id !== undefined && id !== viewer.id)).size
+        if (all.length === 0) return []
+        return [`${MEMORY_HEADINGS[f]}:`, ...own.map(redact),
+          ...(others === 0 ? [] : [`(Notes about ${others} other ${others === 1 ? 'person are' : 'people are'} withheld: each person's notes are given only to them or an admin.)`])]
       })
       return parts.length === 0 ? undefined : parts.join('\n')
     },
@@ -209,6 +246,7 @@ export function createMemoryStore(o: {
         next = lines.filter((line) => !mine(line))
         if (next.length === lines.length) return refuse('no-match', 'there is no note of the speaker\'s own here')
         write(room, f, next)
+        syncConsent(room, next)
         return { ok: true, code: 'remove', message: `Removed ${lines.length - next.length === 1 ? 'their note' : `all ${lines.length - next.length} of their notes`}.` }
       }
       if (op === 'replace' || op === 'remove') {
@@ -224,6 +262,7 @@ export function createMemoryStore(o: {
       }
       if (bytes(next.join('\n') + '\n') > MEMORY_LIMITS.fileBytes) return refuse('full', `${f} is full (${MEMORY_LIMITS.fileBytes} bytes). Remove or replace a note first`)
       write(room, f, next)
+      if (f === 'people') syncConsent(room, next, op === 'add' ? ctx.speaker : undefined)
       return { ok: true, code: op, message: op === 'add' ? 'Saved. The door keeps it for this room.' : op === 'replace' ? 'Replaced.' : 'Removed.' }
     },
 
@@ -236,7 +275,7 @@ export function createMemoryStore(o: {
         if (typeof key !== 'string' || roomFolder(key) !== name) continue
         const files = read(key)
         const shown = Object.fromEntries(MEMORY_FILES.map((f) => [f, redact(files[f])])) as Record<MemoryFile, string>
-        out.push({ key, files: shown, bytes: MEMORY_FILES.reduce((n, f) => n + bytes(files[f]), 0) })
+        out.push({ key, files: shown, bytes: MEMORY_FILES.reduce((n, f) => n + bytes(files[f]), 0), consent: readConsent(key) })
       }
       return out
     },
@@ -261,7 +300,10 @@ export function createMemoryStore(o: {
         next[f as MemoryFile] = lines
       }
       if (problems.length > 0) return problems
-      for (const [f, lines] of Object.entries(next)) write(room, f as MemoryFile, lines as string[])
+      for (const [f, lines] of Object.entries(next)) {
+        write(room, f as MemoryFile, lines as string[])
+        if (f === 'people') syncConsent(room, lines as string[])
+      }
       return []
     },
 
