@@ -96,7 +96,13 @@ if the reader understood all of it and:
 - every command in it is on the allow list, named plainly (`ls`, not `/bin/ls` or `./ls`);
 - none of them has an argument that writes or runs something (`find -exec`, `find -delete`,
   `sort -o`, `date -s`, a second file to `uniq`, `file -C`);
-- nothing is written by a redirection (a write to `/dev/null` is fine).
+- nothing is written by a redirection (a write to `/dev/null` is fine);
+- no word reaches out of the scratch folder: no full path, no `..`, no path fixed to an option
+  (`-f/x`, `--file=/x`), no `--files0-from`. The cell holds more than the scratch folder (its own
+  token in `/proc/1/environ`, other conversations' transcripts, the harness's settings). A file
+  tool cannot reach them, so a command that skips the yes cannot either;
+- `seq` counts to at most five digits: one with no end fills the cell's memory with output
+  faster than the time limit stops it, and takes every conversation down with it.
 
 Anything the reader does not fully understand asks: `$( )`, backticks, `$VAR`, `${ }`, `$'…'`,
 globs, `~`, braces, a subshell, a here-doc, a comment, a job sent to the background, a line that
@@ -108,7 +114,8 @@ reader gives up on, so a block is found after a `;`, inside `$( )` or backticks,
 `env`, `timeout` or `xargs`, and inside `sh -c '…'` or `eval`. Besides the block list, these never
 run: a recursive `rm` that reaches out of the scratch folder (a full path, `~`, `..`, a variable,
 or no path at all, as from `xargs`), `find -delete` the same way, `chmod`/`chown` on a system path,
-a redirection into a system path, `kill -1`, and a fork bomb.
+a redirection into a system path, a redirection to bash's own network paths (`/dev/tcp/…`,
+`/dev/udp/…`), `kill -1`, and a fork bomb.
 
 **Some names can never be on the allow list:** shells, interpreters and anything that runs another
 command (`sh`, `bash`, `source`, `.`, `eval`, `env`, `xargs`, `sudo`, `timeout`, `python3`, `node`,
@@ -127,8 +134,13 @@ What does not change:
   `command=ask:redirect`), never the command. Names in a rule come from the lists, never from the
   command.
 
-The commands found on the cell's `PATH` are the ones the gate's environment names. An earlier yes
-reaches past its own command, as above, so it can change what a later allowed command finds.
+The commands found on the cell's `PATH` are the ones the gate's environment names. Pi starts a new
+shell for each call, so a function or alias from an earlier yes does not carry over. Its settings
+do: `shellCommandPrefix` or `shellPath`, in Pi's own folder or in `.pi/settings.json` in the scratch
+folder, would run beside every later command the door let through unread. So the Pi gate refuses
+every shell call while either is set, and for the rest of that Pi's life once it has seen one.
+An earlier yes still reaches past its own command in one way: a link it made in the scratch folder
+is followed by a later allowed command.
 
 ## Approval in the room
 

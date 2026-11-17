@@ -365,6 +365,8 @@ function wrappedAt(name: string, words: string[]): number | undefined {
 /** Whether one command, read loosely, is something that never runs. The rule if so. */
 function blockOf(words: string[], redirs: Redir[], lists: CommandLists, depth: number): string | undefined {
   for (const r of redirs) {
+    // bash opens a socket for these in a redirection, whatever is installed: they are network tools.
+    if (/^\/dev\/+(tcp|udp)\//.test(path.posix.normalize(r.target))) return 'block:network-path'
     if (/^\d*(>|>>|>\||&>|&>>)$/.test(r.op) || (/^\d*>&$/.test(r.op) && !/^(\d+|-)$/.test(r.target))) {
       if (isSystemPath(r.target)) return 'block:redirect-system'
     }
@@ -431,12 +433,29 @@ function loosely(command: string, lists: CommandLists, depth: number): string | 
 /** The few arguments that make a listed command write a file or set something. Any of them makes it ask. */
 const ARG_CHECKS: Record<string, (args: string[]) => boolean> = {
   find: (args) => args.some((a) => ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'].includes(a)),
-  date: (args) => flagsOf(args).some((f) => shortHas(f, 's') || f.startsWith('--set')),
+  // --s and --se are --set too: a long option may be cut short while it stays the only one it could be.
+  date: (args) => flagsOf(args).some((f) => shortHas(f, 's') || f.startsWith('--s')),
+  // seq with no end, or a long one, fills the cell's memory with output faster than the time limit stops it.
+  seq: (args) => args.length === 0 || args.some((a) => !/^\d{1,5}$/.test(a)),
   sort: (args) => flagsOf(args).some((f) => shortHas(f, 'oT') || /^--(o|ou|out|outp|outpu|output|c|co|com|comp|compr|compre|compres|compress|compress-|compress-p|compress-pr|compress-pro|compress-prog|compress-progr|compress-progra|compress-program|t|te|tem|temp|tempo|tempor|tempora|temporar|temporary|temporary-|temporary-d|temporary-di|temporary-dir|temporary-dire|temporary-direc|temporary-direct|temporary-directo|temporary-director|temporary-directory)(=|$)/.test(f)),
   // file -C writes a compiled magic file.
   file: (args) => flagsOf(args).some((f) => shortHas(f, 'C') || /^--com/.test(f)),
   // uniq's second operand is a file it writes.
   uniq: (args) => operandsOf(args).length > 1,
+}
+
+/**
+ * Whether a word reaches out of the folder the command runs in: a full path, `..`, or a path
+ * fixed to an option (`-f/x`, `--file=/x`). The cell holds more than the scratch folder (its
+ * own token in /proc, other conversations' transcripts, the harness's settings) and a file tool
+ * cannot reach them, so a command that runs with no yes must not either. It asks instead.
+ * `--files0-from` reads the names to open from a file, so it is the same.
+ */
+function reachesOut(word: string): boolean {
+  if (word.startsWith('--files0-from')) return true
+  if (word.split(/[/=]/).includes('..')) return true
+  if (/^-[^-]/.test(word) && word.includes('/')) return true
+  return word.split('=').some((part) => part.startsWith('/'))
 }
 
 /**
@@ -468,12 +487,14 @@ export function classifyCommand(command: string, lists: CommandLists): CommandVe
       const reads = /^\d*<$/.test(r.op)
       const toNothing = /^\d*(>|>>|&>|&>>)$/.test(r.op) && r.target === '/dev/null'
       if (!dup && !reads && !toNothing) return ask('ask:redirect')
+      if (reads && reachesOut(r.target)) return ask('ask:outside-scratch')
     }
     const name = c.words[0]
     if (name.includes('/')) return ask('ask:path')
     if (NEVER_ALLOWED.includes(name)) return ask('ask:never-allowed')
     if (!lists.allow.includes(name) || !NAME.test(name)) return ask('ask:unlisted')
     if (ARG_CHECKS[name]?.(c.words.slice(1))) return ask('ask:args')
+    if (c.words.slice(1).some(reachesOut)) return ask('ask:outside-scratch')
     if (!names.includes(name)) names.push(name)
   }
   return { verdict: 'allow', rule: `allow:${names.join(',')}` }

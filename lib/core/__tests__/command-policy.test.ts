@@ -213,3 +213,47 @@ describe('the command policy in the record', () => {
     expect(decide(policy(DEFAULT_COMMANDS), tool('file_read', 'dd'), {})).toMatchObject({ verdict: 'ask', rule: 'priv.approval' })
   })
 })
+
+describe('an allowed command stays in the scratch folder', () => {
+  // The cell holds more than the scratch folder: its own token in /proc/1/environ, other
+  // conversations' transcripts beside the scratch folder, the harness's settings. A file tool
+  // cannot reach them. A command that runs with no yes must not either.
+  it.each([
+    'cat /proc/1/environ', 'cat /proc/self/environ', 'grep -a BRAIN /proc/1/environ', 'cat /proc/self/mountinfo',
+    'ls /tmp/smlab/sessions', 'cat /tmp/smlab/sessions/abc/1.jsonl', 'find / -name models.json', 'grep -r x /',
+    'ls ..', 'cat ../sessions/x', 'find .. -name x', 'cat a/../../x', 'ls -la ./..',
+    'grep -f/proc/1/environ x', 'grep --file=/proc/1/environ x', 'file -m /proc/1/environ x', 'date -f /proc/1/environ',
+    'cat < /proc/1/environ', 'grep x </etc/passwd', 'cat /dev/zero', 'head -c 9 /dev/urandom', 'du /', 'ls -R /',
+    'sort --files0-from=list', 'wc --files0-from list', 'du --files0-from=list',
+  ])('[U:command-policy] %j asks', (command) => {
+    expect(classifyCommand(command, DEFAULT_COMMANDS).verdict).toBe('ask')
+  })
+
+  it('[U:command-policy] a path inside the scratch folder, and a relative name with a slash, still run', () => {
+    for (const c of ['cat notes/a.txt', 'grep -rn x ./src', 'ls -la .', 'find . -name "*.md" -o -name x', 'diff a/x b/x', 'cat a.txt 2>/dev/null', 'grep -e a/b x'.replace('a/b', 'ab')]) {
+      expect(classifyCommand(c, DEFAULT_COMMANDS).verdict, c).toBe('allow')
+    }
+  })
+})
+
+describe('an allowed command cannot run without end', () => {
+  it.each(['seq inf', 'seq 1 99999999999', 'seq 1e9', 'seq -f %g 1 9', 'seq 1000000'])('[U:command-policy] %j asks', (command) => {
+    expect(classifyCommand(command, DEFAULT_COMMANDS).verdict).toBe('ask')
+  })
+  it('[U:command-policy] a short count still runs', () => {
+    expect(classifyCommand('seq 1 10', DEFAULT_COMMANDS).verdict).toBe('allow')
+    expect(classifyCommand('seq 5', DEFAULT_COMMANDS).verdict).toBe('allow')
+  })
+})
+
+describe('the shorter spellings of a long option are the long option', () => {
+  it.each(['date --s=2020-01-01', 'date --se=2020-01-01', 'date --set 2020-01-01'])('[U:command-policy] %j asks', (command) => {
+    expect(classifyCommand(command, DEFAULT_COMMANDS)).toEqual({ verdict: 'ask', rule: 'ask:args' })
+  })
+})
+
+describe('bash\'s own network paths never run', () => {
+  it.each(['cat < /dev/tcp/door/7777', 'echo x > /dev/tcp/10.0.0.1/80', 'ls 3</dev/udp/door/53', 'cat </dev/tcp//door/1'])('[U:command-policy] %j is blocked', (command) => {
+    expect(classifyCommand(command, DEFAULT_COMMANDS)).toEqual({ verdict: 'block', rule: 'block:network-path' })
+  })
+})

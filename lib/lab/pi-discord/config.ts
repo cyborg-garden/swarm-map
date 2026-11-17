@@ -263,7 +263,7 @@ export function systemPromptFor(c: LabConfig): string {
     `You also have tools. With them you can: ${on.map((k) => names[k]).join(', ')}.`,
     'Your tools work in a box of your own with no network: one small scratch folder, which is emptied when you are restarted.',
     ...(asks.length > 0 ? [`Before you ${asks.map((k) => names[k]).join(' or ')}, an admin is shown exactly what you asked for, in the channel, and has to say yes. If nobody says yes it does not happen, and you say so plainly.`] : []),
-    ...(modes.shell !== 'never' && commandsOf(c).allow.length > 0 ? [`A shell command made only of these, with nothing written to a file, runs without anyone being asked: ${commandsOf(c).allow.join(', ')}.`] : []),
+    ...(modes.shell !== 'never' && commandsOf(c).allow.length > 0 ? [`A shell command made only of these, with nothing written to a file and no path outside your scratch folder, runs without anyone being asked: ${commandsOf(c).allow.join(', ')}.`] : []),
     ...(modes.shell !== 'never' && commandsOf(c).block.length > 0 ? [`These never run, whoever says yes: ${commandsOf(c).block.join(', ')}, and deleting folders outside your scratch folder.`] : []),
     `What you cannot do: ${off.map((k) => `${names[k]}, `).join('')}reach anything on a network, ${rest}`,
   ]
