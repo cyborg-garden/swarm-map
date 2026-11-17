@@ -19,7 +19,7 @@ import { connectShim, type ShimClient } from '../../door/shim-client.ts'
 import { PI_CAPS } from './caps.ts'
 import { MEMORY_TOOL } from './cell/gate.ts'
 import { renderPrompt } from './preamble.ts'
-import { createPiRpc, type PiProcess, type PiRpc } from './rpc.ts'
+import { createPiRpc, type GateCall, type PiProcess, type PiRpc } from './rpc.ts'
 
 export interface PiShimOptions {
   host: string
@@ -111,6 +111,17 @@ export function sessionDirFor(sessionsDir: string, sessionKey: string): string {
   return path.join(sessionsDir, createHash('sha256').update(sessionKey).digest('hex').slice(0, 16))
 }
 
+/**
+ * The door's answer to one of its own tools, as the text the model is given. Only that one name is
+ * carried this way, and only inside a live turn; the door decides it like any other call.
+ */
+export async function answerDoorTool(call: GateCall, turnId: string | undefined, ask: ShimClient['requestTool']): Promise<string> {
+  if (call.tool !== MEMORY_TOOL) return 'Not saved: that is not one of the door\'s tools.'
+  if (!turnId) return 'Not saved: no turn is live.'
+  const answer = await ask(turnId, call.tool, call.input)
+  return answer.reason ?? (answer.allow ? 'Done.' : 'Not saved.')
+}
+
 /** One running Pi, and the tool list it was started with. */
 interface Live { rpc: PiRpc; tools: string; turnId?: string }
 /** One session: its turns run one at a time, on whichever Pi is live for it. */
@@ -150,12 +161,7 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
           return client.requestTool(live.turnId, call.tool, call.input)
         },
         // The door's own tool. Only that one name is carried this way, and the door decides it like any other call.
-        onDoorTool: async (call) => {
-          if (call.tool !== MEMORY_TOOL) return 'Not saved: that is not one of the door\'s tools.'
-          if (!live.turnId) return 'Not saved: no turn is live.'
-          const answer = await client.requestTool(live.turnId, call.tool, call.input)
-          return answer.reason ?? (answer.allow ? 'Done.' : 'Not saved.')
-        },
+        onDoorTool: (call) => answerDoorTool(call, live.turnId, client.requestTool),
       }),
     }
     child.on('exit', () => { if (slot.live === live) slot.live = undefined })

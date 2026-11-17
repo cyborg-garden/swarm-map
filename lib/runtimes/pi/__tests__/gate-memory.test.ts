@@ -8,6 +8,7 @@ import swarmGate, { MEMORY_TOOL, MEMORY_TOOL_DEFINITION, type PiToolDefinition }
 import { MEMORY_TOOL as DOOR_MEMORY_TOOL } from '../../../door/memory.ts'
 import { PI_TOOL_MAP } from '../caps.ts'
 import { DOOR_PREFIX } from '../rpc.ts'
+import { answerDoorTool } from '../shim.ts'
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>
 function load() {
@@ -59,5 +60,18 @@ describe('the door\'s memory tool in Pi', () => {
     // Every other tool is still asked about.
     expect(await handlers.tool_call({ toolName: 'bash', toolCallId: 'c', input: { command: 'ls' } }, ctx)).toMatchObject({ block: true })
     expect(selects).toHaveLength(1)
+  })
+})
+
+describe('the Pi shim and the door\'s tool', () => {
+  it('[U:pi-memory] carries only memory_note, only in a live turn, and hands back the door\'s words', async () => {
+    const asked: unknown[] = []
+    const ask = async (turnId: string, tool: string, input: unknown) => { asked.push([turnId, tool, input]); return { allow: false, reason: 'Not saved: full.' } }
+    expect(await answerDoorTool({ tool: 'bash', input: { command: 'ls' }, callId: 'c' }, 't1', ask)).toBe('Not saved: that is not one of the door\'s tools.')
+    expect(await answerDoorTool({ tool: MEMORY_TOOL, input: {}, callId: 'c' }, undefined, ask)).toBe('Not saved: no turn is live.')
+    expect(asked).toEqual([])
+    expect(await answerDoorTool({ tool: MEMORY_TOOL, input: { file: 'room' }, callId: 'c' }, 't1', ask)).toBe('Not saved: full.')
+    expect(asked).toEqual([['t1', MEMORY_TOOL, { file: 'room' }]])
+    expect(await answerDoorTool({ tool: MEMORY_TOOL, input: {}, callId: 'c' }, 't1', async () => ({ allow: true }))).toBe('Done.')
   })
 })
