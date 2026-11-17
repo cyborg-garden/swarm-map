@@ -202,6 +202,41 @@
       "status": "pass"
     },
     {
+      "id": "M1",
+      "title": "notes outlive a restart: a new door and a new harness are given the notes the last one wrote",
+      "status": "pass"
+    },
+    {
+      "id": "M2",
+      "title": "one room's notes never reach another room",
+      "status": "pass"
+    },
+    {
+      "id": "M3",
+      "title": "a note with something secret-shaped in it is refused: never kept, never given back, and the agent is told",
+      "status": "pass"
+    },
+    {
+      "id": "M4",
+      "title": "the agent changes its notes only through the door's tool: a file tool aimed at the notes changes nothing",
+      "status": "pass"
+    },
+    {
+      "id": "M5",
+      "title": "what the launcher says the agent can do reaches the model whole, after the persona, whatever the persona says",
+      "status": "pass"
+    },
+    {
+      "id": "M6",
+      "title": "a wipe really wipes: once the notes are gone, nothing of them reaches the model again",
+      "status": "pass"
+    },
+    {
+      "id": "M7",
+      "title": "fetched text never writes a note: once a conversation has read a page, the door refuses its notes",
+      "status": "pass"
+    },
+    {
       "id": "S0",
       "title": "fake-proof preflight for the Docker rig",
       "status": "not-run",
@@ -707,6 +742,11 @@
       "checks": []
     },
     {
+      "rule": "mem.notes",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "san.in",
       "status": "shared",
       "checks": []
@@ -770,7 +810,13 @@
         "N6",
         "N7",
         "N8",
-        "C6m"
+        "C6m",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M6",
+        "M7"
       ],
       "suiteCaughtIt": true
     },
@@ -835,6 +881,68 @@
       ],
       "failed": [
         "C6n"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "memory-one-room",
+      "mustFail": [
+        "M2"
+      ],
+      "failed": [
+        "M2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "memory-no-checks",
+      "mustFail": [
+        "M3"
+      ],
+      "failed": [
+        "M3"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "memory-cached",
+      "mustFail": [
+        "M6"
+      ],
+      "failed": [
+        "M6"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "memory-in-scratch",
+      "mustFail": [
+        "M4",
+        "M1"
+      ],
+      "failed": [
+        "M1",
+        "M4"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "memory-after-web",
+      "mustFail": [
+        "M7"
+      ],
+      "failed": [
+        "M7"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "no-system-prompt",
+      "mustFail": [
+        "M5"
+      ],
+      "failed": [
+        "M5"
       ],
       "suiteCaughtIt": true
     },
@@ -1081,7 +1189,14 @@
         "N9",
         "C6m",
         "C6b",
-        "C6s"
+        "C6s",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
+        "M6",
+        "M7"
       ],
       "suiteCaughtIt": true
     }
