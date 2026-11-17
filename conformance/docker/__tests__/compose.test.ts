@@ -135,6 +135,9 @@ describe('the sealed rig', () => {
       ['no-new-privileges', (cell) => { cell.security_opt = ['no-new-privileges:true', 'seccomp:unconfined'] }],
       ['IPv6', (cell) => { cell.sysctls = {} }],
       ['command', (cell) => { cell.command = ['sh', '-c', 'true'] }],
+      ['/tmp is not in memory with a size', (cell) => { cell.tmpfs = ['/tmp'] }],
+      ['/tmp is not in memory with a size', (cell) => { cell.tmpfs = ['/tmp:size=32m,mode=1777,nosuid,nodev'] }],
+      ['/tmp is not in memory with a size', (cell) => { (cell.tmpfs as string[]).push('/opt/swarm') }],
     ]
     for (const [what, edit] of edits) {
       const broken = rig()

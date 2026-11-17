@@ -150,6 +150,13 @@ export function sourceProblems(kind: 'cell' | 'rig', image: string, seen: { labe
 
 /** Where both containers mount the shared volume. Under the temp dir, so the lab's work-dir guard holds inside too. */
 export const LAB_DIR = '/tmp/smlab'
+/**
+ * Every container's /tmp: in memory, with a size, and nothing in it can be run, be setuid or be a
+ * device. Without a size Docker gives a tmpfs up to half the machine's memory, and a shell in the
+ * cell could fill it. The shared folder and the scratch folder are mounts of their own inside it.
+ */
+export const TMP_MB = 32
+export const TMP_MOUNT = `/tmp:size=${TMP_MB}m,mode=1777,noexec,nosuid,nodev`
 export const BRAIN_PORT = 7801
 export const ROUTE_PORT = 7802
 export const SINK_PORT = 8080
@@ -278,7 +285,7 @@ function service(image: string, script: string, networks: string[], environment:
     image, command: entry(script), networks: [...networks], environment: { ...environment },
     pull_policy: 'never', restart: 'no', init: true, stop_grace_period: '1s',
     read_only: true, cap_drop: ['ALL'], security_opt: ['no-new-privileges:true'], user: 'node',
-    tmpfs: ['/tmp'], sysctls: NO_IPV6,
+    tmpfs: [TMP_MOUNT], sysctls: NO_IPV6,
   }
 }
 
@@ -408,6 +415,7 @@ export function assertSealed(rig: Rig, kind: CellKind = PI_CELL): void {
   if (cell.sysctls?.['net.ipv6.conf.all.disable_ipv6'] !== '1') problems.push('the cell does not have IPv6 switched off')
   if (cell.read_only !== true) problems.push('the cell can write its own disk')
   if (cell.user !== 'node') problems.push(`the cell runs as ${cell.user}`)
+  if (cell.tmpfs.join(',') !== TMP_MOUNT) problems.push('the cell\'s /tmp is not in memory with a size of its own')
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) problems.push('the cell mounts something other than the shared folder')
   if (JSON.stringify(cell).includes(`UPSTREAM-${file.services.cell.environment.SWARMLAB_NONCE}`)) problems.push('the cell is handed the model key')
   if (JSON.stringify(file).includes('docker.sock')) problems.push('a Docker socket is named')

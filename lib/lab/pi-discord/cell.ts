@@ -23,8 +23,8 @@ import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { CELL_KINDS } from '../../../conformance/docker/cells.ts'
-import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, labImages, probeArgs, readSource, sourceProblems, type CellKind, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
-import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig } from '../../../conformance/docker/report.ts'
+import { LAB_DIR, BRAIN_PORT, ROUTE_PORT, SOURCE_LABEL, SWARM_ROOT, TMP_MB, TMP_MOUNT, labImages, probeArgs, readSource, sourceProblems, type CellKind, type LabImages, type ProbeTargets, type Service } from '../../../conformance/docker/compose.ts'
+import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, tmpProblems, tmpSeenProblems, writeProblems, type DockerNetwork, type HostConfig } from '../../../conformance/docker/report.ts'
 import { inSubnet, labNetwork, writtenNetworkProblems, type LabNetwork } from '../../../conformance/docker/subnets.ts'
 import { assertLocalDocker, assertNoCredentials, PROJECT_NAME, RefusingToRun } from '../../../conformance/guards/preflight.ts'
 import { DEFAULT_TOOL_LIMITS, type ToolLimits } from '../../core/tools/call.ts'
@@ -76,7 +76,7 @@ export interface CellOptions {
   /** How long the door waits for an admin to answer a request, when a class of tool asks. The cell is told to wait a little longer. */
   approvalMs?: number
   /** Tests only: break the seal in one named way, to show the checks go red. */
-  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped' | 'cell-folder-uncapped'
+  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped' | 'cell-folder-uncapped' | 'cell-tmp-uncapped'
 }
 
 /** The scratch folder: where the harness is started, and the one place its file tools reach. */
@@ -113,7 +113,7 @@ function service(image: string, script: string, networks: string[], environment:
     image, command: ['node', `${SWARM_ROOT}/${script}`], networks, environment,
     pull_policy: 'never', restart: 'no', init: true, stop_grace_period: '1s',
     read_only: true, cap_drop: ['ALL'], security_opt: ['no-new-privileges:true'], user: 'node',
-    tmpfs: ['/tmp'], sysctls: { 'net.ipv6.conf.all.disable_ipv6': '1' }, pids_limit: 256, mem_limit: '1g', cpus: 1,
+    tmpfs: [TMP_MOUNT], sysctls: { 'net.ipv6.conf.all.disable_ipv6': '1' }, pids_limit: 256, mem_limit: '1g', cpus: 1,
   }
 }
 
@@ -138,7 +138,7 @@ export function renderCell(o: CellOptions): LiveFile {
     }),
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'],
   }
-  cell.tmpfs = ['/tmp', scratchMount(whole(limits.workspaceMb, 1024))]
+  cell.tmpfs = [TMP_MOUNT, scratchMount(whole(limits.workspaceMb, 1024))]
   const relay = service(RIG_IMAGE, 'lib/door/relay.ts', ['cell', 'egress'], {
     SMLAB_RELAY: `${BRAIN_PORT}=host.docker.internal:${port(o.brainPort)},${ROUTE_PORT}=host.docker.internal:${port(o.routePort)}`,
   })
@@ -157,7 +157,9 @@ export function renderCell(o: CellOptions): LiveFile {
   if (o.broken === 'cell-on-egress') cell.networks = ['cell', 'egress']
   if (o.broken === 'cell-writable') cell.read_only = false
   // The scratch folder is left as a plain folder of the cell's volume: writable, and with no size of its own.
-  if (o.broken === 'cell-scratch-uncapped') cell.tmpfs = ['/tmp']
+  if (o.broken === 'cell-scratch-uncapped') cell.tmpfs = [TMP_MOUNT]
+  // /tmp is a tmpfs as Docker gives one when asked for nothing more: no size, so up to half of the machine's memory.
+  if (o.broken === 'cell-tmp-uncapped') cell.tmpfs[0] = '/tmp'
   // The cell's own folder is a plain Docker volume: on Docker's disk, with no size.
   if (o.broken === 'cell-folder-uncapped') file.volumes.lab = {} as never
   // The two networks are made on each other's blocks. As written this is still a sealed cell: only Docker can show the difference.
@@ -183,8 +185,8 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
   if (cell.read_only !== true) p.push('the cell can write its own disk')
   if (cell.user !== 'node') p.push(`the cell runs as ${cell.user}`)
   if (cell.volumes?.join(',') !== `lab:${LAB_DIR}`) p.push('the cell mounts something other than its own folder')
-  // Two places in memory and no more: /tmp, and the scratch folder with a size written on it.
-  if (cell.tmpfs.length !== 2 || cell.tmpfs[0] !== '/tmp' || !/^\/tmp\/smlab\/work:size=([1-9]\d{0,3})m,mode=0700,uid=1000,gid=1000$/.test(cell.tmpfs[1])) p.push('the cell\'s scratch folder is not a capped mount of its own')
+  // Two places in memory and no more: /tmp with its size, and the scratch folder with a size written on it.
+  if (cell.tmpfs.length !== 2 || !/^\/tmp\/smlab\/work:size=([1-9]\d{0,3})m,mode=0700,uid=1000,gid=1000$/.test(cell.tmpfs[1])) p.push('the cell\'s scratch folder is not a capped mount of its own')
   if (JSON.stringify(file.volumes?.lab) !== JSON.stringify(cellFolder())) p.push('the cell\'s own folder is not in memory with a size')
   if (Object.keys(cell.environment).sort().join(',') !== CELL_ENV.join(',')) p.push('the cell is handed something that is not on its list')
   try { assertNoCredentials(cell.environment, { nonce: cell.environment.SWARMLAB_NONCE }) } catch (err) { p.push((err as Error).message) }
@@ -193,6 +195,7 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
   for (const [name, s] of Object.entries(file.services)) {
     if (name !== 'door' && s.networks.includes('egress')) p.push(`${name} has a way out`)
     if (s.cap_drop.join(',') !== 'ALL' || s.security_opt.join(',') !== 'no-new-privileges:true') p.push(`${name} keeps privileges`)
+    if (s.tmpfs[0] !== TMP_MOUNT) p.push(`the /tmp of ${name === 'door' ? 'the relay' : `the ${name}`} is not in memory with a size of its own`)
     for (const key of FORBIDDEN_KEYS) if (key in s) p.push(`service ${name} sets ${key}`)
   }
   if (text.includes('docker.sock')) p.push('a Docker socket is named')
@@ -330,6 +333,7 @@ export function runningCellProblems(project: string, written: Record<string, { i
   // What Docker says it mounted in memory: /tmp, and the scratch folder with a size.
   const inMemory = c.HostConfig.Tmpfs ?? {}
   if (Object.keys(inMemory).sort().join(',') !== `/tmp,${SCRATCH_DIR}` || !/(^|,)size=[1-9]\d*m(,|$)/.test(inMemory[SCRATCH_DIR] ?? '')) p.push('the cell\'s scratch folder is not a capped mount of its own')
+  p.push(...tmpProblems(inMemory['/tmp'], 'the cell as Docker made it', 'docker'))
   // Names only. What the image itself sets is not ours to list.
   const ours = c.Config.Env.map((e) => e.slice(0, e.indexOf('='))).filter((n) => /^(SMLAB_|SWARMLAB_)/.test(n) || /TOKEN|KEY|SECRET|PASS/i.test(n))
   if (ours.sort().join(',') !== CELL_ENV.join(',')) p.push('the cell\'s environment is not the list it was given')
@@ -353,7 +357,7 @@ export async function probeCell(project: string, cellNonce: string, sinkIp: stri
   return [
     { id: 'S1', title: 'the cell reaches the door and nothing else: not the internet, not this machine', problems: report ? netProblems(report) : none },
     { id: 'S2', title: `the shim, the gate and ${harnessFacts(harness).label} cannot be changed from inside the cell`, problems: report ? writeProblems(report) : none },
-    { id: 'S3', title: 'no folder of this machine is in the cell', problems: report ? [...mountProblems(report), ...secretProblems(report).filter((x) => x.startsWith('the search'))] : none },
+    { id: 'S3', title: 'no folder of this machine is in the cell, and its /tmp is in memory with a size', problems: report ? [...mountProblems(report), ...tmpSeenProblems(report), ...secretProblems(report).filter((x) => x.startsWith('the search'))] : none },
   ]
 }
 
@@ -364,8 +368,8 @@ export async function probeCell(project: string, cellNonce: string, sinkIp: stri
  */
 export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): string[] {
   const p: string[] = []
-  // The scratch folder, then the cell's own folder outside it: each takes no more than its size.
-  for (const [where, what, size] of [[SCRATCH_DIR, 'the scratch folder', mb], [`${LAB_DIR}/home`, 'the cell\'s own folder', CELL_FOLDER_MB]] as const) {
+  // The scratch folder, the cell's own folder outside it, and /tmp: each takes no more than its size.
+  for (const [where, what, size] of [[SCRATCH_DIR, 'the scratch folder', mb], [`${LAB_DIR}/home`, 'the cell\'s own folder', CELL_FOLDER_MB], ['/tmp', 'the cell\'s /tmp', TMP_MB]] as const) {
     const file = `${where}/.fill`
     const r = docker(['exec', `${project}-cell-1`, 'sh', '-c',
       `touch ${where}/.ok && echo WROTE; rm -f ${where}/.ok; head -c ${(size + 8) * 1024 * 1024} /dev/zero > ${file} 2>/dev/null; echo "LANDED $(wc -c < ${file})"; rm -f ${file}`], 60_000)

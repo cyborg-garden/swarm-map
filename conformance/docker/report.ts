@@ -2,7 +2,7 @@
 // (which runs the probe in a container itself) and by the checks inside the
 // sidecar's container (which have the harness run it as a tool).
 import { lstatSync, readFileSync } from 'node:fs'
-import { LAB_DIR } from './compose.ts'
+import { LAB_DIR, TMP_MB } from './compose.ts'
 import { inSubnet } from './subnets.ts'
 
 export interface ProbeReport {
@@ -24,6 +24,8 @@ export interface ProbeReport {
   dockerSocket: boolean
   /** Mounts that are not the image, a tmpfs or the kernel's own. */
   mounts: string[]
+  /** /tmp as the kernel has it mounted, as `<type> <options>`: the mount's own options, then the file system's. */
+  tmp: string
   noNewPrivs: string
   capEff: string
   ipv6: string[]
@@ -99,6 +101,46 @@ export function mountsSeen(mountinfo: string[]): string[] {
     .filter((m) => !['/etc/resolv.conf', '/etc/hostname', '/etc/hosts'].includes(m.split(' ')[0]))
 }
 
+/** /tmp, from the lines of /proc/self/mountinfo, as `<type> <options>`. Empty when /tmp is not a mount of its own. */
+export function tmpSeen(mountinfo: string[]): string {
+  const line = mountinfo.find((l) => l.split(' - ')[0]?.split(' ')[4] === '/tmp')
+  if (!line) return ''
+  const [left, right] = line.split(' - ')
+  const [type, , superOptions] = right.split(' ')
+  return `${type} ${left.split(' ')[5]},${superOptions ?? ''}`
+}
+
+/**
+ * /tmp is no bigger than its size, and nothing in it can be run, be setuid or be a device. `options`
+ * is a mount's options as Docker or the kernel writes them, undefined when /tmp is not a mount of its
+ * own; a size is in bytes, or with k, m or g. Docker writes the options it was asked for, and mounts a
+ * tmpfs noexec, nosuid and nodev unless asked otherwise, so in what Docker says (`docker`) a flag is
+ * wrong only when its opposite was asked for. The kernel writes every flag the mount has.
+ */
+export function tmpProblems(options: string | undefined, seenAs: string, reader: 'docker' | 'kernel'): string[] {
+  if (options === undefined) return [`${seenAs}: /tmp is not a mount of its own`]
+  const p: string[] = []
+  const words = options.split(',')
+  const size = /^size=(\d+)([kmg]?)$/i.exec(words.find((w) => w.toLowerCase().startsWith('size=')) ?? '')
+  const bytes = size ? Number(size[1]) * ({ '': 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3 } as Record<string, number>)[size[2].toLowerCase()] : Number.NaN
+  if (!Number.isFinite(bytes)) p.push(`${seenAs}: /tmp has no size`)
+  else if (bytes > TMP_MB * 1024 * 1024) p.push(`${seenAs}: /tmp is ${Math.round(bytes / 1024 / 1024)} MB, more than its ${TMP_MB} MB`)
+  for (const flag of ['noexec', 'nosuid', 'nodev']) {
+    const wrong = reader === 'kernel' ? !words.includes(flag) : words.includes(flag.slice(2))
+    if (wrong) p.push(`${seenAs}: /tmp is not ${flag}`)
+  }
+  return p
+}
+
+/** /tmp as the probe saw it from inside: in memory, and as `tmpProblems` says. */
+export function tmpSeenProblems(r: ProbeReport): string[] {
+  const seenAs = 'inside the container'
+  if (typeof r.tmp !== 'string') return [`${seenAs}: the probe did not report /tmp, so it was not checked`]
+  if (r.tmp === '') return [`${seenAs}: /tmp is not a mount of its own`]
+  const [type, options] = r.tmp.split(' ')
+  return type === 'tmpfs' ? tmpProblems(options ?? '', seenAs, 'kernel') : [`${seenAs}: /tmp is not in memory (${type})`]
+}
+
 export function mountProblems(r: ProbeReport): string[] {
   const places = r.mounts.map((m) => m.split(' ')[0])
   return places.length === 1 && places[0] === LAB_DIR ? [] : [`mounted in the container: ${places.join(', ') || 'nothing, not even the shared folder'}`]
@@ -162,6 +204,8 @@ export interface HostConfig {
   CapDrop: string[] | null
   SecurityOpt: string[] | null
   Binds: string[] | null
+  /** The places Docker mounted in memory, each with the options it was given. */
+  Tmpfs?: Record<string, string> | null
 }
 
 /**

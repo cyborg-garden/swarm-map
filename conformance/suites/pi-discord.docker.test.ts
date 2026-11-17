@@ -83,6 +83,14 @@ describe('pi-discord dry run: the containment checks', () => {
     expect(failed(checks)).toEqual(['S0', 'S0d', 'S4'])
     expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the scratch folder took \d+ bytes, which is more than its 64 MB/)
   }, 180_000)
+
+  it('must-fail: a /tmp with no size, as Docker gives one when asked for nothing more, is caught as written, as Docker made it, from inside, and by filling it', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, broken: 'cell-tmp-uncapped' })
+    expect(failed(checks)).toEqual(['S0', 'S0d', 'S3', 'S4'])
+    expect(checks.find((c) => c.id === 'S0d')?.detail).toMatch(/the cell as Docker made it: \/tmp has no size/)
+    expect(checks.find((c) => c.id === 'S3')?.detail).toMatch(/inside the container: \/tmp is \d+ MB, more than its 32 MB|inside the container: \/tmp has no size/)
+    expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the cell's \/tmp took \d+ bytes, which is more than its 32 MB/)
+  }, 180_000)
 })
 
 describe('pi-discord: tools, end to end, through real Pi in the sealed cell', () => {

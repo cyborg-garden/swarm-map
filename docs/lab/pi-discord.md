@@ -167,7 +167,8 @@ reached them. It ends with one of:
 | S0d | What Docker really gave the cell matches what was written, down to the block of addresses each network is on |
 | S1 | From inside, only the door answers: not the internet, not your machine, not the sink |
 | S2 | The shim, the gate and Pi cannot be changed from inside |
-| S3 | No folder of your machine is in the cell |
+| S3 | No folder of your machine is in the cell, and its `/tmp` is in memory, 32 MB at most, and runs nothing |
+| S4 | The scratch folder, the cell's own folder and its `/tmp` can be written, and none takes more than its size |
 | S9 | The dry run left no container behind |
 
 ## 7. Start

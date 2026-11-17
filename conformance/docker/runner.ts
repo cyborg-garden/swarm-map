@@ -17,10 +17,10 @@ import path from 'node:path'
 import { assertLocalDocker, assertNoCredentials, assertOurProject, assertSafeWorkDir, DEFAULT_PREFIX, labPrefix, projectPattern, RefusingToRun } from '../guards/preflight.ts'
 import type { CheckResult } from '../suites/checks.ts'
 import {
-  assertSealed, labImages, PI_CELL, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT,
+  assertSealed, labImages, PI_CELL, probeArgs, readSource, renderRig, RUN_LABEL, SOURCE_LABEL, sourceProblems, SWARM_ROOT, TMP_MOUNT,
   type CellKind, type LabImages, type ProbeTargets, type Rig, type RigOptions, type RigVariant, type Source,
 } from './compose.ts'
-import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from './report.ts'
+import { hostConfigProblems, mountProblems, netProblems, networkProblems, parseReport, secretProblems, tmpProblems, tmpSeenProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from './report.ts'
 import { inSubnet, onFreeSubnets, pickSubnets, usedSubnets } from './subnets.ts'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
@@ -470,6 +470,9 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
     if (seen2.mounts.length !== 1) s.S3.push(`the cell has ${seen2.mounts.length} mounts, not the one shared folder`)
     s.S3.push(...given.mounts.map((problem) => `the cell: ${problem}`))
     if (cell) s.S3.push(...mountProblems(cell), ...secretProblems(cell))
+    // The cell's /tmp, as Docker made it and as the kernel in the cell has it: in memory, with a size.
+    s.S3.push(...tmpProblems(seen2.host.Tmpfs?.['/tmp'], 'the cell as Docker made it', 'docker'))
+    if (cell) s.S3.push(...tmpSeenProblems(cell))
     if (cell?.dockerSocket) s.S3.push('a Docker socket is in the cell')
 
     // Seen from outside, last, so it covers everything the probes just tried.
@@ -483,7 +486,7 @@ export async function runSealChecks(variant: RigVariant, host: HostListener, tar
 /** In a cell that starts on its own, the entry refuses an environment with anything shaped like a real credential. */
 export function cellRefuses(env: Record<string, string>): { code: number | null; out: string } {
   const flags = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`])
-  const r = oneOff('refuse', ['--network', 'none', '--read-only', '--tmpfs', '/tmp', ...flags], checkedImages().cell, ['node', `${SWARM_ROOT}/conformance/docker/${cellKind.entry}`], 60_000)
+  const r = oneOff('refuse', ['--network', 'none', '--read-only', '--tmpfs', TMP_MOUNT, ...flags], checkedImages().cell, ['node', `${SWARM_ROOT}/conformance/docker/${cellKind.entry}`], 60_000)
   return { code: r.code, out: r.out }
 }
 
