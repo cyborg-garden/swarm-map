@@ -188,6 +188,7 @@ If the last run was killed before it could clean up, `start` removes the contain
 ## 8. Verify
 
 1. In the channel, mention the bot. It should answer in that channel.
+   When you type `@` and its name, pick the bot itself (marked APP), not the role of the same name. Picking the bot's own role works too now; any other role does not.
 2. Say something without a mention, and mention it from another channel. It should stay silent.
 3. Read why:
 
@@ -204,7 +205,7 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `deliver addr.mention` | Heard: a listed person mentioned the bot in the channel |
 | `drop adm.rooms` | Not the allowed channel |
 | `drop adm.users` | The sender is not on the list |
-| `drop addr.mention` | No mention |
+| `drop addr.mention` | No mention. If the sentence says a role was mentioned, a role was pinged that is not the bot's own |
 | `drop dm.closed` | A direct message |
 | `drop bots.mode` / `bots.loop` | Another bot that is not heard (a webhook shows as `webhook:<id>`), or too many bot messages in a row |
 | `drop in.once` | An edited message is not read again; a reply to a deleted message is not posted |

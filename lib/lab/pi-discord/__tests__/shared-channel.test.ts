@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, tripwireAttempts } from '../../../../conformance/guards/tripwire.ts'
 import type { Envelope } from '../../../door/protocol.ts'
 import { connectShim, type ShimClient } from '../../../door/shim-client.ts'
-import { IDS, startDiscordRig, type DiscordRig } from '../../../door/testing/discord-rig.ts'
+import { BOT_ROLE_NAME, IDS, startDiscordRig, type DiscordRig } from '../../../door/testing/discord-rig.ts'
 import { ECHO_CAPS } from '../../../door/testing/echo-shim.ts'
 import { parseConfig, policyFor, type LabConfig } from '../config.ts'
 
@@ -166,6 +166,88 @@ describe('one channel: who is heard', () => {
     await rig.settle()
     expect(verdicts(rig)).toEqual(['deliver/addr.threads', 'deliver/addr.threads', 'drop/adm.rooms'])
     expect(rig.fake.requests.filter((q) => q === 'GET /api/v10/channels/7200000000000000005')).toHaveLength(1)
+  })
+})
+
+// In Discord's autocomplete, "@" and the bot's name offers two things: the bot itself
+// (marked APP) and the role Discord made for the bot when it joined. Both are the bot.
+describe("one channel: a mention of the bot's own role", () => {
+  const NO_MENTION = 'This room needs a mention and there was none.'
+  const ROLE_NOT_AGENT = 'This room needs a mention and there was none: a role was mentioned, not the agent.'
+  const ROLE_UNKNOWN = "This room needs a mention and there was none: a role was mentioned, and the agent's own role is not known yet."
+  const rolePing = (r: DiscordRig, role: string, o: { channel?: string; author?: string; bot?: boolean; text?: string } = {}): string => r.fake.post({
+    channel: o.channel ?? IDS.home, guild: IDS.guild, author: { id: o.author ?? IDS.member, bot: o.bot },
+    content: `<@&${role}> ${o.text ?? 'are you there'}`, roleMentions: [role],
+  })
+  const whys = (r: DiscordRig): string[] => r.receipts.all().filter((x) => x.event.kind === 'inbound').map((x) => x.why)
+
+  it('a person who picks the bot role in place of the bot is heard, in the channel and in a thread', async () => {
+    rig = await startDiscordRig(policy())
+    const a = rolePing(rig, IDS.botRole)
+    const b = rolePing(rig, IDS.botRole, { channel: IDS.thread })
+    await rig.posts(2)
+    expect(rig.shim.heard.map((e) => e.id)).toEqual([a, b])
+    expect(verdicts(rig)).toEqual(['deliver/addr.mention', 'deliver/addr.threads'])
+  })
+
+  it('a role that only shares the bot\'s name, a role the bot holds, and @everyone are still not a mention, and the receipt says a role was pinged', async () => {
+    rig = await startDiscordRig(policy({ allowedRoleIds: [IDS.role] }))
+    rolePing(rig, IDS.namesake, { text: `@${BOT_ROLE_NAME} hello` })
+    rolePing(rig, IDS.role)
+    rig.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: '@everyone look', everyone: true })
+    say(rig, { mention: false, text: 'just talking' })
+    await rig.settle()
+    expect(rig.shim.heard).toEqual([])
+    expect(rig.fake.posted).toEqual([])
+    expect(verdicts(rig)).toEqual(['drop/addr.mention', 'drop/addr.mention', 'drop/addr.mention', 'drop/addr.mention'])
+    expect(whys(rig)).toEqual([ROLE_NOT_AGENT, ROLE_NOT_AGENT, NO_MENTION, NO_MENTION])
+  })
+
+  it('the managed role of some other bot in the server does not count', async () => {
+    rig = await startDiscordRig(policy())
+    const theirs = { id: '8500000000000000004', name: BOT_ROLE_NAME, botId: IDS.bot }
+    rig.fake.roleEvent('create', theirs)
+    rolePing(rig, theirs.id)
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/addr.mention'])
+    expect(whys(rig)).toEqual([ROLE_NOT_AGENT])
+  })
+
+  it('before the bot has been told its own role, a role mention is dropped and the receipt says so; once told, it counts', async () => {
+    rig = await startDiscordRig(policy(), { hideBotRole: true })
+    rolePing(rig, IDS.botRole)
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/addr.mention'])
+    expect(whys(rig)).toEqual([ROLE_UNKNOWN])
+    rig.fake.roleEvent('create', { id: IDS.botRole, name: BOT_ROLE_NAME, botId: rig.fake.selfId })
+    rolePing(rig, IDS.botRole)
+    await rig.posts(1)
+    expect(verdicts(rig)).toEqual(['drop/addr.mention', 'deliver/addr.mention'])
+  })
+
+  it('a role that stops being the bot\'s, or is deleted, stops counting', async () => {
+    rig = await startDiscordRig(policy())
+    rig.fake.roleEvent('update', { id: IDS.botRole, name: BOT_ROLE_NAME })
+    rolePing(rig, IDS.botRole)
+    await rig.settle()
+    rig.fake.roleEvent('update', { id: IDS.botRole, name: BOT_ROLE_NAME, botId: rig.fake.selfId })
+    rolePing(rig, IDS.botRole)
+    await rig.posts(1)
+    rig.fake.roleEvent('delete', { id: IDS.botRole, name: BOT_ROLE_NAME })
+    rolePing(rig, IDS.botRole)
+    await rig.settle()
+    expect(verdicts(rig)).toEqual(['drop/addr.mention', 'deliver/addr.mention', 'drop/addr.mention'])
+    expect(whys(rig)).toEqual([ROLE_UNKNOWN, expect.any(String), ROLE_UNKNOWN])
+  })
+
+  it('a named bot that writes the bot role out is heard as if it wrote the bot\'s name; a bot that is not named is not', async () => {
+    rig = await startDiscordRig(policy({ allowedBotIds: [IDS.bot] }))
+    const a = rolePing(rig, IDS.botRole, { author: IDS.bot, bot: true })
+    await rig.posts(1)
+    rolePing(rig, IDS.botRole, { author: '8900000000000000002', bot: true })
+    await rig.settle()
+    expect(rig.shim.heard.map((e) => e.id)).toEqual([a])
+    expect(verdicts(rig)).toEqual(['deliver/addr.mention', 'drop/bots.mode'])
   })
 })
 
