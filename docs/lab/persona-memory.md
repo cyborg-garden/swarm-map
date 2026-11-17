@@ -76,9 +76,10 @@ the turn as context. The harness shows them in a marked block: notes, not instru
 sent again only when they change. Because the door reads them from disk on every turn, an edit or
 a wipe on the dashboard counts at once.
 
-When a conversation's notes are wiped, or notes it wrote itself are wiped, the door starts that
-conversation again before its next turn. So nothing of the wiped notes is left in the harness's
-own transcript either.
+When a note a conversation was given, or wrote itself, is taken down (a wipe, an edit on the
+dashboard, or a person asking to be forgotten), the door starts that conversation again before its
+next turn. So nothing of the removed note is left in the harness's own transcript either. That also
+clears whatever else the conversation held, the person's own words included.
 
 ### How the agent changes them
 
@@ -93,10 +94,12 @@ The door's rules for a note:
 | One line, up to 280 characters | Notes stay notes |
 | Each file up to 4 KB. A full file refuses the note | A hard size cap |
 | Refused if the redactor finds anything secret-shaped, or a secret the door holds | Same check as everything the door posts |
-| Refused if it holds a mention, a platform id or an email address | A note names nobody |
+| Refused if it holds a mention, a platform id or an email address | A note cannot point at someone. A plain name is not caught: see the limits below |
+| Refused if it holds an invisible or direction-changing character | Nothing hidden from the checks or from a person reading it |
 | `people`: only about the person speaking. The door writes their id on the line; the agent cannot name anyone | Notes about a person are theirs |
 | `people`: only in a turn where that person's own message says "remember", "don't forget" or "note that" | Opt-in, in their own words |
-| `people`: anyone may remove their own note, without asking twice | Easy to take back |
+| `people`: anyone may remove their own note, without asking twice. A remove with no note named takes down every note of theirs in the room ("forget me") | Easy to take back |
+| `people`: at most 8 notes for one person in a room | One person cannot fill the file and keep everyone else from being remembered |
 | On an agent anyone can talk to, `room` and `threads` change only in a turn an admin started | A stranger cannot plant a note for the whole room |
 | `replace` and `remove` need the exact note | No guessing |
 
@@ -107,12 +110,30 @@ The agent is told the truth about all of this in its system prompt: that the doo
 that it changes them only with the tool, that a note about a person needs that person to ask, and
 that anyone in the room may be told what the notes say.
 
+### Privacy limits the operator should know
+
+- **Everyone in the room can be told every note**, the people notes included. Person X can ask what
+  the agent knows about person Y, and it may say. The agent is told this, and told never to promise
+  privacy.
+- **Asking is a word check.** "Remember", "don't forget" or "note that" anywhere in the person's own
+  message counts, so "do you remember...?" counts too. The model is also told to keep a note about
+  a person only when they ask.
+- **A plain name is not caught.** The door stops mentions, ids and email addresses, and keeps a
+  person's line to the person speaking. It cannot tell that "my coworker Sam is unwell" is about
+  someone else. On an agent with a known list of people, anyone allowed may also add a note about
+  the room or a thread.
+- **Forgetting is per room.** A person asks in each room where they asked to be remembered. The
+  receipts keep who changed a note and when, never the note.
+- **Notes are given to the model as notes**, in a marked block that says they are not instructions.
+  A note can still try to persuade the model, as any message can. It is one line, at most 280
+  characters, and the door's own rules do not change whatever a note says.
+
 ### Which harness can do what
 
 | Harness | Given the notes | Can change them |
 |---|---|---|
 | Pi | Yes | Yes, with `memory_note` |
-| Letta Code | Yes | No. It is told so, and the dashboard can edit them. It keeps its one-room limit |
+| Letta Code | Yes | No. It is told so, and the dashboard can edit them. Its own `Memory` tool is never offered for notes. It keeps its one-room limit |
 | Claude Agent SDK | Yes, through the shared prompt | No. It is not one of the launcher's harnesses |
 
 ### Turning them on
@@ -143,6 +164,11 @@ the same bytes are unpacked again inside the new cell, by the cell's own user, i
 folder. This machine never unpacks the stream, so nothing in it can land anywhere on this
 machine, and the folder's own size cap still applies to what comes back. A folder too big to keep
 is not kept, and an older copy is removed rather than coming back stale.
+
+It comes back only under the tool rules it was kept under. Under rules that let the agent write a
+file without asking, it can leave a script there; put back under rules where the shell asks, an
+admin would approve only the script's name. So a copy kept under other rules is removed, and so is
+any copy once keeping is switched off.
 
 The agent is told its folder is kept. A request to approve a tool says that what the call leaves
 in the scratch folder is kept after a stop.
