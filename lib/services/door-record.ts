@@ -18,6 +18,7 @@ import path from 'path'
 import { parseConfig, type LabConfig } from '@/lib/lab/pi-discord/config'
 import { isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
 import { secretFilePlaceProblem, MODEL_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
+import { defaultPersona } from '@/lib/lab/pi-discord/persona'
 import type { DoorRuntime } from './runtime-adapter'
 
 /**
@@ -79,12 +80,18 @@ export function doorAgentPaths(dataDir: string, id: string) {
     startedByPage: path.join(dir, 'started-by-page.json'),
     log: path.join(dir, 'door.log'),
     stateDir: path.join(dir, 'state'),
+    /** The door's notes for each room (lib/door/memory.ts). The launcher's `memoryDir` of the state folder. */
+    memory: path.join(dir, 'state', 'memory'),
+    /** A kept scratch folder, as a tar the cell made. The launcher's KEPT_SCRATCH_FILE. Never unpacked on this machine. */
+    keptScratch: path.join(dir, 'state', 'scratch.tar'),
   }
 }
 
 /**
  * A new record: named, closed, and not startable until the ids, the budget
  * and the model are filled in. Every switch starts at its closed setting.
+ * It starts with the default persona and with notes on: the notes are the
+ * door's, kept per room, and an agent can only change them through the door.
  */
 export function draftRecord(id: string, name: string, runtime: DoorRuntime, now: Date = new Date(), description = ''): DoorRulesRecord {
   return {
@@ -92,7 +99,8 @@ export function draftRecord(id: string, name: string, runtime: DoorRuntime, now:
     rules: {
       agentId: name,
       ...(runtime === 'pi' ? {} : { harness: runtime }),
-      persona: { name, description },
+      persona: { name, description, document: defaultPersona(name) },
+      memory: { notes: true },
       discord: {
         guildId: '', channelId: '', adminUserIds: [], allowedUserIds: [], allowedRoleIds: [],
         anyoneInChannel: false, mentionRequired: true, bots: 'none', allowedBotIds: [], botLoopLimit: 4, readAllMessages: false,

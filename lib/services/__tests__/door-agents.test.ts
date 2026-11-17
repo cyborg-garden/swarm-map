@@ -180,7 +180,7 @@ describe('creating a door agent', () => {
   })
 
   it('takes one line about what the agent is for, and refuses anything that is not one line', async () => {
-    expect(svc.create('pi-one', 'pi', '  Answers questions about the garden.  ').rules.persona).toEqual({ name: 'pi-one', description: 'Answers questions about the garden.' })
+    expect(svc.create('pi-one', 'pi', '  Answers questions about the garden.  ').rules.persona).toMatchObject({ name: 'pi-one', description: 'Answers questions about the garden.' })
     for (const bad of ['line one\nline two', 'x'.repeat(601), 7, ['a']]) {
       expect((await refusal(() => svc.create('pi-two', 'pi', bad))).status, String(bad).slice(0, 12)).toBe(400)
     }
