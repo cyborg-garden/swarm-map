@@ -143,9 +143,9 @@ describe('pi-discord: persona, notes and a kept scratch folder, across a stop an
     await until(() => fake.posted.length === posts + 1)
     expect(JSON.stringify(requestWith('CANARY-again'))).toContain(NOTE)
     expect(inCell(`cat ${WORK}/kept.txt`).trim()).toBe(`kept ${nonce}`)
-    // Put back once when the cell came up, and once more each time the start had to start the cell again (it comes back empty).
-    const again = logs.filter((l) => /started again/.test(l)).length
-    expect(logs.filter((l) => l === 'the kept scratch folder was put back')).toHaveLength(1 + again)
+    // Put back once, into the cell that joined the door.
+    expect(logs.filter((l) => l === 'the kept scratch folder was put back')).toHaveLength(1)
+    expect(logs.findIndex((l) => l === 'the kept scratch folder was put back')).toBeGreaterThan(logs.findLastIndex((l) => /started again/.test(l)))
   }, 240_000)
 
   it('wiped, the notes and the kept folder are gone after the next start, and nothing of them reaches the model', async () => {

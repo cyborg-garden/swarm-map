@@ -238,7 +238,6 @@ export async function start(o: StartOptions): Promise<Running> {
     if (running.length > 0) throw new Error(`the cell is not sealed: ${running.join('; ')}`)
     o.log(`cell up and sealed (${project})`)
     cellIsUp = true
-    restoreScratch()
 
     const connector: SurfaceConnector = createDiscordConnector({
       ...(o.discord ?? {}),
@@ -254,12 +253,14 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     await joinCell({
       ready: (ms) => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false),
-      // A cell started again comes back with an empty scratch folder (it is in memory), so a kept one is put back again.
-      stopStart: (what) => { const ok = cellStopStart(project, what); if (ok && what === 'start') restoreScratch(); return ok },
+      stopStart: (what) => cellStopStart(project, what),
       sealProblems: () => runningCellProblems(project, networksWritten(file)),
       pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: Date.now, log: o.log,
     }, { redialMs: o.cellRedialMs ?? 3_000, readyMs: o.cellReadyMs ?? 60_000, force: o.redialCell === true })
+    // Put back once the cell has joined the door and is the cell that stays: a cell that is started again
+    // comes back with an empty folder (it is in memory), and one that has not joined yet may be about to be.
+    restoreScratch()
     o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)
     return { project, door, stop }
   } catch (err) {

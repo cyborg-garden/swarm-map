@@ -405,8 +405,15 @@ export function readScratch(project: string, maxBytes: number = keptScratchMaxBy
   return { tar: r.stdout }
 }
 
-/** Put a kept folder back, unpacked inside the cell. False when the cell refused it. */
-export function writeScratch(project: string, tar: Buffer): boolean {
-  const r = spawnSync('docker', scratchRestoreArgs(project), { env: dockerEnv(), timeout: 60_000, input: tar, stdio: ['pipe', 'ignore', 'ignore'] })
-  return r.status === 0
+/**
+ * Put a kept folder back, unpacked inside the cell. False when the cell refused it. Right after a cell
+ * starts, Docker can refuse an exec now and then ("exec failed ... broken pipe"), so it is tried three times.
+ */
+export function writeScratch(project: string, tar: Buffer, tries = 3): boolean {
+  for (let i = 0; i < tries; i++) {
+    if (i > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+    const r = spawnSync('docker', scratchRestoreArgs(project), { env: dockerEnv(), timeout: 60_000, input: tar, stdio: ['pipe', 'ignore', 'ignore'] })
+    if (r.status === 0) return true
+  }
+  return false
 }
