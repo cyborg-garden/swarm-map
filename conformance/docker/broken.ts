@@ -4,6 +4,7 @@
 import { CHECKS, type Check } from '../suites/checks.ts'
 import { DOCKER_CHECKS } from './checks.ts'
 import { MODEL_FAILURE_CHECKS } from '../suites/failure-checks.ts'
+import { MEMORY_CHECKS } from '../suites/memory-checks.ts'
 import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 import type { GateVariant, RigVariant } from './compose.ts'
 
@@ -65,6 +66,17 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
 
 /** The tool checks, for a harness whose shim can run them. They run in a cell like the rest, one rig each. */
 export const TOOLS_IN_CELL: Check[] = [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]
+
+/**
+ * The memory checks that can run with the harness in a cell. M1 starts a second door and harness on the
+ * same notes, and M5 hands the harness a prompt of its own: neither can be done from inside the rig. The
+ * launcher's own Docker suite does both, with a real stop and start (pi-discord-memory.docker.test.ts).
+ */
+export const MEMORY_SKIPPED_IN_CELL: Record<string, string> = {
+  M1: 'a restart is run by the launcher\'s own Docker suite (pi-discord-memory.docker.test.ts), with a real stop and start of the cell',
+  M5: 'the launcher\'s own Docker suite checks what real Pi is told in its cell (pi-discord-memory.docker.test.ts)',
+}
+export const MEMORY_IN_CELL: Check[] = MEMORY_CHECKS.filter((c) => !(c.id in MEMORY_SKIPPED_IN_CELL))
 
 /**
  * Cells whose tool gate is broken in one way each, for the tool checks. The

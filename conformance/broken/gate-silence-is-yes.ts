@@ -23,6 +23,7 @@ function deaf(ctx: unknown): unknown {
 
 export default function silenceIsYesGate(pi: PiApi): void {
   createGate()({
+    registerTool: (tool) => pi.registerTool(tool),
     on: (event: string, handler: Handler) => (pi.on as (e: string, h: Handler) => void)(event, event !== 'tool_call' ? handler : (e, ctx) => handler(e, deaf(ctx))),
   } as PiApi)
 }

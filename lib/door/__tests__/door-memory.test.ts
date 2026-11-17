@@ -180,6 +180,22 @@ describe('door: notes kept for each room', () => {
     shim.client.close()
   })
 
+  it('[P:mem-wipe] a conversation that wrote a note itself is started again when the notes are wiped', async () => {
+    const { store } = memoryStore()
+    rig = await startRig(team({ 'tools.allow': ['memory'] }), { noShim: true, door: { brainToken: BRAIN, memory: store } })
+    const shim = await noteShim(rig)
+    const answer = shim.next({ file: 'room', op: 'add', text: 'written by the agent' })
+    say(rig, 'one')
+    expect((await answer).allow).toBe(true)
+    await rig.door.idle()
+    store.wipe()
+    say(rig, 'two')
+    await rig.door.idle()
+    // The note is in the harness's own transcript (it wrote it), so only a fresh conversation forgets it.
+    expect(shim.resets).toEqual(['fake:room:r-general'])
+    shim.client.close()
+  })
+
   it('[P:mem-notes] a shim that connects again is given the notes again', async () => {
     const { store } = memoryStore()
     store.apply('fake:r-general', { file: 'room', op: 'add', text: 'kept' }, { speaker: { id: 'x', display: 'x' }, asked: false })

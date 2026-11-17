@@ -18,6 +18,7 @@ import { KNOWN_CHECK_IDS, type Matrix } from '../matrix.ts'
 import { brokenVariants } from './harness.ts'
 import { MODEL_FAILURE_CHECKS } from './failure-checks.ts'
 import { TOOL_CHECKS } from './tool-checks.ts'
+import { MEMORY_CHECKS } from './memory-checks.ts'
 
 armTripwire()
 afterAll(() => expect(tripwireAttempts()).toEqual([]))
@@ -40,7 +41,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
-      ['answers-as-admin', 'chatty', 'covers-failures', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'no-limits', 'no-path-check', 'runs-more', 'silence-is-yes', 'unwatched'])
+      ['answers-as-admin', 'chatty', 'covers-failures', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env',
+        'memory-cached', 'memory-in-scratch', 'memory-no-checks', 'memory-one-room', 'no-limits', 'no-path-check', 'no-system-prompt', 'runs-more', 'silence-is-yes', 'unwatched'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)
@@ -59,6 +61,23 @@ describe('must-fail: broken shims turn their named checks red', () => {
     // C6s waits out a turn that never ends, so a shim has nothing to cover up in it. What turns it red is a door that says nothing at the deadline: door.test.ts [P:one-reply].
     for (const check of [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]) if (check.id !== 'W1+' && check.id !== 'C6s') expect([...covered], check.id).toContain(check.id)
   })
+
+  it('[U:must-fail] every memory check has something broken on purpose that must turn it red', () => {
+    const covered = new Set(Object.values(variants).flatMap((v) => v.red))
+    for (const check of MEMORY_CHECKS) expect([...covered], check.id).toContain(check.id)
+  })
+
+  it('[U:must-fail] each memory check goes red for the reason it names', async () => {
+    const detail = async (name: string, id: string): Promise<string> => {
+      const v = variants[name]
+      return (await runChecks({ harness, shim: v.shim ?? name, ...v.lab }, [id]))[0].detail
+    }
+    expect(await detail('memory-one-room', 'M2')).toContain('one room\'s note was given to the model in another room')
+    expect(await detail('memory-no-checks', 'M3')).toContain('the secret was kept in the notes')
+    expect(await detail('memory-in-scratch', 'M4')).toContain('a file tool wrote into the door\'s notes')
+    expect(await detail('no-system-prompt', 'M5')).toContain('did not reach the model whole')
+    expect(await detail('memory-cached', 'M6')).toContain('after the wipe the model was still sent the note')
+  }, 120_000)
 
   it('[U:must-fail] each tool check goes red for the reason it names', async () => {
     const detail = async (name: string, id: string): Promise<string> => {
@@ -119,7 +138,7 @@ describe('the committed matrix for the pinned Pi', () => {
     const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
     // Every check anyone knows of has a row, run or not, and there is no row for one nobody knows.
     // Plus Pi's own: the checks that a failed model call is told to the room.
-    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id)])].sort())
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id), ...MEMORY_CHECKS.map((c) => c.id)])].sort())
     for (const check of CHECKS) {
       expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance`).toBeDefined()
       expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)

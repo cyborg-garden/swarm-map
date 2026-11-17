@@ -13,11 +13,13 @@ import { withHash } from '../../lib/core/policy/canonical.ts'
 import type { PolicyRecord } from '../../lib/core/policy/types.ts'
 import { createFakeConnector, type FakeConnector } from '../../lib/door/connectors/fake.ts'
 import { createDoor, type Door } from '../../lib/door/door.ts'
+import { createMemoryStore, type MemoryStore } from '../../lib/door/memory.ts'
 import { startModelRoute, type ModelRoute } from '../../lib/door/model-route.ts'
 import { createReceiptLog, type ReceiptLog } from '../../lib/door/receipts.ts'
 import { createSanitizer } from '../../lib/door/sanitizer.ts'
 import { createMemoryLedger } from '../../lib/door/spend-ledger.ts'
 import { startChattyShim } from '../broken/chatty.ts'
+import { brokenMemoryStore, type BrokenMemory } from '../broken/memory-stores.ts'
 import { assertNoCredentials, assertSafeWorkDir } from '../guards/preflight.ts'
 import { startScriptedModel, type ScriptedModel, type ScriptEntry } from '../rig/scripted-model.ts'
 import { applyPatch, loadFixturePolicy } from '../scenarios/load.ts'
@@ -53,7 +55,15 @@ export interface LabOptions {
    * answer to a request as sent by the fixture's admin, whoever sent it. The door has no way to
    * know better, so it shows that the check on who may answer can go red.
    */
-  rig?: 'answers-as-admin'
+  rig?: 'answers-as-admin' | BrokenMemory
+  /**
+   * The door keeps notes for each room (lib/door/memory.ts), in a folder of the lab's own that the
+   * harness is never given: not the work dir, which a cell shares. `dir` reuses a folder another lab
+   * made, for a check that starts a second door and harness on the same notes; that lab owns it.
+   */
+  memory?: { dir?: string }
+  /** What the harness is told it is, as the launcher would tell it. Left out, the harness keeps its own. */
+  systemPrompt?: string
 }
 
 export interface RemoteCell {
@@ -96,6 +106,15 @@ export interface Lab {
   /** Add a scripted reply. */
   script(entry: ScriptEntry): void
   policy(patch?: Record<string, unknown>): PolicyRecord
+  /** The door's notes, when the lab keeps them. */
+  memory?: MemoryStore
+  /** Where the notes are on disk, when the lab keeps them. */
+  memoryDir?: string
+  /**
+   * A second lab on the same notes: a new door, a new harness, the same folder of notes. As a restart
+   * would leave things. The caller closes it, after reading its tripwire.
+   */
+  again(): Promise<Lab>
   close(): Promise<void>
 }
 
@@ -156,6 +175,22 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     closers.push(() => model.close())
     const receipts = createReceiptLog()
     const fake = createFakeConnector({ nonce })
+    const sanitizer = createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] })
+    // The notes' folder is the lab's own, outside the work dir, unless a rig puts it where the harness can write.
+    let memoryDir: string | undefined
+    let memory: MemoryStore | undefined
+    if (o.memory) {
+      if (o.rig === 'memory-in-scratch') {
+        memoryDir = o.harness.workFile({ dir } as Cell, 'notes')
+      } else if (o.memory.dir) {
+        memoryDir = o.memory.dir
+      } else {
+        const own = mkdtempSync(path.join(os.tmpdir(), `swarmlab-notes-${nonce}-`))
+        closers.push(() => { rmSync(own, { recursive: true, force: true }) })
+        memoryDir = path.join(own, 'memory')
+      }
+      memory = brokenMemoryStore(o.rig, createMemoryStore({ dir: memoryDir, sanitizer, ...(o.rig === 'memory-no-checks' ? { checks: false } : {}) }))
+    }
     if (o.rig === 'answers-as-admin') {
       // The surface lies about who answered. Everything else it passes on as it came.
       const admin = { id: 'u-root', display: 'u-root', isBot: false, isSelf: false, roles: [] }
@@ -167,7 +202,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     const door = await createDoor({
       policy: policy(), connectors: [fake.connector], creds: { fake: { token: secrets.chat } },
       receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
-      sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] }),
+      sanitizer, memory,
       turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
     })
     closers.push(() => door.close())
@@ -187,6 +222,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       link: { host: o.remote?.advertise ?? '127.0.0.1', port: door.brainPort, token: secrets.brain },
       verdictTimeoutMs: o.verdictTimeoutMs ?? 400, vetoTimeoutMs: o.vetoTimeoutMs ?? 2000,
       ...(o.toolLimits ? { toolLimits: o.toolLimits } : {}),
+      ...(o.systemPrompt !== undefined ? { systemPrompt: o.systemPrompt } : {}),
     }
 
     process.env[hostCanary.name] = hostCanary.value
@@ -212,6 +248,11 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       },
       tripwire: () => o.harness.tripwire(cell),
       script: (entry) => { script.push(entry) },
+      memory, memoryDir,
+      again: () => {
+        if (!memoryDir || o.remote) throw new Error('a second lab on the same notes needs a lab that keeps notes, on this machine')
+        return startLab({ ...o, memory: { dir: memoryDir } })
+      },
       close: closeAll,
     }
   } catch (err) {

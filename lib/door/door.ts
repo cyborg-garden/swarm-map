@@ -510,6 +510,8 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
               shared: policy.posture !== 'public' || d.privilege === 'admin',
             })
             receipt(tag, { verdict: done.ok ? 'allow' : 'deny', rule: 'mem.notes', why: done.ok ? 'A note for this room was written.' : 'A note for this room was refused.' }, `${note} result=${done.code}`)
+            // This conversation now holds notes it wrote itself. If they are wiped, it is started again (see inbound).
+            if (done.ok) notesGiven.set(turn.sessionKey, 'written')
             link.send({ t: 'tool_verdict', callId: msg.callId, allow: done.ok, reason: done.message, ...(done.ok ? { hash } : {}) })
             return
           }

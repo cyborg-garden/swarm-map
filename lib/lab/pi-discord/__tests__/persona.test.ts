@@ -15,7 +15,7 @@ import { defaultPersona, PERSONA_DOC_MAX_BYTES } from '../persona.ts'
 const FIX = path.join(import.meta.dirname, 'fixtures')
 const record = (): DoorRulesRecord => JSON.parse(readFileSync(path.join(FIX, 'before-persona-memory.record.json'), 'utf8'))
 const before = JSON.parse(readFileSync(path.join(FIX, 'before-persona-memory.expected.json'), 'utf8')) as {
-  piPrompt: string; piHash: string; lettaPrompt: string; lettaHash: string; parsed: LabConfig
+  piPrompt: string; piHash: string; lcPrompt: string; lcHash: string; parsed: LabConfig
 }
 
 const rules = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({ ...record().rules, ...patch })
@@ -37,9 +37,9 @@ describe('an agent made before persona documents and notes', () => {
     expect(systemPromptFor(config)).toBe(before.piPrompt)
     expect(policyFor(config).hash).toBe(before.piHash)
     expect(renderConfig(r)).toBe(readFileSync(path.join(FIX, 'before-persona-memory.config.json'), 'utf8'))
-    const letta = parse({ harness: 'letta-code', tools: undefined })
-    expect(systemPromptFor(letta)).toBe(before.lettaPrompt)
-    expect(policyFor(letta).hash).toBe(before.lettaHash)
+    const lc = parse({ harness: 'letta-code', tools: undefined })
+    expect(systemPromptFor(lc)).toBe(before.lcPrompt)
+    expect(policyFor(lc).hash).toBe(before.lcHash)
   })
 
   it('[U:back-compat] an empty document, or notes switched off, is written as no setting at all', () => {
@@ -118,9 +118,9 @@ describe('notes and a kept scratch folder, as settings', () => {
     expect(p).toContain('never promise that something is private')
     expect(p).not.toContain('only kept when an admin asked')
     // Letta Code has no memory_note tool, so it is not told it has one.
-    const letta = systemPromptFor(parse({ memory: { notes: true }, harness: 'letta-code', tools: undefined }))
-    expect(letta).not.toContain('memory_note')
-    expect(letta).toContain('You cannot change them. The people who run you can.')
+    const lc = systemPromptFor(parse({ memory: { notes: true }, harness: 'letta-code', tools: undefined }))
+    expect(lc).not.toContain('memory_note')
+    expect(lc).toContain('You cannot change them. The people who run you can.')
     // An agent anyone can talk to is told the stricter rule the door holds it to.
     const open = systemPromptFor(parse({ memory: { notes: true }, tools: undefined, discord: { ...record().rules.discord, anyoneInChannel: true } }))
     expect(open).toContain('only kept when an admin asked for it')

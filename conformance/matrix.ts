@@ -10,6 +10,7 @@ import type { CheckResult } from './suites/checks.ts'
 import { CHECKS } from './suites/checks.ts'
 import type { MatrixRowInput } from './suites/harness.ts'
 import { TOOL_CHECKS } from './suites/tool-checks.ts'
+import { MEMORY_CHECKS } from './suites/memory-checks.ts'
 
 export interface MatrixMeta {
   harness: string
@@ -142,6 +143,10 @@ export function buildMatrix(
   })
   const extra: MatrixRow[] = results.filter((r) => !CHECKS.some((c) => c.id === r.id))
     .map((r) => (r.pass ? { id: r.id, title: r.title, status: 'pass' } : { id: r.id, title: r.title, status: 'fail', reason: r.detail }))
+  // A memory check this run left out on purpose is listed as not run, with the reason, never left off.
+  for (const check of MEMORY_CHECKS) {
+    if (skipped[check.id] !== undefined && !results.some((r) => r.id === check.id)) extra.push({ id: check.id, title: check.title, status: 'not-run', reason: skipped[check.id] })
+  }
   const broken = Object.entries(mustFail).map(([shim, m]) => ({
     shim, mustFail: m.mustFail, failed: m.failed, suiteCaughtIt: m.mustFail.every((id) => m.failed.includes(id)),
   }))
