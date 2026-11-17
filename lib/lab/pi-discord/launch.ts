@@ -7,7 +7,7 @@
 // the relay. Nothing here puts a secret in a container, a log or an error.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { sinkProblems, startHostListener } from '../../../conformance/docker/runner.ts'
@@ -17,12 +17,13 @@ import { createDiscordConnector } from '../../door/connectors/discord.ts'
 import { createDoor, type Door } from '../../door/door.ts'
 import { startModelRoute, type ModelRoute } from '../../door/model-route.ts'
 import { OPENAI_CHAT } from '../../door/model-shapes.ts'
+import { createMemoryStore } from '../../door/memory.ts'
 import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
-import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
+import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, keptScratchMaxBytes, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
 import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
@@ -47,6 +48,8 @@ export function prepareStateDir(dir: string): string {
 }
 
 export const runFile = (stateDir: string): string => path.join(stateDir, 'run.json')
+/** Where the door keeps its notes for each room (lib/door/memory.ts): in the state folder, outside every cell. */
+export const memoryDir = (stateDir: string): string => path.join(stateDir, 'memory')
 export function readRun(stateDir: string): RunRecord | undefined {
   try { return JSON.parse(readFileSync(runFile(stateDir), 'utf8')) as RunRecord } catch { return undefined }
 }
@@ -164,6 +167,33 @@ export async function start(o: StartOptions): Promise<Running> {
   const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
 
+  // One check for everything the door posts, writes down or keeps as a note.
+  const sanitizer = createSanitizer({ extraSecrets: [...secrets, ...cellHeld] })
+  // mem.notes: the room notes live here, on this machine, in this agent's state folder. The cell never sees the folder.
+  const memory = o.config.memory?.notes === true ? createMemoryStore({ dir: memoryDir(stateDir), sanitizer }) : undefined
+  // tools.keepScratch: the scratch folder as the cell left it at the last stop, put back in the new cell.
+  const keep = o.config.tools?.keepScratch === true
+  const keptFile = path.join(stateDir, KEPT_SCRATCH_FILE)
+  let cellIsUp = false
+  const restoreScratch = (): void => {
+    if (!keep || !existsSync(keptFile)) return
+    if (statSync(keptFile).size > keptScratchMaxBytes()) { o.log('the kept scratch folder is bigger than the folder may be, so it was not put back'); return }
+    o.log(writeScratch(project, readFileSync(keptFile)) ? 'the kept scratch folder was put back' : 'the kept scratch folder could not be put back, so the folder starts empty')
+  }
+  const saveScratch = (): void => {
+    if (!keep || !cellIsUp) return
+    const { tar, why } = readScratch(project)
+    if (!tar) {
+      // A copy from an earlier stop would come back looking current. It is removed rather than kept stale.
+      rmSync(keptFile, { force: true })
+      o.log(`the scratch folder was not kept: ${why}`)
+      return
+    }
+    writeFileSync(`${keptFile}.tmp`, tar, { mode: 0o600 })
+    renameSync(`${keptFile}.tmp`, keptFile)
+    o.log(`the scratch folder was kept (${tar.length} bytes)`)
+  }
+
   let door: Door | undefined
   let route: ModelRoute | undefined
   let stopped = false
@@ -172,6 +202,7 @@ export async function start(o: StartOptions): Promise<Running> {
     stopped = true
     await door?.close().catch(() => {})
     await route?.close().catch(() => {})
+    try { saveScratch() } catch { o.log('the scratch folder could not be kept') }
     const left = cellDown(project)
     rmSync(runFile(stateDir), { force: true })
     rmSync(path.join(stateDir, 'compose.json'), { force: true })
@@ -206,6 +237,8 @@ export async function start(o: StartOptions): Promise<Running> {
     const running = runningCellProblems(project, networksWritten(file))
     if (running.length > 0) throw new Error(`the cell is not sealed: ${running.join('; ')}`)
     o.log(`cell up and sealed (${project})`)
+    cellIsUp = true
+    restoreScratch()
 
     const connector: SurfaceConnector = createDiscordConnector({
       ...(o.discord ?? {}),
@@ -216,12 +249,13 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
-      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: turnSecondsOf(o.config) * 1000,
+      receipts, brainToken, brainPort, sanitizer, memory, keptScratch: keep, turnDeadlineMs: turnSecondsOf(o.config) * 1000,
       approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
     })
     await joinCell({
       ready: (ms) => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false),
-      stopStart: (what) => cellStopStart(project, what),
+      // A cell started again comes back with an empty scratch folder (it is in memory), so a kept one is put back again.
+      stopStart: (what) => { const ok = cellStopStart(project, what); if (ok && what === 'start') restoreScratch(); return ok },
       sealProblems: () => runningCellProblems(project, networksWritten(file)),
       pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: Date.now, log: o.log,

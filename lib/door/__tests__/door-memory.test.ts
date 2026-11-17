@@ -196,3 +196,38 @@ describe('door: notes kept for each room', () => {
     second.client.close()
   })
 })
+
+describe('door: notes on an agent anyone can talk to', () => {
+  const open = () => team({ posture: 'public', 'tools.allow': ['memory'], 'surfaces.fake.anyoneInAllowedRoom': true })
+  it('[P:mem-notes] a stranger cannot change the room\'s notes, an admin can, and a person can keep their own card', async () => {
+    const { store } = memoryStore()
+    rig = await startRig(open(), { noShim: true, door: { brainToken: BRAIN, memory: store } })
+    const shim = await noteShim(rig)
+    let answer = shim.next({ file: 'room', op: 'add', text: 'the admins are away' })
+    say(rig, 'remember this')
+    expect(await answer).toMatchObject({ allow: false, reason: expect.stringContaining('only kept when an admin asks') })
+    await rig.door.idle()
+    answer = shim.next({ file: 'people', op: 'add', text: 'likes moss' })
+    say(rig, 'remember that I like moss')
+    expect((await answer).allow).toBe(true)
+    await rig.door.idle()
+    answer = shim.next({ file: 'room', op: 'add', text: 'seed swap on Saturday' })
+    say(rig, 'remember the seed swap', 'r-general', 'u-root')
+    expect((await answer).allow).toBe(true)
+    await rig.door.idle()
+    expect(store.render('fake:r-general')).toBe('About this room:\n- seed swap on Saturday\nPeople who asked to be remembered:\n- [u-alice] u-alice: likes moss')
+    shim.client.close()
+  })
+})
+
+describe('door: a kept scratch folder, in a request to approve', () => {
+  it('[P:kept-scratch] the request says what is kept, still fits in one message, and still reads back', async () => {
+    const { MAX_REQUEST_CHARS, requestText, shownIn } = await import('../approvals.ts')
+    const { MAX_SHOWN_CHARS } = await import('../../core/tools/call.ts')
+    const kept = requestText('bash', '{"command":"ls"}', 'f'.repeat(64), 120_000, { keptScratch: true })
+    expect(kept).toContain('stays until the agent is stopped, and what it leaves in its scratch folder is kept after that.')
+    expect(requestText('bash', '{"command":"ls"}', 'f'.repeat(64), 120_000)).not.toContain('kept after that')
+    expect(shownIn(kept)).toEqual({ shown: '{"command":"ls"}', call: 'f'.repeat(12) })
+    expect(requestText('x'.repeat(64), 'y'.repeat(MAX_SHOWN_CHARS), 'f'.repeat(64), 600_000, { keptScratch: true }).length).toBeLessThanOrEqual(MAX_REQUEST_CHARS)
+  })
+})

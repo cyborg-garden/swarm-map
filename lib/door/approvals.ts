@@ -16,12 +16,12 @@ export type Answer = 'approve' | 'deny'
 export const MAX_REQUEST_CHARS = 1900
 
 /** `tool` is a name from the map the shim declared at hello, so it is a plain name. `shown` is showInput()'s text. */
-export function requestText(tool: string, shown: string, hash: string, timeoutMs: number): string {
+export function requestText(tool: string, shown: string, hash: string, timeoutMs: number, o: { keptScratch?: boolean } = {}): string {
   return [
     `Approval needed. The agent wants to run ${tool}:`,
     '```', shown, '```',
     // A yes reaches past the call: a background process it starts, or a file it changes, is still there after it.
-    `An admin can reply approve or deny, or react ✅ or ❌. No answer in ${Math.round(timeoutMs / 1000)} seconds means no. Whatever it starts or changes in the agent's cell stays until the agent is stopped. (call ${shortHash(hash)})`,
+    `An admin can reply approve or deny, or react ✅ or ❌. No answer in ${Math.round(timeoutMs / 1000)} seconds means no. Whatever it starts or changes in the agent's cell stays until the agent is stopped${o.keptScratch ? ', and what it leaves in its scratch folder is kept after that' : ''}. (call ${shortHash(hash)})`,
   ].join('\n')
 }
 

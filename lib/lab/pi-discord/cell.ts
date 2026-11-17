@@ -376,3 +376,37 @@ export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMIT
   }
   return p
 }
+
+/**
+ * A kept scratch folder (`tools.keepScratch`). When the agent stops, the folder is read out of the
+ * cell as one tar stream and stored as it is, in the agent's state folder. When it starts, that same
+ * stream is unpacked again INSIDE the new cell, by the cell's own user, into the capped folder.
+ * This machine never unpacks it, so nothing the agent put there can land anywhere on this machine,
+ * and the folder's own size cap still holds what comes back. Docs: docs/lab/persona-memory.md.
+ */
+export const KEPT_SCRATCH_FILE = 'scratch.tar'
+/** The most a kept folder may take: the folder's own size, and a little for the tar's headers. */
+export const keptScratchMaxBytes = (mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): number => (mb + 1) * 1024 * 1024
+
+export function scratchSaveArgs(project: string): string[] {
+  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
+  return ['exec', '-u', 'node', `${project}-cell-1`, 'tar', '-c', '-C', SCRATCH_DIR, '.']
+}
+export function scratchRestoreArgs(project: string): string[] {
+  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
+  return ['exec', '-i', '-u', 'node', `${project}-cell-1`, 'tar', '-x', '--no-same-owner', '--no-same-permissions', '-C', SCRATCH_DIR]
+}
+
+/** Read the scratch folder out of a running cell. Undefined, with the reason, when it cannot be kept. */
+export function readScratch(project: string, maxBytes: number = keptScratchMaxBytes()): { tar?: Buffer; why?: string } {
+  const r = spawnSync('docker', scratchSaveArgs(project), { env: dockerEnv(), timeout: 60_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: maxBytes })
+  if (r.error && /ENOBUFS|maxBuffer/i.test(String((r.error as NodeJS.ErrnoException).code ?? r.error.message))) return { why: `the folder is bigger than ${maxBytes} bytes` }
+  if (r.status !== 0 || !Buffer.isBuffer(r.stdout)) return { why: 'the cell did not hand the folder over' }
+  return { tar: r.stdout }
+}
+
+/** Put a kept folder back, unpacked inside the cell. False when the cell refused it. */
+export function writeScratch(project: string, tar: Buffer): boolean {
+  const r = spawnSync('docker', scratchRestoreArgs(project), { env: dockerEnv(), timeout: 60_000, input: tar, stdio: ['pipe', 'ignore', 'ignore'] })
+  return r.status === 0
+}

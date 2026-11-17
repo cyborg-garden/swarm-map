@@ -53,6 +53,12 @@ export interface NoteContext {
   speaker: Speaker
   /** Whether that message asked to be remembered (ASKED_TO_REMEMBER). */
   asked: boolean
+  /**
+   * Whether this turn may change the notes everyone in the room is given (room, threads). False on
+   * an agent anyone can talk to, unless an admin started the turn: a stranger cannot plant a note
+   * for the whole room. A person's own note is theirs either way. Left out, true.
+   */
+  shared?: boolean
 }
 export interface NoteResult {
   ok: boolean
@@ -182,6 +188,7 @@ export function createMemoryStore(o: {
       const lines = entries(read(room)[f])
       const mine = (line: string): boolean => f !== 'people' || ownerOf(line) === ctx.speaker.id
       const lineFor = (t: string): string => (f === 'people' ? `- [${ctx.speaker.id}] ${cleanName(ctx.speaker.display)}: ${t}` : `- ${t}`)
+      if (f !== 'people' && ctx.shared === false) return refuse('not-admin', 'here, a note about the room or a thread is only kept when an admin asks for it')
       // A note about a person is about the one who is speaking, and only when they asked for it.
       if (f === 'people' && op !== 'remove' && !ctx.asked) {
         return refuse('not-asked', 'a note about a person is only kept when that person asks you to remember something, in their own message')

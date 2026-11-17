@@ -60,6 +60,8 @@ export interface DoorOptions {
    * are given, and a `memory` tool is refused. docs/lab/persona-memory.md.
    */
   memory?: MemoryStore
+  /** The scratch folder is kept across a stop (`tools.keepScratch`): a request to approve a tool says so. */
+  keptScratch?: boolean
 }
 
 export interface Door {
@@ -502,7 +504,11 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (toolClass === 'memory') {
             if (d.verdict !== 'allow') return refuse('mem.notes', 'Notes are written or refused at once, never held for an admin.')
             if (!opts.memory) return refuse('mem.notes', 'This agent keeps no notes.')
-            const done = opts.memory.apply(roomKey(e), msg.input, { speaker: { id: e.sender.id, display: e.sender.display }, asked: ASKED_TO_REMEMBER.test(e.text) })
+            const done = opts.memory.apply(roomKey(e), msg.input, {
+              speaker: { id: e.sender.id, display: e.sender.display }, asked: ASKED_TO_REMEMBER.test(e.text),
+              // On an agent anyone can talk to, only an admin's turn changes what the whole room is given.
+              shared: policy.posture !== 'public' || d.privilege === 'admin',
+            })
             receipt(tag, { verdict: done.ok ? 'allow' : 'deny', rule: 'mem.notes', why: done.ok ? 'A note for this room was written.' : 'A note for this room was refused.' }, `${note} result=${done.code}`)
             link.send({ t: 'tool_verdict', callId: msg.callId, allow: done.ok, reason: done.message, ...(done.ok ? { hash } : {}) })
             return
@@ -515,7 +521,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (!(policy.surfaces[e.surface]?.admins ?? []).some((ref) => ref.kind === 'user')) return no('Nobody is on the admin list, so nobody could say yes.')
           const shown = showInput(msg.input)
           if ('problem' in shown) return no(`It cannot be shown for approval: ${shown.problem}.`)
-          const text = requestText(toolName, shown.text, hash, approvalMs)
+          const text = requestText(toolName, shown.text, hash, approvalMs, { keptScratch: opts.keptScratch })
           // What is posted has to be what would run. A request the outbound check would change is not posted.
           let clean: ReturnType<Sanitizer['run']>
           try { clean = sanitizer.run('outbound', text, { posture: policy.posture, room: e.room }) } catch { return no('The outbound check failed, so the request was not posted.') }
