@@ -7,6 +7,7 @@ import { LETTA_CODE_CHECKS, lettaCodeHarness } from '../harnesses/letta-code.ts'
 import { piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks, type Check } from '../suites/checks.ts'
 import type { HarnessUnderTest } from '../suites/harness.ts'
+import { MODEL_FAILURE_CHECKS } from '../suites/failure-checks.ts'
 import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 import { startLab, type RemoteCell } from '../suites/lab.ts'
 import { DOCKER_CHECKS } from './checks.ts'
@@ -24,7 +25,7 @@ const remote: RemoteCell = {
 // says about the harness (its capabilities, its wire format, its shell), never to start it.
 const NOT_HERE = { version: async () => 'the SDK is in the cell', query: () => { throw new Error('the SDK is in the cell, not here') } }
 const cells: Record<string, { local: HarnessUnderTest; own: Check[]; slow: boolean }> = {
-  'pi': { local: piHarness(['/usr/local/bin/pi'], 'real'), own: TOOL_CHECKS, slow: false },
+  'pi': { local: piHarness(['/usr/local/bin/pi'], 'real'), own: [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS], slow: false },
   'letta-code': { local: lettaCodeHarness(['/usr/local/bin/letta'], 'real'), own: LETTA_CODE_CHECKS, slow: true },
   'claude-sdk': { local: claudeSdkHarness(NOT_HERE, 'real'), own: CLAUDE_SDK_CHECKS, slow: true },
 }

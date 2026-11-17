@@ -57,12 +57,15 @@ describe('a live turn, with a stand-in at each end', () => {
     expect(result.attempts).toEqual([])
     expect(result.capRefused).toBe(true)
     expect(result.receipts).toContainEqual({ rule: 'budget.cap', verdict: 'deny' })
+    // The refused turn is told to the room, with the reason.
+    expect(result.notices).toEqual(['No answer this time. The monthly budget is spent.'])
   })
 
-  it('[U:live-turn] a budget smaller than one call refuses the first one, and nothing is posted', async () => {
+  it('[U:live-turn] a budget smaller than one call refuses the first one: no reply, and the room is told why', async () => {
     model = await startScriptedModel({ nonce: NONCE, script: [], shape: 'anthropic-messages' })
     const result = await liveTurn({ sdk: fakeClaudeSdk(), upstream: model.baseUrl, keyFile: keyFile(), model: 'scripted', price: PRICE, budgetUsd: 0, question: 'hello' })
     expect(result.reply).toBeUndefined()
+    expect(result.notices).toEqual(['No answer this time. The monthly budget is spent.'])
     expect(model.requests).toEqual([])
     expect(result.meter.requests).toBe(0)
   })
@@ -71,6 +74,8 @@ describe('a live turn, with a stand-in at each end', () => {
     model = await startScriptedModel({ nonce: NONCE, script: [], shape: 'anthropic-messages' })
     const result = await liveTurn({ sdk: fakeClaudeSdk(), upstream: model.baseUrl, keyFile: keyFile('not-the-key\n'), model: 'scripted', price: PRICE, budgetUsd: 5, question: 'hello' })
     expect(result.reply).toBeUndefined()
+    // The room is told the provider refused it, by the door, in its own words: not the provider's.
+    expect(result.notices).toEqual(['No answer this time. The model provider refused the call (status 401).'])
     expect(model.refused).toBe(1)
     expect(result.meter.usd).toBe(0)
     expect(result.capRefused).toBe(false)

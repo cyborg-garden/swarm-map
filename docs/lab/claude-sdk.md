@@ -194,9 +194,10 @@ later audit of this work, which is why they are listed apart.
    stored login, so it stays, and the callback with the line above is the veto.
 3. **A failed model call looks like a reply.** When the model route refuses a call (a spent
    budget, say), the SDK ends the turn with a `result` record of subtype `success` whose text is
-   `API Error: 402 ...`. Only one field, `is_error`, says it failed. The shim posts nothing
-   unless that field is the plain value `false`. The `hides-errors` shim shows the error text
-   being posted to the room without that.
+   `API Error: 402 ...`. Only one field, `is_error`, says it failed. The shim sends no reply
+   unless that field is the plain value `false`, and the door then posts its own line saying
+   why there is no answer. The `hides-errors` shim shows the error text being posted to the
+   room in place of that line.
 4. **It is a compiled program.** No tripwire can be loaded into it, which is why C9p has a proxy
    in its place, and why this harness's process-level run says less than the other two.
 

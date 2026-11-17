@@ -71,6 +71,12 @@ export interface Door {
   /** Swap the live policy. Takes effect on the next decision, with no restart. */
   setPolicy(policy: PolicyRecord): void
   heartbeat(): Heartbeat
+  /**
+   * A model call failed or was refused (the model route says so). A turn that began before it
+   * and then ends with nothing to post is told to the room with this reason. `why` is shown
+   * in the room, so it is the door's or the route's own fixed sentence, never a provider's words.
+   */
+  modelFailed(failure: { rule: string; why: string }): void
   /** Resolves when no message is being handled and no turn is live. */
   idle(): Promise<void>
   close(): Promise<void>
@@ -85,7 +91,23 @@ interface Turn {
   sessionKey: string
   reply?: string
   timer: ReturnType<typeof setTimeout>
+  /** When the door sent the turn. A model failure from before it is not this turn's. */
+  startedAt: number
 }
+
+/**
+ * How a turn ended with nothing to post. The room is told in one short line, so an agent is
+ * never simply silent. The lines are the door's own: nothing the harness or a provider said.
+ */
+type Ending = 'no-reply' | 'error' | 'timeout'
+export const NOTICES: Record<Ending, string> & { failed(why: string): string } = {
+  'no-reply': 'No answer this time: the agent finished without a reply.',
+  'error': 'No answer this time: something went wrong inside the agent.',
+  'timeout': 'No answer this time: the agent took too long, so the door stopped waiting for it.',
+  failed: (why) => `No answer this time. ${why}`,
+}
+/** Is this a line the door posted because a turn had no answer? */
+export const isNotice = (text: string): boolean => text.startsWith('No answer this time')
 
 /** A tool call that is held until an admin answers the request the door posted for it. */
 interface Held {
@@ -131,6 +153,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const deadlineMs = opts.turnDeadlineMs ?? 120_000
   const maxReplyChars = opts.maxReplyChars ?? 6000
   const approvalMs = opts.approvalTimeoutMs ?? 120_000
+  // The last model call that failed, and when. Turns are not told apart by it: with two turns
+  // live at once, either may be the one that is told.
+  let lastFailure: { rule: string; why: string; at: number } | undefined
   const callsPerHour = opts.toolCallsPerHour ?? DEFAULT_TOOL_LIMITS.callsPerHour
   // priv.approval: calls waiting for an admin, by the id of the request the door posted.
   const held = new Map<string, Held>()
@@ -185,11 +210,30 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       h.link.send({ t: 'tool_verdict', callId: h.callId, allow: false, reason: 'the turn is over' })
     }
   }
-  const closeTurn = (turn: Turn): void => {
+  /** Close a live turn. With an `ending`, the room is told first, and the turn counts as busy until it has been. */
+  const closeTurn = (turn: Turn, ending?: Ending): void => {
     if (!turns.delete(turn.turnId)) return
     clearTimeout(turn.timer)
     dropHeld(turn)
-    end()
+    if (ending === undefined) return end()
+    void tell(turn, ending).finally(end)
+  }
+  /** Say in the room that this turn has no answer, and why, if the door knows. */
+  const tell = async (turn: Turn, ending: Ending): Promise<void> => {
+    const tag = about(turn.event, 'outbound', turn.turnId)
+    const failure = lastFailure !== undefined && lastFailure.at >= turn.startedAt ? lastFailure : undefined
+    if (failure) receipt(tag, { verdict: 'drop', rule: failure.rule, why: `The turn has no answer because a model call did not complete: ${failure.why}` })
+    // A bot is not told. The line would be one more message for it to answer, so a turn that
+    // ended in silence, or a failure, would keep a bot loop going instead of ending it.
+    if (turn.event.sender.isBot) {
+      receipt(tag, { verdict: 'drop', rule: 'turn.to-bot', why: 'The turn was started by a bot, so the room is not told it has no answer.' })
+      return
+    }
+    try {
+      await outbound(turn, failure ? NOTICES.failed(failure.why) : NOTICES[ending])
+    } catch {
+      receipt(tag, { verdict: 'drop', rule: 'out.still-allowed', why: 'Posting that the turn has no answer failed.' })
+    }
   }
   /** The clock on a turn: started when the turn is, stopped while a call of its waits for an admin, and started again after. */
   const startClock = (turn: Turn): void => {
@@ -197,7 +241,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     if (turns.get(turn.turnId) !== turn || [...held.values()].some((h) => h.turn === turn)) return
     turn.timer = setTimeout(() => {
       receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness did not finish the turn in time.' })
-      closeTurn(turn)
+      closeTurn(turn, 'timeout')
     }, deadlineMs)
   }
 
@@ -320,7 +364,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       text, attachments: e.attachments, context: { observed: observed.drain(sessionKey) },
       tools, whenBusy: 'queue', deadlineMs,
     }
-    const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never }
+    const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never, startedAt: Date.now() }
     turns.set(turnId, turn)
     startClock(turn)
     begin()
@@ -398,8 +442,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         clearTimeout(turn.timer)
         turns.delete(turn.turnId) // no reply can join this turn from here on
         dropHeld(turn) // and no call of it can still be approved
-        const finish = turn.reply === undefined ? Promise.resolve() : outbound(turn, turn.reply)
-        void finish.catch(() => {
+        if (turn.reply === undefined) {
+          receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'turn.no-reply', why: 'The harness finished the turn without a reply.' })
+          void tell(turn, 'no-reply').finally(end)
+          return
+        }
+        void outbound(turn, turn.reply).catch(() => {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'Posting the reply failed.' })
         }).finally(end)
         return
@@ -510,7 +558,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         const turn = msg.turnId ? turns.get(msg.turnId) : undefined
         if (turn) {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness reported an error for this turn.' })
-          closeTurn(turn)
+          closeTurn(turn, 'error')
         }
         return
       }
@@ -605,6 +653,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       const misfit = shim ? fitProblems(next, shim.caps) : []
       if (misfit.length > 0) throw new Error(`policy refused: ${misfit.join('; ')}`)
       policy = next
+    },
+    modelFailed(failure) {
+      lastFailure = { rule: failure.rule, why: failure.why, at: Date.now() }
     },
     heartbeat: () => ({ agentId: policy.agentId, policyHash: policy.hash, caps: shim?.caps, ts: new Date().toISOString() }),
     idle: () => (busy === 0 ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push(resolve) })),

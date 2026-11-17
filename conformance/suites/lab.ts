@@ -193,6 +193,8 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       // A lab lives for one check and is never restarted, so its spend need not outlive it.
       policy: () => door.policy(), receipts, prices: PRICES, ledger: createMemoryLedger(),
       host: listen, port: o.remote?.routePort,
+      // As the launcher wires it: a call that is refused or fails is told to the room.
+      onFailure: (failure) => door.modelFailed(failure),
     })
     closers.push(() => route.close())
 
