@@ -74,6 +74,20 @@ describe('turn status, on its own', () => {
     expect(calls).toEqual([`+${STATUS_EMOJI.working} m-1`])
   })
 
+  it('[U:turn-status] a call that fails, and a report of it that fails too, leave nothing unhandled', async () => {
+    const reported: string[] = []
+    const broken: SurfaceConnector = { ...connector(), react: async () => { throw new Error('discord: PUT failed with status 403') }, typing: async () => { throw new Error('x') } }
+    const s = startTurnStatus({
+      reactions: true, typing: true, typingEveryMs: 8000, connector: broken, room, messageId: 'm-1', paused: () => false,
+      failed: (what) => { reported.push(what); throw new Error('the receipt could not be written') },
+    })
+    await vi.advanceTimersByTimeAsync(8000 * 2)
+    s.end('failed')
+    await vi.runAllTimersAsync()
+    // Once per kind, and the door is still standing: vitest fails the run on an unhandled rejection.
+    expect(reported.sort()).toEqual(['reaction', 'typing'])
+  })
+
   it('[U:turn-status] a failure is reported by its code, never its text', () => {
     expect(statusCode(new Error('discord: PUT failed with status 403'))).toBe('403')
     expect(statusCode(new Error('discord: rate limited for longer than this connector will wait (PUT)'))).toBe('rate-limited')

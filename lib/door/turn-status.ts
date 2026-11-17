@@ -53,7 +53,8 @@ export function startTurnStatus(o: StatusOptions & {
   const fail = (what: 'reaction' | 'typing') => (err: unknown): void => {
     if (told.has(what)) return
     told.add(what)
-    o.failed(what, err)
+    // Reporting it must not fail either: a rejection nobody handles would take the door down.
+    try { o.failed(what, err) } catch { /* the call is given up on all the same */ }
   }
   // Reactions go one after another, so ✅ never lands before the 👀 it replaces.
   let chain: Promise<void> = Promise.resolve()
