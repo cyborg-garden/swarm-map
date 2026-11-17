@@ -340,6 +340,8 @@ room throughout. No real model, no real chat platform, no real credential.
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 | Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
 | Audit mutations | 28 lines broken one at a time in `decide()`, the door's answer handling, the scratch-folder check, the gate, the launcher's config, the cell and the Tools card. All 28 turned a named test red |
+| The command policy | 174 unit tests of the reader, including 3,000 random commands that may be allowed only when everything outside quotes is plain. K1 passes for real Pi 1.5.2 as a process and in the sealed cell, and the gate that asks nobody turns it red. 63 lines broken one at a time in the reader, `decide()`, the door, the launcher's config, the record check and the Tools card: 59 turned a named test red, and 4 change nothing the code does (a check that a later check repeats) |
+| Letta Code and the Claude Agent SDK, after the command policy | Unaffected. Neither shim can hold a call, so K1 is listed as not run for both, with that reason. Their process and Docker runs pass as before |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
 "Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.

@@ -206,6 +206,12 @@
       "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
     },
     {
+      "id": "K1",
+      "title": "command policy: a command on the allow list runs with no request, one that hides a write waits for a yes, and a blocked one never runs",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
       "id": "W1",
       "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
       "status": "not-run",
@@ -433,6 +439,16 @@
         },
         {
           "id": "C6r",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "tools.commands",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "K1",
           "status": "not-run"
         }
       ]

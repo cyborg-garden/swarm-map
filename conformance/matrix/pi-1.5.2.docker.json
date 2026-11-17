@@ -153,6 +153,11 @@
       "status": "pass"
     },
     {
+      "id": "K1",
+      "title": "command policy: a command on the allow list runs with no request, one that hides a write waits for a yes, and a blocked one never runs",
+      "status": "pass"
+    },
+    {
       "id": "W1",
       "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
       "status": "pass"
@@ -433,6 +438,16 @@
         },
         {
           "id": "C6r",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "tools.commands",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "K1",
           "status": "pass"
         }
       ]
