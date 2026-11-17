@@ -11,8 +11,9 @@ export async function POST(
   if (door) {
     // A door agent is started by its launcher, after a dry run that must end ready.
     try {
-      await services.doorAgents.start(door)
-      return NextResponse.json({ ok: true })
+      // Who started it: this page, or the supervisor that runs it, asked to.
+      const started = await services.doorAgents.start(door)
+      return NextResponse.json({ ok: true, ...started })
     } catch (err) {
       return doorErrorResponse(err)
     }

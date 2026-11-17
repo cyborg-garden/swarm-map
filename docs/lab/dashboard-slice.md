@@ -59,6 +59,8 @@ changed. This slice reuses that guard and adds the door paths beside it.
 3. **A supervisor command.** `start.sh` sits in the data folder. The page shows a `pm2` command
    that runs it. A door that exits with an error is restarted. A door stopped through Swarm Map
    stays stopped, and so does one killed by a signal, which pm2 does not count as an error.
+   Once pm2 has an app for the door, Start and Save on the page go through pm2 (see
+   [Under pm2](#under-pm2)).
 4. **Usage from the spend ledger.** The month's spend against the budget. Today's cost and the
    invocation count are not kept by the door, so they show "—".
 5. **Routes**, all resolved through `lib/harness-ref.ts` and covered by the route sweep:
@@ -130,7 +132,32 @@ page started before Swarm Map kept that note is shown the same way until it is n
 3. If the door is running: write the new config beside the old one, dry-run it, and only if it
    ends "ready to start" stop the door, store the record, write the files and start it again.
    If the dry run fails, or the door cannot be stopped, nothing is stored: the door keeps the old
-   rules, the record still says the old rules, and the page says why.
+   rules, the record still says the old rules, and the page says why. If the stop ended the door
+   but reported a failure (a cell left behind, say), the door is started again on the old rules,
+   so a failed save does not leave it down.
+
+## Under pm2
+
+A door that runs under pm2 is started again by pm2, never beside it. Before Start or Save,
+Swarm Map asks pm2 (`pm2 jlist`, only when pm2's daemon is up, since asking would start one)
+for the app that runs this agent's `start.sh`, or the running door's pid.
+
+- **Save** on a door under pm2: dry run, stop, store, write `config.json` and `start.sh`, then
+  `pm2 restart <id>`. pm2 runs `start.sh` as it is now on disk, so the door comes up on the new
+  rules, under pm2, and the page says pm2 restarted it and names the app.
+- **Start** when pm2 has an app for this agent, running or stopped: dry run, then
+  `pm2 restart <id>`. The page never starts a second door beside one pm2 runs.
+- **Stop** is the launcher's `stop`, as before. The door exits with code 0, and pm2, started with
+  `--stop-exit-codes 0`, leaves it stopped. That was checked against pm2 6.0.14: a door that
+  exits 0, and one killed by a signal, both stay stopped.
+- **Refused, with nothing stopped:** pm2 is up but did not answer (not on the `PATH` Swarm Map
+  runs with, say), two pm2 apps run the same `start.sh`, or the door's parent is pm2 and pm2
+  lists no app for it.
+- Restarting goes by pm2's id, as an argument, never through a shell. Swarm Map waits for the
+  door pm2 started to write its run record, and says so if it does not.
+
+A door started from the page before pm2 had an app for it is unchanged: it is the page's own
+process, and Save starts it again as one.
 
 ## What is out
 
@@ -209,7 +236,10 @@ Added with [the tools slice](tools-slice.md).
   model, on a machine with Docker. No test joins the two: a Letta Code door started from the
   page's Start button.
 - "A supervisor" is read from the door's parent process, and only pm2 is recognised. A door under
-  another supervisor is shown as one Swarm Map has no note of starting.
+  another supervisor is shown as one Swarm Map has no note of starting, and Save starts it again
+  as the page's own process.
+- The pm2 paths are tested against a stub, and the adapter against a stand-in `pm2` command. They
+  were run once by hand against real pm2 6.0.14 with a stand-in launcher; no test starts real pm2.
 - Under `pm2`, a restart after an error exit goes straight to the launcher. The launcher still
   refuses a cell that is not sealed, but the dashboard's dry run is not run again.
 - The dashboard cannot redact the door's log, because it never reads the secrets. The launcher
