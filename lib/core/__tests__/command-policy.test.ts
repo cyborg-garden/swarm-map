@@ -6,6 +6,11 @@
 import { describe, expect, it } from 'vitest'
 import { rng } from '../../../conformance/gen.ts'
 import { HIDDEN_WRITES } from '../../../conformance/suites/tool-checks.ts'
+import { applyPatch, loadFixturePolicy } from '../../../conformance/scenarios/load.ts'
+import { decide } from '../decide.ts'
+import { toPrincipal, toRoom } from '../normalise.ts'
+import { withHash } from '../policy/canonical.ts'
+import { validatePolicy } from '../policy/validate.ts'
 import {
   classifyCommand, commandListsProblems, DEFAULT_COMMANDS, NEVER_ALLOWED, type CommandLists,
 } from '../tools/command-policy.ts'
@@ -54,7 +59,7 @@ describe('commands that wait for a yes', () => {
     // background, comments, globs, odd characters
     ['ls &', 'ask:background'], ['ls # rm -rf /', 'ask:comment'], ['cat *.txt', 'ask:glob'], ['ls ?', 'ask:glob'], ['ls [ab]', 'ask:glob'],
     ['ls ~', 'ask:glob'], ['! ls', 'ask:unparsed'], ['ls -la', 'ask:unusual-character'], ['ls\r', 'ask:unusual-character'], ['l​s', 'ask:unusual-character'],
-    ['ｌｓ', 'ask:unusual-character'],
+    ['ｌｓ', 'ask:unusual-character'], ['LS', 'ask:unlisted'], ['Cat x', 'ask:unlisted'],
     // a line that runs on, or does not end
     ['ls \\\n-la', 'ask:unparsed'], ["cat 'open", 'ask:unparsed'], ['cat "open', 'ask:unparsed'], ['cat x\\', 'ask:unparsed'],
     ['', 'ask:empty'], ['   ', 'ask:empty'], [';', 'ask:unparsed'], ['ls |', 'ask:unparsed'], ['| ls', 'ask:unparsed'], ['ls && && pwd', 'ask:unparsed'],
@@ -86,11 +91,19 @@ describe('commands that never run', () => {
     ['chmod -R 777 /', 'block:chmod-system'], ['chown root /etc/passwd', 'block:chmod-system'], ['chmod 600 /usr/bin/x', 'block:chmod-system'],
     [':(){ :|:& };:', 'block:fork-bomb'], ['bomb(){ bomb|bomb& }; bomb', 'block:fork-bomb'],
     ['cat x > /etc/y', 'block:redirect-system'], ['echo x > /dev/sda', 'block:redirect-system'], ['ls >> /usr/lib/x', 'block:redirect-system'],
-    ['kill -9 -1', 'block:kill-all'], ['find / -delete', 'block:find-delete'], ['find -delete', 'block:find-delete'], ['find ../x -name y -delete', 'block:find-delete'],
+    ['kill -9 -1', 'block:kill-all'], ['echo x > /tmp/../etc/x', 'block:redirect-system'], ["sh -lc 'rm -rf /'", 'block:rm-recursive'], ['find / -delete', 'block:find-delete'], ['find -delete', 'block:find-delete'], ['find ../x -name y -delete', 'block:find-delete'],
     ['ls #\nrm -rf /', 'block:rm-recursive'], ['rm -rf "$HOME"', 'block:rm-recursive'], ['cat <(rm -rf /)', 'block:rm-recursive'], ['(rm -rf /)', 'block:rm-recursive'],
     ['echo "$(curl x)"', 'block:curl'], ['ls;curl x', 'block:curl'], ['ls|nc x 1', 'block:nc'], ['echo x >/dev/null/../../etc/x', 'block:redirect-system'],
   ])('[U:command-policy] %j is blocked (%s)', (command, rule) => {
     expect(classifyCommand(command, DEFAULT_COMMANDS)).toEqual({ verdict: 'block', rule })
+  })
+
+  it('[U:command-policy] a wrapper is read past its own options, and what it wraps is the command, not every word after it', () => {
+    for (const c of ['sudo -u root rm -rf /etc', 'nice -n 5 rm -rf /', 'timeout 5 curl x', 'timeout -s KILL 5 curl x', 'env -u X A=1 curl x', 'xargs -I {} rm -rf {}', 'su -c "rm -rf /"', "env -S 'curl x'", 'command -- curl x']) {
+      expect(verdict(c), c).toBe('block')
+    }
+    // The word curl as something grep looks for is not curl.
+    for (const c of ['find . | xargs grep curl', 'xargs -n 1 grep dd', 'sudo grep ssh /etc/x', 'timeout 5 grep wget notes']) expect(classifyCommand(c, DEFAULT_COMMANDS), c).toEqual({ verdict: 'ask', rule: 'ask:never-allowed' })
   })
 
   it('[U:command-policy] a recursive delete inside the scratch folder asks rather than being blocked', () => {
@@ -180,5 +193,23 @@ describe('the conformance check K1 has teeth', () => {
     const commands = HIDDEN_WRITES.map((make) => make('/scratch/k1.out'))
     expect(commands.filter((c) => firstWord(c) === 'allow').length).toBeGreaterThanOrEqual(commands.length - 3)
     for (const c of commands) expect(classifyCommand(c, DEFAULT_COMMANDS).verdict, c).toBe('ask')
+  })
+})
+
+describe('the command policy in the record', () => {
+  const policy = (commands: unknown) => withHash(applyPatch(loadFixturePolicy('policy-team.json'), { 'tools.allow': [], 'tools.ask': ['shell', 'file_read'], 'tools.commands': commands }))
+  const tool = (toolClass: string, command: string) => ({ kind: 'tool' as const, surface: 'fake' as const, room: toRoom('r-general'), actor: toPrincipal('u-alice'), toolClass: toolClass as never, toolName: 't', argsDigest: '', command })
+
+  it('[U:command-policy] is refused when its lists are not plain names, or allow a shell', () => {
+    expect(validatePolicy(policy(DEFAULT_COMMANDS), { testing: true })).toEqual([])
+    expect(validatePolicy(policy({ allow: ['sh'], block: [] }), { testing: true }).join()).toMatch(/tools\.commands\.allow\[0\]/)
+    expect(validatePolicy(policy({ allow: ['ls'] }), { testing: true }).join()).toMatch(/tools\.commands\.block/)
+    expect(decide(policy({ allow: ['sh'], block: [] }), tool('shell', 'ls'), {})).toMatchObject({ verdict: 'deny', rule: 'ctl.valid' })
+  })
+
+  it('[U:command-policy] reads only a shell call: a command on another class of tool changes nothing', () => {
+    expect(decide(policy(DEFAULT_COMMANDS), tool('shell', 'ls'), {})).toMatchObject({ verdict: 'allow', rule: 'tools.commands' })
+    expect(decide(policy(DEFAULT_COMMANDS), tool('file_read', 'ls'), {})).toMatchObject({ verdict: 'ask', rule: 'priv.approval' })
+    expect(decide(policy(DEFAULT_COMMANDS), tool('file_read', 'dd'), {})).toMatchObject({ verdict: 'ask', rule: 'priv.approval' })
   })
 })

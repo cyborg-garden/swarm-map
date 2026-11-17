@@ -336,6 +336,32 @@ const leavesScratch = (p: string): boolean =>
   p === '' || p.startsWith('/') || p.startsWith('~') || p.includes('$') || p.includes('`') ||
   p.split('/').includes('..')
 
+/** Options of each wrapper that take the next word as their value. */
+const VALUE_OPTS: Record<string, string[]> = {
+  sudo: ['-u', '-g', '-C', '-D', '-h', '-p', '-r', '-t', '-U', '-R', '-T'], doas: ['-u', '-C'], su: ['-c', '-s', '-g', '-G'],
+  env: ['-u', '-C', '-S', '--unset', '--chdir', '--split-string'], nice: ['-n', '--adjustment'], ionice: ['-c', '-n', '-p', '-P', '-u'],
+  timeout: ['-s', '-k', '--signal', '--kill-after'], stdbuf: ['-i', '-o', '-e'], watch: ['-n', '-d', '--interval'],
+  xargs: ['-I', '-L', '-n', '-P', '-s', '-d', '-E', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--max-lines'],
+  exec: ['-a'], unshare: [], nsenter: ['-t', '--target'], chroot: ['--userspec', '--groups'], setsid: [], nohup: [], command: [], builtin: [],
+  time: ['-f', '-o', '--format', '--output'], busybox: [], parallel: [],
+}
+/** Wrappers whose first plain word is a value of their own, not the command: a duration, a new root. */
+const VALUE_FIRST = new Set(['timeout', 'chroot'])
+
+/** Where the command a wrapper runs starts, or undefined if it names none. */
+function wrappedAt(name: string, words: string[]): number | undefined {
+  const takes = VALUE_OPTS[name] ?? []
+  for (let k = 1; k < words.length; k++) {
+    const w = words[k]
+    if (w === '--') return k + 1 < words.length ? k + 1 + (VALUE_FIRST.has(name) ? 1 : 0) : undefined
+    if (w.startsWith('-') && w !== '-') { if (takes.includes(w)) k++; continue }
+    if (name === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) continue
+    const at = VALUE_FIRST.has(name) ? k + 1 : k
+    return at < words.length ? at : undefined
+  }
+  return undefined
+}
+
 /** Whether one command, read loosely, is something that never runs. The rule if so. */
 function blockOf(words: string[], redirs: Redir[], lists: CommandLists, depth: number): string | undefined {
   for (const r of redirs) {
@@ -362,10 +388,18 @@ function blockOf(words: string[], redirs: Redir[], lists: CommandLists, depth: n
   }
   if (['chmod', 'chown', 'chgrp', 'chattr'].includes(name) && operandsOf(args).some(isSystemPath)) return 'block:chmod-system'
   if (name === 'kill' && args.includes('-1')) return 'block:kill-all'
-  // What a wrapper runs is searched from each word on, so `sudo -u x rm -rf /` and `timeout 5 curl` are both found.
+  // What a wrapper runs is the command after its own options, so `sudo -u x rm -rf /` and `timeout 5 curl` are both
+  // found, and `xargs grep curl` is not taken for curl. A wrapper is never allowed, so one read wrongly still asks.
   if (WRAPPERS.has(name)) {
-    for (let k = 1; k < words.length; k++) {
-      const inner = blockOf(words.slice(k), [], lists, depth + 1)
+    const at = wrappedAt(name, words)
+    if (at !== undefined) {
+      const inner = blockOf(words.slice(at), [], lists, depth + 1)
+      if (inner) return inner
+    }
+    // `su -c '…'` and `env -S '…'` hand a whole command line over as one word.
+    const s = args.findIndex((a) => (name === 'su' && a === '-c') || (name === 'env' && (a === '-S' || a === '--split-string')))
+    if (s >= 0 && args[s + 1] !== undefined) {
+      const inner = loosely(args[s + 1], lists, depth + 1)
       if (inner) return inner
     }
   }
