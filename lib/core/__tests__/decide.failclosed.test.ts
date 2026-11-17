@@ -113,3 +113,16 @@ describe('decide() fails closed when a cap is set and spend is not known', () =>
     expect(decide(team(), call, {})).toMatchObject({ verdict: 'allow', rule: 'budget.cap', why: 'No budget is set.' })
   })
 })
+
+describe('decide(): a role-mention hint only changes the words of a drop', () => {
+  it('a hint never makes an unaddressed message heard, and a real mention is heard with or without one', () => {
+    for (const roleMention of ['other', 'unlearned', 'Other', 'own'] as unknown as InboundEvent['roleMention'][]) {
+      const d = decide(team(), say({ room: 'r-general', sender: 'u-alice', roleMention }), {})
+      expect(d).toMatchObject({ verdict: 'drop', rule: 'addr.mention' })
+      expect(decide(team(), say({ room: 'r-general', sender: 'u-alice', mention: true, roleMention }), {}).verdict).toBe('deliver')
+    }
+    expect(decide(team(), say({ room: 'r-general', sender: 'u-alice', roleMention: 'other' }), {}).why).toBe('This room needs a mention and there was none: a role was mentioned, not the agent.')
+    expect(decide(team(), say({ room: 'r-general', sender: 'u-alice', roleMention: 'unlearned' }), {}).why).toMatch(/own role is not known yet\.$/)
+    expect(decide(team(), say({ room: 'r-general', sender: 'u-alice', roleMention: 'Other' as InboundEvent['roleMention'] }), {}).why).toBe('This room needs a mention and there was none.')
+  })
+})

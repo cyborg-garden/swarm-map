@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "docker",
-  "date": "2026-11-16",
+  "date": "2026-11-17",
   "runner": {
     "kind": "docker",
     "server": "29.5.2",
@@ -170,6 +170,21 @@
     {
       "id": "L2",
       "title": "tool output past the size limit does not reach the model",
+      "status": "pass"
+    },
+    {
+      "id": "C6m",
+      "title": "tools on: a model call the provider refuses, after a tool ran, leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6b",
+      "title": "tools on: a model call refused because the budget is spent leaves a receipt and tells the room why",
+      "status": "pass"
+    },
+    {
+      "id": "C6s",
+      "title": "tools on: a model call slower than the turn is allowed tells the room the door stopped waiting",
       "status": "pass"
     },
     {
@@ -677,11 +692,13 @@
       "shim": "gate-asks-nobody",
       "mustFail": [
         "C6",
-        "C6d"
+        "C6d",
+        "C6m"
       ],
       "failed": [
         "C6",
-        "C6d"
+        "C6d",
+        "C6m"
       ],
       "suiteCaughtIt": true
     },

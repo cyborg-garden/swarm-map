@@ -126,9 +126,9 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(c11d.detail).toContain('expected the direct message to be refused under mem.dm-isolated, got 0 such refusal(s)')
   }, 30_000)
 
-  it('[U:claude-sdk-must-fail] an error taken for a reply is posted, and C12 counts it', async () => {
+  it('[U:claude-sdk-must-fail] an error taken for a reply is posted in place of the door\'s line, and C12 says so', async () => {
     const [c12] = await run('hides-errors', ['C12'])
-    expect(c12.detail).toContain('expected 2 posts, got 3')
+    expect(c12.detail).toContain('the refused turn was not told to the room')
   }, 30_000)
 
   it('[U:claude-sdk-must-fail] an SDK that reaches for another machine is caught by the watcher, and the check names where', async () => {

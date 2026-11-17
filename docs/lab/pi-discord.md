@@ -188,6 +188,7 @@ If the last run was killed before it could clean up, `start` removes the contain
 ## 8. Verify
 
 1. In the channel, mention the bot. It should answer in that channel.
+   When you type `@` and its name, pick the bot itself (marked APP), not the role of the same name. Picking the bot's own role works too now; any other role does not.
 2. Say something without a mention, and mention it from another channel. It should stay silent.
 3. Read why:
 
@@ -204,13 +205,17 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `deliver addr.mention` | Heard: a listed person mentioned the bot in the channel |
 | `drop adm.rooms` | Not the allowed channel |
 | `drop adm.users` | The sender is not on the list |
-| `drop addr.mention` | No mention |
+| `drop addr.mention` | No mention. If the sentence says a role was mentioned, a role was pinged that is not the bot's own |
 | `drop dm.closed` | A direct message |
 | `drop bots.mode` / `bots.loop` | Another bot that is not heard (a webhook shows as `webhook:<id>`), or too many bot messages in a row |
 | `drop in.once` | An edited message is not read again; a reply to a deleted message is not posted |
 | `allow out.still-allowed` | A reply was posted |
 | `allow out.size` | The reply was too long and was cut |
-| `deny budget.cap` | The month's budget is spent |
+| `deny budget.cap` | The month's budget is spent. The channel is told so |
+| `deny model.provider` | The model provider refused the call, never answered, or ended its reply with an error. The note has the status or a code. The channel is told |
+| `deny model.route` | The call was not forwarded: no price for the model, or a request the route could not read. The channel is told |
+| `drop turn.no-reply` | The agent finished without a reply. The channel is told |
+| `drop turn.to-bot` | A turn a bot started has no answer. The channel is not told, so a bot is not given something to answer |
 
 ## 9. Stop
 
@@ -290,3 +295,6 @@ What is and is not shown for Letta Code itself is in [`letta-code.md`](letta-cod
 8. **The budget is counted with the prices you give.** They are not checked against the
    provider's. One call can overshoot the cap, because the cap is checked before a call.
 9. **The bot-loop count is kept in memory.** It starts again from nothing when the door restarts.
+10. **A turn with no answer is told to the channel, not explained in full.** The door posts one
+    line, `No answer this time.` and a short reason. When two turns run at once and a model call
+    fails, either may be the one that is told. The receipts say which call failed.

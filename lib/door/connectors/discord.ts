@@ -19,6 +19,11 @@
 //   GUILD_MESSAGE_REACTIONS   only when `reactions` is set: an admin may answer
 //                     a request to run a tool with a reaction. A reaction is
 //                     passed on with who put it there, and never read as text.
+// GUILDS also brings the server's roles, and word when one changes. Of them the
+// connector keeps one: the role Discord made for this bot when it joined (it is
+// `managed`, and its `tags.bot_id` is this bot's id). Discord offers that role
+// beside the bot when someone types "@" and the bot's name, and a mention of it
+// counts as a mention of the bot. No other role does, whatever it is called.
 // It never asks for direct messages, so none arrive. One that did would be
 // passed to the door as a DM like any other event.
 import { randomBytes } from 'node:crypto'
@@ -106,6 +111,8 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
   const listeners: ((e: ConnectorEvent) => void)[] = []
   const channels = new Map<string, Channel | null>()
   const seen = new Set<string>()
+  /** Per server, the id of the role Discord made for this bot there. */
+  const ownRole = new Map<string, string>()
 
   let token = ''
   let gatewayUrl = opts.gatewayUrl
@@ -252,9 +259,21 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     channels.set(id, { type: c.type, parent: str(c.parent_id) })
   }
 
+  /** Keep a role only if it is this bot's own, in a server this bot is for. A role that stops being it is forgotten. */
+  function learnRole(guildRaw: unknown, r: Raw): void {
+    const guild = str(guildRaw)
+    const id = str(r?.id)
+    if (!guild || !id || !selfId) return
+    const mine = r.managed === true && str(r.tags?.bot_id) === selfId && !elsewhere(guild)
+    if (mine) ownRole.set(guild, id)
+    else if (ownRole.get(guild) === id) ownRole.delete(guild)
+  }
+
   function onDispatch(t: string, d: Raw): void {
     switch (t) {
       case 'READY': {
+        // A new session: the servers, and the roles in them, are listed again after this.
+        ownRole.clear()
         selfId = str(d.user?.id)
         const id = str(d.session_id)
         session = id ? { id, url: str(d.resume_gateway_url) ?? gatewayUrl ?? '' } : undefined
@@ -270,7 +289,14 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
       case 'GUILD_CREATE':
         for (const c of Array.isArray(d.channels) ? d.channels : []) remember(c, d.id)
         for (const c of Array.isArray(d.threads) ? d.threads : []) remember(c, d.id)
+        for (const r of Array.isArray(d.roles) ? d.roles : []) learnRole(d.id, r)
         return
+      case 'GUILD_ROLE_CREATE': case 'GUILD_ROLE_UPDATE': learnRole(d.guild_id, d.role); return
+      case 'GUILD_ROLE_DELETE': {
+        const guild = str(d.guild_id)
+        if (guild && ownRole.get(guild) === str(d.role_id)) ownRole.delete(guild)
+        return
+      }
       case 'THREAD_LIST_SYNC': for (const c of Array.isArray(d.threads) ? d.threads : []) remember(c, d.guild_id); return
       case 'CHANNEL_CREATE': case 'CHANNEL_UPDATE': case 'THREAD_CREATE': case 'THREAD_UPDATE': remember(d); return
       case 'CHANNEL_DELETE': case 'THREAD_DELETE': { const id = str(d.id); if (id) channels.delete(id); return }
@@ -350,6 +376,12 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
 
     const text = typeof m.content === 'string' ? m.content : ''
     const mentions: Raw[] = Array.isArray(m.mentions) ? m.mentions : []
+    const roleMentions: string[] = (Array.isArray(m.mention_roles) ? m.mention_roles : []).filter((r: unknown): r is string => typeof r === 'string')
+    // The role Discord made for this bot in this server, where it is known.
+    const myRole = str(m.guild_id) ? ownRole.get(m.guild_id) : undefined
+    const roleMe = myRole !== undefined && roleMentions.includes(myRole)
+    const roleInline = myRole !== undefined && text.includes(`<@&${myRole}>`)
+    const otherRole = roleMentions.some((r) => r !== myRole)
     const room = await roomOf(m)
     // The message this one was written as a reply to, where it is one.
     const replyTo = m.type === 19 ? str(m.message_reference?.message_id) : undefined
@@ -366,10 +398,13 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
         roles: Array.isArray(m.member?.roles) ? m.member.roles.filter((r: unknown): r is string => typeof r === 'string') : [],
       },
       isDm: room.kind === 'dm',
-      // The bot itself was pinged. @everyone and role pings are not a mention of the bot.
-      mention: mentions.some((u) => u?.id === selfId),
-      inlineMention: text.includes(`<@${selfId}>`) || text.includes(`<@!${selfId}>`),
+      // The bot itself was pinged, or the role Discord made for it. @everyone and other role pings are not a mention of the bot.
+      mention: mentions.some((u) => u?.id === selfId) || roleMe,
+      // Writing the bot's own role out is writing its name: a reply-ping never puts a role in the text.
+      inlineMention: text.includes(`<@${selfId}>`) || text.includes(`<@!${selfId}>`) || roleInline,
       replyToAgent: m.referenced_message?.author?.id === selfId,
+      // Only to explain a drop: some role was pinged, and it was not (or could not yet be told to be) this bot's.
+      ...(otherRole && !roleMe ? { roleMention: myRole === undefined ? 'unlearned' as const : 'other' as const } : {}),
       text,
       attachments: (Array.isArray(m.attachments) ? m.attachments : []).map((a: Raw) => ({
         id: String(a?.id ?? ''), name: String(a?.filename ?? ''), bytes: Number(a?.size) || 0,

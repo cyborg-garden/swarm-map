@@ -34,6 +34,7 @@ export type EchoMode =
   | 'reply-after-settled'
   | 'never-settle'
   | 'silent'
+  | 'silent-later'
   | 'tool-without-asking'
 
 export interface EchoShim {
@@ -81,6 +82,8 @@ export async function startEchoShim(opts: {
       case 'silent':
         client.send({ t: 'settled', turnId })
         return
+      case 'silent-later':
+        return // the test settles the turn, or reports an error for it, by hand
       case 'never-settle':
         client.send(reply)
         return
