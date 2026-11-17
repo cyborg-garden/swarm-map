@@ -30,7 +30,7 @@ export interface FakeWeb {
 }
 
 /** Addresses the fake hands out for a public site. Public in form; only ever dialled to loopback, by this file. */
-export const FAKE_PUBLIC = ['44.44.44.44', '45.45.45.45', '2600:1f00::44']
+export const FAKE_PUBLIC = ['2600:1f00::44', '2600:1f00::45']
 
 export async function startFakeWeb(): Promise<FakeWeb> {
   const pages = new Map<string, Page>()

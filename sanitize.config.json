@@ -52,9 +52,12 @@
       "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
       "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345",
       "github_pat_11ABCDEFG0aBcDeFgHiJkLmnwvYN",
-      "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz"
+      "github_pat_11ABCDEFG0_abcdefghijklmnopqrstuvwxyz",
+      "192.0.0.",
+      "192.88.99.",
+      "198.18.0."
     ],
-    "$comment_allow_substrings": "The placeholder email domains swarm-map's pre-canonical gate hardcoded. Matched against the detected value only, never the whole line.",
+    "$comment_allow_substrings": "The placeholder email domains swarm-map's pre-canonical gate hardcoded. Matched against the detected value only, never the whole line. 192.0.0., 192.88.99. and 198.18.0. are IANA special-purpose blocks the door's web fetcher refuses (lib/door/web-fetch.ts), not anyone's host.",
     "ipv4_scope": "public",
     "allow_fiction_phones": true,
     "$comment_relaxations": "Carried over from swarm-map's pre-canonical gate: only globally routable IPv4 counts (private, CGNAT, loopback, link-local and RFC 5737 documentation ranges are fixtures in infra code), and NANP 555 numbers are documentation placeholders. Both default OFF in the canonical gate.",

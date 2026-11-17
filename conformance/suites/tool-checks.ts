@@ -332,11 +332,11 @@ export const TOOL_CHECKS: Check[] = [
 
 const SITE = 'site.test'
 const WEB = { 'tools.allow': ['network'], 'egress.hosts': [{ host: SITE, methods: ['GET'] }, { host: 'inner.test', methods: ['GET'] }] }
-const PUBLIC = '44.44.44.44'
+const PUBLIC = '2600:1f00::44'
 /** The fake web's names for a web check: the listed site is public, inner.test is listed and private, other.test is not listed. */
 function sites(lab: Lab): void {
   lab.web.name(SITE, [PUBLIC])
-  lab.web.name('other.test', ['45.45.45.45'])
+  lab.web.name('other.test', ['2600:1f00::45'])
   lab.web.name('inner.test', ['127.0.0.1'])
 }
 const page = (text: string) => (_req: unknown, res: { writeHead(s: number, h: Record<string, string>): void; end(b: string): void }): void => {
@@ -439,13 +439,13 @@ TOOL_CHECKS.push(
       lab.web.page(SITE, '/login', moved('/after', { 'set-cookie': `session=COOKIE-${lab.nonce}; Path=/` }))
       lab.web.page(SITE, '/after', page('after'))
       const canary = lab.canary('n4')
-      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/login`), fetchCall(lab, `http://user:CRED-${lab.nonce}@${SITE}/after`)] })
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/login`), fetchCall(lab, `http://cred-${lab.nonce}:pw@${SITE}/after`)] })
       say(lab, `read ${canary}`)
       await lab.door.idle()
       want(p, lab.web.seen.some((s) => s.path === '/after'), 'the redirect was not followed, so nothing was checked')
       const sent = JSON.stringify(lab.web.seen.map((s) => s.headers))
       want(p, !sent.includes(`COOKIE-${lab.nonce}`), 'a cookie the site set was sent back')
-      want(p, !sent.includes(`CRED-${lab.nonce}`), 'a credential in the address was sent')
+      want(p, !sent.includes(`cred-${lab.nonce}`) && !sent.includes(Buffer.from(`cred-${lab.nonce}:pw`).toString('base64')), 'a credential in the address was sent')
       want(p, !lab.web.seen.some((s) => 'authorization' in s.headers || 'cookie' in s.headers || 'proxy-authorization' in s.headers), 'a fetch carried an auth or cookie header')
       want(p, oneReply(lab), 'the turn did not end with one reply from the model')
       return p

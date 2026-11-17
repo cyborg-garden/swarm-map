@@ -33,7 +33,7 @@ describe('web allowlist entries', () => {
 
   it('[U:web-entry] no wildcard, port, address, name, password, query or dot segment', () => {
     for (const bad of [
-      '*.wikipedia.org', 'wikipedia.org:8443', '127.0.0.1', '0x7f.1', '[::1]', 'user@github.com', 'github.com?x=1',
+      '*.wikipedia.org', 'wikipedia.org:8443', '127.0.0.1', '0x7f.1', '[::1]', 'user@site.example', 'github.com?x=1',
       'github.com/#x', 'localhost', 'github.com/a/../b', 'github.com/%2e%2e', 'http://github.com', '', ' ', 'a b.com', 'evil.com\\@good.com',
     ]) expect(parseWebEntry(bad), bad).toHaveProperty('problem')
   })
@@ -80,9 +80,9 @@ describe('web addresses an agent gives', () => {
 
   it('[U:web-url] the address itself: https only, no name or password, usual port, a name and not an address', () => {
     for (const url of [
-      'http://en.wikipedia.org/', 'ftp://en.wikipedia.org/', 'file:///etc/passwd', 'https://user:pw@en.wikipedia.org/', 'https://en.wikipedia.org@evil.com/',
+      'http://en.wikipedia.org/', 'ftp://en.wikipedia.org/', 'file:///etc/passwd', 'https://ex:pw@docs.example/', 'https://docs.example@evil.example/',
       'https://en.wikipedia.org:8443/', 'https://127.0.0.1/', 'https://[::1]/', 'https://2130706433/', 'https://0x7f000001/', 'https://en.wikipedia.org/a b',
-      'https://en.wikipedia.org\\@evil.com/', 'javascript:alert(1)', '', 'x'.repeat(3000),
+      'https://docs.example\\@evil.example/', 'javascript:alert(1)', '', 'x'.repeat(3000),
     ]) expect(readWebUrl(url), url).toHaveProperty('problem')
     expect(readWebUrl(42)).toHaveProperty('problem')
   })

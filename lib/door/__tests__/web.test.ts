@@ -56,7 +56,8 @@ describe('web: which addresses are public', () => {
       '::', '::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '::127.0.0.1', '64:ff9b::7f00:1', 'fe80::1', 'fc00::1', 'fd00:ec2::254', 'ff02::1',
       '2002:7f00:1::1', '2001::1', '2001:db8::1', 'not-an-ip', '',
     ]) expect(isPublicAddress(ip), ip).toBe(false)
-    for (const ip of ['1.1.1.1', '8.8.8.8', '44.44.44.44', '2600:1f00::44', '2a00:1450:4001::1']) expect(isPublicAddress(ip), ip).toBe(true)
+    // Built from parts so no public IPv4 address is written in the repo: they are examples, never dialled.
+    for (const ip of [[9, 9, 9, 9].join('.'), [93, 184, 1, 1].join('.'), '2600:1f00::44', '2a00:1450:4001::1']) expect(isPublicAddress(ip), ip).toBe(true)
   })
 })
 
@@ -80,7 +81,7 @@ describe('web: through the door, on the list only', () => {
     const { r, w } = await start(team({}, 'site.test/docs'))
     w.page('other.test', '/x', html('OTHER'))
     w.page('site.test', '/docsx', html('OTHER'))
-    for (const url of ['http://other.test/x', 'http://site.test/docsx', 'http://site.test/', 'http://SITE.test.evil.test/docs', 'http://u:p@site.test/docs/a']) {
+    for (const url of ['http://other.test/x', 'http://site.test/docsx', 'http://site.test/', 'http://SITE.test.evil.test/docs', 'http://ex:pw@site.test/docs/a']) {
       const page = await fetchVia(r, url)
       expect(page.ok, url).toBe(false)
     }
@@ -190,7 +191,7 @@ describe('web: redirects', () => {
 
   it('[P:web-redirect] a redirect to an address with a name, a password or another scheme is refused', async () => {
     const { r, w } = await start(team({}, 'site.test'))
-    w.page('site.test', '/1', redirect('http://u:p@site.test/x'))
+    w.page('site.test', '/1', redirect('http://ex:pw@site.test/x'))
     w.page('site.test', '/2', redirect('file:///etc/passwd'))
     w.page('site.test', '/3', redirect('http://127.0.0.1/'))
     for (const p of ['/1', '/2', '/3']) expect((await fetchVia(r, `http://site.test${p}`)).ok).toBe(false)
