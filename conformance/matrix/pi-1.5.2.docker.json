@@ -173,6 +173,56 @@
       "status": "pass"
     },
     {
+      "id": "N1+",
+      "title": "web: an address on the list is fetched by the door, and the page reaches the model as untrusted text",
+      "status": "pass"
+    },
+    {
+      "id": "N1",
+      "title": "web: an address off the list is refused, and nothing is looked up or fetched",
+      "status": "pass"
+    },
+    {
+      "id": "N2",
+      "title": "web: a redirect off the list is not followed",
+      "status": "pass"
+    },
+    {
+      "id": "N3",
+      "title": "web: a listed name that leads to a private address is refused, by its DNS answer or by a redirect",
+      "status": "pass"
+    },
+    {
+      "id": "N4",
+      "title": "web: a fetch carries no credential, cookie or auth header",
+      "status": "pass"
+    },
+    {
+      "id": "N5",
+      "title": "web: a page past the size limit is cut, and a slow one is cut at the time limit",
+      "status": "pass"
+    },
+    {
+      "id": "N6",
+      "title": "web: a page is never posted by the door, and no receipt holds it",
+      "status": "pass"
+    },
+    {
+      "id": "N7",
+      "title": "web: with the public web on, an unlisted public site is read, and a private address is still refused",
+      "status": "pass"
+    },
+    {
+      "id": "N8",
+      "title": "search: results reach the model as untrusted titles, addresses and snippets; the key never reaches the cell, the model or a receipt; a private result is refused",
+      "status": "pass"
+    },
+    {
+      "id": "N9",
+      "title": "search: with no key there is no search, and the provider gets no call at all",
+      "status": "pass"
+    },
+    {
       "id": "C6m",
       "title": "tools on: a model call the provider refuses, after a tool ran, leaves a receipt and tells the room why",
       "status": "pass"
@@ -461,6 +511,94 @@
         },
         {
           "id": "L2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.allow",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N1",
+          "status": "pass"
+        },
+        {
+          "id": "N1+",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.public",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N7",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.search",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N8",
+          "status": "pass"
+        },
+        {
+          "id": "N9",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.redirect",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.private",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N3",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.no-credentials",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N4",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.limits",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N5",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.untrusted",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N6",
           "status": "pass"
         }
       ]

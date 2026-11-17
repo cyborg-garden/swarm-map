@@ -421,6 +421,11 @@ room throughout. No real model, no real chat platform, no real credential.
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 | Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
 | Audit mutations | 28 lines broken one at a time in `decide()`, the door's answer handling, the scratch-folder check, the gate, the launcher's config, the cell and the Tools card. All 28 turned a named test red |
+| Web and search, real Pi 1.5.2 as a process | 59 checks pass, the ten web checks (N1+, N1 to N9) among them, against a fake web and a fake search provider on loopback. Seven door rigs and gates broken on purpose each turned its named web checks red and left the others green |
+| Web and search, real Pi 1.5.2 in the sealed Docker cell | 60 checks pass, the ten web checks among them: the page and the results reached the model in the cell, and the cell reached nothing but the door |
+| The launcher's own cell, with a fake Discord, after the web change | All 20 tests of the Pi launcher's Docker suite pass |
+| Letta Code and the Claude Agent SDK, after the web change | 26 and 36 checks pass as a process, as before. The web checks are listed as not run, with the tools' reason |
+| Web hand mutations | 67 lines broken one at a time in the allowlist, `decide()`, the fetcher, the search, the door's tickets, the launcher's config, the record, the gate, the shim and the Tools card. 63 turned a named test red. 4 change nothing alone, because a second line holds the same thing; each pair broken together turns a test red, but for the request's own host and port, which only matter if Node ever passed over the checked connection |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
 "Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.

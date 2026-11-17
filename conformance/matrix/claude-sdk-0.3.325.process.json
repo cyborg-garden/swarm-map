@@ -255,6 +255,66 @@
       "title": "tool output past the size limit does not reach the model",
       "status": "not-run",
       "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N1+",
+      "title": "web: an address on the list is fetched by the door, and the page reaches the model as untrusted text",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N1",
+      "title": "web: an address off the list is refused, and nothing is looked up or fetched",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N2",
+      "title": "web: a redirect off the list is not followed",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N3",
+      "title": "web: a listed name that leads to a private address is refused, by its DNS answer or by a redirect",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N4",
+      "title": "web: a fetch carries no credential, cookie or auth header",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N5",
+      "title": "web: a page past the size limit is cut, and a slow one is cut at the time limit",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N6",
+      "title": "web: a page is never posted by the door, and no receipt holds it",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N7",
+      "title": "web: with the public web on, an unlisted public site is read, and a private address is still refused",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N8",
+      "title": "search: results reach the model as untrusted titles, addresses and snippets; the key never reaches the cell, the model or a receipt; a private result is refused",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
+    },
+    {
+      "id": "N9",
+      "title": "search: with no key there is no search, and the provider gets no call at all",
+      "status": "not-run",
+      "reason": "not built for this harness: its shim takes a plain yes or no for a tool and does not say it can hold a call while an admin answers, with no check that the yes names the call, no scratch folder and no limits, so the door does not ask it to hold a call"
     }
   ],
   "rules": [
@@ -488,6 +548,94 @@
         },
         {
           "id": "L2",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.allow",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N1",
+          "status": "not-run"
+        },
+        {
+          "id": "N1+",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.public",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N7",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.search",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N8",
+          "status": "not-run"
+        },
+        {
+          "id": "N9",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.redirect",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N2",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.private",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N3",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.no-credentials",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N4",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.limits",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N5",
+          "status": "not-run"
+        }
+      ]
+    },
+    {
+      "rule": "web.untrusted",
+      "status": "not-run",
+      "checks": [
+        {
+          "id": "N6",
           "status": "not-run"
         }
       ]
