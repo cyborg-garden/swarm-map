@@ -64,6 +64,12 @@ export interface DiscordOptions {
   readyTimeoutMs?: number
   /** A rate limit longer than this fails the post instead of holding it. */
   maxRateLimitWaitMs?: number
+  /**
+   * The same, for a status reaction. Status calls have their own rate limits at Discord, and are
+   * a courtesy: a longer wait gives up on the call. Default 5 s. Typing is never waited for: it is
+   * sent again a few seconds later anyway.
+   */
+  maxStatusWaitMs?: number
   restTimeoutMs?: number
 }
 
@@ -136,7 +142,8 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
 
   const emit = (e: ConnectorInbound | NoticeEvent | ReactionEvent): void => { for (const cb of listeners) cb(e) }
 
-  async function rest(method: string, path: string, body?: unknown): Promise<{ json: Raw; headers: Headers }> {
+  async function rest(method: string, path: string, body?: unknown, o: { maxWait?: number } = {}): Promise<{ json: Raw; headers: Headers }> {
+    const longest = o.maxWait ?? maxWait
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(`${apiBase}${path}`, {
         method,
@@ -151,8 +158,8 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
       if (res.status === 429 && attempt < 3) {
         const told = (await res.json().catch(() => ({}))) as Raw
         const seconds = typeof told.retry_after === 'number' ? told.retry_after : Number(res.headers.get('retry-after'))
-        const wait = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : maxWait + 1
-        if (wait > maxWait) throw new Error(`discord: rate limited for longer than this connector will wait (${method})`)
+        const wait = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : longest + 1
+        if (wait > longest) throw new Error(`discord: rate limited for longer than this connector will wait (${method})`)
         log(`discord: rate limited, waiting ${Math.ceil(wait)}ms`)
         await sleep(wait)
         continue
@@ -412,6 +419,16 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     })
   }
 
+  /** Why nothing may be sent to this room, or undefined when it may. */
+  function unpostable(room: RoomRef): Error | undefined {
+    if (!ready) return new Error('discord: not connected')
+    const home = room.kind === 'thread' ? room.parentId : room.id
+    if (room.kind === 'dm' || room.kind === 'group' || home === undefined || !scope.has(home)) {
+      return new Error('discord: refusing to post outside the channels this connector was started for')
+    }
+    return undefined
+  }
+
   async function post(room: RoomRef, text: string, inReplyTo?: string): Promise<SendReceipt> {
     let last: SendReceipt | undefined
     for (const [i, piece] of chunk(text).entries()) {
@@ -460,14 +477,23 @@ export function createDiscordConnector(opts: DiscordOptions): SurfaceConnector {
     },
     onEvent(cb) { listeners.push(cb) },
     send(room: RoomRef, msg: OutboundMessage): Promise<SendReceipt> {
-      if (!ready) return Promise.reject(new Error('discord: not connected'))
-      const home = room.kind === 'thread' ? room.parentId : room.id
-      if (room.kind === 'dm' || room.kind === 'group' || home === undefined || !scope.has(home)) {
-        return Promise.reject(new Error('discord: refusing to post outside the channels this connector was started for'))
-      }
+      const refused = unpostable(room)
+      if (refused) return Promise.reject(refused)
       const turn = (posting.get(room.id) ?? Promise.resolve()).catch(() => {}).then(() => post(room, msg.text, msg.inReplyTo))
       posting.set(room.id, turn)
       return turn
+    },
+    // A status reaction and the typing indicator: held to the same channels as a post. They do not wait
+    // in line behind a post, and a post does not wait for them.
+    async react(room: RoomRef, messageId: string, emoji: string, on: boolean): Promise<void> {
+      const refused = unpostable(room)
+      if (refused) throw refused
+      await rest(on ? 'PUT' : 'DELETE', `/channels/${encodeURIComponent(room.id)}/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(emoji)}/@me`, undefined, { maxWait: opts.maxStatusWaitMs ?? 5_000 })
+    },
+    async typing(room: RoomRef): Promise<void> {
+      const refused = unpostable(room)
+      if (refused) throw refused
+      await rest('POST', `/channels/${encodeURIComponent(room.id)}/typing`, undefined, { maxWait: 0 })
     },
     // Roles ride on each message as Discord sent it, so there is nothing more to look up.
     async facts(): Promise<Facts> { return {} },

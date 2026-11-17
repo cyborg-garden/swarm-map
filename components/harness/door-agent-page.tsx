@@ -413,6 +413,9 @@ function RulesForm({ view, running, saving, onSave }: {
           <Field label="Bot loop limit" hint="Bot messages answered in a row before a person has to speak. 0 to 20.">
             <Amount name="discord.botLoopLimit" value={d.botLoopLimit} onChange={(botLoopLimit) => discord({ botLoopLimit })} />
           </Field>
+          {/* Left out of a record, both are on. They change how a turn looks in the channel, never who is heard. */}
+          <Toggle label="Status reactions" hint="👀 on a message it is working on, then ✅ when it has answered or ⚠️ when it has not. Allow Add Reactions for the bot in the channel." checked={d.statusReactions !== false} onChange={(statusReactions) => discord({ statusReactions })} />
+          <Toggle label="Typing indicator" hint="Shows the bot typing while it works on a message. Not while it waits for an admin." checked={d.typing !== false} onChange={(typing) => discord({ typing })} />
         </Card>
         <Card title="Budget and model">
           <Field label="Monthly budget, USD" hint="After it, model calls are refused until the next month.">

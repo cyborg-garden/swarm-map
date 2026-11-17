@@ -295,8 +295,11 @@ describe('pi-discord: one message, end to end, through real Pi in the sealed cel
     readFileSync(path.join(stateDir, 'receipts.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
 
   it('a mention in the allowed channel reaches the model through Pi, and the reply is posted there', async () => {
-    say('CANARY-hello')
+    const asked = say('CANARY-hello')
     await until(() => fake.posted.length === 1)
+    // The launcher starts the door with status on, as the config leaves it: 👀 and typing, then ✅ once answered.
+    await until(() => fake.reactionsOn(asked).join() === '✅', 10_000)
+    expect(fake.status.some((c) => c.what === 'typing' && c.channel === IDS.home)).toBe(true)
     expect(fake.posted[0]).toMatchObject({ channel: IDS.home, allowedMentions: { parse: [], replied_user: false } })
     expect(fake.posted[0].content).toContain(`hello from the model FAKE-MODEL-${modelNonce}`)
     expect(model.heard('CANARY-hello')).toBe(true)
@@ -314,14 +317,17 @@ describe('pi-discord: one message, end to end, through real Pi in the sealed cel
 
   it('a message elsewhere, and one from a stranger, never reach the model', async () => {
     const before = model.requests.length
-    say('CANARY-elsewhere', { channel: IDS.other })
-    say('CANARY-stranger', { author: IDS.stranger })
+    const elsewhere = say('CANARY-elsewhere', { channel: IDS.other })
+    const stranger = say('CANARY-stranger', { author: IDS.stranger })
     await until(() => receipts().filter((r) => r.verdict === 'drop').length >= 2)
     await new Promise((resolve) => setTimeout(resolve, 1500))
     expect(model.requests.length).toBe(before)
     expect(model.heard('CANARY-elsewhere') || model.heard('CANARY-stranger')).toBe(false)
     expect(fake.posted).toHaveLength(1)
     expect(receipts().map((r) => `${r.verdict}/${r.rule}`)).toEqual(expect.arrayContaining(['drop/adm.rooms', 'drop/adm.users']))
+    // Nothing is shown on a message the agent did not take.
+    expect([...fake.reactionsOn(elsewhere), ...fake.reactionsOn(stranger)]).toEqual([])
+    expect(fake.status.some((c) => c.channel === IDS.other)).toBe(false)
   }, 60_000)
 
   it('secrets in what the model wrote are redacted before the post', async () => {

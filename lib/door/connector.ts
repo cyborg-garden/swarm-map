@@ -26,5 +26,12 @@ export interface SurfaceConnector {
   onEvent(cb: (e: ConnectorEvent) => void): void
   send(room: RoomRef, msg: OutboundMessage): Promise<SendReceipt>
   facts(q: { principal?: Principal; room?: RoomRef }): Promise<Facts>
+  /**
+   * Put this bot's own reaction on a message (`on`), or take it off. Optional: a surface without
+   * reactions leaves it out. Only ever asked for on a message the door delivered (turn-status.ts).
+   */
+  react?(room: RoomRef, messageId: string, emoji: string, on: boolean): Promise<void>
+  /** Show that the bot is typing in a room, for a few seconds. Optional, like react. */
+  typing?(room: RoomRef): Promise<void>
   close(): Promise<void>
 }
