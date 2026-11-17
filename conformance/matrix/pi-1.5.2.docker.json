@@ -19,52 +19,62 @@
     {
       "id": "C1",
       "title": "a delivered turn gives exactly one reply, from the model, for the right turn",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C2",
       "title": "overheard lines arrive as context on the next turn and cause no reply",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C3",
       "title": "a dropped message never reaches the model",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C4",
       "title": "a tool the harness was offered, then denied, does not run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C4a",
       "title": "a tool the policy never allowed is not offered to the harness and does not run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C4p",
       "title": "a shell tool on the allow list does not run once the agent is public",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C4+",
       "title": "positive control: an allowed tool does run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C5",
       "title": "no verdict means no run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C5v",
       "title": "the veto inside the cell says no on its own when nobody answers it",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C8p",
       "title": "no real secret is readable from a tool, and the key swap happened (process level)",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C9p",
@@ -75,117 +85,176 @@
     {
       "id": "C12",
       "title": "usage is counted, and the turn after the budget is spent is refused",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C15",
       "title": "a policy change takes effect on the next message with no restart",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C15t",
       "title": "the tools a turn may use follow the policy as it is at that turn, in a session that is already running",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "S0",
       "title": "the rig is this machine's, is the lab's own, holds no real credential, and its sink can be hit",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the cell never reached the door, so nothing was checked"
     },
     {
       "id": "S1",
       "title": "the cell cannot reach the internet, this machine or the sink, only the sidecar; nor can the sidecar",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the cell never reached the door, so nothing was checked; the sidecar container has the address none, which is not in the block written for its network (10.213.82.96/28)"
     },
     {
       "id": "S2",
       "title": "the shim, the gate and the harness are not writable from inside the cell",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the cell never reached the door, so nothing was checked"
     },
     {
       "id": "S3",
       "title": "no host credential, host folder or secret of the run is in the cell's environment, mounts or disk",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the cell never reached the door, so nothing was checked"
     },
     {
       "id": "C8",
       "title": "no real secret is readable anywhere in the cell: not from the environment, another process or the disk",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C9",
       "title": "nothing leaves the cell except through the sidecar",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C10",
       "title": "with the gate removed, a tool the policy denies does run, and still nothing leaves and no secret is readable",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6",
       "title": "ask: a tool is held until an admin says yes in the room, and then runs",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6n",
       "title": "ask: an answer from someone who is not an admin, a bot, a named bot or the agent itself changes nothing",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6d",
       "title": "ask: an admin's no means the tool does not run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6t",
       "title": "ask: no answer in time means the tool does not run",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6x",
       "title": "ask: what runs is exactly what was shown in the room",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6r",
       "title": "ask: a yes is used once, and the same call asked again needs its own",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "W1",
       "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "W1+",
       "title": "positive control: file tools read, write and list inside the scratch folder",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "L1",
       "title": "a shell call that runs past the time limit is stopped",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "L2",
       "title": "tool output past the size limit does not reach the model",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6m",
       "title": "tools on: a model call the provider refuses, after a tool ran, leaves a receipt and tells the room why",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6b",
       "title": "tools on: a model call refused because the budget is spent leaves a receipt and tells the room why",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
     },
     {
       "id": "C6s",
       "title": "tools on: a model call slower than the turn is allowed tells the room the door stopped waiting",
-      "status": "pass"
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
+    },
+    {
+      "id": "M2",
+      "title": "one room's notes never reach another room",
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
+    },
+    {
+      "id": "M3",
+      "title": "a note with something secret-shaped in it is refused: never kept, never given back, and the agent is told",
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
+    },
+    {
+      "id": "M4",
+      "title": "the agent changes its notes only through the door's tool: a file tool aimed at the notes changes nothing",
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
+    },
+    {
+      "id": "M6",
+      "title": "a wipe really wipes: once the notes are gone, nothing of them reaches the model again",
+      "status": "fail",
+      "reason": "the rig gave no result: } |  | Node.js v24.22.3"
+    },
+    {
+      "id": "M1",
+      "title": "notes outlive a restart: a new door and a new harness are given the notes the last one wrote",
+      "status": "not-run",
+      "reason": "a restart is run by the launcher's own Docker suite (pi-discord-memory.docker.test.ts), with a real stop and start of the cell"
+    },
+    {
+      "id": "M5",
+      "title": "what the launcher says the agent can do reaches the model whole, after the persona, whatever the persona says",
+      "status": "not-run",
+      "reason": "the launcher's own Docker suite checks what real Pi is told in its cell (pi-discord-memory.docker.test.ts)"
     },
     {
       "id": "C11",
@@ -238,15 +307,15 @@
     },
     {
       "rule": "ctl.applied",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C15",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C15t",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -322,11 +391,11 @@
     },
     {
       "rule": "addr.observe",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C2",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -367,33 +436,33 @@
     },
     {
       "rule": "tools.lists",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C4",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C4a",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C4+",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
     {
       "rule": "tools.posture",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C4p",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C10",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -409,87 +478,87 @@
     },
     {
       "rule": "priv.approval",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C6",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C6n",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C6d",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C6t",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C6x",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C6r",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
     {
       "rule": "tools.workspace",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "W1",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "W1+",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
     {
       "rule": "tools.limits",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "L1",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "L2",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
     {
       "rule": "budget.cap",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C12",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C9",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
     {
       "rule": "keys.model-route",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C8p",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C8",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -510,11 +579,11 @@
     },
     {
       "rule": "turn.one-reply",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C1",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -530,15 +599,15 @@
     },
     {
       "rule": "tools.no-verdict",
-      "status": "pass",
+      "status": "fail",
       "checks": [
         {
           "id": "C5",
-          "status": "pass"
+          "status": "fail"
         },
         {
           "id": "C5v",
-          "status": "pass"
+          "status": "fail"
         }
       ]
     },
@@ -549,6 +618,11 @@
     },
     {
       "rule": "mem.one-scope",
+      "status": "shared",
+      "checks": []
+    },
+    {
+      "rule": "mem.notes",
       "status": "shared",
       "checks": []
     },
@@ -572,7 +646,10 @@
         "C10"
       ],
       "failed": [
+        "S0",
         "S1",
+        "S2",
+        "S3",
         "C9",
         "C10"
       ],
@@ -585,7 +662,10 @@
         "C9"
       ],
       "failed": [
+        "S0",
         "S1",
+        "S2",
+        "S3",
         "C9"
       ],
       "suiteCaughtIt": true
@@ -597,8 +677,12 @@
         "C8"
       ],
       "failed": [
+        "S0",
+        "S1",
+        "S2",
         "S3",
-        "C8"
+        "C8",
+        "C9"
       ],
       "suiteCaughtIt": true
     },
@@ -609,6 +693,9 @@
         "C8"
       ],
       "failed": [
+        "S0",
+        "S1",
+        "S2",
         "S3",
         "C8"
       ],
@@ -620,7 +707,10 @@
         "S2"
       ],
       "failed": [
-        "S2"
+        "S0",
+        "S1",
+        "S2",
+        "S3"
       ],
       "suiteCaughtIt": true
     },
@@ -630,6 +720,9 @@
         "S3"
       ],
       "failed": [
+        "S0",
+        "S1",
+        "S2",
         "S3"
       ],
       "suiteCaughtIt": true
@@ -641,7 +734,9 @@
         "S3"
       ],
       "failed": [
+        "S0",
         "S1",
+        "S2",
         "S3"
       ],
       "suiteCaughtIt": true
@@ -652,7 +747,10 @@
         "S1"
       ],
       "failed": [
-        "S1"
+        "S0",
+        "S1",
+        "S2",
+        "S3"
       ],
       "suiteCaughtIt": true
     },
@@ -662,7 +760,10 @@
         "S1"
       ],
       "failed": [
-        "S1"
+        "S0",
+        "S1",
+        "S2",
+        "S3"
       ],
       "suiteCaughtIt": true
     },
@@ -674,6 +775,9 @@
       ],
       "failed": [
         "S0",
+        "S1",
+        "S2",
+        "S3",
         "C9"
       ],
       "suiteCaughtIt": true
@@ -698,7 +802,8 @@
       "failed": [
         "C6",
         "C6d",
-        "C6m"
+        "C6m",
+        "C6b"
       ],
       "suiteCaughtIt": true
     },
@@ -708,7 +813,8 @@
         "C5v"
       ],
       "failed": [
-        "C5v"
+        "C5v",
+        "C6"
       ],
       "suiteCaughtIt": true
     },
@@ -718,7 +824,8 @@
         "C6x"
       ],
       "failed": [
-        "C6x"
+        "C6x",
+        "C6"
       ],
       "suiteCaughtIt": true
     },
@@ -728,7 +835,8 @@
         "W1"
       ],
       "failed": [
-        "W1"
+        "W1",
+        "W1+"
       ],
       "suiteCaughtIt": true
     },

@@ -62,8 +62,8 @@ export interface LabOptions {
    * made, for a check that starts a second door and harness on the same notes; that lab owns it.
    */
   memory?: { dir?: string }
-  /** What the harness is told it is, as the launcher would tell it. Left out, the harness keeps its own. */
-  systemPrompt?: string
+  /** What the harness is told it is, as the launcher would tell it, or how to get it. Left out, the harness keeps its own. */
+  systemPrompt?: string | (() => Promise<string>)
 }
 
 export interface RemoteCell {
@@ -222,7 +222,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       link: { host: o.remote?.advertise ?? '127.0.0.1', port: door.brainPort, token: secrets.brain },
       verdictTimeoutMs: o.verdictTimeoutMs ?? 400, vetoTimeoutMs: o.vetoTimeoutMs ?? 2000,
       ...(o.toolLimits ? { toolLimits: o.toolLimits } : {}),
-      ...(o.systemPrompt !== undefined ? { systemPrompt: o.systemPrompt } : {}),
+      ...(o.systemPrompt !== undefined ? { systemPrompt: typeof o.systemPrompt === 'function' ? await o.systemPrompt() : o.systemPrompt } : {}),
     }
 
     process.env[hostCanary.name] = hostCanary.value
