@@ -60,6 +60,8 @@ export interface DoorOptions {
   web?: WebFetchOptions
   /** Test hook: a fetcher with a part left out on purpose (createWebFetcher's `parts`), to show a check goes red without it. */
   webFetcher?: ReturnType<typeof createWebFetcher>
+  /** Test hook: decide a web call with no look at the allowlist, to prove the check for it goes red without one. */
+  webListUnchecked?: boolean
 }
 
 export interface Door {
@@ -444,7 +446,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             const read = readWebUrl(input.url, fetchSchemes)
             if ('problem' in read) return refuse('web.allow', `That address is refused: ${read.problem}.`)
             const e2 = decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, facts)
-            if (e2.verdict !== 'allow') return refuse(e2.rule, e2.why)
+            if (e2.verdict !== 'allow' && !opts.webListUnchecked) return refuse(e2.rule, e2.why)
             web = input.url as string
           }
 
@@ -545,6 +547,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     }
     webFetches.push(Date.now())
     const check = (host: string, path: string): string | undefined => {
+      if (opts.webListUnchecked) return undefined
       const d = decide(policy, { kind: 'egress', host, path, method: 'GET' }, {})
       return d.verdict === 'allow' ? undefined : d.why
     }

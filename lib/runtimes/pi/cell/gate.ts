@@ -103,7 +103,7 @@ function cut(text: string, max: number, keep: 'start' | 'end'): string {
  * source: the conformance suite does, to show the checks for each part go red
  * without it (conformance/broken). Nothing in a cell's environment can.
  */
-export function createGate(parts: { confine: boolean; limits: boolean } = { confine: true, limits: true }): (pi: PiApi) => void {
+export function createGate(parts: { confine: boolean; limits: boolean; web?: 'door' | 'direct' } = { confine: true, limits: true }): (pi: PiApi) => void {
   return (pi) => {
     // Registered whatever the rules say: Pi declares it to the model only when the shim names it in --tools,
     // and the door says no to a call of it unless the rules let it through.
@@ -115,6 +115,8 @@ export function createGate(parts: { confine: boolean; limits: boolean } = { conf
       parameters: { type: 'object', properties: { url: { type: 'string', description: 'The full https address of the page' } }, required: ['url'], additionalProperties: false },
       async execute(toolCallId, params, _signal, _onUpdate, ctx) {
         const url = isRecord(params) && typeof params.url === 'string' ? params.url : ''
+        // Broken on purpose only (conformance/broken/gate-web-direct.ts): the tool fetches by itself, not through the door.
+        if (parts.web === 'direct') return { content: [{ type: 'text', text: await (await fetch(url)).text() }], details: {} }
         const answer = await ctx.ui.input(WEB_PREFIX + JSON.stringify({ callId: toolCallId, url }), undefined, { timeout: setting('SWARM_GATE_TIMEOUT_MS', 30_000) })
         let page: { ok?: unknown; text?: unknown; reason?: unknown } = {}
         try { page = JSON.parse(answer ?? '{}') } catch { /* no page */ }

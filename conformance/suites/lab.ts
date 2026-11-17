@@ -16,6 +16,8 @@ import { createDoor, type Door } from '../../lib/door/door.ts'
 import { startModelRoute, type ModelRoute } from '../../lib/door/model-route.ts'
 import { createReceiptLog, type ReceiptLog } from '../../lib/door/receipts.ts'
 import { createSanitizer } from '../../lib/door/sanitizer.ts'
+import { startFakeWeb, type FakeWeb } from '../../lib/door/testing/fake-web.ts'
+import { createWebFetcher, type WebLimits } from '../../lib/door/web-fetch.ts'
 import { createMemoryLedger } from '../../lib/door/spend-ledger.ts'
 import { startChattyShim } from '../broken/chatty.ts'
 import { assertNoCredentials, assertSafeWorkDir } from '../guards/preflight.ts'
@@ -53,7 +55,9 @@ export interface LabOptions {
    * answer to a request as sent by the fixture's admin, whoever sent it. The door has no way to
    * know better, so it shows that the check on who may answer can go red.
    */
-  rig?: 'answers-as-admin'
+  rig?: 'answers-as-admin' | 'web-no-list' | 'web-no-address-check' | 'web-unchecked-redirects' | 'web-keeps-cookies' | 'web-no-limits'
+  /** The door's limits on a web fetch, for a check that wants them small. */
+  webLimits?: Partial<WebLimits>
 }
 
 export interface RemoteCell {
@@ -75,6 +79,8 @@ export interface Lab {
   model: ScriptedModel
   route: ModelRoute
   receipts: ReceiptLog
+  /** The only web the door can reach in a lab: a server on loopback that plays every site, and a fake DNS. */
+  web: FakeWeb
   /** Secrets that must never show up in the cell or in a post. */
   secrets: { upstream: string; chat: string; brain: string }
   /**
@@ -156,6 +162,16 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     closers.push(() => model.close())
     const receipts = createReceiptLog()
     const fake = createFakeConnector({ nonce })
+    const web = await startFakeWeb()
+    closers.push(() => web.close())
+    const webOptions = { ...web.options, limits: o.webLimits }
+    // A door whose web fetcher is broken on purpose, in one way each, to show the web checks can go red.
+    const broken = { addresses: true, redirects: true, bare: true, limits: true }
+    const webFetcher = o.rig === 'web-no-address-check' ? createWebFetcher(webOptions, { ...broken, addresses: false })
+      : o.rig === 'web-unchecked-redirects' ? createWebFetcher(webOptions, { ...broken, redirects: false })
+        : o.rig === 'web-keeps-cookies' ? createWebFetcher(webOptions, { ...broken, bare: false })
+          : o.rig === 'web-no-limits' ? createWebFetcher(webOptions, { ...broken, limits: false })
+            : undefined
     if (o.rig === 'answers-as-admin') {
       // The surface lies about who answered. Everything else it passes on as it came.
       const admin = { id: 'u-root', display: 'u-root', isBot: false, isSelf: false, roles: [] }
@@ -169,6 +185,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
       sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] }),
       turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
+      web: webOptions, ...(webFetcher ? { webFetcher } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}),
     })
     closers.push(() => door.close())
     const route = await startModelRoute({
@@ -201,7 +218,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     await door.shimConnected()
 
     return {
-      nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, dir, policy,
+      nonce, harness: o.harness, door, fake, model, route, receipts, web, secrets, hostCanary, dir, policy,
       canary: (name) => `CANARY-${name}-${nonce}`,
       file: (name) => o.harness.workFile(cell, name),
       outside: () => {

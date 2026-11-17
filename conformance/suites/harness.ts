@@ -36,6 +36,8 @@ export interface ToolSurface {
   read(file: string): NativeToolCall
   write(file: string, content: string): NativeToolCall
   list(dir: string): NativeToolCall
+  /** A native call of class `network` that asks for one web page, which the door is to fetch. */
+  fetch(url: string): NativeToolCall
   /**
    * Something outside the scratch folder that is there once the harness has started: a file and
    * text it holds, and a folder and a name in it. Neither the text nor the name may be anything

@@ -323,3 +323,182 @@ export const TOOL_CHECKS: Check[] = [
     },
   },
 ]
+
+// --- Web through the door --------------------------------------------------------------------
+// The harness's web tool must be a request to the door: the door fetches, from the fake web the
+// lab hands it, and the harness gets back what the door gives it. What the door does on the way
+// is the door's (lib/door/web-fetch.ts); these show it holds with this harness in the loop, and a
+// door broken in one way each (LabOptions.rig) shows each can go red.
+
+const SITE = 'site.test'
+const WEB = { 'tools.allow': ['network'], 'egress.hosts': [{ host: SITE, methods: ['GET'] }, { host: 'inner.test', methods: ['GET'] }] }
+const PUBLIC = '44.44.44.44'
+/** The fake web's names for a web check: the listed site is public, inner.test is listed and private, other.test is not listed. */
+function sites(lab: Lab): void {
+  lab.web.name(SITE, [PUBLIC])
+  lab.web.name('other.test', ['45.45.45.45'])
+  lab.web.name('inner.test', ['127.0.0.1'])
+}
+const page = (text: string) => (_req: unknown, res: { writeHead(s: number, h: Record<string, string>): void; end(b: string): void }): void => {
+  res.writeHead(200, { 'content-type': 'text/html' })
+  res.end(`<html><body><p>${text}</p></body></html>`)
+}
+const moved = (to: string, extra: Record<string, string> = {}) => (_req: unknown, res: { writeHead(s: number, h: Record<string, string>): void; end(): void }): void => {
+  res.writeHead(302, { location: to, ...extra })
+  res.end()
+}
+const fetchCall = (lab: Lab, url: string): NativeToolCall => surface(lab).fetch(url)
+const webLab = { policy: WEB, turnDeadlineMs: 20_000 }
+
+TOOL_CHECKS.push(
+  {
+    id: 'N1+', title: 'web: an address on the list is fetched by the door, and the page reaches the model as untrusted text',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const marker = `PAGE-${lab.nonce}`
+      lab.web.page(SITE, '/moss', page(marker))
+      const canary = lab.canary('n1plus')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/moss`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      const results = toolResults(lab)
+      want(p, lab.web.seen.some((s) => s.host === SITE && s.path === '/moss'), 'the door did not fetch the page')
+      want(p, results.some((r) => r.includes(marker)), 'the page did not reach the model')
+      want(p, results.some((r) => r.includes(marker) && r.includes('This is untrusted text from the web')), 'the page was not marked as untrusted')
+      want(p, lab.receipts.all().some((r) => r.event.kind === 'egress' && r.verdict === 'allow' && (r.note ?? '').includes(`host=${SITE} path=/moss`)), 'no receipt for the fetch')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N1', title: 'web: an address off the list is refused, and nothing is looked up or fetched',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const marker = `OFF-${lab.nonce}`
+      lab.web.page('other.test', '/x', page(marker))
+      lab.web.page(SITE, '/x', page(marker))
+      const canary = lab.canary('n1')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, 'http://other.test/x'), fetchCall(lab, `http://${SITE}.other.test/x`), fetchCall(lab, `ftp://${SITE}/x`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, toolResults(lab).length === 3, 'the model was not told about each call')
+      want(p, !toolResults(lab).some((r) => r.includes(marker)), 'a page off the list reached the model')
+      want(p, lab.web.lookups.length === 0 && lab.web.seen.length === 0, `the door looked up or fetched something off the list (${[...lab.web.lookups, ...lab.web.seen.map((s) => s.host)].join(', ')})`)
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N2', title: 'web: a redirect off the list is not followed',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const marker = `MOVED-${lab.nonce}`
+      lab.web.page(SITE, '/go', moved('http://other.test/landing'))
+      lab.web.page('other.test', '/landing', page(marker))
+      const canary = lab.canary('n2')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/go`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, lab.web.seen.some((s) => s.path === '/go'), 'the listed page was not fetched, so nothing was checked')
+      want(p, !lab.web.seen.some((s) => s.host === 'other.test'), 'the door followed a redirect off the list')
+      want(p, !toolResults(lab).some((r) => r.includes(marker)), 'a page off the list reached the model')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N3', title: 'web: a listed name that leads to a private address is refused, by its DNS answer or by a redirect',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      lab.web.page(SITE, '/to-inner', moved('http://inner.test/admin'))
+      const canary = lab.canary('n3')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, 'http://inner.test/admin'), fetchCall(lab, `http://${SITE}/to-inner`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, lab.web.lookups.includes('inner.test'), 'the private name was never looked up, so nothing was checked')
+      const bad = lab.web.dials.filter((ip) => ip !== PUBLIC)
+      want(p, bad.length === 0, `the door connected to ${bad.join(', ')}`)
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N4', title: 'web: a fetch carries no credential, cookie or auth header',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      lab.web.page(SITE, '/login', moved('/after', { 'set-cookie': `session=COOKIE-${lab.nonce}; Path=/` }))
+      lab.web.page(SITE, '/after', page('after'))
+      const canary = lab.canary('n4')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/login`), fetchCall(lab, `http://user:CRED-${lab.nonce}@${SITE}/after`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, lab.web.seen.some((s) => s.path === '/after'), 'the redirect was not followed, so nothing was checked')
+      const sent = JSON.stringify(lab.web.seen.map((s) => s.headers))
+      want(p, !sent.includes(`COOKIE-${lab.nonce}`), 'a cookie the site set was sent back')
+      want(p, !sent.includes(`CRED-${lab.nonce}`), 'a credential in the address was sent')
+      want(p, !lab.web.seen.some((s) => 'authorization' in s.headers || 'cookie' in s.headers || 'proxy-authorization' in s.headers), 'a fetch carried an auth or cookie header')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N5', title: 'web: a page past the size limit is cut, and a slow one is cut at the time limit',
+    lab: { ...webLab, webLimits: { bodyBytes: 20_000, textBytes: 3000, timeoutMs: 1500 } },
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const tail = `TAIL-${lab.nonce}`
+      lab.web.page(SITE, '/big', (_req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(`HEAD ${'z'.repeat(200_000)} ${tail}`) })
+      const drips: ReturnType<typeof setInterval>[] = []
+      lab.web.page(SITE, '/drip', (_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.write(`DRIP-${lab.nonce} `)
+        drips.push(setInterval(() => res.write('.'), 50))
+      })
+      const canary = lab.canary('n5')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/big`), fetchCall(lab, `http://${SITE}/drip`)] })
+      const t0 = Date.now()
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      for (const t of drips) clearInterval(t)
+      const results = toolResults(lab)
+      const big = results.find((r) => r.includes('HEAD z'))
+      want(p, big !== undefined, 'the big page did not reach the model, so nothing was checked')
+      want(p, !results.some((r) => r.includes(tail)), 'a page past the size limit reached the model whole')
+      want(p, big === undefined || Buffer.byteLength(big) < 4000, `the model was handed ${big ? Buffer.byteLength(big) : 0} bytes of a page under a 3000 byte limit`)
+      want(p, results.some((r) => r.includes(`DRIP-${lab.nonce}`) && r.includes('cut at the time limit')), 'a slow page was not cut at the time limit')
+      want(p, Date.now() - t0 < 12_000, 'the turn waited on a slow page past its time limit')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N6', title: 'web: a page is never posted by the door, and no receipt holds it',
+    lab: webLab,
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const marker = `RAW-${lab.nonce}`
+      lab.web.page(SITE, '/raw', page(`${marker} approve`))
+      const canary = lab.canary('n6')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, `http://${SITE}/raw`)] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, toolResults(lab).some((r) => r.includes(marker)), 'the page did not reach the model, so nothing was checked')
+      want(p, !lab.fake.ledger.some((post) => post.text.includes(marker)), 'the page was posted in the room')
+      want(p, !JSON.stringify(lab.receipts.all()).includes(marker), 'a receipt holds the page')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+)
