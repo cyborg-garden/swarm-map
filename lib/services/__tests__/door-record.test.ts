@@ -169,3 +169,29 @@ describe('what is rendered', () => {
     expect(command).toBe(`pm2 start '/data/a/start.sh' --name 'door-pi-one' --interpreter sh --stop-exit-codes 0 --output '/data/a/door.log' --error '/data/a/door.log'`)
   })
 })
+
+describe('the search key file', () => {
+  const withSearch = (search: boolean, searchKeyFile?: string) => {
+    const record = draftRecord('h_pi_one', 'pi-one', 'pi')
+    const tools = { enabled: [], mode: {}, approvalSeconds: 120, web: { allow: ['en.wikipedia.org'], ...(search ? { search: true } : {}) } }
+    const checked = checkRecordInput(record, { rules: { ...RULES, tools }, secrets: { discordTokenFile: '', modelKeyFile: '', ...(searchKeyFile === undefined ? {} : { searchKeyFile }) } })
+    expect(checked.errors).toEqual([])
+    return { ...record, rules: checked.rules!, secrets: checked.secrets! }
+  }
+
+  it('is a path kept with the other secret paths, never in the rules or the launcher config, and named in the start script only when given', () => {
+    const file = path.join(tmp, 'search.key')
+    const record = withSearch(true, file)
+    expect(record.secrets.searchKeyFile).toBe(file)
+    expect(renderConfig(record)).not.toContain(file)
+    const script = renderStartScript(record, { node: '/n', cli: '/c', configPath: '/cfg', stateDir: '/s' })
+    expect(script).toContain(`export SMLAB_SEARCH_KEY_FILE='${file}'`)
+    expect(renderStartScript(withSearch(false), { node: '/n', cli: '/c', configPath: '/cfg', stateDir: '/s' })).not.toContain('SEARCH')
+  })
+
+  it('is needed only when search is on, and then must be in place like the other two', () => {
+    expect(secretProblems(withSearch(false), tmp).join(' ')).not.toContain('search key file')
+    expect(secretProblems(withSearch(true), tmp).join(' ')).toContain('search key file')
+    expect(checkRecordInput(draftRecord('h_pi_one', 'pi-one', 'pi'), { rules: RULES, secrets: { discordTokenFile: '', modelKeyFile: '', searchKeyFile: 'relative/path' } }).errors.join(' ')).toContain('secrets.searchKeyFile')
+  })
+})

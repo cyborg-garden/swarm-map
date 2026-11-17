@@ -19,7 +19,7 @@ import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, toolsLine, t
 import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
-import { MODEL_KEY_FILE_ENV, readSecretFile, secretFileProblem, TOKEN_FILE_ENV } from './secrets.ts'
+import { MODEL_KEY_FILE_ENV, readSecretFile, SEARCH_KEY_FILE_ENV, secretFileProblem, TOKEN_FILE_ENV } from './secrets.ts'
 import { monthOf } from '../../door/spend-ledger.ts'
 import type { Receipt } from '../../door/receipts.ts'
 
@@ -62,8 +62,10 @@ async function dryRun(): Promise<void> {
   say(`  ok    policy ${policy.hash.slice(0, 12)}`)
 
   say('secrets (the files are checked, not opened to Discord or the model)')
-  const missing = [TOKEN_FILE_ENV, MODEL_KEY_FILE_ENV].map((name) => secretFileProblem(name, process.env, REPO_ROOT)).filter((p): p is string => p !== undefined)
-  for (const name of [TOKEN_FILE_ENV, MODEL_KEY_FILE_ENV]) {
+  // The search key is needed only when the config switches search on.
+  const secretNames = [TOKEN_FILE_ENV, MODEL_KEY_FILE_ENV, ...(config.tools?.web?.search === true ? [SEARCH_KEY_FILE_ENV] : [])]
+  const missing = secretNames.map((name) => secretFileProblem(name, process.env, REPO_ROOT)).filter((p): p is string => p !== undefined)
+  for (const name of secretNames) {
     const problem = secretFileProblem(name, process.env, REPO_ROOT)
     say(problem ? `  FAIL  ${problem}` : `  ok    ${name}: a file only you can read, outside the repo`)
   }
@@ -90,10 +92,11 @@ async function dryRun(): Promise<void> {
 async function run(): Promise<void> {
   const config = loadConfig()
   const stateDir = stateDirFor(config)
-  const secrets = { discordToken: '', modelKey: '' }
+  const secrets: { discordToken: string; modelKey: string; searchKey?: string } = { discordToken: '', modelKey: '' }
   try {
     secrets.discordToken = readSecretFile(TOKEN_FILE_ENV, process.env, REPO_ROOT)
     secrets.modelKey = readSecretFile(MODEL_KEY_FILE_ENV, process.env, REPO_ROOT)
+    if (config.tools?.web?.search === true) secrets.searchKey = readSecretFile(SEARCH_KEY_FILE_ENV, process.env, REPO_ROOT)
   } catch (err) { fail(`secrets: ${(err as Error).message}`) }
   // Belt and braces: whatever a line says, the two secrets are never printed.
   const log = (line: string): void => {
@@ -114,7 +117,7 @@ async function run(): Promise<void> {
   try {
     running = await start({ config, secrets, stateDir, log, onFatal: (code) => { log(`Discord refused the bot (code ${code}${code === 4014 ? ': it asked for the Message Content intent, which is not switched on for this bot in the Developer Portal' : ''}). Stopping.`); void stop(1) } })
   } catch (err) {
-    fail(`start: ${(err as Error).message.split(secrets.discordToken).join('[redacted]').split(secrets.modelKey).join('[redacted]')}`)
+    fail(`start: ${[secrets.discordToken, secrets.modelKey, secrets.searchKey ?? ''].filter((s) => s.length >= 8).reduce((m, s) => m.split(s).join('[redacted]'), (err as Error).message)}`)
   }
   log(`receipts: ${path.join(stateDir, 'receipts.jsonl')}`)
   log('to stop: run this command again with `stop`, or press Ctrl-C here')

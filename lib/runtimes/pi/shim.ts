@@ -155,7 +155,9 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
           const doorId = live.asked.get(call.callId)
           live.asked.delete(call.callId)
           if (!live.turnId || doorId === undefined) return { ok: false, reason: 'not a call the door let through' }
-          return client.webFetch(doorId, call.url, opts.gateTimeoutMs)
+          return typeof call.query === 'string'
+            ? client.webSearch(doorId, call.query, opts.gateTimeoutMs)
+            : client.webFetch(doorId, String(call.url), opts.gateTimeoutMs)
         },
       }),
     }

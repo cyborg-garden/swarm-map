@@ -30,7 +30,7 @@ export interface PiProcess {
 
 export interface GateCall { tool: string; input: unknown; callId: string }
 /** A page the web tool wants: the call it belongs to (Pi's id for it) and the address. */
-export interface WebCall { callId: string; url: string }
+export interface WebCall { callId: string; url?: string; query?: string }
 export interface WebPage { ok: boolean; text?: string; reason?: string }
 export interface PiTurnResult { text: string; aborted: boolean }
 
@@ -89,7 +89,7 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
     let page: WebPage = { ok: false, reason: 'no page' }
     try {
       const call = JSON.parse(title.slice(WEB_PREFIX.length)) as WebCall
-      if (opts.onWeb && typeof call?.callId === 'string' && typeof call.url === 'string') page = await opts.onWeb(call)
+      if (opts.onWeb && typeof call?.callId === 'string' && (typeof call.url === 'string') !== (typeof call.query === 'string')) page = await opts.onWeb(call)
     } catch {
       page = { ok: false, reason: 'no page' }
     }

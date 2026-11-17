@@ -26,6 +26,8 @@ export interface FakeWeb {
   /** Every address the door connected to. */
   dials: string[]
   lookups: string[]
+  /** A fake of the search provider, on the same server: where it is, what to answer, and every search it was sent. */
+  search: { endpoint: string; results(list: { title: string; url: string; description: string }[]): void; seen: { query: string; headers: http.IncomingHttpHeaders }[] }
   close(): Promise<void>
 }
 
@@ -39,7 +41,16 @@ export async function startFakeWeb(): Promise<FakeWeb> {
   const dials: string[] = []
   const lookups: string[] = []
   const sockets = new Set<net.Socket>()
+  const searched: FakeWeb['search']['seen'] = []
+  let answer: { title: string; url: string; description: string }[] = []
   const server = http.createServer((req, res) => {
+    const asked = new URL(req.url ?? '/', 'http://fake')
+    if (asked.pathname === '/fake-search/res/v1/web/search') {
+      searched.push({ query: asked.searchParams.get('q') ?? '', headers: req.headers })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ web: { results: answer } }))
+      return
+    }
     const host = String(req.headers.host ?? '')
     const path = (req.url ?? '/').split('?')[0]
     seen.push({ host, path, method: req.method ?? '', headers: req.headers })
@@ -73,6 +84,7 @@ export async function startFakeWeb(): Promise<FakeWeb> {
     page: (host, path, page) => { pages.set(`${host}${path}`, page) },
     name: (host, addresses) => { names.set(host, addresses) },
     seen, dials, lookups,
+    search: { endpoint: `http://127.0.0.1:${port}/fake-search/res/v1/web/search`, results: (list) => { answer = list }, seen: searched },
     close: () => new Promise<void>((done) => {
       for (const s of sockets) s.destroy()
       server.close(() => done())

@@ -20,6 +20,8 @@ export interface ShimClient {
   requestTool(turnId: string, tool: string, input: unknown, named?: (callId: string) => void): Promise<ToolAnswer>
   /** Ask the door to fetch the page for a web call it said yes to. Timeout or a lost link is a failure. */
   webFetch(callId: string, url: string, timeoutMs?: number): Promise<WebAnswer>
+  /** Ask the door to make the search for a search call it said yes to. */
+  webSearch(callId: string, query: string, timeoutMs?: number): Promise<WebAnswer>
   close(): void
 }
 
@@ -84,7 +86,12 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
           if (socket.destroyed) return finish({ allow: false, reason: 'link closed' })
           send({ t: 'tool_request', callId, turnId, tool, input })
         }),
-        webFetch: (callId, url, timeoutMs) => new Promise<WebAnswer>((done) => {
+        webFetch: (callId, url, timeoutMs) => web(callId, { t: 'web_fetch', callId, url }, timeoutMs),
+        webSearch: (callId, query, timeoutMs) => web(callId, { t: 'web_search', callId, query }, timeoutMs),
+        close: () => socket.destroy(),
+      })
+      function web(callId: string, msg: FromShim, timeoutMs?: number): Promise<WebAnswer> {
+        return new Promise<WebAnswer>((done) => {
           if (pages.has(callId)) return done({ ok: false, reason: 'already asked' })
           const finish = (answer: WebAnswer): void => {
             if (!pages.delete(callId)) return
@@ -94,10 +101,9 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
           const timer = setTimeout(() => finish({ ok: false, reason: 'no answer in time' }), timeoutMs ?? 30_000)
           pages.set(callId, finish)
           if (socket.destroyed) return finish({ ok: false, reason: 'link closed' })
-          send({ t: 'web_fetch', callId, url })
-        }),
-        close: () => socket.destroy(),
-      })
+          send(msg)
+        })
+      }
     })
   })
 }

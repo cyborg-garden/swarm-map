@@ -35,10 +35,10 @@ const sharedBut = (...red: string[]): string[] => SHARED.filter((id) => !red.inc
 // What a gate that asks nobody turns red among the tool checks: every one that waits for an answer, the scratch folder, and both limits.
 const UNGATED = ['C6', 'C6m', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
 /** The web checks. */
-const WEB = ['N1+', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6']
+const WEB = ['N1+', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9']
 // A gate that adds no web tool, or whose web tool never reaches the door: every web check that needs a page fetched goes red.
-// N1 stays green: nothing off the list is fetched either.
-const WEB_RUN = WEB.filter((id) => id !== 'N1')
+// N1 and N9 stay green: nothing off the list is fetched, and no search is made, either.
+const WEB_RUN = WEB.filter((id) => id !== 'N1' && id !== 'N9')
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
 function hostEnvSafeToHandOver(base: Record<string, string>): Record<string, string> {
@@ -101,6 +101,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       write: (file, content) => ({ name: 'write', args: { path: file, content } }),
       list: (dir) => ({ name: 'ls', args: { path: dir } }),
       fetch: (url) => ({ name: 'web_fetch', args: { url } }),
+      search: (query) => ({ name: 'web_search', args: { query } }),
       // Pi's own config file, which holds the placeholder it presents for a key, and the folder Pi's folders sit in.
       outside: (cell) => ({ file: path.join(dirs(cell).agent, 'models.json'), holds: cell.placeholder, dir: cell.dir, dirHolds: 'sessions' }),
     },
@@ -156,16 +157,21 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       // Not faults of the shim: the door's web fetcher, broken in one way each. The harness and its gate are the real ones.
       'web-direct': {
         what: 'The real gate, except that its web tool fetches by itself instead of asking the door',
-        red: WEB_RUN, green: ['N1', 'C4', 'C4+', 'W1+'], checks: [...WEB, 'C4', 'C4+', 'W1+'],
+        red: ['N1+', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7'], green: ['N1', 'N9', 'C4', 'C4+', 'W1+'], checks: [...WEB, 'C4', 'C4+', 'W1+'],
       },
       'web-no-list': {
         what: 'A door that decides a web call without looking at the allowlist',
         // With no list, a redirect is not checked against one either.
         red: ['N1', 'N2'], green: WEB.filter((id) => id !== 'N1' && id !== 'N2'), checks: WEB, shim: 'good', lab: { rig: 'web-no-list' },
       },
+      // Not a fault of the shim: the lab hands the door a search key when the check says there is none.
+      'search-key-anyway': {
+        what: 'A door that has a search key when search is meant to be off',
+        red: ['N9'], green: WEB.filter((id) => id !== 'N9'), checks: WEB, shim: 'good', lab: { rig: 'search-key-anyway' },
+      },
       'web-no-address-check': {
         what: 'A door whose web fetcher does not check that an address is a public one',
-        red: ['N3'], green: WEB.filter((id) => id !== 'N3'), checks: WEB, shim: 'good', lab: { rig: 'web-no-address-check' },
+        red: ['N3', 'N7', 'N8'], green: WEB.filter((id) => !['N3', 'N7', 'N8'].includes(id)), checks: WEB, shim: 'good', lab: { rig: 'web-no-address-check' },
       },
       'web-unchecked-redirects': {
         what: 'A door whose web fetcher follows a redirect without checking it against the list',

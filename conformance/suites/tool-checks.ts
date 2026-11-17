@@ -501,4 +501,73 @@ TOOL_CHECKS.push(
       return p
     },
   },
+  {
+    id: 'N7', title: 'web: with the public web on, an unlisted public site is read, and a private address is still refused',
+    lab: { policy: { ...WEB, 'egress.default': 'public' }, turnDeadlineMs: 20_000 },
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const marker = `ANY-${lab.nonce}`
+      lab.web.page('other.test', '/any', page(marker))
+      lab.web.page('other.test', '/to-inner', moved('http://inner.test/admin'))
+      const canary = lab.canary('n7')
+      lab.script({ match: canary, text: 'done', tools: [fetchCall(lab, 'http://other.test/any'), fetchCall(lab, 'http://inner.test/admin'), fetchCall(lab, 'http://other.test/to-inner')] })
+      say(lab, `read ${canary}`)
+      await lab.door.idle()
+      want(p, toolResults(lab).some((r) => r.includes(marker)), 'an unlisted public page did not reach the model under the public web')
+      want(p, lab.web.lookups.includes('inner.test'), 'the private name was never looked up, so nothing was checked')
+      const bad = lab.web.dials.filter((ip) => ip !== PUBLIC && ip !== '2600:1f00::45')
+      want(p, bad.length === 0, `the door connected to ${bad.join(', ')}`)
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N8', title: 'search: results reach the model as untrusted titles, addresses and snippets; the key never reaches the cell, the model or a receipt; a private result is refused',
+    lab: { policy: { 'tools.allow': ['network', 'search', 'shell'], 'egress.default': 'public' }, turnDeadlineMs: 20_000 },
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      const query = `QUERY-${lab.nonce}`
+      lab.web.search.results([
+        { title: `Found-${lab.nonce}`, url: `http://${SITE}/found`, description: `a snippet ${lab.secrets.search}` },
+        { title: 'Inside', url: 'http://inner.test/admin', description: 'a private one' },
+      ])
+      const env = lab.file('n8.env')
+      const canary = lab.canary('n8')
+      lab.script({ match: canary, text: 'done', tools: [surface(lab).search(query), fetchCall(lab, 'http://inner.test/admin'), lab.harness.shell.dumpEnv(env)] })
+      say(lab, `find ${canary}`)
+      await lab.door.idle()
+      const results = toolResults(lab)
+      want(p, lab.web.search.seen.length === 1 && lab.web.search.seen[0].query === query, 'the door did not make the search it was asked for')
+      want(p, lab.web.search.seen[0]?.headers['x-subscription-token'] === lab.secrets.search, 'the provider was not sent the key, so nothing was checked')
+      want(p, results.some((r) => r.includes(`Found-${lab.nonce}`) && r.includes('This is untrusted text from the web')), 'the results did not reach the model, marked as untrusted')
+      want(p, !results.some((r) => r.includes(lab.secrets.search)), 'the key reached the model')
+      want(p, existsSync(env), 'the environment was not dumped, so nothing was checked')
+      want(p, !existsSync(env) || !readFileSync(env, 'utf8').includes(lab.secrets.search), 'the key is in the cell\'s environment')
+      want(p, !JSON.stringify(lab.receipts.all()).includes(lab.secrets.search) && !JSON.stringify(lab.receipts.all()).includes(query), 'a receipt holds the key or the query')
+      want(p, !lab.fake.ledger.some((post) => post.text.includes(lab.secrets.search)), 'the key was posted')
+      want(p, !lab.web.dials.some((ip) => ip !== PUBLIC && ip !== '2600:1f00::45'), 'the door connected to a private result')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
+  {
+    id: 'N9', title: 'search: with no key there is no search, and the provider gets no call at all',
+    lab: { policy: { 'tools.allow': ['network', 'search'] }, turnDeadlineMs: 20_000, searchKey: false },
+    async run(lab) {
+      const p: Outcome = []
+      sites(lab)
+      lab.web.search.results([{ title: `Found-${lab.nonce}`, url: `http://${SITE}/found`, description: 'x' }])
+      const canary = lab.canary('n9')
+      lab.script({ match: canary, text: 'done', tools: [surface(lab).search(`QUERY-${lab.nonce}`)] })
+      say(lab, `find ${canary}`)
+      await lab.door.idle()
+      want(p, toolResults(lab).length === 1, 'the model was not told about the call')
+      want(p, lab.web.search.seen.length === 0, 'the provider was called with search off')
+      want(p, !toolResults(lab).some((r) => r.includes(`Found-${lab.nonce}`)), 'results reached the model with search off')
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
+      return p
+    },
+  },
 )

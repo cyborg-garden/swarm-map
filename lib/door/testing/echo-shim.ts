@@ -14,7 +14,7 @@ export const ECHO_CAPS: Capabilities = {
   ownsChat: false,
   toolVeto: 'pre-call',
   approvalRoundTrip: false,
-  toolMap: { bash: 'shell', read: 'file_read', fetch: 'network', post: 'chat_post' },
+  toolMap: { bash: 'shell', read: 'file_read', fetch: 'network', post: 'chat_post', search: 'search' },
   modelBaseUrl: false,
   mcpClient: false,
   nativeMemory: 'none',
@@ -85,6 +85,13 @@ export async function startEchoShim(opts: {
       const answer = await client.requestTool(turnId, 'fetch', { url }, (id) => { callId = id })
       shim.verdicts.push({ tool: 'fetch', ...answer })
       shim.pages.push(answer.allow && callId ? await client.webFetch(callId, url) : { ok: false, reason: answer.reason ?? 'not allowed' })
+    }
+    // `!search <word>`: the search tool, the same way.
+    for (const [, query] of env.text.matchAll(/!search (\S+)/g)) {
+      let callId = ''
+      const answer = await client.requestTool(turnId, 'search', { query }, (id) => { callId = id })
+      shim.verdicts.push({ tool: 'search', ...answer })
+      shim.pages.push(answer.allow && callId ? await client.webSearch(callId, query) : { ok: false, reason: answer.reason ?? 'not allowed' })
     }
     const reply = { t: 'reply' as const, turnId, text: `echo: ${env.text}`, attachments: [] }
     switch (shim.mode) {

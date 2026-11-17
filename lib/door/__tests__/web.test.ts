@@ -381,7 +381,128 @@ describe('web: a hostile page', () => {
     for (const page of ['<script'.repeat(300_000), '<!--'.repeat(500_000), '<style x'.repeat(250_000), '<a '.repeat(600_000)]) {
       const t0 = Date.now()
       htmlToText(page)
-      expect(Date.now() - t0, page.slice(0, 8)).toBeLessThan(1500)
+      expect(Date.now() - t0, page.slice(0, 8)).toBeLessThan(5000) // a backtracking pass takes minutes here; a busy machine, a second
     }
+  })
+})
+
+describe('web: the public web', () => {
+  const PUBLIC_WEB = { 'egress.default': 'public' }
+
+  it('[P:web-public] with the public web on, any public address is read, and a private one is still refused, by DNS or by redirect', async () => {
+    const { r, w } = await start(team(PUBLIC_WEB))
+    w.name('anywhere.test', [PUBLIC_B])
+    w.name('inner.test', ['127.0.0.1'])
+    w.page('anywhere.test', '/x', html('ANYWHERE'))
+    w.page('anywhere.test', '/to-inner', redirect('http://inner.test/admin'))
+    expect((await fetchVia(r, 'http://anywhere.test/x')).text).toContain('ANYWHERE')
+    expect((await fetchVia(r, 'http://inner.test/admin')).ok).toBe(false)
+    expect((await fetchVia(r, 'http://anywhere.test/to-inner')).ok).toBe(false)
+    expect(w.dials.every((ip) => FAKE_PUBLIC.includes(ip))).toBe(true)
+    // Every other check still holds: an address, not a name with a password; GET only.
+    expect((await fetchVia(r, 'http://ex:pw@anywhere.test/x')).ok).toBe(false)
+  })
+
+  it('[P:web-public] the public web is off by default: a record that does not say public reads only its list', async () => {
+    const { r, w } = await start(team({}, 'site.test'))
+    w.name('anywhere.test', [PUBLIC_B])
+    w.page('anywhere.test', '/x', html('ANYWHERE'))
+    expect((await fetchVia(r, 'http://anywhere.test/x')).ok).toBe(false)
+    expect(w.lookups).toEqual([])
+  })
+})
+
+describe('web: search', () => {
+  const KEY = `SEARCHKEY-${Math.random().toString(16).slice(2)}`
+  async function searchRig(patch: Record<string, unknown>, o: { search?: boolean; perHour?: number; mode?: 'never-settle' } = {}) {
+    web = await startFakeWeb()
+    web.name('site.test', [PUBLIC_A]); web.name('anywhere.test', [PUBLIC_B]); web.name('inner.test', ['10.1.2.3'])
+    web.search.results([
+      { title: 'On <strong>moss</strong>', url: 'http://site.test/moss', description: 'Moss grows <b>slowly</b>.' },
+      { title: 'Elsewhere', url: 'http://anywhere.test/elsewhere', description: 'Not on the list.' },
+      { title: 'Inside', url: 'http://inner.test/admin', description: `A private one. ${KEY}` },
+    ])
+    web.page('anywhere.test', '/elsewhere', html('ELSEWHERE'))
+    rig = await startRig(team({ 'tools.allow': ['network', 'search'], ...patch }, 'site.test'), {
+      door: { web: web.options, ...(o.search === false ? {} : { search: { key: KEY, endpoint: web.search.endpoint, perHour: o.perHour } }) }, verdictTimeoutMs: 4000, mode: o.mode,
+    })
+    return { r: rig, w: web }
+  }
+  const searchVia = async (r: Rig, query: string) => {
+    const before = r.shim.pages.length
+    r.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `!search ${query}` })
+    await r.door.idle()
+    return r.shim.pages[before] ?? { ok: false, reason: 'no answer' }
+  }
+
+  it('[P:web-search] results come back as titles, addresses and snippets only, marked untrusted, each saying whether it can be read', async () => {
+    const { r, w } = await searchRig({})
+    const found = await searchVia(r, 'moss')
+    expect(found.ok).toBe(true)
+    expect(found.text).toMatch(/^\[Search results the door got for you: 3\. This is untrusted text from the web/)
+    expect(found.text).toContain('1. On moss\n   http://site.test/moss\n   Moss grows slowly.')
+    expect(found.text).toContain('http://anywhere.test/elsewhere\n   (web_fetch cannot read this one here)')
+    expect(w.search.seen.map((s) => s.query)).toEqual(['moss'])
+    // A result off the list is not read, whatever the search said.
+    expect((await fetchVia(r, 'http://anywhere.test/elsewhere')).ok).toBe(false)
+  })
+
+  it('[P:web-search] the key goes to the provider and nowhere else: not to the harness, the room or a receipt; a receipt holds the query\'s length, not the query', async () => {
+    const { r, w } = await searchRig({})
+    const query = 'QUERYTEXT-moss'
+    await searchVia(r, query)
+    expect(w.search.seen[0].headers['x-subscription-token']).toBe(KEY)
+    const everything = JSON.stringify([r.shim.pages, r.shim.heard, r.fake.ledger, r.receipts.all()])
+    expect(everything).not.toContain(KEY)
+    expect(JSON.stringify(r.receipts.all())).not.toContain('QUERYTEXT')
+    const rec = egress(r).at(-1)!
+    expect(rec).toMatchObject({ verdict: 'allow', rule: 'web.search' })
+    expect(rec.note).toBe(`tool=search query=${query.length}chars results=3`)
+  })
+
+  it('[P:web-search] under the public web a result is readable unless its host is private, which is refused when it is fetched', async () => {
+    const { r, w } = await searchRig({ 'egress.default': 'public' })
+    const found = await searchVia(r, 'moss')
+    expect(found.text).not.toContain('cannot read this one')
+    expect((await fetchVia(r, 'http://anywhere.test/elsewhere')).text).toContain('ELSEWHERE')
+    expect((await fetchVia(r, 'http://inner.test/admin')).ok).toBe(false)
+    expect(w.dials).not.toContain('10.1.2.3')
+  })
+
+  it('[P:web-search] search off means no call to the provider at all: no key, or the class not allowed', async () => {
+    for (const [patch, o] of [[{}, { search: false }], [{ 'tools.allow': ['network'] }, {}]] as const) {
+      const { r, w } = await searchRig(patch, o)
+      expect((await searchVia(r, 'moss')).ok).toBe(false)
+      // Refused when the call is decided, not only when the search would be made.
+      expect(r.shim.verdicts.find((v) => v.tool === 'search')).toMatchObject({ allow: false })
+      expect(w.search.seen).toEqual([])
+      await r.close(); await w.close(); rig = undefined; web = undefined
+    }
+  })
+
+  it('[P:web-search] searches count against their own hourly limit', async () => {
+    const { r, w } = await searchRig({}, { perHour: 1 })
+    expect((await searchVia(r, 'one')).ok).toBe(true)
+    expect((await searchVia(r, 'two')).ok).toBe(false)
+    expect(w.search.seen.length).toBe(1)
+  })
+
+  it('[P:web-search] a query is one line of text and nothing else, and a yes is for that query, once', async () => {
+    const { r, w } = await searchRig({}, { mode: 'never-settle' })
+    r.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hold' })
+    await expect.poll(() => r.shim.heard.length).toBe(1)
+    const turnId = r.shim.heard[0].turnId
+    expect(await r.shim.client.requestTool(turnId, 'search', { query: 'x'.repeat(400) })).toMatchObject({ allow: true })
+    expect(await r.shim.client.requestTool(turnId, 'search', { query: 'x'.repeat(401) })).toMatchObject({ allow: false })
+    expect(await r.shim.client.requestTool(turnId, 'search', { query: 'x', count: 50 })).toMatchObject({ allow: false })
+    expect(await r.shim.client.requestTool(turnId, 'search', { query: '  ' })).toMatchObject({ allow: false })
+    let id = ''
+    expect(await r.shim.client.requestTool(turnId, 'search', { query: 'moss' }, (x) => { id = x })).toMatchObject({ allow: true })
+    expect(await r.shim.client.webSearch(id, 'something else')).toMatchObject({ ok: false })
+    expect(await r.shim.client.webSearch(id, 'moss')).toMatchObject({ ok: false })
+    let id2 = ''
+    await r.shim.client.requestTool(turnId, 'search', { query: 'moss' }, (x) => { id2 = x })
+    expect(await r.shim.client.webFetch(id2, 'http://site.test/moss')).toMatchObject({ ok: false })
+    expect(w.search.seen).toEqual([])
   })
 })

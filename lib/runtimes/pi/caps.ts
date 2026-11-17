@@ -17,6 +17,7 @@ export const PI_TOOL_MAP: Record<string, ToolClass> = {
   bash: 'shell',
   // Not Pi's own: the gate adds it. It asks the door, which fetches the page (lib/door/web-fetch.ts).
   web_fetch: 'network',
+  web_search: 'search',
 }
 
 export const PI_CAPS: Capabilities = {

@@ -23,7 +23,9 @@ describe('Tools card: web pages', () => {
   it('is off by default, with the suggested sites offered as chips and none switched on', () => {
     const { web } = renderCard()
     expect(within(web).queryByRole('list', { name: 'Allowed sites' })).toBeNull()
-    expect(document.querySelector('select[name="tools.web.mode"]')).toBeNull()
+    expect((document.querySelector('select[name="tools.web.mode"]') as HTMLSelectElement).value).toBe('off')
+    expect(document.querySelector('select[name="tools.web.approval"]')).toBeNull()
+    expect((document.querySelector('input[name="tools.web.search"]') as HTMLInputElement).checked).toBe(false)
     const chips = within(web).getAllByRole('button', { name: /^\+ / })
     expect(chips.map((c) => c.textContent)).toEqual(SUGGESTED_WEB.map((s) => `+ ${s.label}`))
   })
@@ -39,7 +41,7 @@ describe('Tools card: web pages', () => {
   })
 
   it('every chip, all at once, is a list the launcher takes', () => {
-    const tools = withWeb(undefined, SUGGESTED_WEB.flatMap((s) => s.entries), 'ask')
+    const tools = withWeb(undefined, { allow: SUGGESTED_WEB.flatMap((s) => s.entries), approval: 'ask' })
     expect(parseConfig({ ...RULES, tools }).errors).toEqual([])
   })
 
@@ -55,9 +57,9 @@ describe('Tools card: web pages', () => {
   })
 
   it('a listed site can be removed, and with none left the web is off again', () => {
-    const rules = { ...RULES, tools: withWeb(undefined, ['en.wikipedia.org'], 'ask') }
+    const rules = { ...RULES, tools: withWeb(undefined, { allow: ['en.wikipedia.org'], approval: 'ask' }) }
     const { web, onChange } = renderCard(rules)
-    expect((document.querySelector('select[name="tools.web.mode"]') as HTMLSelectElement).value).toBe('ask')
+    expect((document.querySelector('select[name="tools.web.approval"]') as HTMLSelectElement).value).toBe('ask')
     expect(document.querySelector('input[name="tools.approvalSeconds"]')).not.toBeNull()
     fireEvent.click(within(web).getByRole('button', { name: 'Remove en.wikipedia.org' }))
     expect(onChange.mock.calls[0][0].web).toBeUndefined()
@@ -69,5 +71,25 @@ describe('Tools card: web pages', () => {
     document.body.innerHTML = ''
     renderCard(RULES, 'Pi')
     expect(screen.queryByRole('button', { name: '+ Stack Overflow' })).toBeNull()
+  })
+
+  it('the public web and search are chosen here, and the launcher takes what the card wrote', () => {
+    const { onChange } = renderCard()
+    fireEvent.change(document.querySelector('select[name="tools.web.mode"]')!, { target: { value: 'public' } })
+    const tools = onChange.mock.calls[0][0]
+    expect(tools.web).toEqual({ allow: [], mode: 'public' })
+    expect(policyFor(parseConfig({ ...RULES, tools }).config!).egress.default).toBe('public')
+  })
+
+  it('search asks for its key file, which goes to the record\'s secrets, not the rules', () => {
+    const onSearchKeyFile = vi.fn()
+    const onChange = vi.fn<(tools: ToolsConfig) => void>()
+    const rules = { ...RULES, tools: withWeb(undefined, { allow: ['en.wikipedia.org'], search: true }) }
+    render(<DoorToolsCard rules={rules} onChange={onChange} searchKeyFile="" onSearchKeyFile={onSearchKeyFile} />)
+    fireEvent.change(document.querySelector('input[name="secrets.searchKeyFile"]')!, { target: { value: '/keys/search' } })
+    expect(onSearchKeyFile).toHaveBeenCalledWith('/keys/search')
+    expect(JSON.stringify(rules.tools)).not.toContain('/keys')
+    fireEvent.click(document.querySelector('input[name="tools.web.search"]')!)
+    expect(onChange.mock.calls[0][0].web).toEqual({ allow: ['en.wikipedia.org'] })
   })
 })

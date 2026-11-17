@@ -16,7 +16,7 @@ const BOT_MODES = ['none', 'mentions', 'all']
 const INVITE_MODES = ['closed', 'admins', 'allowlisted', 'open']
 const PRINCIPAL_KINDS = ['user', 'role']
 export const TOOL_CLASSES = [
-  'shell', 'file_read', 'file_write', 'code_exec', 'browser', 'network', 'chat_post', 'chat_admin', 'memory', 'unknown',
+  'shell', 'file_read', 'file_write', 'code_exec', 'browser', 'network', 'chat_post', 'chat_admin', 'memory', 'search', 'unknown',
 ]
 const BROWSER_GUARDS = ['off', 'public-hosts-only']
 const KEY_KINDS = ['model', 'broker', 'sidecar-tool', 'env']
@@ -123,7 +123,7 @@ export function shapeErrors(policy: unknown): string[] {
   }))
 
   obj('egress', p.egress, (egress) => {
-    if (egress.default !== 'deny') bad('egress.default', "'deny'")
+    oneOf('egress.default', egress.default, ['deny', 'public'])
     list('egress.hosts', egress.hosts, (hp, h) => obj(hp, h, (host) => {
       // Written as the URL parser writes a name: lower case, punycode, no trailing dot, not an address.
       const read = isText(host.host) ? parseWebEntry(host.host) : undefined

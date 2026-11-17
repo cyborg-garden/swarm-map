@@ -186,7 +186,7 @@ describe('the page of a door agent', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    const selects = within(card).getAllByRole('combobox') as HTMLSelectElement[]
+    const selects = (within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))
     expect(selects.map((el) => [el.getAttribute('aria-label'), el.value, el.disabled])).toEqual([['Read files', 'never', false], ['Write files', 'never', false], ['Shell', 'never', false]])
     // Nothing asks yet, so there is no time to answer to set.
     expect(document.querySelector('input[name="tools.approvalSeconds"]')).toBeNull()
@@ -206,7 +206,7 @@ describe('the page of a door agent', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    const values = () => (within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])
+    const values = () => ((within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))).map((el) => [el.value, el.disabled])
     // Shell with no mode of its own asks: that is its default.
     expect(values()).toEqual([['never', false], ['ask', false], ['ask', false]])
     // While the shell asks, file writing cannot be set to allow: an admin would approve a script's name, not what is in it.
@@ -375,7 +375,7 @@ describe('a Letta Code agent behind a door', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    expect((within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])).toEqual([['never', true], ['never', true], ['never', true]])
+    expect(((within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))).map((el) => [el.value, el.disabled])).toEqual([['never', true], ['never', true], ['never', true]])
     expect(within(card).getByRole('note')).toHaveTextContent('Tools are built for Pi only')
   })
 

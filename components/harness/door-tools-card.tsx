@@ -58,32 +58,44 @@ export function withMode(tools: ToolsConfig | undefined, key: ToolClass, mode: M
   return { ...t, enabled, mode: modes }
 }
 
-/** The web allowlist with entries added, each at most once. An empty list switches the web off. */
-export function withWeb(tools: ToolsConfig | undefined, allow: string[], mode?: 'allow' | 'ask'): ToolsConfig {
+type WebConfig = NonNullable<ToolsConfig['web']>
+/**
+ * The tools part with the web changed. `null` switches it off. Entries are kept once each. With no
+ * site listed, the public web off and search off, there is no web, and the part is left out.
+ * `keep` keeps it even with nothing on yet: choosing "Listed sites" before adding one.
+ */
+export function withWeb(tools: ToolsConfig | undefined, patch: Partial<WebConfig> | null, keep = false): ToolsConfig {
   const t = tools ?? EMPTY
-  const unique = [...new Set(allow)]
-  const { web: _old, ...rest } = t
-  void _old
-  const nextMode = mode ?? t.web?.mode
-  return unique.length === 0 ? rest : { ...rest, web: { allow: unique, ...(nextMode ? { mode: nextMode } : {}) } }
+  const { web: old, ...rest } = t
+  if (patch === null) return rest
+  const next: WebConfig = { ...(old ?? { allow: [] }), ...patch }
+  next.allow = [...new Set(next.allow)]
+  if (next.search !== true) delete next.search
+  const on = next.allow.length > 0 || next.mode === 'public' || next.search === true
+  return on || keep ? { ...rest, web: next } : rest
 }
 
 const inputClass = 'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
-export function DoorToolsCard({ rules, builtFor, onChange }: {
+export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSearchKeyFile }: {
   rules: LabConfig
   /** Set when this agent's harness has no tools: the name of the one that does. The card is then switched off. */
   builtFor?: string
   onChange: (tools: ToolsConfig) => void
+  /** The search key file's path, kept with the record's other secret paths, never in the rules. */
+  searchKeyFile?: string
+  onSearchKeyFile?: (path: string) => void
 }) {
   const tools = rules.tools
   const anyone = rules.discord.anyoneInChannel
   const off = anyone || builtFor !== undefined
-  const webAllow = tools?.web?.allow ?? []
-  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask') || (webAllow.length > 0 && tools?.web?.mode === 'ask')
+  const web = tools?.web
+  const webAllow = web?.allow ?? []
+  const webOn = web !== undefined
+  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask') || (webOn && web?.approval === 'ask')
   const [entry, setEntry] = useState('')
   const read = entry.trim() === '' ? undefined : parseWebEntry(entry)
-  const add = (more: string[]) => onChange(withWeb(tools, [...webAllow, ...more]))
+  const add = (more: string[]) => onChange(withWeb(tools, { allow: [...webAllow, ...more] }))
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3" data-testid="door-tools-card">
       <h3 className="font-medium text-sm">Tools</h3>
@@ -128,35 +140,50 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
       <div className="space-y-2 border-t border-[var(--border)] pt-3" data-testid="door-web">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-sm">Web pages</p>
+            <p className="text-sm">Web</p>
             <p className="text-xs text-muted-foreground">
-              Off until a site is listed. The door fetches a page for the agent, never the cell: read-only, no logins or cookies, private addresses refused.
-              A host is matched exactly; add a path to allow only what is under it. What a page says goes to the model as untrusted text, never into the channel.
+              Off by default. The door reads a page for the agent, never the cell: read-only, no logins or cookies, private and local addresses always refused.
+              &quot;Listed sites&quot; reads only the sites below; a host is matched exactly, and a path allows only what is under it. &quot;Public web&quot; reads any public address.
+              What a page says goes to the model as untrusted text, never into the channel.
             </p>
           </div>
-          {webAllow.length > 0 && (
+          <select
+            name="tools.web.mode" aria-label="Web" className={inputClass} disabled={builtFor !== undefined}
+            value={webOn ? (web?.mode ?? 'allowlist') : 'off'}
+            onChange={(e) => onChange(e.target.value === 'off' ? withWeb(tools, null) : withWeb(tools, { mode: e.target.value as 'allowlist' | 'public' }, true))}
+          >
+            <option value="off">Off</option>
+            <option value="allowlist">Listed sites</option>
+            <option value="public">Public web</option>
+          </select>
+        </div>
+        {webOn && (
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm">Each address or search</span>
             <select
-              name="tools.web.mode" aria-label="Web pages" className={inputClass} disabled={builtFor !== undefined}
-              value={tools?.web?.mode ?? 'allow'}
-              onChange={(e) => onChange(withWeb(tools, webAllow, e.target.value as 'allow' | 'ask'))}
+              name="tools.web.approval" aria-label="Each address or search" className={inputClass} disabled={builtFor !== undefined}
+              value={web?.approval ?? 'allow'} onChange={(e) => onChange(withWeb(tools, { approval: e.target.value as 'allow' | 'ask' }))}
             >
               <option value="ask">Ask an admin</option>
-              <option value="allow">Allow listed sites</option>
+              <option value="allow">Allow</option>
             </select>
-          )}
-        </div>
-        {webAllow.length > 0 && (
+          </label>
+        )}
+        {webOn && web?.mode === 'public' && (
+          <p role="note" className="text-xs text-amber-600">The public web is on: the agent can read any public page, and what it puts in an address reaches that site.</p>
+        )}
+        {web?.mode !== 'public' && webAllow.length > 0 && (
           <ul className="flex flex-wrap gap-1.5" aria-label="Allowed sites">
             {webAllow.map((site) => (
               <li key={site} className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-0.5 text-xs">
                 <span>{site}</span>
                 <button type="button" aria-label={`Remove ${site}`} disabled={builtFor !== undefined}
-                  onClick={() => onChange(withWeb(tools, webAllow.filter((s) => s !== site)))}>×</button>
+                  onClick={() => onChange(withWeb(tools, { allow: webAllow.filter((s) => s !== site) }))}>×</button>
               </li>
             ))}
           </ul>
         )}
-        {builtFor === undefined && (
+        {builtFor === undefined && web?.mode !== 'public' && (
           <>
             <div className="flex gap-2">
               <input
@@ -175,6 +202,22 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
               ))}
             </div>
           </>
+        )}
+        <label className="flex items-center gap-2">
+          <input type="checkbox" name="tools.web.search" disabled={builtFor !== undefined} checked={web?.search === true}
+            onChange={(e) => onChange(withWeb(tools, { search: e.target.checked }))} />
+          <span className="text-sm">Web search (Brave)</span>
+        </label>
+        {web?.search === true && onSearchKeyFile && (
+          <label className="block space-y-1">
+            <span className="text-sm">Search key file</span>
+            <input name="secrets.searchKeyFile" className={`w-full ${inputClass}`} placeholder="/full/path/to/the/file"
+              value={searchKeyFile ?? ''} onChange={(e) => onSearchKeyFile(e.target.value)} />
+            <span className="block text-xs text-muted-foreground">
+              A file only you can read, outside the repo, holding the key. Only the door reads it; the agent never sees it.
+              Results come back as titles, addresses and snippets, and a result is read only if the setting above allows it.
+            </span>
+          </label>
         )}
       </div>
       {asks && builtFor === undefined && (

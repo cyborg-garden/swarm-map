@@ -11,7 +11,7 @@ export type Posture = 'private' | 'team' | 'public'
 export type PrincipalRef = { kind: 'user' | 'role'; id: string }
 export type ToolClass =
   | 'shell' | 'file_read' | 'file_write' | 'code_exec' | 'browser' | 'network'
-  | 'chat_post' | 'chat_admin' | 'memory' | `mcp:${string}` | 'unknown'
+  | 'chat_post' | 'chat_admin' | 'memory' | 'search' | `mcp:${string}` | 'unknown'
 
 export interface RoomRule {
   match: { room: string } | { category: string }
@@ -66,7 +66,11 @@ export interface KeyGrant {
 }
 
 export interface EgressPolicy {
-  default: 'deny'
+  /**
+   * `deny`: a web fetch reaches only the hosts below. `public`: any public address, with every
+   * other check of the door's unchanged (GET only, no credential, private addresses refused).
+   */
+  default: 'deny' | 'public'
   /**
    * The hosts a web fetch through the door may reach (lib/core/tools/web.ts). A host is matched
    * exactly. With `paths`, only those path prefixes on it, by whole segments. Only GET is ever made.

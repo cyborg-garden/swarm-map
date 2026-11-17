@@ -58,6 +58,8 @@ export type FromShim =
    * fetches it itself, once, and only the address that call was decided on (lib/door/web-fetch.ts).
    */
   | { t: 'web_fetch'; callId: string; url: string }
+  /** Make the search for a search call the door already said yes to, by its call id (lib/door/web-search.ts). */
+  | { t: 'web_search'; callId: string; query: string }
   | { t: 'delta'; turnId: string; text: string }
   | { t: 'reply'; turnId: string; text: string; attachments: AttachmentRef[] }
   | { t: 'settled'; turnId: string; usage?: Usage }

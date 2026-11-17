@@ -234,6 +234,8 @@ function decideEgress(policy: PolicyRecord, e: Extract<Event, { kind: 'egress' }
   })
   if (e.method !== 'GET') return end('deny', 'The door only reads from the web: GET, nothing else.')
   if (typeof e.host !== 'string' || typeof (e.path ?? '/') !== 'string') return end('deny', 'That is not an address.')
+  // The public web: any address. Whether it is a public one is the door's to check, after DNS, as on the list.
+  if (policy.egress.default === 'public') return end('allow', 'The public web is on, so any public address may be read.')
   return egressAllows(policy.egress, e.host, e.path ?? '/', e.method)
     ? end('allow', 'That address is on the web allowlist.')
     : end('deny', 'That address is not on the web allowlist.')

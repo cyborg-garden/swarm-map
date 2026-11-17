@@ -114,7 +114,6 @@ describe('decide() properties', () => {
       'tools.perRoom': { 'r-general': { deny: ['shell'] } },
       'tools.browserGuard': 'public-hosts-only',
       'keys': [{ ref: 'k-1', kind: 'model', hosts: [] }],
-      'egress.default': 'allow',
       'egress.blockPrivateRanges': false,
       'memory.threadsPoolIntoParent': false,
       'memory.team.dm': 'read',

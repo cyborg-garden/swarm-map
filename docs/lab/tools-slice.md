@@ -10,9 +10,9 @@ is a placeholder.
 - **Off by default.** An agent has no tools until its rules switch a class of tool on.
 - **Three classes in this slice.** Read files, write files, and a shell. All three run inside the
   sealed cell and nowhere else.
-- **And web pages, through the door.** A fourth tool reads one web page from a list of sites. The
-  cell still has no route out: the door fetches the page and hands back text. See "Web through the
-  door" below.
+- **And the web, through the door.** Two more tools read one web page and search the web. The
+  cell still has no route out: the door makes every request and hands back text. Off by default.
+  See "Web through the door" below.
 - **Each class has a mode.** `never`, `ask` or `allow`. Shell starts at `ask`.
 - **`ask` means a person says yes in the room.** The door posts what the agent wants to run. An
   admin answers. No answer in time is a no.
@@ -246,16 +246,15 @@ harnesses, so no config can switch a tool on for it.
 
 ## Web through the door
 
-An agent can read web pages from a list of sites, and nothing else on the web. The cell still has
-no route out: the agent's tool asks the door, and the door fetches the page on its behalf.
+An agent can read web pages and search the web. The cell still has no route out: the agent's tool
+asks the door, and the door makes the request on its behalf. All of it is off by default.
 
 ### What the agent has
 
 | Tool | Class | What it takes | What it gets back |
 |---|---|---|---|
 | `web_fetch` | `network` | One address, `https://` only | The page as text, marked as untrusted, or why not |
-
-There is no `web_search`. See "Search, as a design" below.
+| `web_search` | `search` | One query, up to 400 characters | Titles, addresses and snippets, marked as untrusted, or why not |
 
 ### The list
 
@@ -265,18 +264,24 @@ Tools card write it from a plainer shape:
 
 ```json
 "tools": { "enabled": [], "mode": {}, "approvalSeconds": 120,
-           "web": { "allow": ["en.wikipedia.org", "github.com/some-org"], "mode": "allow" } }
+           "web": { "mode": "allowlist", "allow": ["en.wikipedia.org", "github.com/some-org"],
+                    "approval": "allow", "search": false } }
 ```
 
-- **Empty means off.** No site listed, no web, and the tool is not even declared to the model.
+- **Two modes.** `allowlist` (the default) reads only the listed sites. `public` reads any public
+  address, and is written into the record as `egress.default: 'public'`. Every other check below
+  holds the same in both: GET only, no credential, private addresses refused after DNS and on
+  every redirect, the same limits, and what comes back goes to the model only.
+- **Off means off.** No `web`, or `allowlist` with no site listed and no search: no web, and the
+  tools are not even declared to the model.
 - **An entry is a host, or a host and a path.** `en.wikipedia.org` allows that host. `github.com/some-org`
   allows `/some-org` and what is under it, by whole segments: not `/some-organisation`.
 - **A host is matched exactly.** No wildcard, no subdomain, no other port. A site that lives at
   `www.` needs that name listed. Names are compared as the URL parser writes them: lower case,
   an international name in its punycode form, no trailing dot. An address (`10.0.0.1`, `[::1]`,
   `0x7f.1`) is never an entry.
-- **`mode`** is `allow` (the default) or `ask`, which shows an admin the address first, in the room,
-  as any tool in ask mode is shown.
+- **`approval`** is `allow` (the default) or `ask`, which shows an admin the address or the query
+  first, in the room, as any tool in ask mode is shown.
 - **An agent that hears anyone may have it.** A public agent loses shell and file tools; it keeps
   the web, still read-only and still on the list.
 
@@ -326,7 +331,8 @@ Sefaria (`www.sefaria.org`) and the Library of Congress (`www.loc.gov`).
 - **Receipts hold where, not what.** Host, path (when it is plain characters and nothing
   secret-shaped; otherwise only its length) and size. Never the content.
 
-What an agent puts in an address reaches that site. The list is what bounds that.
+What an agent puts in an address, or in a query, reaches that site or the search provider. Under
+`allowlist` the list bounds where that can go; under the public web nothing does.
 
 ### Rules and checks
 
@@ -338,6 +344,8 @@ What an agent puts in an address reaches that site. The list is what bounds that
 | `web.no-credentials` | No credential, cookie or auth header, whatever the agent asks | N4 |
 | `web.limits` | Size, time, content type, and fetches an hour | N5 |
 | `web.untrusted` | To the model only, marked untrusted; never posted; receipts hold no content | N6 |
+| `web.public` | With the public web on, any public address; every other rule unchanged | N7 |
+| `web.search` | The door searches with its own key; results only as untrusted titles, addresses, snippets; own hourly count; no query in receipts; off means no call | N8, N9 |
 
 The checks run against a fake web: one server on loopback that plays every site, a fake DNS that
 answers what a check tells it, and a dial that reaches the server only for an address the fake DNS
@@ -348,32 +356,43 @@ that turns it red:
 |---|---|
 | A door that decides a web call without the list | N1, N2 |
 | A fetcher that does not check a redirect | N2 |
-| A fetcher with no address check | N3 |
+| A fetcher with no address check | N3, N7, N8 |
+| A door that has a search key when search is meant to be off | N9 |
 | A fetcher that keeps cookies | N4 |
 | A fetcher with no limits | N5 |
-| A gate whose web tool fetches by itself instead of asking the door | N1+, N2 to N6 |
-| A gate that asks nobody | N1+, N2 to N6, with the other tool checks |
+| A gate whose web tool fetches by itself instead of asking the door | N1+, N2 to N7 |
+| A gate that asks nobody | N1+, N2 to N8, with the other tool checks |
 
 The door's own tests (`lib/door/__tests__/web.test.ts`) cover the same with more cases: rebinding,
 a mixed DNS answer, IPv4 inside IPv6, the cloud metadata address, a ticket used twice or for another
 address, ask mode, a drip and a hang, content types.
 
-### Search, as a design
+### Search
 
-Not built. This is the shape for switching search on later, kept small:
+`"search": true` switches on `web_search`. It is off by default.
 
-- **One provider, called by the door with its own key.** The key lives with the door, like the
-  model key. The cell never sees it and never reaches the provider.
-- **Results are titles, addresses and snippets only**, marked untrusted like a page, and cut to a
-  size.
-- **A result is fetched only through `web_fetch`**, so only if its address is on the list. A second,
-  separate mode could let `web_fetch` reach any public address (every other check above still
-  applies); it would be its own switch, off by default, and an admin's choice.
-- **Its own class and rule** (`search`, `web.search`), its own count an hour, and receipts that
-  hold the query's length, not the query.
+- **One provider, the Brave Search API, called by the door with its own key.** The key is read
+  from a file, like the bot token and the model key: the file's path is kept in the record with
+  the other secret paths (`secrets.searchKeyFile`), never in the rules, and the start script hands
+  it to the launcher as `SMLAB_SEARCH_KEY_FILE`. The file must be the user's own, unreadable by
+  others, outside the repo. The launcher refuses to start with search on and no key.
+- **The key stays with the door.** It goes in the provider's own header and nowhere else: not to
+  the cell, not to the model, not into a receipt or a post. A result that carries it back is
+  blanked before the model sees it.
+- **Results are titles, addresses and snippets only**, cut to size, between the same marks as a
+  page. Each says whether `web_fetch` may read it under the rules now.
+- **A result is read only through `web_fetch`,** so only if the current mode allows its address,
+  and never when its host is a private one.
+- **Its own count.** 30 searches an hour for the agent, apart from the fetches.
+- **Receipts hold the query's length and the number of results, never the query.**
+- **Off means no call at all.** With no key, or the class not allowed, the provider is never
+  called.
 
-It is left out here because no provider can be reached without a key, and this slice holds no key
-for the web.
+### Scanning what comes back
+
+Not built. Pages and results are marked as untrusted and go to the model only; nothing scans them
+for instructions aimed at the model. A scanner can plug in at the door later, between the fetch and
+the hand-back, where every page and every result already passes.
 
 ## What was left out
 
@@ -381,8 +400,8 @@ for the web.
   a plain Docker volume has no size cap.
 - **Role-holders as approvers** (`approverRoles`). Still refused by `decide()`.
 - **Per-room tool lists**, code-exec, browser, MCP and memory tools.
-- **Web search** (see "Search, as a design"), a GitHub token, and web for Letta Code or the Claude
-  Agent SDK: like the other tools, the web tool is Pi's only.
+- **Scanning pages for prompt injection** (see "Scanning what comes back"), a GitHub token, and web
+  for Letta Code or the Claude Agent SDK: like the other tools, the web tools are Pi's only.
 - **Limits in the rules record.** They are fixed numbers handed to the door and the cell at start.
 - **"Approve always".** Every call in `ask` mode needs its own yes.
 

@@ -55,7 +55,9 @@ export interface LabOptions {
    * answer to a request as sent by the fixture's admin, whoever sent it. The door has no way to
    * know better, so it shows that the check on who may answer can go red.
    */
-  rig?: 'answers-as-admin' | 'web-no-list' | 'web-no-address-check' | 'web-unchecked-redirects' | 'web-keeps-cookies' | 'web-no-limits'
+  rig?: 'answers-as-admin' | 'search-key-anyway' | 'web-no-list' | 'web-no-address-check' | 'web-unchecked-redirects' | 'web-keeps-cookies' | 'web-no-limits'
+  /** Left out or true, the door has a search key (minted per lab) and the fake provider; false, it has none. */
+  searchKey?: boolean
   /** The door's limits on a web fetch, for a check that wants them small. */
   webLimits?: Partial<WebLimits>
 }
@@ -82,7 +84,7 @@ export interface Lab {
   /** The only web the door can reach in a lab: a server on loopback that plays every site, and a fake DNS. */
   web: FakeWeb
   /** Secrets that must never show up in the cell or in a post. */
-  secrets: { upstream: string; chat: string; brain: string }
+  secrets: { upstream: string; chat: string; brain: string; search: string }
   /**
    * A variable planted in this test process's own environment before the shim
    * started. It is not a secret and not shaped like one. A harness that
@@ -142,7 +144,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     throw err
   }
 
-  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: o.remote?.brainToken ?? `cell-${randomBytes(8).toString('hex')}` }
+  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: o.remote?.brainToken ?? `cell-${randomBytes(8).toString('hex')}`, search: `SEARCHKEY-${nonce}` }
   const listen = o.remote ? '0.0.0.0' : undefined
   const placeholder = `PLACEHOLDER-${nonce}`
   const policy = (patch: Record<string, unknown> = {}): PolicyRecord =>
@@ -183,9 +185,11 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     const door = await createDoor({
       policy: policy(), connectors: [fake.connector], creds: { fake: { token: secrets.chat } },
       receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
-      sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] }),
+      sanitizer: createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain, secrets.search] }),
       turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
-      web: webOptions, ...(webFetcher ? { webFetcher } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}),
+      web: webOptions, ...(webFetcher ? { webFetcher } : {}),
+      // A lab with no search key has none, unless the rig is broken to hand the door one anyway.
+      ...(o.searchKey !== false || o.rig === 'search-key-anyway' ? { search: { key: secrets.search, endpoint: web.search.endpoint } } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}),
     })
     closers.push(() => door.close())
     const route = await startModelRoute({

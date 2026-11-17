@@ -130,6 +130,10 @@ export const RULES: Rule[] = [
   // that show a harness's web tool really goes through the door, and takes what the door hands back.
   { id: 'web.allow', statement: 'A web fetch is made by the door, by GET only, and only to a host and path on the agent\'s web allowlist. An empty list means no web.',
     klass: 'security', kind: 'wall', reads: ['egress.hosts', 'tools.allow', 'tools.ask'], surfaces: 'all', enforcer: 'door', tests: ['U:web-entry', 'U:web-url', 'P:web-allow'], checks: ['N1', 'N1+'] },
+  { id: 'web.public', statement: 'With the public web on, a fetch may reach any public address, and every other web rule still holds. It is off unless the record says so.',
+    klass: 'security', kind: 'wall', reads: ['egress.default'], surfaces: 'all', enforcer: 'door', tests: ['P:web-public'], checks: ['N7'] },
+  { id: 'web.search', statement: 'A web search is made by the door with a key only the door holds, returns titles, addresses and snippets marked as untrusted, and counts against its own hourly limit. A receipt holds the query\'s length and the number of results, never the query. With no key, or search not allowed, no search is made.',
+    klass: 'security', kind: 'wall', reads: ['tools.allow', 'tools.ask'], surfaces: 'all', enforcer: 'door', tests: ['P:web-search'], checks: ['N8', 'N9'] },
   { id: 'web.redirect', statement: 'A redirect is followed only to an address that is on the allowlist too, checked again at every step.',
     klass: 'security', kind: 'wall', reads: ['egress.hosts'], surfaces: 'all', enforcer: 'door', tests: ['P:web-redirect'], checks: ['N2'] },
   { id: 'web.private', statement: 'The door never fetches from a private, loopback, link-local or metadata address, checked against every DNS answer and on every redirect, and it connects to the address it checked.',

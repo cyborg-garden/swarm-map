@@ -22,6 +22,7 @@ import type { Capabilities, Envelope, FromShim, Usage } from './protocol.ts'
 import type { Receipt, ReceiptLog } from './receipts.ts'
 import { createSanitizer, type Sanitizer } from './sanitizer.ts'
 import { createWebFetcher, untrustedText, type WebFetchOptions } from './web-fetch.ts'
+import { DEFAULT_SEARCH, MAX_QUERY_CHARS, searchBrave, untrustedResults, type SearchOptions } from './web-search.ts'
 
 export interface Heartbeat { agentId: string; policyHash: string; caps?: Capabilities; ts: string }
 
@@ -60,6 +61,8 @@ export interface DoorOptions {
   web?: WebFetchOptions
   /** Test hook: a fetcher with a part left out on purpose (createWebFetcher's `parts`), to show a check goes red without it. */
   webFetcher?: ReturnType<typeof createWebFetcher>
+  /** Web search: the provider's key, which only the door holds. Left out, a search call is refused, and no search is ever made. */
+  search?: SearchOptions
   /** Test hook: decide a web call with no look at the allowlist, to prove the check for it goes red without one. */
   webListUnchecked?: boolean
 }
@@ -120,13 +123,15 @@ interface Held {
   toolClass: ToolClass
   /** The hash of the call that was shown. The yes that goes back to the cell carries it. */
   hash: string
-  /** For a web call: the address it was decided on. A yes to it lets the door fetch that address once. */
-  web?: string
+  /** For a web call: the address it was decided on, or a search's query. A yes to it lets the door make that one request, once. */
+  web?: WebAsk
   timer: ReturnType<typeof setTimeout>
 }
 
-/** A web call the door said yes to, and the one address it may fetch for it. Used once. */
-interface WebTicket { turn: Turn; link: ShimLink; url: string; tool: string }
+/** What a web call asks the door for: one page, or one search. */
+type WebAsk = { url: string } | { query: string }
+/** A web call the door said yes to, and the one request it may make for it. Used once. */
+type WebTicket = { turn: Turn; link: ShimLink; tool: string } & WebAsk
 
 export async function createDoor(opts: DoorOptions): Promise<Door> {
   // F1. A connector that is not the fake one is refused unless its surface was named in `live`.
@@ -164,6 +169,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   // web.*: the web calls that may be fetched, by the id the shim asked under, and when this agent's recent fetches were made.
   const webTickets = new Map<string, WebTicket>()
   let webFetches: number[] = []
+  let searches: number[] = []
   const fetcher = opts.webFetcher ?? createWebFetcher(opts.web)
   // bots.loop: bot messages delivered in a row, per room, since a person was last delivered there.
   // A thread counts with its parent, so a loop cannot carry on by moving into one.
@@ -283,7 +289,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
    */
   function settle(h: Held, allow: boolean, why: string, rule = 'priv.approval'): void {
     receipt(about(h.turn.event, 'tool', h.turn.turnId), { verdict: allow ? 'allow' : 'deny', rule, why }, `tool=${h.tool} call=${shortHash(h.hash)}`)
-    if (allow && h.web !== undefined) webTickets.set(h.callId, { turn: h.turn, link: h.link, url: h.web, tool: h.tool })
+    if (allow && h.web !== undefined) webTickets.set(h.callId, { turn: h.turn, link: h.link, tool: h.tool, ...h.web })
     h.link.send({ t: 'tool_verdict', callId: h.callId, allow, ...(allow ? { hash: h.hash } : { reason: why }) })
     startClock(h.turn)
   }
@@ -485,7 +491,16 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
 
           // web.allow: a web call takes one address and nothing else, and the address has to be on the list.
           // What is shown to an admin, and what the door later fetches, is that one address.
-          let web: string | undefined
+          let web: WebAsk | undefined
+          if (toolClass === 'search') {
+            const input = msg.input as Record<string, unknown> | null
+            if (!opts.search) return refuse('web.search', 'Search is not set up for this agent.')
+            if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join() !== 'query'
+              || typeof input.query !== 'string' || input.query.trim() === '' || input.query.length > MAX_QUERY_CHARS) {
+              return refuse('web.search', `A search takes one query of 1 to ${MAX_QUERY_CHARS} characters and nothing else.`)
+            }
+            web = { query: input.query }
+          }
           if (toolClass === 'network') {
             const input = msg.input as Record<string, unknown> | null
             if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join() !== 'url') {
@@ -495,7 +510,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             if ('problem' in read) return refuse('web.allow', `That address is refused: ${read.problem}.`)
             const e2 = decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, facts)
             if (e2.verdict !== 'allow' && !opts.webListUnchecked) return refuse(e2.rule, e2.why)
-            web = input.url as string
+            web = { url: input.url as string }
           }
 
           // tools.limits: a conversation gets so many calls an hour. Counted when the rules let a call
@@ -507,7 +522,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
 
           if (d.verdict === 'allow') {
             receipt(tag, d, note)
-            if (web !== undefined) webTickets.set(msg.callId, { turn, link, url: web, tool: toolName })
+            if (web !== undefined) webTickets.set(msg.callId, { turn, link, tool: toolName, ...web })
             return verdict(true)
           }
 
@@ -554,6 +569,10 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         void fetchFor(link, msg.callId, msg.url)
         return
       }
+      case 'web_search': {
+        void searchFor(link, msg.callId, msg.query)
+        return
+      }
       case 'error': {
         const turn = msg.turnId ? turns.get(msg.turnId) : undefined
         if (turn) {
@@ -581,7 +600,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const ticket = typeof callId === 'string' ? webTickets.get(callId) : undefined
     // Asked for once, used: a wrong address under a call's id spends that call too.
     if (ticket) webTickets.delete(callId as string)
-    if (!ticket || ticket.link !== link || ticket.url !== url || turns.get(ticket.turn.turnId) !== ticket.turn) {
+    if (!ticket || ticket.link !== link || !('url' in ticket) || ticket.url !== url || turns.get(ticket.turn.turnId) !== ticket.turn) {
       receipt({ kind: 'egress' }, { verdict: 'deny', rule: 'web.allow', why: 'A page was asked for that is not one the door said yes to.' })
       return answer(false, { reason: 'not a fetch the door said yes to' })
     }
@@ -611,6 +630,49 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       `tool=${ticket.tool} ${where} bytes=${result.bytes} status=${result.status} hops=${result.hops}${result.cut ? ` cut=${result.cut}` : ''}`)
     answer(true, { text: untrustedText(result, randomUUID().slice(0, 8)) })
   }
+  /**
+   * web.search: make the search for a call the door said yes to. As for a page: that call's own
+   * shim, that query, once, while its turn is live. The key goes to the provider and nowhere else.
+   * The receipt holds the query's length and the number of results, never the query.
+   */
+  async function searchFor(link: ShimLink, callId: unknown, query: unknown): Promise<void> {
+    const answer = (ok: boolean, body: { text?: string; reason?: string }): void => {
+      if (typeof callId === 'string') link.send({ t: 'web_result', callId, ok, ...body })
+    }
+    const ticket = typeof callId === 'string' ? webTickets.get(callId) : undefined
+    if (ticket) webTickets.delete(callId as string)
+    if (!opts.search || !ticket || ticket.link !== link || !('query' in ticket) || ticket.query !== query || turns.get(ticket.turn.turnId) !== ticket.turn) {
+      receipt({ kind: 'egress' }, { verdict: 'deny', rule: 'web.search', why: 'A search was asked for that is not one the door said yes to.' })
+      return answer(false, { reason: 'not a search the door said yes to' })
+    }
+    const tag = about(ticket.turn.event, 'egress', ticket.turn.turnId)
+    const note = `tool=${ticket.tool} query=${ticket.query.length}chars`
+    const since = Date.now() - 3_600_000
+    searches = searches.filter((at) => at > since)
+    if (searches.length >= (opts.search.perHour ?? DEFAULT_SEARCH.perHour)) {
+      receipt(tag, { verdict: 'deny', rule: 'web.search', why: 'This agent has made as many searches as it may in an hour.' }, note)
+      return answer(false, { reason: 'too many searches this hour' })
+    }
+    searches.push(Date.now())
+    let result: Awaited<ReturnType<typeof searchBrave>>
+    try { result = await searchBrave(ticket.query, opts.search) } catch { result = { ok: false, why: 'the search failed' } }
+    if (!result.ok) {
+      receipt(tag, { verdict: 'deny', rule: 'web.search', why: `The search was not made: ${result.why}.` }, note)
+      return answer(false, { reason: result.why })
+    }
+    // Each result says whether web_fetch may read it under the rules as they are now. Whether its host is a
+    // public one is checked when it is fetched, after DNS, like any other address.
+    const fetchable = (u: string): boolean => {
+      const read = readWebUrl(u, fetchSchemes)
+      return !('problem' in read) && decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, {}).verdict === 'allow'
+    }
+    receipt(tag, { verdict: 'allow', rule: 'web.search', why: 'The door made the search and handed the results to the model only.' }, `${note} results=${result.results.length}`)
+    // A provider sees the key, so it could hand it back. It never reaches the model from here.
+    const key = opts.search.key
+    const text = untrustedResults(result.results, fetchable, randomUUID().slice(0, 8))
+    answer(true, { text: key.length >= 8 ? text.split(key).join('[redacted]') : text })
+  }
+
   /** A path as a receipt may hold it: plain characters, short, and nothing secret-shaped. Anything else is counted, not shown. */
   const shownPath = (p: string): string => {
     let secretShaped = true
