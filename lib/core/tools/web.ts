@@ -28,7 +28,8 @@ export const SUGGESTED_WEB: { label: string; entries: string[] }[] = [
   { label: 'cyborg.garden', entries: ['cyborg.garden'] },
   { label: 'Wikipedia (English)', entries: ['en.wikipedia.org'] },
   { label: 'Stack Overflow', entries: ['stackoverflow.com'] },
-  { label: 'Internet Archive', entries: ['archive.org', 'web.archive.org'] },
+  // Only the archive's pages: web.archive.org/save/<address> has the archive fetch any address, query and all.
+  { label: 'Internet Archive', entries: ['archive.org', 'web.archive.org/web'] },
   { label: 'Sefaria', entries: ['www.sefaria.org'] },
   { label: 'Library of Congress', entries: ['www.loc.gov'] },
 ]

@@ -103,3 +103,14 @@ describe('web addresses an agent gives', () => {
     expect(verdict(policyWith(), 'https://en.wikipedia.org/')).toBe('deny')
   })
 })
+
+describe('the suggested sites', () => {
+  it('[U:web-entry] none is a site that fetches another address on request, which would make the list the whole web', () => {
+    // web.archive.org/save/<address> has the Internet Archive fetch that address, query and all.
+    const entries = SUGGESTED_WEB.flatMap((s) => s.entries).map(parseWebEntry)
+    const hosts = egressHostsFor(entries.filter((e): e is WebEntry => !('problem' in e)))
+    expect(egressAllows({ hosts }, 'web.archive.org', '/save/https://example.com/', 'GET')).toBe(false)
+    expect(egressAllows({ hosts }, 'web.archive.org', '/web/2020/https://example.com/', 'GET')).toBe(true)
+  })
+})
+
