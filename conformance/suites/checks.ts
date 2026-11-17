@@ -12,7 +12,7 @@
 // The checks name no harness. Which native tool is a shell, and what the
 // harness is called, come from the HarnessUnderTest the lab was started with.
 import { existsSync, readFileSync } from 'node:fs'
-import { NOTICES } from '../../lib/door/door.ts'
+import { isNotice, NOTICES } from '../../lib/door/door.ts'
 import { startLab, type Lab, type LabOptions } from './lab.ts'
 
 export interface CheckResult { id: string; title: string; pass: boolean; detail: string }
@@ -29,6 +29,8 @@ const F = 'surfaces.fake.'
 const violations = (lab: Lab): number =>
   lab.receipts.all().filter((r) => r.rule === 'turn.known' || r.rule === 'turn.one-reply').length
 const stamped = (lab: Lab): boolean => lab.fake.ledger.every((p) => p.text.includes(`FAKE-MODEL-${lab.nonce}`))
+/** What the harness posted: the room's posts, less the door's own line for a turn with no answer. */
+const replies = (lab: Lab): number => lab.fake.ledger.filter((post) => !isNotice(post.text)).length
 const want = (problems: Outcome, ok: boolean, what: string): void => { if (!ok) problems.push(what) }
 const ask = (lab: Lab, text: string, sender: Parameters<Lab['fake']['say']>[0]['sender'] = 'u-alice'): string =>
   lab.fake.say({ room: 'r-general', sender, mention: true, text })
@@ -51,7 +53,7 @@ export const CHECKS: Check[] = [
       ask(lab, `please ${canary}`)
       await lab.door.idle()
       want(p, lab.model.heard(canary), 'the model never heard the message')
-      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 1, `expected 1 reply, got ${replies(lab)}`)
       want(p, lab.fake.ledger.length > 0 && stamped(lab), 'a post did not come from the scripted model')
       want(p, lab.fake.ledger[0]?.text.startsWith('the answer') === true, 'the post is not the scripted reply')
       want(p, violations(lab) === 0, `${violations(lab)} protocol violations`)
@@ -73,7 +75,7 @@ export const CHECKS: Check[] = [
       await lab.door.idle()
       const turn = lab.model.requests.find((r) => r.body.includes(asked))
       want(p, turn?.body.includes(overheard) === true, 'the overheard line was not in the next turn')
-      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 1, `expected 1 reply, got ${replies(lab)}`)
       return p
     },
   },
@@ -269,7 +271,7 @@ export const CHECKS: Check[] = [
       await lab.door.idle()
       want(p, lab.model.heard(before), 'the first turn did not reach the model')
       want(p, !lab.model.heard(after), 'a message to a closed room reached the model')
-      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 1, `expected 1 reply, got ${replies(lab)}`)
       want(p, lab.door.heartbeat().policyHash !== hash, 'the heartbeat hash did not change')
       want(p, lab.door.heartbeat().caps?.harness === lab.harness.caps.harness, 'the heartbeat does not name the harness')
       return p
@@ -302,7 +304,7 @@ export const CHECKS: Check[] = [
       want(p, lab.model.heard(removed.canary), 'the third turn never reached the model')
       want(p, !existsSync(removed.file), 'a tool the policy removed still ran')
       want(p, toolReceipts(lab).length === allowed, 'a tool the policy removed was still offered: the harness asked to run it')
-      want(p, lab.fake.ledger.length === 3, `expected 3 posts, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 3, `expected 3 replies, got ${replies(lab)}`)
       return p
     },
   },

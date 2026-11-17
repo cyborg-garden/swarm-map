@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "docker",
-  "date": "2026-11-16",
+  "date": "2026-11-17",
   "runner": {
     "kind": "docker",
     "server": "29.5.2",

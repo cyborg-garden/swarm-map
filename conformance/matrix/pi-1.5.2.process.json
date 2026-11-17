@@ -3,7 +3,7 @@
   "version": "1.5.2",
   "harnessBuild": "real",
   "substrate": "process",
-  "date": "2026-11-16",
+  "date": "2026-11-17",
   "model": "scripted",
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
