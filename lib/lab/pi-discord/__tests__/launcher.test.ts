@@ -497,6 +497,21 @@ describe('pi-discord config: web through the door', () => {
     expect(decide(policy, { kind: 'egress', host: 'en.wikipedia.org', path: '/wiki/x', method: 'POST' }, {}).verdict).toBe('deny')
   })
 
+  it('an agent that hears anyone does not read the public web with no yes: strangers would steer the door anywhere', () => {
+    const hearsAnyone = (approval?: string) => parseConfig({ ...(web([], approval, { mode: 'public' }) as object), discord: { ...good().discord, anyoneInChannel: true } })
+    expect(hearsAnyone().errors.join(' ')).toContain('tools.web.approval')
+    expect(hearsAnyone('allow').errors.join(' ')).toContain('tools.web.approval')
+    expect(hearsAnyone('ask').errors).toEqual([])
+    // And a record made anyway: decide() says no to the call, before any address is looked at.
+    const team = policyFor(parseConfig(web([], undefined, { mode: 'public' })).config!)
+    const policy = { ...team, posture: 'public' as const }
+    const room = { id: '710000000000000001', kind: 'channel' as const }
+    const actor = { id: '900000000000000009', display: 'x', isBot: false, isSelf: false, roles: [] }
+    expect(decide(policy, { kind: 'tool', surface: 'discord', room, actor, toolClass: 'network', toolName: 'web_fetch', argsDigest: '' }, {})).toMatchObject({ verdict: 'deny', rule: 'tools.posture' })
+    const asking = { ...policy, tools: { ...policy.tools, allow: [], ask: ['network' as const] } }
+    expect(decide(asking, { kind: 'tool', surface: 'discord', room, actor, toolClass: 'network', toolName: 'web_fetch', argsDigest: '' }, {}).verdict).toBe('ask')
+  })
+
   it('the public web reads any public address: the record says public, and the list is not needed', () => {
     const { config, errors } = parseConfig(web([], undefined, { mode: 'public' }))
     expect(errors).toEqual([])

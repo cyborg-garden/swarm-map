@@ -283,12 +283,15 @@ Tools card write it from a plainer shape:
 - **`approval`** is `allow` (the default) or `ask`, which shows an admin the address or the query
   first, in the room, as any tool in ask mode is shown.
 - **An agent that hears anyone may have it.** A public agent loses shell and file tools; it keeps
-  the web, still read-only and still on the list.
+  the web, still read-only and still on the list. It reads the public web only with `approval:
+  ask`: with no yes, anyone in the room could send the door to any address, and put what the agent
+  knows into it. The launcher refuses that config, and `decide()` says no to a record that has it.
 
 The Tools card offers suggestions as one-click chips. None is on until someone clicks it: the
 project's own GitHub (`github.com`, `api.github.com/repos/…`, `api.github.com/orgs/…` and
 `raw.githubusercontent.com`, each limited to that organisation), `cyborg.garden`,
-`en.wikipedia.org`, `stackoverflow.com`, the Internet Archive (`archive.org`, `web.archive.org`),
+`en.wikipedia.org`, `stackoverflow.com`, the Internet Archive (`archive.org`, and `web.archive.org/web` only: its
+`/save/` path fetches any address on request),
 Sefaria (`www.sefaria.org`) and the Library of Congress (`www.loc.gov`).
 
 ### What the door does for one fetch

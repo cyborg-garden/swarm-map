@@ -157,6 +157,11 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
   if (policy.posture === 'public') {
     if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', 'This tool is not classified, and this agent is public.')
     if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', `Public agents do not get ${e.toolClass} tools.`)
+    // The public web with no yes would let anyone in the room steer the door to any address, and put
+    // what the agent knows into it. A public agent reads the public web only with an admin's yes.
+    if (e.toolClass === 'network' && policy.egress.default === 'public' && !policy.tools.ask.includes('network')) {
+      return end('deny', 'tools.posture', 'A public agent reads the public web only with an admin\'s yes for each address.')
+    }
     trace.push({ rule: 'tools.posture', outcome: 'pass' })
   }
   if (policy.tools.deny.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are on the deny list.`)

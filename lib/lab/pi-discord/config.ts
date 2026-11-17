@@ -214,6 +214,9 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   if (w.approval !== undefined && w.approval !== 'allow' && w.approval !== 'ask') errors.push("tools.web.approval: must be 'allow' or 'ask'")
   if (w.search !== undefined && typeof w.search !== 'boolean') errors.push('tools.web.search: must be true or false')
   const webOn = (Array.isArray(w.allow) && w.allow.length > 0) || w.mode === 'public' || w.search === true
+  if (w.mode === 'public' && d.anyoneInChannel === true && w.approval !== 'ask') {
+    errors.push("tools.web.approval: an agent that hears anyone reads the public web only with an admin's yes. Set approval to 'ask', use an allowlist, or name who it hears")
+  }
   const web = webOn ? {
     ...(w.mode === undefined ? {} : { mode: w.mode as 'allowlist' | 'public' }), allow: w.allow as string[],
     ...(w.approval === undefined ? {} : { approval: w.approval as 'allow' | 'ask' }), ...(w.search === true ? { search: true } : {}),
