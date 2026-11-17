@@ -41,7 +41,11 @@ const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name)
   return i === -1 ? undefined : argv[i + 1]
 }
-const tools = argv.includes('--no-builtin-tools') ? [] : (flag('--tools') ?? 'read,bash,edit,write').split(',')
+// As in the real Pi: --no-tools leaves none at all, --no-builtin-tools leaves an extension's, --tools names every one.
+const tools = argv.includes('--no-tools') ? []
+  : argv.includes('--no-builtin-tools') ? null
+    : (flag('--tools') ?? 'read,bash,edit,write').split(',')
+const declared = (name: string): boolean => (tools === null ? Object.hasOwn(extensionTools, name) : tools.includes(name))
 
 const models = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? '', 'models.json'), 'utf8'))
 const provider = models.providers[flag('--provider') ?? '']
@@ -54,6 +58,9 @@ emit({ type: 'fake_pi', mimics: '1.5.2' })
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>
 const handlers: Record<string, Handler[]> = {}
+type ExtensionTool = { execute(id: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown): Promise<{ content: { type: string; text?: string }[] }> }
+/** Tools an extension registered, by name. Like Pi's, one is declared only when --tools names it. */
+const extensionTools: Record<string, ExtensionTool> = {}
 const waiting = new Map<string, (value: string | undefined) => void>()
 
 const ctx = {
@@ -67,6 +74,14 @@ const ctx = {
         const timer = opts.timeout === undefined ? undefined : setTimeout(() => { waiting.delete(id); resolve(undefined) }, opts.timeout)
         waiting.set(id, (value) => { clearTimeout(timer); waiting.delete(id); resolve(value) })
         emit({ type: 'extension_ui_request', id, method: 'select', title, options, ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) })
+      }),
+    // A dialog for free text: answered by the client, or undefined at the timeout.
+    input: (title: string, _placeholder?: string, opts: { timeout?: number } = {}): Promise<string | undefined> =>
+      new Promise((resolve) => {
+        const id = randomUUID()
+        const timer = opts.timeout === undefined ? undefined : setTimeout(() => { waiting.delete(id); resolve(undefined) }, opts.timeout)
+        waiting.set(id, (value) => { clearTimeout(timer); waiting.delete(id); resolve(value) })
+        emit({ type: 'extension_ui_request', id, method: 'input', title, ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) })
       }),
     // Fire and forget.
     notify: (message: string, notifyType = 'info'): void => {
@@ -85,7 +100,10 @@ for (let i = 0; i < argv.length; i++) {
   if (!file || !existsSync(file)) fatal(file, `Extension path does not exist: ${file}`)
   try {
     const mod = await import(pathToFileURL(file).href)
-    await mod.default({ on: (name: string, handler: Handler) => { (handlers[name] ??= []).push(handler) } })
+    await mod.default({
+      on: (name: string, handler: Handler) => { (handlers[name] ??= []).push(handler) },
+      registerTool: (tool: ExtensionTool & { name: string }) => { extensionTools[tool.name] = tool },
+    })
   } catch (err) {
     fatal(file, `Failed to load extension: ${(err as Error).message}`)
   }
@@ -156,8 +174,12 @@ async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<
   return { text: out === '' ? '(no output)' : out, isError: false }
 }
 
-async function runTool(name: string, args: Record<string, unknown>): Promise<Ran> {
+async function runTool(name: string, args: Record<string, unknown>, id: string): Promise<Ran> {
   try {
+    if (Object.hasOwn(extensionTools, name)) {
+      const out = await extensionTools[name].execute(id, args, undefined, undefined, ctx)
+      return { text: out.content.map((part) => part.text ?? '').join(''), isError: false }
+    }
     if (name === 'bash') return await runBash(args)
     const file = String(args.path ?? '.')
     if (name === 'read') return { text: readFileSync(file, 'utf8'), isError: false }
@@ -198,7 +220,7 @@ async function prompt(id: string, message: string): Promise<void> {
     for (const call of calls) {
       emit({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.function.name })
       let result: { text: string; isError: boolean }
-      if (!tools.includes(call.function.name)) {
+      if (!declared(call.function.name)) {
         // Like the real Pi: a tool that was not declared at start never reaches an extension.
         result = { text: `Tool ${call.function.name} not found`, isError: true }
       } else {
@@ -207,7 +229,7 @@ async function prompt(id: string, message: string): Promise<void> {
         const reason = await blockedBy(call.function.name, call.id, input)
         if (reason !== undefined) result = { text: reason, isError: true }
         else {
-          const ran = await runTool(call.function.name, input)
+          const ran = await runTool(call.function.name, input, call.id)
           result = { text: await resultFor(call.function.name, call.id, input, ran), isError: ran.isError }
         }
       }

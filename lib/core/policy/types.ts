@@ -67,7 +67,11 @@ export interface KeyGrant {
 
 export interface EgressPolicy {
   default: 'deny'
-  hosts: { host: string; methods?: string[] }[]
+  /**
+   * The hosts a web fetch through the door may reach (lib/core/tools/web.ts). A host is matched
+   * exactly. With `paths`, only those path prefixes on it, by whole segments. Only GET is ever made.
+   */
+  hosts: { host: string; methods?: string[]; paths?: string[] }[]
   blockPrivateRanges: true
 }
 

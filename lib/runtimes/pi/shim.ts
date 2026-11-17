@@ -72,7 +72,8 @@ export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: s
     ...(o.resume ? ['--continue'] : []),
     '--provider', 'swarm', '--model', o.model,
     ...(o.systemPrompt !== undefined ? ['--system-prompt', o.systemPrompt] : []),
-    ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-builtin-tools']),
+    // With no tools, none at all: --no-builtin-tools would leave the gate's own web tool declared.
+    ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-tools']),
     '--no-context-files', '--no-skills', '--no-mcp', '--no-extensions', '--no-prompt-templates',
     '-e', o.gate.path,
   ]
@@ -105,8 +106,11 @@ export function sessionDirFor(sessionsDir: string, sessionKey: string): string {
   return path.join(sessionsDir, createHash('sha256').update(sessionKey).digest('hex').slice(0, 16))
 }
 
-/** One running Pi, and the tool list it was started with. */
-interface Live { rpc: PiRpc; tools: string; turnId?: string }
+/**
+ * One running Pi, and the tool list it was started with. `asked` maps Pi's id for a call
+ * the door let through to the id the door knows it by, for the web tool's page.
+ */
+interface Live { rpc: PiRpc; tools: string; turnId?: string; asked: Map<string, string> }
 /** One session: its turns run one at a time, on whichever Pi is live for it. */
 interface Slot { queue: Promise<void>; live?: Live }
 
@@ -136,12 +140,22 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
     }
     const live: Live = {
       tools,
+      asked: new Map(),
       rpc: createPiRpc(proc, {
         gateReadyMs: opts.gateReadyMs,
         // Pi asks through the gate; the sidecar answers. No live turn means no.
         onGate: async (call) => {
           if (!live.turnId) return { allow: false }
-          return client.requestTool(live.turnId, call.tool, call.input)
+          const answer = await client.requestTool(live.turnId, call.tool, call.input, (doorId) => { live.asked.set(String(call.callId), doorId) })
+          if (!answer.allow) live.asked.delete(String(call.callId))
+          return answer
+        },
+        // The web tool's page: asked of the door under the id the call was let through with. The door fetches it, once.
+        onWeb: async (call) => {
+          const doorId = live.asked.get(call.callId)
+          live.asked.delete(call.callId)
+          if (!live.turnId || doorId === undefined) return { ok: false, reason: 'not a call the door let through' }
+          return client.webFetch(doorId, call.url, opts.gateTimeoutMs)
         },
       }),
     }

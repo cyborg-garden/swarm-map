@@ -125,6 +125,22 @@ export const RULES: Rule[] = [
   { id: 'tools.limits', statement: 'A shell call is stopped at a time limit, a call\'s output is cut at a size limit before the model sees it, and a conversation gets a set number of tool calls an hour.',
     klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'gate', tests: ['P:tool-limit'], checks: ['L1', 'L2'] },
 
+  // Web through the door. The cell has no route out: the harness's web tool is a request to the
+  // door, which fetches on the agent's behalf. Each rule is the door's. Each names the shim checks
+  // that show a harness's web tool really goes through the door, and takes what the door hands back.
+  { id: 'web.allow', statement: 'A web fetch is made by the door, by GET only, and only to a host and path on the agent\'s web allowlist. An empty list means no web.',
+    klass: 'security', kind: 'wall', reads: ['egress.hosts', 'tools.allow', 'tools.ask'], surfaces: 'all', enforcer: 'door', tests: ['U:web-entry', 'U:web-url', 'P:web-allow'], checks: ['N1', 'N1+'] },
+  { id: 'web.redirect', statement: 'A redirect is followed only to an address that is on the allowlist too, checked again at every step.',
+    klass: 'security', kind: 'wall', reads: ['egress.hosts'], surfaces: 'all', enforcer: 'door', tests: ['P:web-redirect'], checks: ['N2'] },
+  { id: 'web.private', statement: 'The door never fetches from a private, loopback, link-local or metadata address, checked against every DNS answer and on every redirect, and it connects to the address it checked.',
+    klass: 'security', kind: 'wall', reads: ['egress.blockPrivateRanges'], surfaces: 'all', enforcer: 'door', tests: ['U:web-address', 'P:web-private'], checks: ['N3'] },
+  { id: 'web.no-credentials', statement: 'A web fetch carries no credential, cookie or auth header, whatever the agent asks for.',
+    klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:web-no-credentials'], checks: ['N4'] },
+  { id: 'web.limits', statement: 'A web fetch is cut at a size and a time limit, takes text, HTML, JSON or Markdown only, and an agent gets a set number an hour.',
+    klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:web-limits'], checks: ['N5'] },
+  { id: 'web.untrusted', statement: 'What a web fetch returns goes to the model only, marked as untrusted. The door never posts it, and a receipt holds the host, path and size, never the content.',
+    klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:web-untrusted'], checks: ['N6'] },
+
   // Both model-route rules hold only for a harness whose model wire format has
   // a ModelShape (lib/door/model-shapes.ts). Two exist: OpenAI chat-completions
   // and Anthropic Messages. A harness that speaks anything else has neither rule.

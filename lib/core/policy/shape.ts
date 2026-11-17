@@ -5,6 +5,7 @@
 // value decide() does not recognise can never fall through to "allowed".
 //
 // Returns one line per problem, `<path>: <what is wrong>`. Never throws.
+import { parseWebEntry } from '../tools/web.ts'
 
 const POSTURES = ['private', 'team', 'public']
 const MODES = ['door', 'native']
@@ -124,8 +125,11 @@ export function shapeErrors(policy: unknown): string[] {
   obj('egress', p.egress, (egress) => {
     if (egress.default !== 'deny') bad('egress.default', "'deny'")
     list('egress.hosts', egress.hosts, (hp, h) => obj(hp, h, (host) => {
-      if (!isText(host.host)) bad(`${hp}.host`, 'non-empty text')
-      if (host.methods !== undefined) texts(`${hp}.methods`, host.methods)
+      // Written as the URL parser writes a name: lower case, punycode, no trailing dot, not an address.
+      const read = isText(host.host) ? parseWebEntry(host.host) : undefined
+      if (!read || 'problem' in read || read.host !== host.host || read.path !== '') bad(`${hp}.host`, 'a host name in lower case, with no path, port or wildcard')
+      if (host.methods !== undefined) list(`${hp}.methods`, host.methods, (mp, m) => { if (m !== 'GET') bad(mp, "'GET': the door makes no other kind of request") })
+      if (host.paths !== undefined) list(`${hp}.paths`, host.paths, (pp, v) => { if (typeof v !== 'string' || !/^\/[^\s?#]*[^/\s?#]$/.test(v)) bad(pp, 'a path that starts with / and does not end with one') })
     }))
     if (egress.blockPrivateRanges !== true) bad('egress.blockPrivateRanges', 'true')
   })

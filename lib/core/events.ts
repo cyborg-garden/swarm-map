@@ -50,7 +50,8 @@ export type Event =
   | { kind: 'approval'; surface: SurfaceId; room: RoomRef; approver: Principal }
   | { kind: 'memory'; op: 'read' | 'write'; scope: MemoryScope; room: RoomRef }
   | { kind: 'model'; provider: string; model: string }
-  | { kind: 'egress'; host: string; method: string }
+  /** A web fetch the door is about to make for the agent: the host and path as readWebUrl() wrote them. */
+  | { kind: 'egress'; host: string; method: string; path?: string }
 
 /** Live data the caller fetched. decide() does no I/O. */
 export interface Facts {

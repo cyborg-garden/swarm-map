@@ -6,7 +6,7 @@
 // `mode` makes it misbehave on purpose, so tests can show the door holds when
 // a shim does not keep its side of the protocol.
 import type { Capabilities, Envelope } from '../protocol.ts'
-import { connectShim, type ShimClient } from '../shim-client.ts'
+import { connectShim, type ShimClient, type WebAnswer } from '../shim-client.ts'
 
 export const ECHO_CAPS: Capabilities = {
   harness: 'echo',
@@ -14,7 +14,7 @@ export const ECHO_CAPS: Capabilities = {
   ownsChat: false,
   toolVeto: 'pre-call',
   approvalRoundTrip: false,
-  toolMap: { bash: 'shell', read: 'file_read', fetch: 'network' },
+  toolMap: { bash: 'shell', read: 'file_read', fetch: 'network', post: 'chat_post' },
   modelBaseUrl: false,
   mcpClient: false,
   nativeMemory: 'none',
@@ -43,6 +43,8 @@ export interface EchoShim {
   toolsRan: { turnId: string; tool: string }[]
   /** Answers the shim got to its tool requests. */
   verdicts: { tool: string; allow: boolean; reason?: string; hash?: string }[]
+  /** What the door handed back for each `!web <url>`, in order: the page, or why not. */
+  pages: WebAnswer[]
   client: ShimClient
   mode: EchoMode
   close(): void
@@ -58,7 +60,7 @@ export async function startEchoShim(opts: {
     verdictTimeoutMs: opts.verdictTimeoutMs,
   })
   const shim: EchoShim = {
-    heard: [], toolsRan: [], verdicts: [], client, mode: opts.mode ?? 'normal', close: () => client.close(),
+    heard: [], toolsRan: [], verdicts: [], pages: [], client, mode: opts.mode ?? 'normal', close: () => client.close(),
   }
 
   const onTurn = async (env: Envelope): Promise<void> => {
@@ -75,6 +77,13 @@ export async function startEchoShim(opts: {
         shim.toolsRan.push({ turnId, tool })
         client.send({ t: 'tool_done', callId: `done-${turnId}-${tool}`, ok: true, summary: 'ran' })
       }
+    }
+    // `!web <url>`: the web tool, as a harness's would be: ask the door, and on a yes ask it for the page.
+    for (const [, url] of env.text.matchAll(/!web (\S+)/g)) {
+      let callId = ''
+      const answer = await client.requestTool(turnId, 'fetch', { url }, (id) => { callId = id })
+      shim.verdicts.push({ tool: 'fetch', ...answer })
+      shim.pages.push(answer.allow && callId ? await client.webFetch(callId, url) : { ok: false, reason: answer.reason ?? 'not allowed' })
     }
     const reply = { t: 'reply' as const, turnId, text: `echo: ${env.text}`, attachments: [] }
     switch (shim.mode) {

@@ -15,6 +15,8 @@ export const PI_TOOL_MAP: Record<string, ToolClass> = {
   edit: 'file_write',
   write: 'file_write',
   bash: 'shell',
+  // Not Pi's own: the gate adds it. It asks the door, which fetches the page (lib/door/web-fetch.ts).
+  web_fetch: 'network',
 }
 
 export const PI_CAPS: Capabilities = {

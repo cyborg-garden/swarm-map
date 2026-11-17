@@ -6,6 +6,7 @@ import { assertRendered, UnrenderedError } from './policy/deferred.ts'
 import { shapeErrors } from './policy/shape.ts'
 import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy, ToolClass } from './policy/types.ts'
 import { sessionKeyFor } from './session-key.ts'
+import { egressAllows } from './tools/web.ts'
 
 type Trace = Decision['trace']
 type Privilege = Decision['privilege']
@@ -217,18 +218,35 @@ function decideOutbound(policy: PolicyRecord, e: Extract<Event, { kind: 'outboun
   return end('allow', 'The room is still approved.')
 }
 
+/**
+ * May the door fetch this address for the agent? Only by GET, and only a host on the
+ * list, with a path under one of its prefixes when it names any. The door asks this for
+ * the address the agent gave and again for every redirect, under the policy as it is then.
+ * Whether the host's address is a private one is the door's to check: it needs DNS.
+ */
+function decideEgress(policy: PolicyRecord, e: Extract<Event, { kind: 'egress' }>): Partial_ {
+  const end = (verdict: 'allow' | 'deny', why: string): Partial_ => ({
+    verdict, rule: 'web.allow', why, privilege: 'guest',
+    trace: [{ rule: 'web.allow', outcome: verdict === 'allow' ? 'pass' : 'fail' }],
+  })
+  if (e.method !== 'GET') return end('deny', 'The door only reads from the web: GET, nothing else.')
+  if (typeof e.host !== 'string' || typeof (e.path ?? '/') !== 'string') return end('deny', 'That is not an address.')
+  return egressAllows(policy.egress, e.host, e.path ?? '/', e.method)
+    ? end('allow', 'That address is on the web allowlist.')
+    : end('deny', 'That address is not on the web allowlist.')
+}
+
 /** Event kinds this slice has no rule for, and the rule that will cover each. */
 const UNBUILT_EVENTS: Partial<Record<Event['kind'], string>> = {
   invite: 'invite.policy',
   memory: 'mem.scope',
-  egress: 'sub.g1',
 }
 
 /** The answer under a record that is not valid: nothing is heard, posted, run or spent. */
 function refuseAll(event: Event, problem: string): Partial_ | undefined {
   const verdict: Verdict | undefined =
     event.kind === 'inbound' || event.kind === 'outbound' ? 'drop'
-      : event.kind === 'tool' || event.kind === 'model' || event.kind === 'approval' ? 'deny'
+      : event.kind === 'tool' || event.kind === 'model' || event.kind === 'approval' || event.kind === 'egress' ? 'deny'
         : undefined
   if (!verdict) return undefined
   return {
@@ -259,6 +277,7 @@ export function decide(policy: PolicyRecord, event: Event, facts: Facts): Decisi
     case 'approval': return done(decideApproval(policy, event))
     case 'model': return done(decideModel(policy, facts))
     case 'outbound': return done(decideOutbound(policy, event, facts))
+    case 'egress': return done(decideEgress(policy, event))
     default: throw new UnrenderedError(`event.${event.kind}`, UNBUILT_EVENTS[event.kind] ?? 'unknown')
   }
 }

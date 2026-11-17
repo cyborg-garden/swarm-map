@@ -32,7 +32,6 @@ export const DEFERRED_FIELDS: DeferredField[] = [
   { path: 'tools.browserGuard', rule: 'tools.browser-guard', atRest: is('off') },
   { path: 'keys', rule: 'keys.not-in-cell', atRest: empty },
   { path: 'egress.default', rule: 'sub.g1', atRest: is('deny') },
-  { path: 'egress.hosts', rule: 'sub.g1', atRest: empty },
   { path: 'egress.blockPrivateRanges', rule: 'sub.g1', atRest: is(true) },
   { path: 'memory.threadsPoolIntoParent', rule: 'mem.scope', atRest: is(true) },
   { path: 'memory.team.dm', rule: 'mem.team-read-only', atRest: is('none') },
@@ -46,7 +45,7 @@ export const DEFERRED_FIELDS: DeferredField[] = [
 ]
 
 /** Committed count. May only go down. */
-export const DEFERRED_COUNT_CEILING = 21
+export const DEFERRED_COUNT_CEILING = 20
 
 export class UnrenderedError extends Error {
   readonly path: string
