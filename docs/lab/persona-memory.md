@@ -112,6 +112,21 @@ The agent is told the truth about all of this in its system prompt: that the doo
 that it changes them only with the tool, that a note about a person needs that person to ask, and
 that anyone in the room may be told what the notes say.
 
+### Notes and the web
+
+With the web on (docs/lab/tools-slice.md), a page or a search result is untrusted text, so:
+
+- **Fetched text never writes a note.** Once a conversation has been handed a page or search
+  results, the door refuses its `memory_note` calls (`after-web`), in that turn and later ones,
+  until the conversation starts again. A person can still ask to be forgotten.
+- **A web call cannot carry a note out.** An address or a query that holds the text of a note the
+  conversation was given is refused before anything is looked up. A note that is reworded or
+  encoded is not caught.
+- **Notes are never on the web.** They live in the state folder, and the dashboard that shows them
+  is on a private address, which the door never fetches.
+
+Check M7 shows the first with the harness in the loop.
+
 ### Privacy limits the operator should know
 
 - **A person's notes go only to that person or an admin.** When anyone else speaks, the door leaves
@@ -201,6 +216,7 @@ that must turn it red.
 | M4 | The agent changes notes only through the door's tool: a file tool aimed at them changes nothing | The notes' folder put inside the scratch folder |
 | M5 | The launcher's statement reaches the model whole, after the persona | Pi started without the launcher's text |
 | M6 | A wipe really wipes: nothing of the notes reaches the model again | Notes read once and kept in memory |
+| M7 | Fetched text never writes a note: after a page, the door refuses the notes | A door that lets a conversation that read a page change the notes |
 
 In the Docker cell, M2, M3, M4 and M6 run like the rest. M1 and M5 need a second lab or a prompt
 of their own, so the launcher's own Docker suite (`pi-discord-memory.docker.test.ts`) covers them

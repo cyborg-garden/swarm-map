@@ -179,6 +179,10 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
         what: 'The notes\' folder put inside the scratch folder, where a file tool can write',
         red: ['M4', 'M1'], green: memoryBut('M4', 'M1'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-in-scratch' },
       },
+      'memory-after-web': {
+        what: 'A door that lets a conversation that has read a page change the notes',
+        red: ['M7'], green: memoryBut('M7'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-after-web' },
+      },
       'no-system-prompt': {
         what: 'Pi started without the launcher\'s text, so it keeps its own introduction',
         red: ['M5'], green: memoryBut('M5'), checks: MEMORY,

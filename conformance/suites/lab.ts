@@ -224,7 +224,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
       web: webOptions, ...(webFetcher ? { webFetcher } : {}),
       // A lab with no search key has none, unless the rig is broken to hand the door one anyway.
-      ...(o.searchKey !== false || o.rig === 'search-key-anyway' ? { search: { key: secrets.search, endpoint: web.search.endpoint } } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}),
+      ...(o.searchKey !== false || o.rig === 'search-key-anyway' ? { search: { key: secrets.search, endpoint: web.search.endpoint } } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}), ...(o.rig === 'memory-after-web' ? { notesAfterWeb: true } : {}),
     })
     closers.push(() => door.close())
     const route = await startModelRoute({

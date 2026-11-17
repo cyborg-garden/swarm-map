@@ -74,6 +74,8 @@ export interface DoorOptions {
   search?: SearchOptions
   /** Test hook: decide a web call with no look at the allowlist, to prove the check for it goes red without one. */
   webListUnchecked?: boolean
+  /** Test hook: let a conversation that has read the web change the notes, to prove the check for it (M7) goes red without it. */
+  notesAfterWeb?: boolean
 }
 
 export interface Door {
@@ -206,6 +208,21 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   // own transcript holds nothing of it. A shim that connects again may remember nothing: it starts from none.
   const notesGiven = new Map<string, { hash: string; lines: Set<string> }>()
   const noteLines = (notes: string | undefined): string[] => (notes ?? '').split('\n').filter((l) => l.startsWith('- '))
+  // mem.notes and the web: the conversations that have been handed a page or search results. Their transcript
+  // holds untrusted text from the web, so they may not change the notes until they start again.
+  const readTheWeb = new Set<string>()
+  /** The text of each note line, without its "- " or "- [id] name: ", in the plain form a web call is compared in. */
+  const plain = (t: string): string => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const noteTexts = (lines: Iterable<string>): string[] => [...lines]
+    .map((l) => plain(l.replace(/^- (\[[^\]]*\] [^:]*: )?/, '')))
+    .filter((t) => t.length >= 8)
+  /** Whether a web call's address or query carries a note this conversation holds. A note is not sent out through the web. */
+  const carriesANote = (sessionKey: string, said: string): boolean => {
+    let decoded = said
+    try { decoded = decodeURIComponent(said.replace(/\+/g, ' ')) } catch { /* compared as it is */ }
+    const out = ` ${plain(decoded)} `
+    return noteTexts(notesGiven.get(sessionKey)?.lines ?? []).some((t) => out.includes(` ${t} `))
+  }
 
   // idle() bookkeeping: messages being handled plus live turns.
   let busy = 0
@@ -406,6 +423,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       // A note this conversation was given, or wrote, is gone: it starts again, so the harness holds nothing of it.
       if (before !== undefined && [...before.lines].some((line) => !now.includes(line))) {
         shim.link.send({ t: 'reset', sessionKey })
+        readTheWeb.delete(sessionKey)
         receipt(about(e, 'inbound'), { verdict: 'deliver', rule: 'mem.notes', why: 'A note this conversation held was removed, so the conversation was started again without it.' })
         before = undefined
       }
@@ -552,6 +570,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
               || typeof input.query !== 'string' || input.query.trim() === '' || input.query.length > MAX_QUERY_CHARS) {
               return refuse('web.search', `A search takes one query of 1 to ${MAX_QUERY_CHARS} characters and nothing else.`)
             }
+            if (carriesANote(turn.sessionKey, input.query)) return refuse('mem.notes', 'A search may not carry the room\'s notes out.')
             web = { query: input.query }
           }
           if (toolClass === 'network') {
@@ -563,6 +582,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             if ('problem' in read) return refuse('web.allow', `That address is refused: ${read.problem}.`)
             const e2 = decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, facts)
             if (e2.verdict !== 'allow' && !opts.webListUnchecked) return refuse(e2.rule, e2.why)
+            if (carriesANote(turn.sessionKey, input.url as string)) return refuse('mem.notes', 'A web address may not carry the room\'s notes out.')
             web = { url: input.url as string }
           }
 
@@ -579,6 +599,15 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             if (toolName !== MEMORY_TOOL) return refuse('mem.notes', 'Notes change only through the door\'s own tool.')
             if (d.verdict !== 'allow') return refuse('mem.notes', 'Notes are written or refused at once, never held for an admin.')
             if (!opts.memory) return refuse('mem.notes', 'This agent keeps no notes.')
+            // Fetched text must never write a note. Taking a person's own notes down ("forget me") is still let through.
+            const input = msg.input as Record<string, unknown> | null
+            const forgetting = input !== null && typeof input === 'object' && input.file === 'people' && input.op === 'remove'
+            if (readTheWeb.has(turn.sessionKey) && !forgetting && !opts.notesAfterWeb) {
+              const why = 'This conversation has read from the web, so it cannot change the notes until it starts again. Notes come from the people here, never from a page.'
+              receipt(tag, { verdict: 'deny', rule: 'mem.notes', why }, `${note} result=after-web`)
+              link.send({ t: 'tool_verdict', callId: msg.callId, allow: false, reason: `Not saved: ${why}` })
+              return
+            }
             const done = opts.memory.apply(roomKey(e), msg.input, {
               speaker: { id: e.sender.id, display: e.sender.display }, asked: ASKED_TO_REMEMBER.test(e.text),
               // On an agent anyone can talk to, only an admin's turn changes what the whole room is given.
@@ -704,6 +733,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     }
     receipt({ ...tag, bytes: result.bytes }, { verdict: 'allow', rule: 'web.allow', why: 'The door fetched the page and handed it to the model only.' },
       `tool=${ticket.tool} ${where} bytes=${result.bytes} status=${result.status} hops=${result.hops}${result.cut ? ` cut=${result.cut}` : ''}`)
+    readTheWeb.add(ticket.turn.sessionKey)
     answer(true, { text: untrustedText(result, randomUUID().slice(0, 8)) })
   }
   /**
@@ -746,6 +776,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     // A provider sees the key, so it could hand it back. It never reaches the model from here.
     const key = opts.search.key
     const text = untrustedResults(result.results, fetchable, randomUUID().slice(0, 8))
+    readTheWeb.add(ticket.turn.sessionKey)
     answer(true, { text: key.length >= 8 ? text.split(key).join('[redacted]') : text })
   }
 
@@ -761,6 +792,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     onShim: (link, caps) => {
       shim = { link, caps }
       notesGiven.clear()
+      readTheWeb.clear()
       link.onMessage((msg) => fromShim(link, caps, msg))
       link.onClose(() => { if (shim?.link === link) shim = undefined })
     },

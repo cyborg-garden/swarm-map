@@ -8,7 +8,7 @@
 //   memory-in-scratch  the notes' folder is inside the scratch folder, where a file tool can write (set up by the lab)
 import type { MemoryStore } from '../../lib/door/memory.ts'
 
-export type BrokenMemory = 'memory-one-room' | 'memory-no-checks' | 'memory-cached' | 'memory-in-scratch'
+export type BrokenMemory = 'memory-one-room' | 'memory-no-checks' | 'memory-cached' | 'memory-in-scratch' | 'memory-after-web'
 
 export function brokenMemoryStore(rig: string | undefined, store: MemoryStore): MemoryStore {
   if (rig === 'memory-one-room') {
