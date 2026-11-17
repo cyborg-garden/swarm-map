@@ -7,7 +7,7 @@ import { applyPatch, loadFixturePolicy } from '../../../conformance/scenarios/lo
 import { decide } from '../decide.ts'
 import { withHash } from '../policy/canonical.ts'
 import { validatePolicy } from '../policy/validate.ts'
-import { egressHostsFor, parseWebEntry, readWebUrl, SUGGESTED_WEB, webEntriesOf, type WebEntry } from '../tools/web.ts'
+import { egressAllows, egressHostsFor, parseWebEntry, readWebUrl, SUGGESTED_WEB, webEntriesOf, type WebEntry } from '../tools/web.ts'
 
 const entries = (...raw: string[]): WebEntry[] => raw.map((r) => {
   const e = parseWebEntry(r)
@@ -85,6 +85,18 @@ describe('web addresses an agent gives', () => {
       'https://en.wikipedia.org\\@evil.com/', 'javascript:alert(1)', '', 'x'.repeat(3000),
     ]) expect(readWebUrl(url), url).toHaveProperty('problem')
     expect(readWebUrl(42)).toHaveProperty('problem')
+  })
+
+  it('[U:web-url] an escaped slash, backslash or dot under an allowed prefix is refused, so the site cannot read it as another path', () => {
+    for (const url of ['https://github.com/cyborg-garden/a%2F..%2F..%2Fother-org', 'https://github.com/cyborg-garden/a%5c..%5cother-org', 'https://github.com/cyborg-garden/%2E%2E%2Fother-org']) {
+      expect(readWebUrl(url), url).toHaveProperty('problem')
+    }
+  })
+
+  it('[U:web-url] the list itself allows GET only, whoever asks it', () => {
+    const { egress } = policyWith('en.wikipedia.org')
+    expect(egressAllows(egress, 'en.wikipedia.org', '/', 'GET')).toBe(true)
+    for (const m of ['POST', 'PUT', 'DELETE', 'get', 'HEAD']) expect(egressAllows(egress, 'en.wikipedia.org', '/', m), m).toBe(false)
   })
 
   it('[U:web-url] an empty list allows nothing', () => {

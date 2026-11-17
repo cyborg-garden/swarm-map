@@ -122,6 +122,30 @@ describe('web: through the door, on the list only', () => {
     expect(w.seen.length).toBe(1)
   })
 
+  it('[P:web-allow] an admin\'s no, or a turn that is over, leaves nothing to fetch, even for a shim that asks anyway', async () => {
+    const { r, w } = await start(team({ 'tools.allow': [], 'tools.ask': ['network'] }, 'site.test'), { caps: { approvalRoundTrip: true }, mode: 'never-settle', door: { approvalTimeoutMs: 3000, turnDeadlineMs: 1500 } })
+    w.page('site.test', '/a', html('NO'))
+    r.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: 'hold' })
+    await expect.poll(() => r.shim.heard.length).toBe(1)
+    const turnId = r.shim.heard[0].turnId
+    let denied = ''
+    const asked = r.shim.client.requestTool(turnId, 'fetch', { url: 'http://site.test/a' }, (x) => { denied = x })
+    await expect.poll(() => r.fake.ledger.filter((p) => p.text.startsWith('Approval needed.')).length).toBe(1)
+    const req = r.fake.ledger.find((p) => p.text.startsWith('Approval needed.'))!
+    r.fake.say({ room: 'r-general', sender: 'u-root', text: 'deny', replyTo: req.id })
+    expect(await asked).toMatchObject({ allow: false })
+    expect(await r.shim.client.webFetch(denied, 'http://site.test/a')).toMatchObject({ ok: false })
+    // A yes, then the turn ends before the page is asked for.
+    let late = ''
+    const second = r.shim.client.requestTool(turnId, 'fetch', { url: 'http://site.test/a' }, (x) => { late = x })
+    await expect.poll(() => r.fake.ledger.filter((p) => p.text.startsWith('Approval needed.')).length).toBe(2)
+    r.fake.say({ room: 'r-general', sender: 'u-root', text: 'approve', replyTo: r.fake.ledger.filter((p) => p.text.startsWith('Approval needed.'))[1].id })
+    expect(await second).toMatchObject({ allow: true })
+    await r.door.idle()
+    expect(await r.shim.client.webFetch(late, 'http://site.test/a')).toMatchObject({ ok: false })
+    expect(w.seen).toEqual([])
+  })
+
   it('[P:web-allow] in ask mode the admin is shown the address, and the page is fetched only after a yes', async () => {
     const { r, w } = await start(team({ 'tools.allow': [], 'tools.ask': ['network'] }, 'site.test'), { caps: { approvalRoundTrip: true }, door: { approvalTimeoutMs: 3000 } })
     w.page('site.test', '/a', html('ASKED'))
@@ -264,6 +288,14 @@ describe('web: limits', () => {
     expect(page.text).toContain('cut at the size limit')
     expect(Buffer.byteLength(page.text!)).toBeLessThan(4600)
     expect(Number(/bytes=(\d+)/.exec(egress(r)[0].note ?? '')?.[1])).toBeLessThanOrEqual(50_000)
+  })
+
+  it('[P:web-limits] a body is not read past the size limit, and the receipt says it was cut', async () => {
+    const { r, w } = await start(team({}, 'site.test'), { limits: { bodyBytes: 1000, textBytes: 15_000 } })
+    w.page('site.test', '/big', (_req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('q'.repeat(500_000)) })
+    const page = await fetchVia(r, 'http://site.test/big')
+    expect(page.text).toContain('cut at the size limit')
+    expect(egress(r)[0].note).toMatch(/bytes=1000 .*cut=size$/)
   })
 
   it('[P:web-limits] a site that drips is cut at the time limit, counted on the clock across the whole fetch', async () => {
