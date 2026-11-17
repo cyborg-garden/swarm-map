@@ -387,6 +387,21 @@ export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMIT
 export const KEPT_SCRATCH_FILE = 'scratch.tar'
 /** The most a kept folder may take: the folder's own size, and a little for the tar's headers. */
 export const keptScratchMaxBytes = (mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): number => (mb + 1) * 1024 * 1024
+/** Beside the kept folder: the tool rules it was kept under. */
+export const KEPT_SCRATCH_RULES_FILE = 'scratch.json'
+
+/**
+ * What to do with a kept folder when the agent starts. It is put back only under the tool rules it was
+ * kept under. Rules that let the agent write a file without asking can leave a script there; put back
+ * under rules where the shell asks, an admin would approve only the script's name (the same reason the
+ * rules refuse shell asking while writing files does not). So a copy kept under other rules, or with no
+ * record of them, is removed, and so is any copy once keeping is switched off.
+ */
+export function keptScratchPlan(o: { keep: boolean; rulesNow: string; kept: { size: number; rules: string | undefined } | undefined }): 'none' | 'restore' | 'drop' {
+  if (o.kept === undefined) return 'none'
+  if (!o.keep || o.kept.rules !== o.rulesNow || o.kept.size > keptScratchMaxBytes()) return 'drop'
+  return 'restore'
+}
 
 export function scratchSaveArgs(project: string): string[] {
   if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)

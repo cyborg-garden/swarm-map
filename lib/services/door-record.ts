@@ -84,6 +84,8 @@ export function doorAgentPaths(dataDir: string, id: string) {
     memory: path.join(dir, 'state', 'memory'),
     /** A kept scratch folder, as a tar the cell made. The launcher's KEPT_SCRATCH_FILE. Never unpacked on this machine. */
     keptScratch: path.join(dir, 'state', 'scratch.tar'),
+    /** The tool rules the kept folder was kept under (the launcher's KEPT_SCRATCH_RULES_FILE). */
+    keptScratchRules: path.join(dir, 'state', 'scratch.json'),
   }
 }
 

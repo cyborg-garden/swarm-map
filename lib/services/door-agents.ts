@@ -419,6 +419,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     const record = this.record(id)
     if (this.statusOf(id, record).state === 'running') throw new DoorError(409, 'Stop the agent first. Its scratch folder is kept again when it stops, so wiping it now would not empty it')
     fs.rmSync(doorAgentPaths(this.dataDir, id).keptScratch, { force: true })
+    fs.rmSync(doorAgentPaths(this.dataDir, id).keptScratchRules, { force: true })
     this.audit.append({ who: 'admin', what: 'door:scratch-wipe', target: record.name })
     return this.memory(id)
   }

@@ -148,6 +148,22 @@ describe('pi-discord: persona, notes and a kept scratch folder, across a stop an
     expect(logs.findIndex((l) => l === 'the kept scratch folder was put back')).toBeGreaterThan(logs.findLastIndex((l) => /started again/.test(l)))
   }, 240_000)
 
+  it('with the tool rules changed, the kept folder is not put back, and the copy is removed', async () => {
+    await running?.stop()
+    running = undefined
+    expect(existsSync(path.join(stateDir, KEPT_SCRATCH_FILE))).toBe(true)
+    const changed = parseConfig({ ...JSON.parse(JSON.stringify(config)), tools: { ...config.tools, mode: { file_write: 'ask' } } }, { allowLoopbackModel: true })
+    expect(changed.errors).toEqual([])
+    logs.length = 0
+    running = await start({ config: changed.config!, secrets, stateDir, log: (line) => { logs.push(line) }, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
+    expect(logs).toContain('the kept scratch folder was kept under other tool rules, so it was removed and the folder starts empty')
+    expect(inCell(`ls -A ${WORK}; echo LISTED`).trim()).toBe('LISTED')
+    expect(existsSync(path.join(stateDir, KEPT_SCRATCH_FILE))).toBe(false)
+    // Put the folder back in place for the next check, under the first rules.
+    await running.stop()
+    running = await start({ config, secrets, stateDir, log: () => {}, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
+  }, 240_000)
+
   it('wiped, the notes and the kept folder are gone after the next start, and nothing of them reaches the model', async () => {
     await running?.stop()
     running = undefined

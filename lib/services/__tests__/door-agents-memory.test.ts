@@ -9,7 +9,7 @@ import os from 'os'
 import path from 'path'
 import { createMemoryStore } from '@/lib/door/memory'
 import { createSanitizer } from '@/lib/door/sanitizer'
-import { KEPT_SCRATCH_FILE } from '@/lib/lab/pi-discord/cell'
+import { KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE } from '@/lib/lab/pi-discord/cell'
 import { memoryDir } from '@/lib/lab/pi-discord/launch'
 import { defaultPersona } from '@/lib/lab/pi-discord/persona'
 import { AuditService } from '../audit'
@@ -83,6 +83,7 @@ describe('a new door agent', () => {
     const p = doorAgentPaths(dataDir, 'h_fern')
     expect(p.memory).toBe(memoryDir(p.stateDir))
     expect(path.basename(p.keptScratch)).toBe(KEPT_SCRATCH_FILE)
+    expect(path.basename(p.keptScratchRules)).toBe(KEPT_SCRATCH_RULES_FILE)
   })
 })
 
@@ -119,6 +120,7 @@ describe('the Memory tab', () => {
     const record = oldAgent()
     const p = doorAgentPaths(dataDir, record.id)
     fs.writeFileSync(p.keptScratch, Buffer.alloc(2048))
+    fs.writeFileSync(p.keptScratchRules, '{}')
     expect(svc.memory(record.id).scratch).toMatchObject({ bytes: 2048, kept: false })
     fs.writeFileSync(path.join(p.stateDir, 'run.json'), JSON.stringify({ pid: 777, policyHash: 'x' }))
     live.add(777)
@@ -127,5 +129,6 @@ describe('the Memory tab', () => {
     live.clear()
     expect(svc.wipe(record.id, { room: null, all: 'scratch' }).scratch).toBeNull()
     expect(fs.existsSync(p.keptScratch)).toBe(false)
+    expect(fs.existsSync(p.keptScratchRules)).toBe(false)
   })
 })

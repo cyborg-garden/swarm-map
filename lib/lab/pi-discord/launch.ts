@@ -23,8 +23,8 @@ import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
-import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, keptScratchMaxBytes, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
-import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE, keptScratchPlan, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
+import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, toolModes, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -174,23 +174,39 @@ export async function start(o: StartOptions): Promise<Running> {
   // tools.keepScratch: the scratch folder as the cell left it at the last stop, put back in the new cell.
   const keep = o.config.tools?.keepScratch === true
   const keptFile = path.join(stateDir, KEPT_SCRATCH_FILE)
+  const keptRulesFile = path.join(stateDir, KEPT_SCRATCH_RULES_FILE)
+  // The tool rules the folder is kept under. It comes back only under the same ones (keptScratchPlan).
+  const rulesNow = JSON.stringify(toolModes(o.config))
   let cellIsUp = false
+  const dropKept = (): void => { rmSync(keptFile, { force: true }); rmSync(keptRulesFile, { force: true }) }
   const restoreScratch = (): void => {
-    if (!keep || !existsSync(keptFile)) return
-    if (statSync(keptFile).size > keptScratchMaxBytes()) { o.log('the kept scratch folder is bigger than the folder may be, so it was not put back'); return }
-    o.log(writeScratch(project, readFileSync(keptFile)) ? 'the kept scratch folder was put back' : 'the kept scratch folder could not be put back, so the folder starts empty')
+    let rules: string | undefined
+    try { rules = (JSON.parse(readFileSync(keptRulesFile, 'utf8')) as { rules?: unknown }).rules as string | undefined } catch { rules = undefined }
+    const kept = existsSync(keptFile) ? { size: statSync(keptFile).size, rules: typeof rules === 'string' ? rules : undefined } : undefined
+    const plan = keptScratchPlan({ keep, rulesNow, kept })
+    if (plan === 'none') return
+    if (plan === 'drop') {
+      dropKept()
+      o.log(!keep ? 'keeping the scratch folder is off, so the kept copy was removed'
+        : kept!.rules !== rulesNow ? 'the kept scratch folder was kept under other tool rules, so it was removed and the folder starts empty'
+          : 'the kept scratch folder is bigger than the folder may be, so it was removed and the folder starts empty')
+      return
+    }
+    o.log(writeScratch(project, readFileSync(keptFile)) ? 'the kept scratch folder was put back' : 'the kept scratch folder could not be put back whole, so some of it may be missing')
   }
   const saveScratch = (): void => {
     if (!keep || !cellIsUp) return
     const { tar, why } = readScratch(project)
     if (!tar) {
       // A copy from an earlier stop would come back looking current. It is removed rather than kept stale.
-      rmSync(keptFile, { force: true })
+      dropKept()
       o.log(`the scratch folder was not kept: ${why}`)
       return
     }
     writeFileSync(`${keptFile}.tmp`, tar, { mode: 0o600 })
+    writeFileSync(`${keptRulesFile}.tmp`, JSON.stringify({ rules: rulesNow }) + '\n', { mode: 0o600 })
     renameSync(`${keptFile}.tmp`, keptFile)
+    renameSync(`${keptRulesFile}.tmp`, keptRulesFile)
     o.log(`the scratch folder was kept (${tar.length} bytes)`)
   }
 
