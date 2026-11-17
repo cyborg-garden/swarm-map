@@ -125,4 +125,37 @@ describe('memory notes kept by the door', () => {
     expect(JSON.stringify(s.rooms())).not.toContain(FAKE_KEY)
     expect(readFileSync(file, 'utf8')).toContain(FAKE_KEY)
   })
+
+  it('[U:mem] "forget me": a person takes down every note of their own at once, and nobody else\'s', () => {
+    const { s } = store()
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes ferns' }, ADA_ASKED)
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'is learning Welsh' }, ADA_ASKED)
+    s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes moss' }, BO_ASKED)
+    // No exact note is needed: no old and no text means all of the speaker's own notes.
+    expect(s.apply('fake:r-a', { file: 'people', op: 'remove' }, ADA)).toMatchObject({ ok: true, code: 'remove' })
+    expect(s.render('fake:r-a')).toBe('People who asked to be remembered:\n- [u-bo] Bo: likes moss')
+    // With nothing of theirs left, it says so.
+    expect(s.apply('fake:r-a', { file: 'people', op: 'remove' }, ADA)).toMatchObject({ ok: false, code: 'no-match' })
+    // It never takes down a whole room or thread file.
+    s.apply('fake:r-a', { file: 'room', op: 'add', text: 'plain' }, ADA)
+    expect(s.apply('fake:r-a', { file: 'room', op: 'remove' }, ADA)).toMatchObject({ ok: false, code: 'no-match' })
+    expect(s.render('fake:r-a')).toContain('plain')
+  })
+
+  it('[U:mem] one person cannot fill the people file and so keep everyone else from being remembered', () => {
+    const { s } = store()
+    let kept = 0
+    for (let i = 0; i < 40; i++) if (s.apply('fake:r-a', { file: 'people', op: 'add', text: `note ${i} `.padEnd(120, 'x') }, ADA_ASKED).ok) kept++
+    expect(kept).toBe(MEMORY_LIMITS.notesPerPerson)
+    expect(s.apply('fake:r-a', { file: 'people', op: 'add', text: 'one more' }, ADA_ASKED)).toMatchObject({ ok: false, code: 'full' })
+    expect(s.apply('fake:r-a', { file: 'people', op: 'add', text: 'likes moss' }, BO_ASKED)).toMatchObject({ ok: true })
+  })
+
+  it('[U:mem] a note with invisible or direction-changing characters is refused', () => {
+    const { s } = store()
+    for (const text of ['ping 1234567​89012345678', 'safe ‮etirw', 'zero⁠width', 'a﻿b']) {
+      expect(s.apply('fake:r-a', { file: 'room', op: 'add', text }, ADA)).toMatchObject({ ok: false, code: 'bad-note' })
+    }
+    expect(s.render('fake:r-a')).toBeUndefined()
+  })
 })

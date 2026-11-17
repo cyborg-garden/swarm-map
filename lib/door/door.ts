@@ -14,7 +14,7 @@ import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
 import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
 import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
-import { ASKED_TO_REMEMBER, type MemoryStore } from './memory.ts'
+import { ASKED_TO_REMEMBER, MEMORY_TOOL, type MemoryStore } from './memory.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
 import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
@@ -164,10 +164,13 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const roomKey = (e: ConnectorInbound): string => `${e.surface}:${e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id}`
   const botKey = (e: ConnectorInbound): string => ((policy.surfaces[e.surface]?.bots.ids ?? []).includes(e.sender.id) ? e.sender.id : '')
   const runOf = (e: ConnectorInbound): number => botRuns.get(roomKey(e))?.get(botKey(e)) ?? 0
-  // mem.notes: the notes each conversation was last given, by a hash of them, on the shim that is
-  // connected now. A conversation is given its room's notes when it starts and again when they change.
-  // A shim that connects again is a harness that may remember nothing, so it starts from none.
-  const notesGiven = new Map<string, string>()
+  // mem.notes: what each conversation holds of the notes, on the shim that is connected now: a hash of
+  // the notes it was last given (or 'written' after it wrote one), and every note line it has been given
+  // or has written. A conversation is given its room's notes when it starts and again when they change.
+  // When a line it holds is taken down (a wipe, "forget me", an edit), it starts again, so the harness's
+  // own transcript holds nothing of it. A shim that connects again may remember nothing: it starts from none.
+  const notesGiven = new Map<string, { hash: string; lines: Set<string> }>()
+  const noteLines = (notes: string | undefined): string[] => (notes ?? '').split('\n').filter((l) => l.startsWith('- '))
 
   // idle() bookkeeping: messages being handled plus live turns.
   let busy = 0
@@ -347,6 +350,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     // A tool that would have to wait for a yes is only offered to a harness that can hold a call.
     const offered = caps.approvalRoundTrip === true ? ['allow', 'ask'] : ['allow']
     const tools = Object.entries(caps.toolMap)
+      // mem.notes: the memory class is the door's notes, changed only through the door's own tool. A memory
+      // tool of the harness's own (Letta Code's Memory) is never offered: it is not the door's, and is refused.
+      .filter(([toolName, toolClass]) => toolClass !== 'memory' || toolName === MEMORY_TOOL)
       .filter(([toolName, toolClass]) => offered.includes(decide(policy, {
         kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: '',
       }, facts).verdict))
@@ -358,14 +364,16 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       let notes: string | undefined
       try { notes = opts.memory.render(roomKey(e)) } catch { notes = undefined }
       const key = notes === undefined ? '' : createHash('sha256').update(notes).digest('hex')
-      const before = notesGiven.get(sessionKey)
-      // Notes this conversation was given are gone: it starts again, so the harness holds nothing of them.
-      if (before !== undefined && before !== '' && key === '') {
+      const now = noteLines(notes)
+      let before = notesGiven.get(sessionKey)
+      // A note this conversation was given, or wrote, is gone: it starts again, so the harness holds nothing of it.
+      if (before !== undefined && [...before.lines].some((line) => !now.includes(line))) {
         shim.link.send({ t: 'reset', sessionKey })
-        receipt(about(e, 'inbound'), { verdict: 'deliver', rule: 'mem.notes', why: 'The notes for this room were removed, so the conversation was started again without them.' })
+        receipt(about(e, 'inbound'), { verdict: 'deliver', rule: 'mem.notes', why: 'A note this conversation held was removed, so the conversation was started again without it.' })
+        before = undefined
       }
-      if (key !== '' && before !== key) memory = notes
-      notesGiven.set(sessionKey, key)
+      if (key !== '' && before?.hash !== key) memory = notes
+      notesGiven.set(sessionKey, { hash: key, lines: new Set([...(before?.lines ?? []), ...now]) })
     }
     const env: Envelope = {
       id: e.messageId, turnId, sessionKey, surface: e.surface, room: e.room,
@@ -502,6 +510,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           // mem.notes: the door's own tool. It runs here, on the host, and never in the cell: the cell
           // carries the request and the answer, and the answer says what the door did.
           if (toolClass === 'memory') {
+            if (toolName !== MEMORY_TOOL) return refuse('mem.notes', 'Notes change only through the door\'s own tool.')
             if (d.verdict !== 'allow') return refuse('mem.notes', 'Notes are written or refused at once, never held for an admin.')
             if (!opts.memory) return refuse('mem.notes', 'This agent keeps no notes.')
             const done = opts.memory.apply(roomKey(e), msg.input, {
@@ -510,8 +519,14 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
               shared: policy.posture !== 'public' || d.privilege === 'admin',
             })
             receipt(tag, { verdict: done.ok ? 'allow' : 'deny', rule: 'mem.notes', why: done.ok ? 'A note for this room was written.' : 'A note for this room was refused.' }, `${note} result=${done.code}`)
-            // This conversation now holds notes it wrote itself. If they are wiped, it is started again (see inbound).
-            if (done.ok) notesGiven.set(turn.sessionKey, 'written')
+            // This conversation now holds the notes as they are after its change, its own included. If one of them
+            // is taken down later, it is started again (see inbound). Its notes are sent again on its next turn.
+            if (done.ok) {
+              let after: string | undefined
+              try { after = opts.memory.render(roomKey(e)) } catch { after = undefined }
+              const held = notesGiven.get(turn.sessionKey)?.lines ?? new Set<string>()
+              notesGiven.set(turn.sessionKey, { hash: 'written', lines: new Set([...held, ...noteLines(after)]) })
+            }
             link.send({ t: 'tool_verdict', callId: msg.callId, allow: done.ok, reason: done.message, ...(done.ok ? { hash } : {}) })
             return
           }

@@ -84,6 +84,7 @@ export const MEMORY_TOOL_DEFINITION: Omit<PiToolDefinition, 'execute'> = {
     'Ask the door to change the notes it keeps for this room. They are given back to you when a conversation starts, after a restart too.',
     'file: room (about this room), people (about the person speaking, only when they asked you to remember), threads (what is still going on).',
     'op: add a note, replace one (old is the exact note, text the new one), or remove one (old is the exact note).',
+    'When a person asks you to forget them, use file people, op remove, with no old and no text: every note of theirs here is removed.',
     'One short line per note. Notes name nobody, and hold no secret: the door refuses those and says why. Everyone you talk to in this room may be told what is in these notes.',
   ].join(' '),
   parameters: {
@@ -92,7 +93,7 @@ export const MEMORY_TOOL_DEFINITION: Omit<PiToolDefinition, 'execute'> = {
       file: { type: 'string', enum: ['room', 'people', 'threads'] },
       op: { type: 'string', enum: ['add', 'replace', 'remove'] },
       text: { type: 'string', description: 'The note, one line.' },
-      old: { type: 'string', description: 'The exact note to replace or remove.' },
+      old: { type: 'string', description: 'The exact note to replace or remove. Left out on a people remove: all of the speaker\'s notes.' },
     },
     required: ['file', 'op'],
     additionalProperties: false,

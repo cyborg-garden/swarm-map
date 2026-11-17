@@ -28,6 +28,8 @@ export const MEMORY_LIMITS = {
   noteChars: 280,
   /** One file, in bytes. A file that would grow past this refuses the note. */
   fileBytes: 4096,
+  /** One person's notes in a room. So one person cannot fill the people file and keep everyone else from being remembered. */
+  notesPerPerson: 8,
 } as const
 
 /** The heading each file is shown under, to the agent and on the dashboard. */
@@ -42,8 +44,10 @@ export const MEMORY_TOOL = 'memory_note'
 
 /**
  * Words that count as a person asking to be remembered, in their own message.
- * Without one, a note about them is refused. "Forget" is not needed to remove
- * your own note: anyone may take their own card down.
+ * Without one, a note about them is refused. It is a word check, not an
+ * understanding: "do you remember..." passes it too, so the model is also told
+ * to keep a note only when asked. "Forget" is not needed to remove your own
+ * notes: anyone may take their own card down, one note or all of them at once.
  */
 export const ASKED_TO_REMEMBER = /\b(remember|don'?t forget|do not forget|note that)\b/i
 
@@ -88,7 +92,9 @@ export interface MemoryStore {
   wipe(room?: string): void
 }
 
-const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]/
+// Control characters, and the invisible format characters (zero-width, direction overrides) that
+// would let a note hide a mention, an id or a word from the checks below or from a person reading it.
+const CONTROL = /[\u0000-\u001f\u007f\u2028\u2029]|\p{Cf}/u
 // What would let a note name somebody who did not ask: a mention, a platform id, an email address.
 const NAMES_SOMEONE: { what: string; re: RegExp }[] = [
   { what: 'a mention', re: /<[@#][!&]?\d+>/ },
@@ -198,6 +204,13 @@ export function createMemoryStore(o: {
         const problem = checks ? noteProblem(text, o.sanitizer, { checkNames: true }) : typeof text === 'string' && text.trim() !== '' ? undefined : 'a note cannot be empty'
         if (problem) return refuse(problem.startsWith('it holds something that looks like a secret') ? 'secret' : 'bad-note', problem)
       }
+      // "Forget me": a person's remove with no note named takes down every note of theirs in this room.
+      if (f === 'people' && op === 'remove' && old === undefined && text === undefined) {
+        next = lines.filter((line) => !mine(line))
+        if (next.length === lines.length) return refuse('no-match', 'there is no note of the speaker\'s own here')
+        write(room, f, next)
+        return { ok: true, code: 'remove', message: `Removed ${lines.length - next.length === 1 ? 'their note' : `all ${lines.length - next.length} of their notes`}.` }
+      }
       if (op === 'replace' || op === 'remove') {
         const target = typeof old === 'string' ? old.trim() : op === 'remove' && typeof text === 'string' ? text.trim() : ''
         const at = lines.findIndex((line) => mine(line) && noteOf(line, f) === target)
@@ -206,6 +219,7 @@ export function createMemoryStore(o: {
       } else {
         const t = (text as string).trim()
         if (lines.some((line) => mine(line) && noteOf(line, f) === t)) return { ok: true, code: 'same', message: 'Already noted. Nothing changed.' }
+        if (f === 'people' && lines.filter(mine).length >= MEMORY_LIMITS.notesPerPerson) return refuse('full', `a person may have at most ${MEMORY_LIMITS.notesPerPerson} notes here. Remove or replace one of theirs first`)
         next = [...lines, lineFor(t)]
       }
       if (bytes(next.join('\n') + '\n') > MEMORY_LIMITS.fileBytes) return refuse('full', `${f} is full (${MEMORY_LIMITS.fileBytes} bytes). Remove or replace a note first`)
