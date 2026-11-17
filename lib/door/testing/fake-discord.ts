@@ -76,7 +76,8 @@ export interface FakePost {
   webhook?: boolean
   id?: string
 }
-export interface FakeRole { id: string; name: string; guild?: string; botId?: string; listed?: boolean }
+/** `managed` defaults to whether `botId` is set, as on Discord; set it to send a combination Discord should not. */
+export interface FakeRole { id: string; name: string; guild?: string; botId?: string; managed?: boolean; listed?: boolean }
 export interface Posted { id: string; channel: string; content: string; allowedMentions: unknown; replyTo?: string }
 
 export interface FakeDiscord {
@@ -145,7 +146,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
   const sessionId = `sess-${nonce}`
   const channels = new Map<string, { id: string; type: number; parent_id?: string; listed: boolean; guild: string }>()
   const roles = new Map<string, FakeRole>()
-  const roleBody = (r: FakeRole) => ({ id: r.id, name: r.name, managed: r.botId !== undefined, ...(r.botId ? { tags: { bot_id: r.botId } } : {}) })
+  const roleBody = (r: FakeRole) => ({ id: r.id, name: r.name, managed: r.managed ?? r.botId !== undefined, ...(r.botId ? { tags: { bot_id: r.botId } } : {}) })
   const conns = new Set<Conn>()
   const sockets = new Set<Duplex>()
   /** Every dispatch sent, so a resume can replay what a connection missed. */
