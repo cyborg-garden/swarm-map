@@ -6,6 +6,7 @@ import { assertRendered, UnrenderedError } from './policy/deferred.ts'
 import { shapeErrors } from './policy/shape.ts'
 import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy, ToolClass } from './policy/types.ts'
 import { sessionKeyFor } from './session-key.ts'
+import { classifyCommand } from './tools/command-policy.ts'
 
 type Trace = Decision['trace']
 type Privilege = Decision['privilege']
@@ -156,6 +157,15 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     trace.push({ rule: 'tools.posture', outcome: 'pass' })
   }
   if (policy.tools.deny.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are on the deny list.`)
+  // tools.commands: a shell that is on, and a command the policy has read whole. The rule it names comes
+  // from the policy's own lists or a fixed code, never from the command.
+  const shellOn = policy.tools.ask.includes('shell') || policy.tools.allow.includes('shell')
+  if (e.toolClass === 'shell' && shellOn && policy.tools.commands && typeof e.command === 'string') {
+    const c = classifyCommand(e.command, policy.tools.commands)
+    if (c.verdict === 'block') return end('deny', 'tools.commands', `This command never runs (${c.rule}).`)
+    if (c.verdict === 'allow') return end('allow', 'tools.commands', `Every part of this command is on the allow list (${c.rule}).`)
+    trace.push({ rule: 'tools.commands', outcome: 'n/a' })
+  }
   // Ask comes before allow: a class on both lists waits for a yes.
   if (policy.tools.ask.includes(e.toolClass)) return end('ask', 'priv.approval', `${e.toolClass} tools need an admin's yes in the room.`)
   if (!policy.tools.allow.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are not on the allow list.`)

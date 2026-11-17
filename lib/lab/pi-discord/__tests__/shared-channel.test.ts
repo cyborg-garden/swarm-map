@@ -494,7 +494,8 @@ describe('a tool that waits for an admin, in the Discord channel', () => {
 
   it('an admin\'s reply to the request works too, and a reply from anyone else, or to another message, does not', async () => {
     const r = await start()
-    const id = say(r, { text: '!tool bash=ls' })
+    // A command that is not on the allow list, so it waits: one that is would run with no request at all.
+    const id = say(r, { text: '!tool bash=touch' })
     await expect.poll(() => r.fake.posted.length).toBe(1)
     const reply = (author: string, to: string, content = 'approve'): string => r.fake.post({
       channel: IDS.home, guild: IDS.guild, author: { id: author }, content: `<@${r.fake.selfId}> ${content}`, mentions: [r.fake.selfId], replyToMessage: to,

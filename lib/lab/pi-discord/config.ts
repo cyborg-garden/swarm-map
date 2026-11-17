@@ -10,6 +10,7 @@ import { withHash } from '../../core/policy/canonical.ts'
 import type { PolicyRecord, PrincipalRef } from '../../core/policy/types.ts'
 import { validatePolicy } from '../../core/policy/validate.ts'
 import { TOOL_SLICE_CLASSES, type SliceClass, type ToolMode } from '../../core/tools/call.ts'
+import { commandListsProblems, DEFAULT_COMMANDS, type CommandLists } from '../../core/tools/command-policy.ts'
 import { DEFAULT_HARNESS, harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES, type LauncherHarness } from './harnesses.ts'
 
 export interface LabConfig {
@@ -78,6 +79,12 @@ export interface ToolsConfig {
   mode: Partial<Record<SliceClass, ToolMode>>
   /** How long an admin has to answer a request, in seconds. No answer by then is a no. */
   approvalSeconds: number
+  /**
+   * The command policy for the shell: names that run without a yes when every part of a command is
+   * on `allow`, and names that never run. Left out, the shipped lists (DEFAULT_COMMANDS). A shell,
+   * an interpreter or a wrapper can never be on `allow`. See docs/lab/tools-slice.md.
+   */
+  commands?: CommandLists
 }
 export const NO_TOOLS: ToolsConfig = { enabled: [], mode: {}, approvalSeconds: 120 }
 const TOOL_MODES: ToolMode[] = ['never', 'ask', 'allow']
@@ -88,6 +95,10 @@ export function toolModes(c: Pick<LabConfig, 'tools'>): Record<SliceClass, ToolM
   const modeOf = (k: SliceClass, fallback: ToolMode): ToolMode => (!t.enabled.includes(k) ? 'never' : t.mode[k] ?? fallback)
   const shell = modeOf('shell', 'ask')
   return { file_read: modeOf('file_read', 'allow'), file_write: modeOf('file_write', shell === 'ask' ? 'ask' : 'allow'), shell }
+}
+/** The command lists the shell is held to: the config's own, or the shipped ones. */
+export function commandsOf(c: Pick<LabConfig, 'tools'>): CommandLists {
+  return c.tools?.commands ?? DEFAULT_COMMANDS
 }
 /** The seconds the door waits for an admin, or undefined when no class asks. */
 export function approvalSecondsOf(c: Pick<LabConfig, 'tools'>): number | undefined {
@@ -125,7 +136,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   const p: Record<string, unknown> = { name: root.agentId, description: '', ...(root.persona === undefined ? {} : obj(root.persona, 'persona', ['name', 'description'])) }
   const d: Record<string, unknown> = { ...DEFAULTS, ...obj(root.discord, 'discord', ['guildId', 'channelId', 'adminUserIds', 'allowedUserIds', 'allowedRoleIds', 'anyoneInChannel', 'mentionRequired', 'bots', 'allowedBotIds', 'botLoopLimit', 'readAllMessages']) }
   const b = obj(root.budget, 'budget', ['monthlyUsd'])
-  const t: Record<string, unknown> = { ...NO_TOOLS, ...(root.tools === undefined ? {} : obj(root.tools, 'tools', ['enabled', 'mode', 'approvalSeconds'])) }
+  const t: Record<string, unknown> = { ...NO_TOOLS, ...(root.tools === undefined ? {} : obj(root.tools, 'tools', ['enabled', 'mode', 'approvalSeconds', 'commands'])) }
   const m = obj(root.model, 'model', ['baseUrl', 'id', 'usdPerMTokIn', 'usdPerMTokOut'])
 
   const id = (v: unknown, at: string): void => { if (typeof v !== 'string' || !SNOWFLAKE.test(v)) errors.push(`${at}: must be a Discord id (digits only, in quotes)`) }
@@ -167,6 +178,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
     else if (!TOOL_MODES.includes(v as ToolMode)) errors.push(`tools.mode.${k}: must be ${TOOL_MODES.join(', ')}`)
   }
   if (!Number.isInteger(t.approvalSeconds) || (t.approvalSeconds as number) < 10 || (t.approvalSeconds as number) > 600) errors.push('tools.approvalSeconds: a whole number from 10 to 600')
+  if (t.commands !== undefined) for (const problem of commandListsProblems(t.commands)) errors.push(`tools.commands.${problem}`)
   amount(m.usdPerMTokIn, 'model.usdPerMTokIn', 0)
   amount(m.usdPerMTokOut, 'model.usdPerMTokOut', 0)
   if (typeof m.id !== 'string' || !MODEL_ID.test(m.id)) errors.push('model.id: must be a model name')
@@ -184,7 +196,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
     agentId: root.agentId, ...(harness === DEFAULT_HARNESS ? {} : { harness }),
     persona: { name: (p.name as string).trim(), description: (p.description as string).trim() }, discord: d, budget: b,
     // Only the three settings are kept, and only when a class is switched on: a config with no tools is written as it always was.
-    ...((t.enabled as unknown[]).length === 0 ? {} : { tools: { enabled: t.enabled, mode: t.mode, approvalSeconds: t.approvalSeconds } }),
+    ...((t.enabled as unknown[]).length === 0 ? {} : { tools: { enabled: t.enabled, mode: t.mode, approvalSeconds: t.approvalSeconds, ...(t.commands === undefined ? {} : { commands: t.commands }) } }),
     model: m,
   } as unknown as LabConfig
   const anyTool = Object.values(toolModes(config)).some((mode) => mode !== 'never')
@@ -241,6 +253,8 @@ export function systemPromptFor(c: LabConfig): string {
     `You also have tools. With them you can: ${on.map((k) => names[k]).join(', ')}.`,
     'Your tools work in a box of your own with no network: one small scratch folder, which is emptied when you are restarted.',
     ...(asks.length > 0 ? [`Before you ${asks.map((k) => names[k]).join(' or ')}, an admin is shown exactly what you asked for, in the channel, and has to say yes. If nobody says yes it does not happen, and you say so plainly.`] : []),
+    ...(modes.shell !== 'never' && commandsOf(c).allow.length > 0 ? [`A shell command made only of these, with nothing written to a file, runs without anyone being asked: ${commandsOf(c).allow.join(', ')}.`] : []),
+    ...(modes.shell !== 'never' && commandsOf(c).block.length > 0 ? [`These never run, whoever says yes: ${commandsOf(c).block.join(', ')}, and deleting folders outside your scratch folder.`] : []),
     `What you cannot do: ${off.map((k) => `${names[k]}, `).join('')}reach anything on a network, ${rest}`,
   ]
   return [
@@ -268,7 +282,9 @@ export function toolsLine(c: LabConfig): string {
   const on = TOOL_SLICE_CLASSES.filter((k) => modes[k] !== 'never')
   if (on.length === 0) return 'tools: none'
   const wait = approvalSecondsOf(c)
-  return `tools, all inside the cell: ${on.map((k) => `${names[k]} (${modes[k] === 'ask' ? 'an admin has to say yes' : 'allowed'})`).join(', ')}${wait === undefined ? '' : `. An admin has ${wait} seconds to answer`}`
+  const cmds = commandsOf(c)
+  const policyLine = modes.shell === 'never' ? '' : `. Shell commands: ${cmds.allow.length} names run without a yes, ${cmds.block.length} never run`
+  return `tools, all inside the cell: ${on.map((k) => `${names[k]} (${modes[k] === 'ask' ? 'an admin has to say yes' : 'allowed'})`).join(', ')}${policyLine}${wait === undefined ? '' : `. An admin has ${wait} seconds to answer`}`
 }
 
 /** Which other bots are heard, in one plain line, for the dry run. */
@@ -308,7 +324,11 @@ export function policyFor(c: LabConfig): PolicyRecord {
       },
     },
     // With no class switched on this is a chat-only agent, and the harness is started with no tools at all.
-    tools: { allow: TOOL_SLICE_CLASSES.filter((k) => modes[k] === 'allow'), ask: TOOL_SLICE_CLASSES.filter((k) => modes[k] === 'ask'), deny: [], browserGuard: 'off' },
+    tools: {
+      allow: TOOL_SLICE_CLASSES.filter((k) => modes[k] === 'allow'), ask: TOOL_SLICE_CLASSES.filter((k) => modes[k] === 'ask'), deny: [], browserGuard: 'off',
+      // The command policy goes with a shell that is on, and only then.
+      ...(modes.shell === 'never' ? {} : { commands: { allow: [...commandsOf(c).allow], block: [...commandsOf(c).block] } }),
+    },
     keys: [],
     egress: { default: 'deny', hosts: [], blockPrivateRanges: true },
     memory: { threadsPoolIntoParent: true, dmIsolated: true, team: { dm: 'none', group: 'none', public: 'none' }, store: { kind: 'git-markdown', repo: '' } },

@@ -129,6 +129,17 @@ const UNSUPPORTED: Ran = { text: 'fake pi: command not supported', isError: true
  *   printf '%s%s\n' <a> <b> [> <path>]         head -c <n> /dev/zero | tr '\0' x
  * A call that sleeps past its `timeout` (seconds) stops there, as the real one is killed.
  */
+/** Make the files a part of a command would make, as a shell would. How many it made. */
+function sideEffects(part: string): number {
+  let made = 0
+  for (const m of part.matchAll(/(touch|tee|mkdir|>>|>)\s*(\/[^\s`)\\;"]+)/g)) {
+    if (m[1] === 'mkdir') mkdirSync(m[2], { recursive: true })
+    else writeFileSync(m[2], '')
+    made++
+  }
+  return made
+}
+
 async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<Ran> {
   const limit = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : undefined
   let out = ''
@@ -151,6 +162,10 @@ async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<
       else out += `${m[1]}${m[2]}\n`
     }
     else if ((m = /^head -c (\d+) \/dev\/zero \| tr '\\0' x$/.exec(part))) out += 'x'.repeat(Number(m[1]))
+    else if ((m = /^echo (\S+) \| grep \S+$/.exec(part))) out += `${m[1]}\n`
+    // The command policy's check (K1) hides a write in a command that looks harmless. A real shell would
+    // make it, so this does too: every file a touch, tee, mkdir or redirection in it names, wherever it sits.
+    else if (sideEffects(part) > 0 || /^(ls|echo\b.*|"\s*)$/.test(part)) continue
     else return UNSUPPORTED
   }
   return { text: out === '' ? '(no output)' : out, isError: false }

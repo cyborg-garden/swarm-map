@@ -12,6 +12,7 @@ import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subne
 import { decide } from '../../../core/decide.ts'
 import { CELL_ENV, launcherImages, networksWritten, renderCell, sealProblems, type CellOptions } from '../cell.ts'
 import { approvalSecondsOf, botsLine, parseConfig, policyFor, systemPromptFor, toolModes, toolsLine } from '../config.ts'
+import { DEFAULT_COMMANDS } from '../../../core/tools/command-policy.ts'
 import { harnessFacts } from '../harnesses.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
 import { readSecretFile, secretFileProblem } from '../secrets.ts'
@@ -146,15 +147,43 @@ describe('pi-discord config', () => {
   it('a class that is switched on with no mode: a shell asks, reading is allowed, and writing asks when the shell does', () => {
     const config = withTools({ enabled: ['shell', 'file_read', 'file_write'] }).config!
     expect(toolModes(config)).toEqual({ file_read: 'allow', file_write: 'ask', shell: 'ask' })
-    expect(policyFor(config).tools).toEqual({ allow: ['file_read'], ask: ['file_write', 'shell'], deny: [], browserGuard: 'off' })
+    expect(policyFor(config).tools).toEqual({ allow: ['file_read'], ask: ['file_write', 'shell'], deny: [], browserGuard: 'off', commands: DEFAULT_COMMANDS })
     expect(approvalSecondsOf(config)).toBe(120)
     expect(validatePolicy(policyFor(config))).toEqual([])
     // The dry run says so in one line, so nobody starts an agent with a tool they did not mean to give it.
-    expect(toolsLine(config)).toBe('tools, all inside the cell: read files (allowed), write files (an admin has to say yes), shell (an admin has to say yes). An admin has 120 seconds to answer')
+    expect(toolsLine(config)).toBe(`tools, all inside the cell: read files (allowed), write files (an admin has to say yes), shell (an admin has to say yes). Shell commands: ${DEFAULT_COMMANDS.allow.length} names run without a yes, ${DEFAULT_COMMANDS.block.length} never run. An admin has 120 seconds to answer`)
     expect(toolsLine(withTools({ enabled: ['file_read'] }).config!)).toBe('tools, all inside the cell: read files (allowed)')
     // With no shell, or a shell that is allowed, writing is allowed as before.
     expect(toolModes(withTools({ enabled: ['file_write'] }).config!).file_write).toBe('allow')
     expect(toolModes(withTools({ enabled: ['file_write', 'shell'], mode: { shell: 'allow' } }).config!).file_write).toBe('allow')
+  })
+
+  it('the command lists: shipped when left out, kept as written when given, and refused when they name a shell or are not names', () => {
+    const shipped = withTools({ enabled: ['shell'] }).config!
+    expect('commands' in shipped.tools!).toBe(false)
+    expect(policyFor(shipped).tools.commands).toEqual(DEFAULT_COMMANDS)
+    const own = withTools({ enabled: ['shell'], commands: { allow: ['ls'], block: ['dd'] } }).config!
+    expect(own.tools!.commands).toEqual({ allow: ['ls'], block: ['dd'] })
+    expect(policyFor(own).tools.commands).toEqual({ allow: ['ls'], block: ['dd'] })
+    expect(validatePolicy(policyFor(own))).toEqual([])
+    // With no shell there is no command policy in the record.
+    expect('commands' in policyFor(withTools({ enabled: ['file_read'], commands: { allow: ['ls'], block: [] } }).config!).tools).toBe(false)
+    for (const [commands, error] of [
+      [{ allow: ['sh'], block: [] }, /tools\.commands\.allow\[0\]: sh runs other commands/],
+      [{ allow: ['bash'], block: [] }, /tools\.commands\.allow\[0\]: bash runs other commands/],
+      [{ allow: ['rm -rf'], block: [] }, /tools\.commands\.allow\[0\]: a plain command name/],
+      [{ allow: 'ls', block: [] }, /tools\.commands\.allow: must be a list/],
+      [{ allow: [], block: [], also: [] }, /tools\.commands\.also: not a setting/],
+    ] as const) {
+      const refused = withTools({ enabled: ['shell'], commands })
+      expect(refused.config).toBeUndefined()
+      expect(refused.errors.join('\n')).toMatch(error)
+    }
+    // The agent is told which commands run without a yes and which never run.
+    const prompt = systemPromptFor(own)
+    expect(prompt).toContain('runs without anyone being asked: ls.')
+    expect(prompt).toContain('These never run, whoever says yes: dd,')
+    expect(systemPromptFor(withTools({ enabled: ['file_read'] }).config!)).not.toContain('without anyone being asked')
   })
 
   it('a shell that asks with file writing that does not is refused: a yes to a script\'s name would run what the agent wrote in it unseen', () => {

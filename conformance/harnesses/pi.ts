@@ -31,7 +31,7 @@ const allBut = (...red: string[]): string[] => [...SHARED, ...TOOLS].filter((id)
 /** The shared checks, but for the ones named: for a fault the tool checks have nothing to say about. */
 const sharedBut = (...red: string[]): string[] => SHARED.filter((id) => !red.includes(id))
 // What a gate that asks nobody turns red among the tool checks: every one that waits for an answer, the scratch folder, and both limits.
-const UNGATED = ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
+const UNGATED = ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'K1', 'W1', 'L1', 'L2']
 
 /** The shim's own env, minus anything credential-shaped and anything Pi's env already sets. */
 function hostEnvSafeToHandOver(base: Record<string, string>): Record<string, string> {

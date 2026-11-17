@@ -13,6 +13,9 @@ is a placeholder.
 - **Each class has a mode.** `never`, `ask` or `allow`. Shell starts at `ask`.
 - **`ask` means a person says yes in the room.** The door posts what the agent wants to run. An
   admin answers. No answer in time is a no.
+- **Not every command needs a yes.** A shell command made only of commands that read and print
+  (`ls`, `cat`, `grep` and so on) runs without asking. One with anything destructive in it never
+  runs. Everything else asks. See "The command policy".
 - **The door decides, not the harness.** Every tool call is put to `decide()`. The harness only
   carries the question and the answer.
 - **An agent anyone can talk to gets none of these.** A public agent loses shell and file tools
@@ -66,9 +69,66 @@ on, so nobody is left thinking a tool is on. `decide()` is the wall behind that 
 2. The agent is public: no to shell, file, code-exec and chat-admin tools, and to any tool it
    cannot classify.
 3. The class is on the deny list: no.
+3a. A shell call whose command the command policy reads as blocked: no. Read as allowed: yes.
 4. The class is on the ask list: **ask**.
 5. The class is on the allow list: yes.
 6. Otherwise: no.
+
+## The command policy
+
+A shell that asks for every `ls` is a shell nobody leaves on. So the record can hold two lists of
+command names, `tools.commands.allow` and `tools.commands.block`, and the door reads each shell
+call against them before it asks anyone.
+
+```json
+"tools": { "enabled": ["shell"], "commands": { "allow": ["ls", "cat", "grep"], "block": ["dd", "curl"] } }
+```
+
+Left out, the shipped lists apply (`lib/core/tools/command-defaults.ts`). The shipped allow list is
+about forty commands that read and print and change nothing. The shipped block list is disk wipers,
+shutdown, and network tools (the cell has no network, so those are only noise).
+
+**A command is read whole, and `allow` is the narrow answer.** The door has a small shell reader of
+its own (`lib/core/tools/command-policy.ts`, no new dependency). It reads words, quotes,
+backslashes, `|`, `||`, `&&`, `;`, new lines and redirections. A command runs without a yes only
+if the reader understood all of it and:
+
+- every command in it is on the allow list, named plainly (`ls`, not `/bin/ls` or `./ls`);
+- none of them has an argument that writes or runs something (`find -exec`, `find -delete`,
+  `sort -o`, `date -s`, a second file to `uniq`, `file -C`);
+- nothing is written by a redirection (a write to `/dev/null` is fine).
+
+Anything the reader does not fully understand asks: `$( )`, backticks, `$VAR`, `${ }`, `$'…'`,
+globs, `~`, braces, a subshell, a here-doc, a comment, a job sent to the background, a line that
+runs on, a `VAR=value` prefix, and any character outside plain printable ASCII (look-alike letters,
+invisible marks). So does a call whose input is anything more than a command and a time limit.
+
+**`block` is searched for everywhere.** A second, looser reading goes on past what the strict
+reader gives up on, so a block is found after a `;`, inside `$( )` or backticks, behind `sudo`,
+`env`, `timeout` or `xargs`, and inside `sh -c '…'` or `eval`. Besides the block list, these never
+run: a recursive `rm` that reaches out of the scratch folder (a full path, `~`, `..`, a variable,
+or no path at all, as from `xargs`), `find -delete` the same way, `chmod`/`chown` on a system path,
+a redirection into a system path, `kill -1`, and a fork bomb.
+
+**Some names can never be on the allow list:** shells, interpreters and anything that runs another
+command (`sh`, `bash`, `source`, `.`, `eval`, `env`, `xargs`, `sudo`, `timeout`, `python3`, `node`,
+`awk`, `sed`, `git`, `tar` and others). The launcher refuses such a list, and the reader asks
+anyway. Allowing one would let a yes be skipped for a script the agent wrote, which is why a shell
+that asks still cannot go with file writing that does not.
+
+What does not change:
+
+- A command that asks is held, shown and bound to its hash exactly as before.
+- A yes is checked against the lists as they are when it lands: a command the block list caught up
+  with meanwhile does not run.
+- An allowed command still needs the shell to be on, still counts against the calls per hour, and
+  still runs under the gate's time and output limits. A public agent still has no shell.
+- Receipts name the rule that decided (`command=allow:ls,grep`, `command=block:rm-recursive`,
+  `command=ask:redirect`), never the command. Names in a rule come from the lists, never from the
+  command.
+
+The commands found on the cell's `PATH` are the ones the gate's environment names. An earlier yes
+reaches past its own command, as above, so it can change what a later allowed command finds.
 
 ## Approval in the room
 
@@ -182,6 +242,7 @@ says its shim can hold a call. Each has something broken on purpose that must tu
 | C6t | No answer in time: the tool does not run | Gate that asks nobody |
 | C6x | What ran is exactly what was shown | Gate that runs more than it asked about |
 | C6r | A yes is used once | Gate that asks nobody |
+| K1 | A command on the allow list runs with no request, ten that hide a write each wait for a yes, and a blocked one never runs | Gate that asks nobody |
 | W1 | A file tool cannot leave the scratch folder: `..`, a full path, a link | Gate with no path check |
 | W1+ | Positive control: file tools work inside the scratch folder | (a control: it shows W1 was not green because nothing ran) |
 | L1 | A shell call past the time limit is stopped | Gate that applies no limits |

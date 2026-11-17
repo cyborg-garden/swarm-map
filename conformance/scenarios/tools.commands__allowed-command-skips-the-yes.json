@@ -1,0 +1,48 @@
+{
+  "id": "tools.commands/allowed-command-skips-the-yes",
+  "rule": "tools.commands",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.allow": [],
+    "tools.ask": [
+      "shell"
+    ],
+    "tools.commands": {
+      "allow": [
+        "ls",
+        "grep"
+      ],
+      "block": [
+        "dd"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash",
+        "command": "ls -la | grep notes"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "allow",
+      "rule": "tools.commands"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.commands": null
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "ask",
+        "rule": "priv.approval"
+      }
+    }
+  }
+}

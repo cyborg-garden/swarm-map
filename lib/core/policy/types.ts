@@ -55,6 +55,12 @@ export interface ToolPolicy {
   ask: ToolClass[]
   deny: ToolClass[]
   perRoom?: Record<string, { allow?: ToolClass[]; ask?: ToolClass[]; deny?: ToolClass[] }>
+  /**
+   * The command policy for the shell (core/tools/command-policy.ts). Left out, every shell call is
+   * decided by the lists above alone. Set, a command whose every part is on `allow` runs without a
+   * yes, and one with anything on `block` (or clearly destructive) never runs.
+   */
+  commands?: { allow: string[]; block: string[] }
   browserGuard: 'off' | 'public-hosts-only'
 }
 
