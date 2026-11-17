@@ -13,6 +13,10 @@
 //      carries the hash of what it decided on (and, in ask mode, of what an
 //      admin was shown), so a yes meant for another call does not fit.
 //   4. If the call changed while it waited, it does not run.
+//   5. A shell call does not run at all if Pi's settings name a shell or a prefix for it
+//      (shellPath, shellCommandPrefix). A prefix runs before every command, out of sight of
+//      the door, which only read the command; so does a shell of another kind. Once seen, this
+//      holds for the life of this Pi, which read its settings when it started.
 // And after a tool has run, its output is cut to a size before the model sees it.
 //
 // When the session starts it says so on the same channel (GATE_READY). The
@@ -30,7 +34,9 @@
 //
 // It imports Node and two small files of lib/core, which a cell image holds
 // beside it. The few Pi types it needs are declared here by hand, from Pi 1.5.2.
-import { lstatSync, realpathSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { canonicalJson } from '../../../core/policy/canonical.ts'
 import { callHash, confine, DEFAULT_TOOL_LIMITS, type PathLookup } from '../../../core/tools/call.ts'
 
@@ -71,6 +77,26 @@ const setting = (name: string, fallback: number): number => {
 }
 const block = (why: string): PiBlock => ({ block: true, reason: `swarm gate: ${why}` })
 
+/** The settings that change what Pi's shell runs, beside the command it was given. */
+const SHELL_SETTINGS = ['shellCommandPrefix', 'shellPath']
+/** Whether one of Pi's settings files names a shell or a prefix. A file it cannot read plainly counts as yes. */
+function setsShell(file: string): boolean {
+  let text: string
+  try { text = readFileSync(file, 'utf8') } catch (err) { return (err as NodeJS.ErrnoException).code !== 'ENOENT' }
+  try {
+    const v: unknown = JSON.parse(text)
+    return isRecord(v) && SHELL_SETTINGS.some((k) => Object.hasOwn(v, k))
+  } catch {
+    return /shell/i.test(text)
+  }
+}
+/** Pi's two settings files: its own folder's, and the one in the folder it was started in. */
+function shellSettingsSet(): boolean {
+  const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent')
+  const projects = new Set([process.cwd(), process.env.SWARM_WORKSPACE].filter((d): d is string => !!d))
+  return [path.join(agentDir, 'settings.json'), ...[...projects].map((d) => path.join(d, '.pi', 'settings.json'))].some(setsShell)
+}
+
 /** Cut text to its first or last `max` bytes, with a note that says so. */
 function cut(text: string, max: number, keep: 'start' | 'end'): string {
   const bytes = Buffer.from(text)
@@ -88,6 +114,8 @@ function cut(text: string, max: number, keep: 'start' | 'end'): string {
  */
 export function createGate(parts: { confine: boolean; limits: boolean } = { confine: true, limits: true }): (pi: PiApi) => void {
   return (pi) => {
+    // Pi read its settings before it loaded this file. What they said then is what its shell does now.
+    let shellChanged = shellSettingsSet()
     pi.on('session_start', async (_event, ctx) => {
       // If this cannot be said, the shim never sends a turn. That is the safe side.
       ctx.ui.notify(GATE_READY, 'info')
@@ -101,6 +129,9 @@ export function createGate(parts: { confine: boolean; limits: boolean } = { conf
           const where = confine(process.env.SWARM_WORKSPACE ?? '', input.path === undefined ? '' : input.path, DISK)
           if ('problem' in where) return block(where.problem)
           input.path = where.path
+        }
+        if (event.toolName === SHELL_TOOL && (shellChanged ||= shellSettingsSet())) {
+          return block('its settings run something beside each shell command (shellCommandPrefix or shellPath), so no shell call runs')
         }
         if (parts.limits && event.toolName === SHELL_TOOL) {
           if (!isRecord(input)) return block('not a call it can read')
