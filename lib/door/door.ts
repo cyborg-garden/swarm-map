@@ -23,6 +23,7 @@ import { createObserveBuffer } from './observe-buffer.ts'
 import type { Capabilities, Envelope, FromShim, Usage } from './protocol.ts'
 import type { Receipt, ReceiptLog } from './receipts.ts'
 import { createSanitizer, type Sanitizer } from './sanitizer.ts'
+import { startTurnStatus, statusCode, type StatusEnd, type StatusOptions, type TurnStatus } from './turn-status.ts'
 import { createWebFetcher, untrustedText, type WebFetchOptions } from './web-fetch.ts'
 import { DEFAULT_SEARCH, MAX_QUERY_CHARS, searchBrave, untrustedResults, type SearchOptions } from './web-search.ts'
 
@@ -76,6 +77,11 @@ export interface DoorOptions {
   webListUnchecked?: boolean
   /** Test hook: let a conversation that has read the web change the notes, to prove the check for it (M7) goes red without it. */
   notesAfterWeb?: boolean
+  /**
+   * A sign in the room that a delivered message is being worked on: a reaction on it and the typing
+   * indicator (turn-status.ts). Left out, neither. Only on a surface whose connector has them.
+   */
+  status?: StatusOptions
 }
 
 export interface Door {
@@ -107,6 +113,8 @@ interface Turn {
   timer: ReturnType<typeof setTimeout>
   /** When the door sent the turn. A model failure from before it is not this turn's. */
   startedAt: number
+  /** The reaction and typing shown for it, if any. */
+  status?: TurnStatus
 }
 
 /**
@@ -265,6 +273,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     if (!turns.delete(turn.turnId)) return
     clearTimeout(turn.timer)
     dropHeld(turn)
+    turn.status?.end(ending === undefined ? 'gone' : 'failed')
     if (ending === undefined) return end()
     void tell(turn, ending).finally(end)
   }
@@ -439,12 +448,27 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never, startedAt: Date.now() }
     turns.set(turnId, turn)
     startClock(turn)
+    // Delivered, so the room may see the agent is on it. Nothing else the door is sent is ever marked.
+    if (opts.status && (opts.status.reactions || opts.status.typing)) {
+      turn.status = startTurnStatus({
+        ...opts.status, connector, room: e.room, messageId: e.messageId,
+        // Waiting on an admin is waiting on a person, not working: 👀 stays, typing stops.
+        paused: () => [...held.values()].some((h) => h.turn === turn),
+        failed: (what, err) => receipt(about(e, 'outbound', turnId), {
+          verdict: 'drop', rule: 'out.status',
+          why: what === 'reaction'
+            ? 'A status reaction could not be put on the message, so the turn went on without it. If the code is 403, allow Add Reactions for the bot in the channel.'
+            : 'The typing indicator could not be sent, so the turn went on without it.',
+        }, `what=${what} code=${statusCode(err)}`),
+      })
+    }
     begin()
     if (keepsOneMemory(caps)) given = sessionKey
     shim.link.send({ t: 'turn', env })
   }
 
-  async function outbound(turn: Turn, text: string): Promise<void> {
+  /** Post a turn's reply, or the line that says it has none. True when something was posted. */
+  async function outbound(turn: Turn, text: string): Promise<boolean> {
     const e = turn.event
     const tag = about(e, 'outbound', turn.turnId)
     // Would this message still be delivered, and may this room still be answered, under the policy as it is now?
@@ -452,17 +476,17 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const again = decide(policy, e, facts)
     if (again.verdict !== 'deliver') {
       receipt(tag, { verdict: 'drop', rule: 'out.still-allowed', why: `The policy changed mid-turn: ${again.why}` })
-      return
+      return false
     }
     const out = decide(policy, { kind: 'outbound', surface: e.surface, room: e.room, turnId: turn.turnId, text }, { ...facts, turnLive: true })
-    if (out.verdict !== 'allow') { receipt(tag, out); return }
+    if (out.verdict !== 'allow') { receipt(tag, out); return false }
 
     let clean: ReturnType<Sanitizer['run']>
     try {
       clean = sanitizer.run('outbound', text, { posture: policy.posture, room: e.room })
     } catch {
       receipt(tag, { verdict: 'drop', rule: 'san.out', why: 'The outbound check failed, so nothing was posted.' })
-      return
+      return false
     }
     // Cut after the redaction, so a secret cannot be split across the cut and survive it.
     const chars = [...clean.text]
@@ -472,6 +496,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const notes = clean.findings.map((f) => `${f.pattern} x${f.count}`)
     receipt({ ...tag, bytes: Buffer.byteLength(body) }, out, notes.length > 0 ? notes.join(', ') : undefined)
     if (cut) receipt({ ...tag, bytes: Buffer.byteLength(body) }, { verdict: 'allow', rule: 'out.size', why: 'The reply was longer than the limit, so it was cut before it was posted.' }, `chars=${chars.length} limit=${maxReplyChars}`)
+    return true
   }
 
   // in.once: a message is read once. An edit is not read again, and a reply to a message
@@ -512,16 +537,19 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         if (!turn) return unknown('settled')
         if (msg.usage) opts.onUsage?.(turn.turnId, msg.usage)
         clearTimeout(turn.timer)
+        turn.status?.quiet() // the agent has stopped working, whatever is posted next
         turns.delete(turn.turnId) // no reply can join this turn from here on
         dropHeld(turn) // and no call of it can still be approved
         if (turn.reply === undefined) {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'turn.no-reply', why: 'The harness finished the turn without a reply.' })
+          turn.status?.end('failed')
           void tell(turn, 'no-reply').finally(end)
           return
         }
-        void outbound(turn, turn.reply).catch(() => {
+        let how: StatusEnd = 'failed'
+        void outbound(turn, turn.reply).then((posted) => { if (posted) how = 'done' }, () => {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'Posting the reply failed.' })
-        }).finally(end)
+        }).finally(() => { turn.status?.end(how); end() })
         return
       }
       case 'tool_request': {

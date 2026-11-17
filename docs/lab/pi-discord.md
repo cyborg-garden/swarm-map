@@ -70,14 +70,15 @@ https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permis
 
 ## 3. Limit it to one channel
 
-In the channel: **Edit Channel**, **Permissions**, add the bot, and allow exactly these four:
+In the channel: **Edit Channel**, **Permissions**, add the bot, and allow exactly these five:
 
 | Permission | Why |
 |---|---|
 | View Channel | To be sent the channel's messages |
 | Send Messages | To reply |
 | Send Messages in Threads | To reply in a thread of that channel |
-| Read Message History | So a reply can sit under the message it answers |
+| Read Message History | So a reply can sit under the message it answers, and so it can react to that message |
+| Add Reactions | For [status reactions](#while-it-works): 👀, then ✅ or ⚠️. Leave it out if `statusReactions` is false |
 
 Allow nothing else. If the server's other channels are open to everyone, the bot can see them too.
 To close them at Discord, deny **View Channel** to the bot's role on each category. The door
@@ -120,6 +121,8 @@ server, the channel or a person and choose **Copy ID**.
 | `discord.allowedBotIds` | `[]` | The only bots that are heard, by user id. With any id here, a named bot is heard when it writes the bot's mention (or without one, if `mentionRequired` is false), and every other bot and every webhook is dropped with a receipt, whatever `bots` says |
 | `discord.botLoopLimit` | `4` | Bot messages answered in a row before a listed person has to be answered. Each named bot has a count of its own; bots that are not named share one |
 | `discord.readAllMessages` | `false` | Ask Discord for the text of every message. Needed when `mentionRequired` is false |
+| `discord.statusReactions` | `true` | 👀 on a message the agent is working on, then ✅ or ⚠️. See [While it works](#while-it-works) |
+| `discord.typing` | `true` | Discord's typing indicator while the agent works on a message |
 | `budget.monthlyUsd` | none | Model spend allowed in a calendar month (UTC). After it, model calls are refused |
 | `tools.enabled` | `[]` | Classes of tool that are switched on: `file_read`, `file_write`, `shell`. All run inside the cell. See [the tools slice](tools-slice.md) |
 | `tools.mode` | shell asks, reading allowed, writing asks when the shell does | For a class that is switched on: `allow`, `ask` (an admin says yes in the channel first) or `never` |
@@ -147,7 +150,8 @@ do. A changed persona takes effect on the next `start`.
 node lib/lab/pi-discord/cli.ts dry-run --config /path/to/config.json
 ```
 
-It says in one line which other bots are heard. It cannot check the **Message Content** switch,
+It says in one line which other bots are heard. With status reactions on, it says to allow Add Reactions in the channel: it
+cannot check that either. It cannot check the **Message Content** switch,
 because that needs a connection: if the config asks for the intent (`readAllMessages`) and the
 switch is off, `start` stops at once and says so. The other way round does no harm.
 
@@ -217,6 +221,43 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `deny model.route` | The call was not forwarded: no price for the model, or a request the route could not read. The channel is told |
 | `drop turn.no-reply` | The agent finished without a reply. The channel is told |
 | `drop turn.to-bot` | A turn a bot started has no answer. The channel is not told, so a bot is not given something to answer |
+| `drop out.status` | A status reaction or the typing indicator could not be sent. The turn went on. Code 403 on a reaction: allow Add Reactions in the channel |
+
+## While it works
+
+A turn that reads web pages can take half a minute. So the bot shows it is on it, as the other
+bots in a server often do:
+
+- **👀** on the message, as soon as the message is handed to the agent.
+- **Typing**, sent again about every 8 seconds while the turn runs.
+- **✅** in place of 👀 once the reply is posted.
+- **⚠️** in place of 👀 when the turn ends with no reply: a model call failed, the agent hit an
+  error or took too long, it finished without an answer, or the door refused the reply after the
+  message was delivered (the rules changed mid-turn, say). The line the door posts says which.
+  ⚠️ and not ❌, because ❌ is how an admin says no to a request, and nothing the person asked
+  for was refused.
+
+Only a message the agent is handling gets any of this. Chatter it does not hear, a person or bot
+that is not on the list, a message in another channel, and a message dropped for any other reason
+get no reaction and no typing.
+
+**Waiting for an admin.** While a tool call waits for an admin's yes, 👀 stays and typing stops:
+the agent is waiting on a person, not working. Typing comes back once the admin answers. Nothing
+is put on the door's own request.
+
+**When one fails.** A reaction or typing call that is rate limited, or refused, never holds up
+the reply or breaks the turn. Reactions wait out a short rate limit (up to 5 seconds) and give up
+on a longer one; typing is never waited for. Each kind that fails in a turn is one receipt,
+`drop out.status`, with a code. Code 403 on a reaction means the bot cannot add reactions in the
+channel: **allow Add Reactions in the channel**. The dry run cannot check that, because it connects
+to nothing, so it says what to allow.
+
+A message deleted mid-turn keeps whatever it had (it is gone). A stop while a turn runs stops
+typing at once and leaves 👀 where it is.
+
+Both are on by default. Switch either off in the config, or on the dashboard's Rules tab, under
+**When it answers**. A change takes effect on the next start, like the persona: neither is part of
+the policy, so neither changes the policy's hash.
 
 ## 9. Stop
 
@@ -288,7 +329,8 @@ What is and is not shown for Letta Code itself is in [`letta-code.md`](letta-cod
    no harness is connected, until you stop and start again. If the door stops, the cell stays
    up, sealed and silent, until `stop` or the next `start` removes it.
 6. **Text only.** Attachments are listed for the door and not passed to Pi. There are no slash
-   commands and no reactions. A reply to the bot with its ping switched off counts as addressed
+   commands, and the only reactions are the bot's own [status reactions](#while-it-works) and an
+   admin's ✅ or ❌ on a request. A reply to the bot with its ping switched off counts as addressed
    to it, but without `readAllMessages` Discord sends no text for such a message, so the agent is
    handed an empty one.
 7. **How Pi behaves as a chat partner is not tested.** It is a coding agent started with no tools

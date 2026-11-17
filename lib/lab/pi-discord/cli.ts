@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, toolsLine, type LabConfig } from './config.ts'
+import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, statusLine, toolsLine, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
@@ -58,6 +58,7 @@ async function dryRun(): Promise<void> {
   say(d.readAllMessages
     ? '  note  this config asks Discord for the Message Content intent. Switch it ON for the bot in the Developer Portal, or the start is refused. The dry run connects to nothing, so it cannot check'
     : '  ok    the Message Content intent is not asked for, so its switch in the Developer Portal does not matter')
+  say(statusLine(config))
   say(`  ok    budget $${config.budget.monthlyUsd} a month, then model calls are refused; model ${config.model.id}`)
   if (config.model.usdPerMTokIn === 0 && config.model.usdPerMTokOut === 0) say('  note  both prices are 0, so the budget can never be reached')
   say(`  ok    policy ${policy.hash.slice(0, 12)}`)

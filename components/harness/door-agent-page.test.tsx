@@ -13,7 +13,7 @@ import HarnessesPage from '@/app/(dashboard)/harnesses/page'
 import { usd } from './door-agent-page'
 import { commandsOf, mayChoose, modeOf, namesIn, TOOL_ROWS, withMode } from './door-tools-card'
 import { DEFAULT_COMMANDS } from '@/lib/core/tools/command-policy'
-import { parseConfig, toolModes } from '@/lib/lab/pi-discord/config'
+import { parseConfig, statusOf, toolModes } from '@/lib/lab/pi-discord/config'
 import { toast } from 'sonner'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() } }))
@@ -186,6 +186,22 @@ describe('the page of a door agent', () => {
       secrets: { discordTokenFile: '/keys/token', modelKeyFile: '/keys/key' },
       version: 3,
     })
+  })
+
+  it('shows status reactions and typing on for a record that never named them, and saves one switched off', async () => {
+    await openPage()
+    await openTab('Rules')
+    const reactions = await screen.findByRole('switch', { name: 'Status reactions' })
+    const typing = screen.getByRole('switch', { name: 'Typing indicator' })
+    expect([reactions.getAttribute('aria-checked'), typing.getAttribute('aria-checked')]).toEqual(['true', 'true'])
+    fireEvent.click(typing)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT')).toBe(true))
+    const rules = (requests.find((r) => r.method === 'PUT')!.body as { rules: typeof RULES }).rules
+    expect(rules).toEqual({ ...RULES, discord: { ...RULES.discord, typing: false } })
+    // What the page saves is a config the launcher takes, and it reads as typing off, reactions on.
+    expect(parseConfig({ ...rules, agentId: 'pi-one' }).config?.discord).toMatchObject({ typing: false })
+    expect(statusOf(parseConfig({ ...rules, agentId: 'pi-one' }).config!)).toEqual({ reactions: true, typing: false })
   })
 
   it('has a Tools card with every class off, and saves a class that is switched on with the rest of the rules', async () => {
