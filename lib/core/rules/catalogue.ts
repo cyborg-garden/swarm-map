@@ -164,6 +164,11 @@ export const RULES: Rule[] = [
   { id: 'mem.one-scope', statement: 'A harness that keeps one memory for the whole agent is given one room, or one person\'s direct messages, and no more.',
     klass: 'security', kind: 'guardrail', reads: [`${S}.rooms`, `${S}.dm.mode`, `${S}.dm.users`], surfaces: 'all', enforcer: 'door', tests: ['U:one-scope', 'P:one-scope'], checks: [] },
 
+  // The door's own notes (lib/door/memory.ts). The door keeps the rule for every harness, so it names no
+  // shim check; the memory checks M1 to M6 put a harness that carries the door's tool through it end to end.
+  { id: 'mem.notes', statement: 'The door keeps notes for each room. One room\'s notes never reach another, a note changes only through the door\'s tool, a note that holds something secret-shaped or names someone who did not ask is refused, and wiped notes are no longer given to the harness.',
+    klass: 'security', kind: 'wall', reads: ['tools.allow'], surfaces: 'all', enforcer: 'door', tests: ['U:mem', 'P:mem-notes', 'P:mem-wipe'], checks: [] },
+
   { id: 'san.in', statement: 'Pasted secrets are scrubbed before the harness sees them.',
     klass: 'security', kind: 'wall', reads: [], surfaces: 'all', enforcer: 'door', tests: ['P:scrub-in'], checks: [] },
   { id: 'san.out', statement: 'Secrets are redacted before a reply is posted, and a failed check posts nothing.',

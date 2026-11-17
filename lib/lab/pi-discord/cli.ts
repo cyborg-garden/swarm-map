@@ -51,6 +51,7 @@ async function dryRun(): Promise<void> {
   say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
   const tools = toolsLine(config)
   say(`  ok    it introduces itself as "${config.persona.name}", and is told ${tools === 'tools: none' ? 'it has no tools' : 'which tools it has'}`)
+  say(`  ok    persona: ${config.persona.document ? `a document of ${Buffer.byteLength(config.persona.document)} bytes, before what the rules say it can do` : 'its name and one line'}; notes for each room: ${config.memory?.notes ? 'on, kept by the door in the state folder' : 'off'}${config.tools?.keepScratch ? '; the scratch folder is kept across a stop' : ''}`)
   say(`  ok    heard: ${d.adminUserIds.length} admin(s), ${d.allowedUserIds.length} other people, ${d.allowedRoleIds.length} role(s)${d.anyoneInChannel ? ', and anyone in the channel' : ''}`)
   say(`  ${d.bots === 'mentions' && d.allowedBotIds.length === 0 ? 'note' : 'ok  '}  ${botsLine(config)}`)
   say(`  ${tools === 'tools: none' ? 'ok  ' : 'note'}  direct messages: refused; ${tools}`)
