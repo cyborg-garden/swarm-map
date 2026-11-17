@@ -22,9 +22,11 @@
  */
 import fs from 'fs'
 import path from 'path'
+import { createMemoryStore, MEMORY_FILES, MEMORY_HEADINGS, MEMORY_LIMITS, type MemoryFile, type MemoryStore, type RoomNotes } from '@/lib/door/memory'
 import type { Receipt } from '@/lib/door/receipts'
+import { createSanitizer } from '@/lib/door/sanitizer'
 import { monthOf } from '@/lib/door/spend-ledger'
-import { policyFor } from '@/lib/lab/pi-discord/config'
+import { parseConfig, policyFor, systemPromptFor } from '@/lib/lab/pi-discord/config'
 import { harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
 import { doorAgentName, doorNameClash, doorNameTaken } from '@/lib/door-agent-name'
 import type { Harness } from '@/lib/types'
@@ -69,6 +71,18 @@ export interface DoorAgentView {
   supervisor: { command: string; startScript: string }
   /** Which harness is in the cell, the one version of it that is pinned, and what it cannot do here. */
   harness: { runtime: DoorRuntime; label: string; version: string; oneRoomOnly: boolean; limits: string[] }
+  /** What the agent is told, persona and all, from the saved rules. Null while the rules cannot be started. */
+  systemPrompt: string | null
+}
+
+/** The Memory tab: the door's notes for each room, and a kept scratch folder. Nothing in it is secret-shaped: it is redacted on read. */
+export interface DoorMemoryView {
+  notes: boolean
+  rooms: RoomNotes[]
+  limits: { noteChars: number; fileBytes: number }
+  /** A kept scratch folder: its size and when it was kept. Null when there is none. */
+  scratch: { kept: boolean; bytes: number; savedAt: string } | null
+  running: boolean
 }
 
 type Row = { id?: string; name?: string; runtime?: string | null }
@@ -332,7 +346,107 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       problems: { rules: rulesProblems(record), secrets: secretProblems(record, this.repoRoot) },
       supervisor: { command: supervisorCommand(record, { startScript: p.startScript, logPath: p.log }), startScript: p.startScript },
       harness: this.harnessOf(record),
+      systemPrompt: this.promptOf(record),
     }
+  }
+
+  private promptOf(record: DoorRulesRecord): string | null {
+    if (rulesProblems(record).length > 0) return null
+    const { config } = parseConfig({ ...record.rules, agentId: record.name })
+    return config ? systemPromptFor(config) : null
+  }
+
+  // --- memory -----------------------------------------------------------------
+
+  /**
+   * The door's notes, read with the redactor: something secret-shaped that reached a file is never
+   * shown. The page never sees a secret file either: the redactor here knows the patterns, not the keys.
+   */
+  private notesStore(id: string): MemoryStore {
+    return createMemoryStore({ dir: doorAgentPaths(this.dataDir, id).memory, sanitizer: createSanitizer() })
+  }
+
+  memory(id: string): DoorMemoryView {
+    const record = this.record(id)
+    const p = doorAgentPaths(this.dataDir, id)
+    let scratch: DoorMemoryView['scratch'] = null
+    try {
+      const st = fs.statSync(p.keptScratch)
+      scratch = { kept: record.rules.tools?.keepScratch === true, bytes: st.size, savedAt: st.mtime.toISOString() }
+    } catch { /* nothing kept */ }
+    return {
+      notes: record.rules.memory?.notes === true,
+      rooms: this.notesStore(id).rooms(),
+      limits: { noteChars: MEMORY_LIMITS.noteChars, fileBytes: MEMORY_LIMITS.fileBytes },
+      scratch,
+      running: this.statusOf(id, record).state === 'running',
+    }
+  }
+
+  /** Replace one room's notes with what was written on the page. Checked as the door checks a note: size, and no secret. */
+  saveMemory(id: string, input: { room: unknown; files: unknown }): DoorMemoryView {
+    const record = this.record(id)
+    const store = this.notesStore(id)
+    const known = store.rooms().map((r) => r.key)
+    if (typeof input.room !== 'string' || !known.includes(input.room)) throw new DoorError(404, 'No notes are kept for that room')
+    const files = input.files
+    if (files === null || typeof files !== 'object' || Array.isArray(files)) throw new DoorError(422, 'Not saved. The notes were refused', ['files: must be an object'])
+    const problems = store.replace(input.room, files as Partial<Record<MemoryFile, string>>)
+    if (problems.length > 0) throw new DoorError(422, 'Not saved. The notes were refused', problems)
+    this.audit.append({ who: 'admin', what: 'door:memory-edit', target: record.name })
+    return this.memory(id)
+  }
+
+  /** Remove one room's notes, or all of them. A running door reads its notes for every turn, so this counts at once. */
+  wipeMemory(id: string, room?: unknown): DoorMemoryView {
+    const record = this.record(id)
+    const store = this.notesStore(id)
+    if (room !== undefined) {
+      if (typeof room !== 'string' || !store.rooms().some((r) => r.key === room)) throw new DoorError(404, 'No notes are kept for that room')
+      store.wipe(room)
+    } else {
+      store.wipe()
+    }
+    this.audit.append({ who: 'admin', what: 'door:memory-wipe', target: record.name, meta: { scope: room === undefined ? 'all' : 'room' } })
+    return this.memory(id)
+  }
+
+  /**
+   * Remove a kept scratch folder. Only while the agent is stopped: a running agent's folder is kept
+   * again when it stops, so a wipe then would not be a wipe.
+   */
+  wipeScratch(id: string): DoorMemoryView {
+    const record = this.record(id)
+    if (this.statusOf(id, record).state === 'running') throw new DoorError(409, 'Stop the agent first. Its scratch folder is kept again when it stops, so wiping it now would not empty it')
+    fs.rmSync(doorAgentPaths(this.dataDir, id).keptScratch, { force: true })
+    fs.rmSync(doorAgentPaths(this.dataDir, id).keptScratchRules, { force: true })
+    this.audit.append({ who: 'admin', what: 'door:scratch-wipe', target: record.name })
+    return this.memory(id)
+  }
+
+  /** What the Memory tab's wipe buttons ask for: one room's notes, every room's, or the kept scratch folder. */
+  wipe(id: string, what: { room: string | null; all: string | null }): DoorMemoryView {
+    if (what.room !== null) return this.wipeMemory(id, what.room)
+    if (what.all === 'notes') return this.wipeMemory(id)
+    if (what.all === 'scratch') return this.wipeScratch(id)
+    this.record(id)
+    throw new DoorError(400, 'Say what to wipe: ?room=<key>, ?all=notes or ?all=scratch')
+  }
+
+  /** Every room's notes as one Markdown file, redacted, for the Download button. */
+  memoryMarkdown(id: string): { name: string; text: string } {
+    const record = this.record(id)
+    const rooms = this.notesStore(id).rooms()
+    const lines = [`# Notes kept by the door for ${record.name}`, '', `Downloaded ${this.now().toISOString()}. Secret-shaped text is redacted.`]
+    for (const room of rooms) {
+      lines.push('', `## Room ${room.key}`)
+      for (const f of MEMORY_FILES) {
+        lines.push('', `### ${MEMORY_HEADINGS[f]}`, '', room.files[f].trim() || '(none)')
+      }
+      lines.push('', '### Who asked to be remembered, and when', '', room.consent.map((c) => `- [${c.id}] ${c.display}: ${c.askedAt}`).join('\n') || '(nobody)')
+    }
+    if (rooms.length === 0) lines.push('', 'No notes are kept.')
+    return { name: `${record.name}-notes.md`, text: lines.join('\n') + '\n' }
   }
 
   private harnessOf(record: DoorRulesRecord): DoorAgentView['harness'] {

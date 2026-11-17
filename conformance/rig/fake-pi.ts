@@ -47,6 +47,7 @@ const tools = argv.includes('--no-tools') ? []
     : (flag('--tools') ?? 'read,bash,edit,write').split(',')
 const declared = (name: string): boolean => (tools === null ? Object.hasOwn(extensionTools, name) : tools.includes(name))
 
+const systemPrompt = flag('--system-prompt')
 const models = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? '', 'models.json'), 'utf8'))
 const provider = models.providers[flag('--provider') ?? '']
 const model = flag('--model') ?? ''
@@ -218,7 +219,8 @@ async function prompt(id: string, message: string): Promise<void> {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify({ model, messages, stream: false }),
+      // As Pi does: what it was told it is goes first, as the system message.
+      body: JSON.stringify({ model, messages: [...(systemPrompt === undefined ? [] : [{ role: 'system', content: systemPrompt }]), ...messages], stream: false }),
     })
     if (!res.ok) {
       emit({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: `${res.status}` } })

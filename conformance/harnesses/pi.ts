@@ -15,6 +15,7 @@ import { CHECKS, type Check } from '../suites/checks.ts'
 import type { Cell, HarnessUnderTest } from '../suites/harness.ts'
 import { MODEL_FAILURE_CHECKS } from '../suites/failure-checks.ts'
 import { TOOL_CHECKS } from '../suites/tool-checks.ts'
+import { MEMORY_CHECKS } from '../suites/memory-checks.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const GATE = path.resolve(HERE, '..', '..', 'lib', 'runtimes', 'pi', 'cell', 'gate.ts')
@@ -25,9 +26,12 @@ export function fakePiCommand(): string[] {
 }
 
 /** Every check Pi is put through: the shared ones, the tool checks, which its shim can run, and the checks that a failed model call is told to the room. */
-export const PI_CHECKS: Check[] = [...CHECKS, ...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]
+export const PI_CHECKS: Check[] = [...CHECKS, ...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS, ...MEMORY_CHECKS]
 const SHARED = CHECKS.map((c) => c.id)
 const TOOLS = [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS].map((c) => c.id)
+const MEMORY = MEMORY_CHECKS.map((c) => c.id)
+/** The memory checks, but for the ones named. */
+const memoryBut = (...red: string[]): string[] => MEMORY.filter((id) => !red.includes(id))
 /** Every check, but for the ones named. */
 const allBut = (...red: string[]): string[] => [...SHARED, ...TOOLS].filter((id) => !red.includes(id))
 /** The shared checks, but for the ones named: for a fault the tool checks have nothing to say about. */
@@ -65,6 +69,7 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       ...cell.link, piCommand, agentDir: d.agent, sessionsDir: d.sessions, workDir: d.work, homeDir: d.home,
       gate: { path: GATE }, verdictTimeoutMs: cell.verdictTimeoutMs, gateTimeoutMs: cell.vetoTimeoutMs, gateReadyMs: 10_000,
       rigEnv: watched, ...(cell.toolLimits ? { toolLimits: cell.toolLimits } : {}),
+      ...(cell.systemPrompt !== undefined ? { systemPrompt: cell.systemPrompt } : {}),
     }
     switch (variant) {
       case 'good': return base
@@ -80,6 +85,8 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       case 'runs-more': return { ...base, gate: { path: path.join(BROKEN, 'gate-runs-more.ts') } }
       case 'no-path-check': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-path-check.ts') } }
       case 'no-limits': return { ...base, gate: { path: path.join(BROKEN, 'gate-no-limits.ts') } }
+      // Pi is started without what the launcher told it, so it keeps its own introduction.
+      case 'no-system-prompt': return { ...base, systemPrompt: undefined }
       case 'web-direct': return { ...base, gate: { path: path.join(BROKEN, 'gate-web-direct.ts') } }
       // The real shim and gate. What is broken is the link: see start().
       case 'covers-failures': return base
@@ -153,6 +160,32 @@ export function piHarness(piCommand: string[], build: 'real' | 'fake'): HarnessU
       'answers-as-admin': {
         what: 'A chat surface that reports every answer to a request as the admin\'s, whoever sent it',
         red: ['C6n'], green: TOOLS.filter((id) => id !== 'C6n'), checks: TOOLS, shim: 'good', lab: { rig: 'answers-as-admin' },
+      },
+      // The door's notes, kept wrong in one way each (broken/memory-stores.ts). The shim and the gate are the real ones.
+      'memory-one-room': {
+        what: 'Notes kept under one key for every room',
+        red: ['M2'], green: memoryBut('M2'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-one-room' },
+      },
+      'memory-no-checks': {
+        what: 'Notes written as asked, with no check for a secret',
+        red: ['M3'], green: memoryBut('M3'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-no-checks' },
+      },
+      'memory-cached': {
+        what: 'Notes read once per room and kept in memory, so a wipe on disk is not seen',
+        red: ['M6'], green: memoryBut('M6'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-cached' },
+      },
+      // The notes are in the scratch folder: a restart lands on another folder too, so M1 goes red with M4.
+      'memory-in-scratch': {
+        what: 'The notes\' folder put inside the scratch folder, where a file tool can write',
+        red: ['M4', 'M1'], green: memoryBut('M4', 'M1'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-in-scratch' },
+      },
+      'memory-after-web': {
+        what: 'A door that lets a conversation that has read a page change the notes',
+        red: ['M7'], green: memoryBut('M7'), checks: MEMORY, shim: 'good', lab: { rig: 'memory-after-web' },
+      },
+      'no-system-prompt': {
+        what: 'Pi started without the launcher\'s text, so it keeps its own introduction',
+        red: ['M5'], green: memoryBut('M5'), checks: MEMORY,
       },
       // Not faults of the shim: the door's web fetcher, broken in one way each. The harness and its gate are the real ones.
       'web-direct': {

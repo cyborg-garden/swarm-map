@@ -68,7 +68,7 @@ export interface LettaCodeShim { close(): void }
  */
 export function lettaCodeSystemPromptProblem(prompt: string): string | undefined {
   if (prompt === '') return 'the system prompt is empty'
-  if (prompt.length > 4000) return 'the system prompt is too long'
+  if (prompt.length > 16_000) return 'the system prompt is too long'
   if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(prompt)) return 'the system prompt is not plain text'
   if (prompt.trimStart().startsWith('-')) return 'the system prompt could be read as a flag'
   return undefined

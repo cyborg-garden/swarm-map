@@ -17,7 +17,7 @@ type Handler = (event: unknown, ctx: unknown) => Promise<unknown>
 /** Loads a gate the way Pi does and hands back what it registered. */
 function load(gate: (pi: never) => void = swarmGate as never) {
   const handlers: Record<string, Handler> = {}
-  gate({ on: (name: string, handler: Handler) => { handlers[name] = handler } } as never)
+  gate({ on: (name: string, handler: Handler) => { handlers[name] = handler }, registerTool: () => {} } as never)
   return handlers
 }
 

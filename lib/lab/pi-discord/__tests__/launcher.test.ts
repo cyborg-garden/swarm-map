@@ -467,7 +467,7 @@ describe('pi-discord cell, as written', () => {
     expect(() => renderCell({ ...options, nonce: 'prod' })).toThrow(/REFUSING TO RUN: F5/)
     expect(() => renderCell({ ...options, brainPort: 80 })).toThrow(/REFUSING TO RUN: F5/)
     expect(() => renderCell({ ...options, systemPrompt: '' })).toThrow(/REFUSING TO RUN: F5/)
-    expect(() => renderCell({ ...options, systemPrompt: 'x'.repeat(4001) })).toThrow(/REFUSING TO RUN: F5/)
+    expect(() => renderCell({ ...options, systemPrompt: 'x'.repeat(16_001) })).toThrow(/REFUSING TO RUN: F5/)
     // The cell's placeholder must not be something a container name gives away.
     expect(() => renderCell({ ...options, cellNonce: '0badf00d', brainToken: ['BRAIN', '0badf00d', '0123456789abcdef'].join('-') })).toThrow(/REFUSING TO RUN: F5/)
     expect(JSON.stringify(renderCell(options).services.cell)).not.toContain('0badf00d')

@@ -22,7 +22,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../lib/runtimes/pi/caps.ts'
-import { BROKEN_RIGS, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL as SKIPPED, TOOL_RIGS, TOOLS_IN_CELL } from '../docker/broken.ts'
+import { BROKEN_RIGS, IN_CELL as SHARED_IN_CELL, MEMORY_IN_CELL, MEMORY_SKIPPED_IN_CELL, SKIPPED_IN_CELL as SKIPPED, TOOL_RIGS, TOOLS_IN_CELL } from '../docker/broken.ts'
 import { contextFiles, readSource, type GateVariant, type RigVariant } from '../docker/compose.ts'
 import {
   cellRefuses, imageProblems, labObjects, preflight, runInRig, runSealChecks, SEAL_CHECKS, startHostListener, withRig,
@@ -37,7 +37,7 @@ armTripwire()
 
 const harness = piHarness(['pi'], 'real')
 // Pi's shim can run the tool checks, so they run in a cell too, with their own broken gates.
-const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL]
+const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL, ...MEMORY_IN_CELL]
 const BROKEN = { ...BROKEN_RIGS, ...TOOL_RIGS }
 const EXPECTED = SEAL_CHECKS.length + IN_CELL.length
 
@@ -77,7 +77,7 @@ afterAll(async () => {
       harness: harness.caps.harness, version: PI_VERSION, harnessBuild: harness.build, substrate: 'docker', date: new Date().toISOString().slice(0, 10),
       runner: { kind: 'docker', server: facts.server, host: `${facts.os}, ${facts.arch}` },
     },
-    results, mustFail, harness, undefined, SKIPPED,
+    results, mustFail, harness, undefined, { ...SKIPPED, ...MEMORY_SKIPPED_IN_CELL },
   )
   const dir = path.resolve(import.meta.dirname, '..', 'matrix')
   mkdirSync(dir, { recursive: true })

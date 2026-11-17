@@ -109,7 +109,7 @@ export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSear
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3" data-testid="door-tools-card">
       <h3 className="font-medium text-sm">Tools</h3>
       <p className="text-xs text-muted-foreground">
-        Off by default. Every tool runs inside the agent&apos;s sealed cell: a small scratch folder that is emptied when it stops, no network, no secrets.
+        Off by default. Every tool runs inside the agent&apos;s sealed cell: a small scratch folder that is {tools?.keepScratch ? 'kept when it stops (see Memory)' : 'emptied when it stops'}, no network, no secrets.
         With &quot;Ask an admin&quot;, the door posts exactly what the agent wants to run in the channel, and it runs only if an admin replies approve or reacts ✅.
       </p>
       {builtFor !== undefined ? (

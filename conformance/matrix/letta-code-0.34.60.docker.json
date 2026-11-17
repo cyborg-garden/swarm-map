@@ -716,6 +716,11 @@
       "checks": []
     },
     {
+      "rule": "mem.notes",
+      "status": "shared",
+      "checks": []
+    },
+    {
       "rule": "san.in",
       "status": "shared",
       "checks": []

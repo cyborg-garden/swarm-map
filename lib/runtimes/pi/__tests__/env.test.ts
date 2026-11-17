@@ -69,9 +69,10 @@ describe('the flags the shim gives Pi', () => {
     ])
   })
 
-  it('[U:pi-env] with no tools allowed, Pi is told to load none at all, the gate\'s web tool included', () => {
+  it('[U:pi-env] with no tools allowed, Pi is told to load none: not its own, and none the gate registers (the web tools, the door\'s notes tool)', () => {
     const args = piArgs({ ...o, tools: [] })
     expect(args).toContain('--no-tools')
+    // Pi keeps a registered tool under --no-builtin-tools, so that flag would leave the gate's tools declared.
     expect(args).not.toContain('--no-builtin-tools')
     expect(args).not.toContain('--tools')
   })
@@ -87,7 +88,7 @@ describe('the flags the shim gives Pi', () => {
     expect(systemPromptProblem('package.json', process.cwd())).toMatch(/names a file/)
     expect(systemPromptProblem(import.meta.filename, '/')).toMatch(/names a file/)
     expect(systemPromptProblem('', '/')).toMatch(/empty/)
-    expect(systemPromptProblem('x'.repeat(4001), '/')).toMatch(/too long/)
+    expect(systemPromptProblem('x'.repeat(16_001), '/')).toMatch(/too long/)
     expect(systemPromptProblem('You are\u0000 Fern', '/')).toMatch(/plain text/)
     expect(systemPromptProblem('You are Fern.\nYou have no tools.', '/')).toBeUndefined()
   })

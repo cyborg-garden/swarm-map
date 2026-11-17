@@ -28,6 +28,8 @@ export interface Cell {
   vetoTimeoutMs: number
   /** The time one shell call may run and the output that reaches the model, when a check sets them. */
   toolLimits?: { callSeconds?: number; outputBytes?: number }
+  /** What the harness is told it is, when a check sets it. */
+  systemPrompt?: string
 }
 
 /** What the tool checks need from a harness whose shim holds a call for approval and keeps file tools in a scratch folder. */

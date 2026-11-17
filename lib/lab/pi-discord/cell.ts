@@ -121,7 +121,7 @@ export function renderCell(o: CellOptions): LiveFile {
   const name = `smlab-${o.nonce}`
   if (!PROJECT_NAME.test(name)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
-  if (o.systemPrompt === '' || o.systemPrompt.length > 4000) throw new RefusingToRun('F5', 'not a system prompt')
+  if (o.systemPrompt === '' || o.systemPrompt.length > 16_000) throw new RefusingToRun('F5', 'not a system prompt')
   const kind = cellKind(o.harness)
   const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages(o.harness)
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
@@ -375,4 +375,60 @@ export function scratchProblems(project: string, mb: number = DEFAULT_TOOL_LIMIT
     else if (landed > size * 1024 * 1024) p.push(`${what} took ${landed} bytes, which is more than its ${size} MB`)
   }
   return p
+}
+
+/**
+ * A kept scratch folder (`tools.keepScratch`). When the agent stops, the folder is read out of the
+ * cell as one tar stream and stored as it is, in the agent's state folder. When it starts, that same
+ * stream is unpacked again INSIDE the new cell, by the cell's own user, into the capped folder.
+ * This machine never unpacks it, so nothing the agent put there can land anywhere on this machine,
+ * and the folder's own size cap still holds what comes back. Docs: docs/lab/persona-memory.md.
+ */
+export const KEPT_SCRATCH_FILE = 'scratch.tar'
+/** The most a kept folder may take: the folder's own size, and a little for the tar's headers. */
+export const keptScratchMaxBytes = (mb: number = DEFAULT_TOOL_LIMITS.workspaceMb): number => (mb + 1) * 1024 * 1024
+/** Beside the kept folder: the tool rules it was kept under. */
+export const KEPT_SCRATCH_RULES_FILE = 'scratch.json'
+
+/**
+ * What to do with a kept folder when the agent starts. It is put back only under the tool rules it was
+ * kept under. Rules that let the agent write a file without asking can leave a script there; put back
+ * under rules where the shell asks, an admin would approve only the script's name (the same reason the
+ * rules refuse shell asking while writing files does not). So a copy kept under other rules, or with no
+ * record of them, is removed, and so is any copy once keeping is switched off.
+ */
+export function keptScratchPlan(o: { keep: boolean; rulesNow: string; kept: { size: number; rules: string | undefined } | undefined }): 'none' | 'restore' | 'drop' {
+  if (o.kept === undefined) return 'none'
+  if (!o.keep || o.kept.rules !== o.rulesNow || o.kept.size > keptScratchMaxBytes()) return 'drop'
+  return 'restore'
+}
+
+export function scratchSaveArgs(project: string): string[] {
+  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
+  return ['exec', '-u', 'node', `${project}-cell-1`, 'tar', '-c', '-C', SCRATCH_DIR, '.']
+}
+export function scratchRestoreArgs(project: string): string[] {
+  if (!PROJECT_NAME.test(project)) throw new RefusingToRun('F5', `not a lab project: ${project}`)
+  return ['exec', '-i', '-u', 'node', `${project}-cell-1`, 'tar', '-x', '--no-same-owner', '--no-same-permissions', '-C', SCRATCH_DIR]
+}
+
+/** Read the scratch folder out of a running cell. Undefined, with the reason, when it cannot be kept. */
+export function readScratch(project: string, maxBytes: number = keptScratchMaxBytes()): { tar?: Buffer; why?: string } {
+  const r = spawnSync('docker', scratchSaveArgs(project), { env: dockerEnv(), timeout: 60_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: maxBytes })
+  if (r.error && /ENOBUFS|maxBuffer/i.test(String((r.error as NodeJS.ErrnoException).code ?? r.error.message))) return { why: `the folder is bigger than ${maxBytes} bytes` }
+  if (r.status !== 0 || !Buffer.isBuffer(r.stdout)) return { why: 'the cell did not hand the folder over' }
+  return { tar: r.stdout }
+}
+
+/**
+ * Put a kept folder back, unpacked inside the cell. False when the cell refused it. Right after a cell
+ * starts, Docker can refuse an exec now and then ("exec failed ... broken pipe"), so it is tried three times.
+ */
+export function writeScratch(project: string, tar: Buffer, tries = 3): boolean {
+  for (let i = 0; i < tries; i++) {
+    if (i > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+    const r = spawnSync('docker', scratchRestoreArgs(project), { env: dockerEnv(), timeout: 60_000, input: tar, stdio: ['pipe', 'ignore', 'ignore'] })
+    if (r.status === 0) return true
+  }
+  return false
 }

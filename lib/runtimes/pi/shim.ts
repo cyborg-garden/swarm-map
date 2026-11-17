@@ -17,8 +17,9 @@ import path from 'node:path'
 import type { Envelope } from '../../door/protocol.ts'
 import { connectShim, type ShimClient } from '../../door/shim-client.ts'
 import { PI_CAPS } from './caps.ts'
+import { MEMORY_TOOL } from './cell/gate.ts'
 import { renderPrompt } from './preamble.ts'
-import { createPiRpc, type PiProcess, type PiRpc } from './rpc.ts'
+import { createPiRpc, type GateCall, type PiProcess, type PiRpc } from './rpc.ts'
 
 export interface PiShimOptions {
   host: string
@@ -57,9 +58,12 @@ export interface PiShim { close(): void }
  * a prompt that names a file as that file's contents, so one that does is
  * refused: the prompt is text, never a way to read something in the cell.
  */
+/** The longest system prompt handed to Pi: a persona of up to 8 KB, and what the launcher writes after it. */
+export const SYSTEM_PROMPT_MAX = 16_000
+
 export function systemPromptProblem(prompt: string, workDir: string): string | undefined {
   if (prompt === '') return 'the system prompt is empty'
-  if (prompt.length > 4000) return 'the system prompt is too long'
+  if (prompt.length > SYSTEM_PROMPT_MAX) return 'the system prompt is too long'
   if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(prompt)) return 'the system prompt is not plain text'
   if (existsSync(path.resolve(workDir, prompt))) return 'the system prompt names a file'
   return undefined
@@ -72,7 +76,8 @@ export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: s
     ...(o.resume ? ['--continue'] : []),
     '--provider', 'swarm', '--model', o.model,
     ...(o.systemPrompt !== undefined ? ['--system-prompt', o.systemPrompt] : []),
-    // With no tools, none at all: --no-builtin-tools would leave the gate's own web tool declared.
+    // --no-tools, not --no-builtin-tools: the gate registers its own tools (the web tools, the door's notes tool),
+    // and Pi keeps a registered tool under --no-builtin-tools. A turn given no tool must not be able to call one.
     ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-tools']),
     '--no-context-files', '--no-skills', '--no-mcp', '--no-extensions', '--no-prompt-templates',
     '-e', o.gate.path,
@@ -104,6 +109,17 @@ export function piEnv(o: Pick<PiShimOptions, 'agentDir' | 'homeDir' | 'workDir' 
 /** A session's own transcript folder. Named by a hash of the key, so the key is never used as a path. */
 export function sessionDirFor(sessionsDir: string, sessionKey: string): string {
   return path.join(sessionsDir, createHash('sha256').update(sessionKey).digest('hex').slice(0, 16))
+}
+
+/**
+ * The door's answer to one of its own tools, as the text the model is given. Only that one name is
+ * carried this way, and only inside a live turn; the door decides it like any other call.
+ */
+export async function answerDoorTool(call: GateCall, turnId: string | undefined, ask: ShimClient['requestTool']): Promise<string> {
+  if (call.tool !== MEMORY_TOOL) return 'Not saved: that is not one of the door\'s tools.'
+  if (!turnId) return 'Not saved: no turn is live.'
+  const answer = await ask(turnId, call.tool, call.input)
+  return answer.reason ?? (answer.allow ? 'Done.' : 'Not saved.')
 }
 
 /**
@@ -159,6 +175,8 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
             ? client.webSearch(doorId, call.query, opts.gateTimeoutMs)
             : client.webFetch(doorId, String(call.url), opts.gateTimeoutMs)
         },
+        // The door's own tool. Only that one name is carried this way, and the door decides it like any other call.
+        onDoorTool: (call) => answerDoorTool(call, live.turnId, client.requestTool),
       }),
     }
     child.on('exit', () => { if (slot.live === live) slot.live = undefined })

@@ -169,6 +169,7 @@ const OTHER_FIELDS: Record<string, string> = {
   './harnesses/[id]/duplicate/route.ts': 'name',
   './harnesses/[id]/door/receipts/route.ts': '?last',
   './harnesses/[id]/door/rules/route.ts': 'rules secrets version',
+  './harnesses/[id]/door/memory/route.ts': '?all ?room files room',
   './harnesses/[id]/image/route.ts': 'imageRef',
   './harnesses/[id]/logs/route.ts': '?lines ?source',
   './harnesses/[id]/models/route.ts': 'cascade chain expected_chain expected_fallback_providers fallback_providers model provider set_primary',
@@ -290,6 +291,8 @@ const SERVES_DOOR = new Set([
   './harnesses/[id]/door/route.ts',
   './harnesses/[id]/door/rules/route.ts',
   './harnesses/[id]/door/receipts/route.ts',
+  './harnesses/[id]/door/memory/route.ts',
+  './harnesses/[id]/door/memory/download/route.ts',
 ])
 // The sweep stubs fs writes; the stored rows are put in place with the real one.
 const realWriteFileSync = fs.writeFileSync

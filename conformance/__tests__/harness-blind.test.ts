@@ -5,6 +5,7 @@
 // HarnessUnderTest (suites/harness.ts). This guard reads the shared files and
 // fails if one of them reaches into a runtime, an adapter, or a harness's
 // native names again.
+import { MEMORY_CHECKS } from '../suites/memory-checks.ts'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -47,7 +48,7 @@ describe('the shared shim suite names no harness', () => {
     // One optional key since: `tools`, for a harness whose shim can run the tool checks.
     expect(Object.keys(pi).sort()).toEqual(['broken', 'build', 'caps', 'cellEnv', 'modelShape', 'rows', 'shell', 'start', 'tools', 'tripwire', 'workFile'])
     // Its broken shims name the shared checks and the tool checks, which are shared too, and nothing of its own.
-    const ids = [...CHECKS, ...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS].map((c) => c.id)
+    const ids = [...CHECKS, ...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS, ...MEMORY_CHECKS].map((c) => c.id)
     for (const v of Object.values(brokenVariants(pi))) for (const id of [...v.red, ...v.green]) expect(ids).toContain(id)
     // The second one did it: one more optional key (a patch to the lab's starting policy), and why it is not put through the tool checks.
     const second = lettaCodeHarness(fakeLettaCodeCommand(), 'fake')

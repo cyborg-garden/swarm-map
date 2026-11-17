@@ -18,6 +18,8 @@ import { createLineDecoder, encodeLine } from '../../door/framing.ts'
 
 export const GATE_PREFIX = 'swarm-gate:v1:'
 export const GATE_READY = 'swarm-gate:v1:ready'
+/** A request for one of the door's own tools (`memory_note`), sent by the gate as an `input` dialog. Answered with the door's words. */
+export const DOOR_PREFIX = 'swarm-door:v1:'
 /** The web tool asks for its page through an `input` dialog whose title starts with this. */
 export const WEB_PREFIX = 'swarm-web:v1:'
 
@@ -57,6 +59,11 @@ const DIALOGS = new Set(['select', 'confirm', 'input', 'editor'])
 export interface PiRpcOptions {
   /** The sidecar's answer. A yes with no hash of a call is not a yes. */
   onGate: (call: GateCall) => Promise<{ allow: boolean; hash?: string }>
+  /**
+   * A door tool the gate asked for: the door's answer, as the text the model is given. Left out,
+   * or on any error, the answer says nothing was done.
+   */
+  onDoorTool?: (call: GateCall) => Promise<string>
   /** The door's answer to the web tool. Left out, the web tool gets no page. */
   onWeb?: (call: WebCall) => Promise<WebPage>
   /** How long the gate has, from process start, to announce itself. Default 15 seconds. */
@@ -84,6 +91,14 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
     }
     send({ type: 'extension_ui_response', id, value })
   }
+  const doorTool = async (id: string, title: string): Promise<void> => {
+    let value = 'Not saved: the door could not be asked.'
+    try {
+      const call = JSON.parse(title.slice(DOOR_PREFIX.length)) as GateCall
+      if (opts.onDoorTool) value = await opts.onDoorTool(call)
+    } catch { /* the answer stays a no */ }
+    send({ type: 'extension_ui_response', id, value })
+  }
 
   const web = async (id: string, title: string): Promise<void> => {
     let page: WebPage = { ok: false, reason: 'no page' }
@@ -103,6 +118,7 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
         if (r.method === 'notify' && r.message === GATE_READY) { clearTimeout(gateTimer); gateSettled(true); return }
         if (!r.id || !DIALOGS.has(r.method ?? '')) return // other notices need no answer
         if (r.method === 'select' && r.title?.startsWith(GATE_PREFIX)) void gate(r.id, r.title)
+        else if (r.method === 'input' && r.title?.startsWith(DOOR_PREFIX)) void doorTool(r.id, r.title)
         else if (r.method === 'input' && r.title?.startsWith(WEB_PREFIX)) void web(r.id, r.title)
         else send({ type: 'extension_ui_response', id: r.id, cancelled: true }) // nobody is here to answer a dialog
         return

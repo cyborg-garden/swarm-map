@@ -15,6 +15,8 @@ export const PI_TOOL_MAP: Record<string, ToolClass> = {
   edit: 'file_write',
   write: 'file_write',
   bash: 'shell',
+  // The door's own tool, registered by the gate. It runs on the host, in the door, never in the cell.
+  memory_note: 'memory',
   // Not Pi's own: the gate adds it. It asks the door, which fetches the page (lib/door/web-fetch.ts).
   web_fetch: 'network',
   web_search: 'search',

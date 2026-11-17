@@ -7,7 +7,7 @@
 // the relay. Nothing here puts a secret in a container, a log or an error.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { sinkProblems, startHostListener } from '../../../conformance/docker/runner.ts'
@@ -17,13 +17,14 @@ import { createDiscordConnector } from '../../door/connectors/discord.ts'
 import { createDoor, type Door } from '../../door/door.ts'
 import { startModelRoute, type ModelRoute } from '../../door/model-route.ts'
 import { OPENAI_CHAT } from '../../door/model-shapes.ts'
+import { createMemoryStore } from '../../door/memory.ts'
 import { createReceiptLog } from '../../door/receipts.ts'
 import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
-import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
-import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE, keptScratchPlan, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
+import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, toolModes, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -47,6 +48,8 @@ export function prepareStateDir(dir: string): string {
 }
 
 export const runFile = (stateDir: string): string => path.join(stateDir, 'run.json')
+/** Where the door keeps its notes for each room (lib/door/memory.ts): in the state folder, outside every cell. */
+export const memoryDir = (stateDir: string): string => path.join(stateDir, 'memory')
 export function readRun(stateDir: string): RunRecord | undefined {
   try { return JSON.parse(readFileSync(runFile(stateDir), 'utf8')) as RunRecord } catch { return undefined }
 }
@@ -166,6 +169,49 @@ export async function start(o: StartOptions): Promise<Running> {
   const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
 
+  // One check for everything the door posts, writes down or keeps as a note.
+  const sanitizer = createSanitizer({ extraSecrets: [...secrets, ...cellHeld] })
+  // mem.notes: the room notes live here, on this machine, in this agent's state folder. The cell never sees the folder.
+  const memory = o.config.memory?.notes === true ? createMemoryStore({ dir: memoryDir(stateDir), sanitizer }) : undefined
+  // tools.keepScratch: the scratch folder as the cell left it at the last stop, put back in the new cell.
+  const keep = o.config.tools?.keepScratch === true
+  const keptFile = path.join(stateDir, KEPT_SCRATCH_FILE)
+  const keptRulesFile = path.join(stateDir, KEPT_SCRATCH_RULES_FILE)
+  // The tool rules the folder is kept under. It comes back only under the same ones (keptScratchPlan).
+  const rulesNow = JSON.stringify(toolModes(o.config))
+  let cellIsUp = false
+  const dropKept = (): void => { rmSync(keptFile, { force: true }); rmSync(keptRulesFile, { force: true }) }
+  const restoreScratch = (): void => {
+    let rules: string | undefined
+    try { rules = (JSON.parse(readFileSync(keptRulesFile, 'utf8')) as { rules?: unknown }).rules as string | undefined } catch { rules = undefined }
+    const kept = existsSync(keptFile) ? { size: statSync(keptFile).size, rules: typeof rules === 'string' ? rules : undefined } : undefined
+    const plan = keptScratchPlan({ keep, rulesNow, kept })
+    if (plan === 'none') return
+    if (plan === 'drop') {
+      dropKept()
+      o.log(!keep ? 'keeping the scratch folder is off, so the kept copy was removed'
+        : kept!.rules !== rulesNow ? 'the kept scratch folder was kept under other tool rules, so it was removed and the folder starts empty'
+          : 'the kept scratch folder is bigger than the folder may be, so it was removed and the folder starts empty')
+      return
+    }
+    o.log(writeScratch(project, readFileSync(keptFile)) ? 'the kept scratch folder was put back' : 'the kept scratch folder could not be put back whole, so some of it may be missing')
+  }
+  const saveScratch = (): void => {
+    if (!keep || !cellIsUp) return
+    const { tar, why } = readScratch(project)
+    if (!tar) {
+      // A copy from an earlier stop would come back looking current. It is removed rather than kept stale.
+      dropKept()
+      o.log(`the scratch folder was not kept: ${why}`)
+      return
+    }
+    writeFileSync(`${keptFile}.tmp`, tar, { mode: 0o600 })
+    writeFileSync(`${keptRulesFile}.tmp`, JSON.stringify({ rules: rulesNow }) + '\n', { mode: 0o600 })
+    renameSync(`${keptFile}.tmp`, keptFile)
+    renameSync(`${keptRulesFile}.tmp`, keptRulesFile)
+    o.log(`the scratch folder was kept (${tar.length} bytes)`)
+  }
+
   let door: Door | undefined
   let route: ModelRoute | undefined
   let stopped = false
@@ -174,6 +220,7 @@ export async function start(o: StartOptions): Promise<Running> {
     stopped = true
     await door?.close().catch(() => {})
     await route?.close().catch(() => {})
+    try { saveScratch() } catch { o.log('the scratch folder could not be kept') }
     const left = cellDown(project)
     rmSync(runFile(stateDir), { force: true })
     rmSync(path.join(stateDir, 'compose.json'), { force: true })
@@ -208,6 +255,7 @@ export async function start(o: StartOptions): Promise<Running> {
     const running = runningCellProblems(project, networksWritten(file))
     if (running.length > 0) throw new Error(`the cell is not sealed: ${running.join('; ')}`)
     o.log(`cell up and sealed (${project})`)
+    cellIsUp = true
 
     const connector: SurfaceConnector = createDiscordConnector({
       ...(o.discord ?? {}),
@@ -218,7 +266,7 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
-      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }),
+      receipts, brainToken, brainPort, sanitizer, memory, keptScratch: keep,
       ...(o.config.tools?.web?.search === true && o.secrets.searchKey ? { search: { key: o.secrets.searchKey } } : {}), turnDeadlineMs: turnSecondsOf(o.config) * 1000,
       approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
     })
@@ -229,6 +277,9 @@ export async function start(o: StartOptions): Promise<Running> {
       pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: Date.now, log: o.log,
     }, { redialMs: o.cellRedialMs ?? 3_000, readyMs: o.cellReadyMs ?? 60_000, force: o.redialCell === true })
+    // Put back once the cell has joined the door and is the cell that stays: a cell that is started again
+    // comes back with an empty folder (it is in memory), and one that has not joined yet may be about to be.
+    restoreScratch()
     o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)
     return { project, door, stop }
   } catch (err) {

@@ -472,8 +472,8 @@ the hand-back, where every page and every result already passes.
 
 ## What was left out
 
-- **Keeping the scratch folder.** It is always wiped on stop. A kept folder needs a volume, and
-  a plain Docker volume has no size cap.
+- **Keeping the scratch folder.** Built since, as `tools.keepScratch`, off by default: see
+  [`persona-memory.md`](persona-memory.md).
 - **Role-holders as approvers** (`approverRoles`). Still refused by `decide()`.
 - **Per-room tool lists**, code-exec, browser, MCP and memory tools.
 - **Scanning pages for prompt injection** (see "Scanning what comes back"), a GitHub token, and web

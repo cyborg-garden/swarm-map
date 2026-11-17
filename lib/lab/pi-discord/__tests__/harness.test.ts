@@ -190,7 +190,7 @@ describe('what Letta Code is told it is', () => {
   it('[U:letta-code-args] a prompt that could be read as a flag, or is not plain text, is refused', () => {
     expect(lettaCodeSystemPromptProblem('You are Fern.\nYou have no tools.')).toBeUndefined()
     expect(lettaCodeSystemPromptProblem('')).toMatch(/empty/)
-    expect(lettaCodeSystemPromptProblem('x'.repeat(4001))).toMatch(/too long/)
+    expect(lettaCodeSystemPromptProblem('x'.repeat(16_001))).toMatch(/too long/)
     expect(lettaCodeSystemPromptProblem('--permission-mode unrestricted')).toMatch(/flag/)
     expect(lettaCodeSystemPromptProblem('You are\u0007 Fern')).toMatch(/plain text/)
   })

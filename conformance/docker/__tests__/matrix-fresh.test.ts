@@ -11,12 +11,13 @@ import { describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../../lib/runtimes/pi/caps.ts'
 import { buildMatrix, KNOWN_CHECK_IDS, type Matrix } from '../../matrix.ts'
 import { MODEL_FAILURE_CHECKS } from '../../suites/failure-checks.ts'
-import { BROKEN_RIGS as SHARED_RIGS, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL, TOOL_RIGS, TOOLS_IN_CELL } from '../broken.ts'
+import { BROKEN_RIGS as SHARED_RIGS, IN_CELL as SHARED_IN_CELL, MEMORY_IN_CELL, MEMORY_SKIPPED_IN_CELL, SKIPPED_IN_CELL, TOOL_RIGS, TOOLS_IN_CELL } from '../broken.ts'
+import { MEMORY_CHECKS } from '../../suites/memory-checks.ts'
 import { SEAL_CHECKS } from '../runner.ts'
 
 const file = path.resolve(import.meta.dirname, '..', '..', 'matrix', `pi-${PI_VERSION}.docker.json`)
 // Pi is put through the tool checks as well, with the gates that are broken for them.
-const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL]
+const IN_CELL = [...SHARED_IN_CELL, ...TOOLS_IN_CELL, ...MEMORY_IN_CELL]
 const BROKEN_RIGS = { ...SHARED_RIGS, ...TOOL_RIGS }
 const committed = JSON.parse(readFileSync(file, 'utf8')) as Matrix
 const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
@@ -32,13 +33,13 @@ describe('the committed Docker matrix for the pinned Pi', () => {
 
   it('[U:docker-matrix] has a result for every check the Docker run makes today, under today\'s title', () => {
     // Plus Pi's own: the checks that a failed model call is told to the room.
-    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id)])].sort())
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id), ...MEMORY_CHECKS.map((c) => c.id)])].sort())
     for (const check of [...SEAL_CHECKS, ...IN_CELL]) {
       expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance:docker`).toBeDefined()
       expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)
       expect(rows[check.id].title, check.id).toBe(check.title)
     }
-    for (const [id, reason] of Object.entries(SKIPPED_IN_CELL)) expect(rows[id]).toMatchObject({ status: 'not-run', reason })
+    for (const [id, reason] of Object.entries({ ...SKIPPED_IN_CELL, ...MEMORY_SKIPPED_IN_CELL })) expect(rows[id]).toMatchObject({ status: 'not-run', reason })
   })
 
   it('[U:docker-matrix] names every broken rig the suite has today, and on that run each turned its checks red', () => {
