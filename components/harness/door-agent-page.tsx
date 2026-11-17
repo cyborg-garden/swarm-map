@@ -89,8 +89,11 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
         const f = await failure(res, verb === 'start' ? 'Start failed' : 'Stop failed')
         setProblem(f)
         toast.error(f.error)
+      } else if (verb === 'stop') {
+        toast.success('Stopped')
       } else {
-        toast.success(verb === 'start' ? 'The cell was checked and the door is starting' : 'Stopped')
+        const started = await res.json().catch(() => ({})) as { by?: string; supervisor?: string }
+        toast.success(started.by === 'supervisor' ? `The cell was checked, and pm2 started the door (${started.supervisor})` : 'The cell was checked and the door is starting')
       }
     } catch {
       toast.error(verb === 'start' ? 'Start failed' : 'Stop failed')
@@ -207,8 +210,8 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
                     toast.error(f.error)
                     return false
                   }
-                  const { applied } = await res.json()
-                  toast.success(applied === 'restarted' ? 'Saved. The door was restarted on the new rules' : 'Saved')
+                  const { applied, by, supervisor } = await res.json()
+                  toast.success(applied !== 'restarted' ? 'Saved' : by === 'supervisor' ? `Saved. pm2 restarted the door (${supervisor}) on the new rules` : 'Saved. The door was restarted on the new rules')
                   return true
                 } catch {
                   toast.error('Save failed')
@@ -313,7 +316,7 @@ function Overview({ view }: { view: DoorAgentView }) {
       <div className="col-span-2">
         <Card title="Run it under a supervisor">
           <p className="text-xs text-muted-foreground">
-            Start runs the door as a background process. To have it restarted when it exits with an error, run it under pm2 instead. Stop on this page still stops it, and it stays stopped:
+            Start runs the door as a background process. To have it restarted when it exits with an error, run it under pm2 instead. Start and Save on this page then go through pm2, so pm2 keeps watching the one door. Stop on this page still stops it, and it stays stopped:
           </p>
           <pre className="overflow-x-auto rounded-md bg-muted p-2 text-xs font-mono">{view.supervisor.command}</pre>
         </Card>

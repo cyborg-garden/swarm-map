@@ -31,13 +31,13 @@ import { harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/p
 import { doorAgentName, doorNameClash, doorNameTaken } from '@/lib/door-agent-name'
 import type { Harness } from '@/lib/types'
 import type { AuditService } from './audit'
-import type { DoorLauncher } from './door-launcher'
+import type { DoorLauncher, SupervisedApp } from './door-launcher'
 import { tailLogFile } from './harness'
 import {
   checkRecordInput, doorAgentPaths, draftRecord, renderConfig, renderStartScript, rulesProblems, secretProblems,
   supervisorCommand, type DoorRulesRecord,
 } from './door-record'
-import { isDoorRuntime, type DoorRuntime, type DoorRuntimeAdapter, type DoorStatus, type DoorUsage } from './runtime-adapter'
+import { isDoorRuntime, type DoorRuntime, type DoorRuntimeAdapter, type DoorStarted, type DoorStatus, type DoorUsage } from './runtime-adapter'
 import type { Storage } from './storage'
 
 const HARNESSES_FILE = 'harnesses.json'
@@ -456,8 +456,12 @@ export class DoorAgentService implements DoorRuntimeAdapter {
 
   // --- start, stop, save ------------------------------------------------------
 
-  /** Dry-run the record's rules, and start the door only if the dry run ends ready. */
-  async start(id: string): Promise<void> {
+  /**
+   * Dry-run the record's rules, and start the door only if the dry run ends ready. When a supervisor
+   * has an app for this agent, running or stopped, it is asked to start it: a door the page started
+   * beside it would be a second door, and one the supervisor does not watch.
+   */
+  async start(id: string): Promise<DoorStarted> {
     const record = this.record(id)
     return this.exclusive(id, async () => {
       const problems = rulesProblems(record)
@@ -467,9 +471,11 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       const misplaced = secretProblems(record, this.repoRoot)
       if (misplaced.length > 0) throw new DoorError(422, 'Not started. The secret files are not in place', misplaced)
       const p = this.render(record)
+      const app = this.supervisedApp(record, undefined, 'Not started')
       await this.dryRunOrRefuse(record, p.config, 'Not started')
-      await this.startDoor(record)
-      this.audit.append({ who: 'admin', what: 'door:start', target: record.name })
+      const started = await this.bringUp(record, app)
+      this.audit.append({ who: 'admin', what: 'door:start', target: record.name, meta: { by: started.by } })
+      return started
     })
   }
 
@@ -491,7 +497,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
    * stopped keeps its old rules, so nothing is stored: the record never says
    * something else than the door that is running.
    */
-  async saveRules(id: string, input: { rules: unknown; secrets: unknown; version: unknown }): Promise<{ record: DoorRulesRecord; applied: 'stored' | 'restarted' }> {
+  async saveRules(id: string, input: { rules: unknown; secrets: unknown; version: unknown }): Promise<{ record: DoorRulesRecord; applied: 'stored' } | ({ record: DoorRulesRecord; applied: 'restarted' } & DoorStarted)> {
     const current = this.record(id)
     return this.exclusive(id, async () => {
       const checked = checkRecordInput(current, input)
@@ -500,27 +506,40 @@ export class DoorAgentService implements DoorRuntimeAdapter {
         throw new DoorError(409, 'Not saved. The rules were changed somewhere else since this page loaded. Reload and try again')
       }
       const next: DoorRulesRecord = { ...current, rules: checked.rules!, secrets: checked.secrets!, version: current.version + 1, updatedAt: this.now().toISOString() }
-      const running = this.statusOf(id, current).state === 'running'
+      const status = this.statusOf(id, current)
+      const running = status.state === 'running'
       const p = doorAgentPaths(this.dataDir, id)
+      let app: SupervisedApp | null = null
       if (running) {
         const misplaced = secretProblems(next, this.repoRoot)
         if (misplaced.length > 0) throw new DoorError(422, 'Not saved. The door keeps running on the rules it had. The secret files are not in place', misplaced)
+        // Who brings the door back is settled before anything is stopped. A door under a supervisor is
+        // started again by it; one that cannot be asked is not stopped at all.
+        app = this.supervisedApp(current, status.pid, 'Not saved. The door keeps running on the rules it had')
         fs.writeFileSync(p.candidateConfig, renderConfig(next), { mode: 0o600 })
         try { await this.dryRunOrRefuse(next, p.candidateConfig, 'Not saved. The door keeps running on the rules it had') } finally { fs.rmSync(p.candidateConfig, { force: true }) }
         try { await this.stopDoor(current) } catch {
-          throw new DoorError(500, 'Not saved. The door could not be stopped cleanly, so the rules on record are unchanged. The Logs tab and the launcher\'s `stop` command say more')
+          // The stop may have ended the door all the same. Then it is started again on the rules it had,
+          // which are still the ones on record and on disk, so a failed save never leaves it down.
+          const back = this.statusOf(id, current).state === 'running' ? 'It is still running on the rules it had' : await this.bringUp(current, app).then(
+            () => 'It was started again on the rules it had',
+            (err) => `It stopped, and could not be started again: ${err instanceof Error ? err.message : 'unknown error'}`,
+          )
+          throw new DoorError(500, `Not saved. The door could not be stopped cleanly, so the rules on record are unchanged. ${back}. The Logs tab and the launcher's \`stop\` command say more`)
         }
       }
       this.writeRecord(next)
       this.render(next)
       this.audit.append({ who: 'admin', what: 'door:rules', target: next.name, meta: { version: next.version, policy: policyFor(next.rules).hash.slice(0, 12) } })
       if (!running) return { record: next, applied: 'stored' as const }
+      let started: DoorStarted
       try {
-        await this.startDoor(next)
+        started = await this.bringUp(next, app)
       } catch (err) {
-        throw new DoorError(500, `The rules were saved, but the door did not come back up: ${err instanceof Error ? err.message : 'unknown error'}`)
+        const again = app ? ` Run \`pm2 restart ${app.name}\` to try again.` : ''
+        throw new DoorError(500, `The rules were saved, but the door did not come back up: ${err instanceof Error ? err.message : 'unknown error'}.${again}`)
       }
-      return { record: next, applied: 'restarted' as const }
+      return { record: next, applied: 'restarted' as const, ...started }
     })
   }
 
@@ -580,6 +599,36 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     if (result !== 'ready') {
       throw new DoorError(422, `${refusedAs}. The dry run did not end "ready to start"`, lines.length > 0 ? lines : ['The dry run did not finish'])
     }
+  }
+
+  /**
+   * The supervisor app that runs this agent's door, or null. A supervisor that is there but cannot be
+   * asked refuses the change, as does a door whose parent is pm2 when pm2 lists no app for it: restarting
+   * either around the supervisor could leave two doors, or one that nothing watches.
+   */
+  private supervisedApp(record: DoorRulesRecord, pid: number | undefined, refusedAs: string): SupervisedApp | null {
+    const startScript = doorAgentPaths(this.dataDir, record.id).startScript
+    const found = this.launcher.supervisedBy?.({ startScript, pid }) ?? null
+    if (found !== null && 'unknown' in found) throw new DoorError(409, `${refusedAs}. ${found.unknown}`)
+    if (found === null && pid !== undefined && this.launcher.supervisor?.(pid)) {
+      throw new DoorError(409, `${refusedAs}. The door runs under pm2, but pm2 lists no app for it, so it cannot be restarted through pm2. Stop it with pm2, then use Start here`)
+    }
+    return found
+  }
+
+  /** Start the door: through its supervisor app when it has one, else as this page's own background process. */
+  private async bringUp(record: DoorRulesRecord, app: SupervisedApp | null): Promise<DoorStarted> {
+    if (!app) {
+      await this.startDoor(record)
+      return { by: 'page' }
+    }
+    const p = doorAgentPaths(this.dataDir, record.id)
+    fs.mkdirSync(p.stateDir, { recursive: true, mode: 0o700 })
+    // The page did not start this one.
+    fs.rmSync(p.startedByPage, { force: true })
+    if (!this.launcher.restartSupervised) throw new Error('this launcher cannot ask a supervisor to restart a door')
+    await this.launcher.restartSupervised(app, { stateDir: p.stateDir })
+    return { by: 'supervisor', supervisor: app.name }
   }
 
   private async startDoor(record: DoorRulesRecord): Promise<void> {

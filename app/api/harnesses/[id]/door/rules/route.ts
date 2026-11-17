@@ -17,8 +17,9 @@ export async function PUT(
   if (refusal) return refusal
   const body = await request.json().catch(() => ({}))
   try {
-    const { record, applied } = await services.doorAgents.saveRules(id, { rules: body.rules, secrets: body.secrets, version: body.version })
-    return NextResponse.json({ record, applied })
+    // The record, whether it was applied to a running door, and who started that door again.
+    const saved = await services.doorAgents.saveRules(id, { rules: body.rules, secrets: body.secrets, version: body.version })
+    return NextResponse.json(saved)
   } catch (err) {
     return doorErrorResponse(err)
   }

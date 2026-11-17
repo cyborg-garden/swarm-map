@@ -43,6 +43,13 @@ let stopFails: boolean
 let livePids: Set<number>
 let nodeProblem: string | undefined
 let supervisorOf: (pid: number) => 'pm2' | undefined
+// A stand-in for pm2: the apps it lists, whether it can be asked at all, and whether a restart works.
+let pm2Apps: { id: number; name: string; script: string; pid: number | null }[]
+let pm2Unknown: string | undefined
+let pm2Asked: (number | null)[]
+let pm2RestartFails: string | undefined
+// A stop that ends the door but leaves something behind, as when the door was killed before it cleaned up.
+let stopKillsButFails: boolean
 let svc: DoorAgentService
 let secrets: { discordTokenFile: string; modelKeyFile: string }
 
@@ -76,10 +83,29 @@ function stubLauncher(): DoorLauncher {
       if (stopFails) return { ok: false, output: 'these containers are still there' }
       livePids.clear()
       fs.rmSync(path.join(o.stateDir, 'run.json'), { force: true })
-      return { ok: true, output: 'stopped' }
+      // pm2 keeps a door that exited 0 stopped: the stop exit code it is started with.
+      for (const app of pm2Apps) app.pid = null
+      return stopKillsButFails ? { ok: false, output: 'these containers are still there' } : { ok: true, output: 'stopped' }
     },
     alive: (pid) => livePids.has(pid),
     supervisor: (pid) => supervisorOf(pid),
+    supervisedBy(o) {
+      pm2Asked.push(o.pid ?? null)
+      if (pm2Unknown) return { unknown: pm2Unknown }
+      const found = pm2Apps.filter((a) => a.script === o.startScript || (o.pid !== undefined && a.pid === o.pid))
+      return found.length === 0 ? null : { supervisor: 'pm2', id: found[0].id, name: found[0].name }
+    },
+    async restartSupervised(app, o) {
+      calls.push(`pm2 restart ${app.name}`)
+      if (pm2RestartFails) throw new Error(pm2RestartFails)
+      // pm2 runs the start script as it is on disk now, so the door comes up on the config written last.
+      const config = JSON.parse(fs.readFileSync(paths().config, 'utf8'))
+      fs.mkdirSync(o.stateDir, { recursive: true })
+      for (const pid of livePids) if (supervisorOf(pid) === 'pm2') livePids.delete(pid)
+      fs.writeFileSync(path.join(o.stateDir, 'run.json'), JSON.stringify({ pid: 6262, project: 'smlab-fake6262', agentId: 'pi-one', policyHash: policyHashOf(config), startedAt: NOW.toISOString() }))
+      livePids.add(6262)
+      pm2Apps.find((a) => a.id === app.id)!.pid = 6262
+    },
   }
 }
 
@@ -99,7 +125,12 @@ beforeEach(() => {
   stopFails = false
   livePids = new Set()
   nodeProblem = undefined
-  supervisorOf = () => undefined
+  pm2Apps = []
+  pm2Unknown = undefined
+  pm2Asked = []
+  pm2RestartFails = undefined
+  stopKillsButFails = false
+  supervisorOf = (pid) => (pm2Apps.some((a) => a.pid === pid) ? 'pm2' : undefined)
   svc = new DoorAgentService({
     storage, audit: new AuditService(storage), dataDir, launcher: stubLauncher(),
     repoRoot: path.join(tmp, 'repo'), now: () => NOW,
@@ -548,6 +579,136 @@ describe('saving the rules', () => {
     expect(err.status).toBe(500)
     expect(err.message).toMatch(/saved/)
     expect(svc.view('h_pi_one').record.version).toBe(3)
+  })
+})
+
+describe('a door under a supervisor', () => {
+  const edited = { ...RULES, discord: { ...RULES.discord, botLoopLimit: 2 } }
+  // The door as pm2 runs it: an app for this agent's start script, and the door it started.
+  const underPm2 = async () => {
+    await filled()
+    pm2Apps = [{ id: 7, name: 'door-pi-one', script: paths().startScript, pid: 6262 }]
+    livePids = new Set([6262])
+    writeState('run.json', JSON.stringify({ pid: 6262, project: 'smlab-fake6262', agentId: 'pi-one', policyHash: policyHashOf(RULES), startedAt: NOW.toISOString() }))
+    calls.length = 0
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'supervisor' })
+  }
+  // How many doors are up: every live pid is one door process.
+  const doors = () => livePids.size
+
+  it('a save restarts it through pm2, on the new rules, and starts nothing beside it', async () => {
+    await underPm2()
+    const result = await svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 })
+    expect(result).toMatchObject({ applied: 'restarted', by: 'supervisor', supervisor: 'door-pi-one' })
+    expect(calls).toEqual(['dryRun config.next.json', 'stop', 'pm2 restart door-pi-one'])
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'supervisor', rulesInForce: true })
+    expect(doors()).toBe(1)
+    // pm2 is asked about the door that is running now, by its pid.
+    expect(pm2Asked).toContain(6262)
+    expect(fs.existsSync(paths().startedByPage)).toBe(false)
+  })
+
+  it('a save is refused before anything is stopped when pm2 cannot be asked', async () => {
+    await underPm2()
+    const before = fs.readFileSync(paths().record, 'utf8')
+    pm2Unknown = 'pm2 runs on this machine, but did not answer'
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(409)
+    expect(err.message).toMatch(/^Not saved/)
+    expect(err.message).toContain('did not answer')
+    expect(calls).toEqual([])
+    expect(fs.readFileSync(paths().record, 'utf8')).toBe(before)
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'supervisor' })
+  })
+
+  it('a save is refused when the door runs under pm2 but pm2 lists no app for it', async () => {
+    await underPm2()
+    pm2Apps = []
+    supervisorOf = (pid) => (pid === 6262 ? 'pm2' : undefined)
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(409)
+    expect(calls).toEqual([])
+    expect(doors()).toBe(1)
+  })
+
+  it('says so when the rules were saved but pm2 did not bring the door back', async () => {
+    await underPm2()
+    pm2RestartFails = 'pm2 did not restart door-pi-one'
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(500)
+    expect(err.message).toMatch(/rules were saved/)
+    expect(err.message).toContain('pm2 restart door-pi-one')
+    expect(calls).toEqual(['dryRun config.next.json', 'stop', 'pm2 restart door-pi-one'])
+    expect(calls).not.toContain('start start.sh')
+  })
+
+  it('start is handed to pm2 when pm2 has an app for this agent, even a stopped one, so no second door is started beside it', async () => {
+    await underPm2()
+    await svc.stop('h_pi_one')
+    expect(doors()).toBe(0)
+    calls.length = 0
+    const result = await svc.start('h_pi_one')
+    expect(result).toEqual({ by: 'supervisor', supervisor: 'door-pi-one' })
+    expect(calls).toEqual(['dryRun config.json', 'pm2 restart door-pi-one'])
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'supervisor' })
+    expect(doors()).toBe(1)
+  })
+
+  it('start is refused before the dry run when pm2 cannot be asked', async () => {
+    await filled()
+    pm2Unknown = 'pm2 runs on this machine, but did not answer'
+    const err = await refusal(() => svc.start('h_pi_one'))
+    expect(err.status).toBe(409)
+    expect(err.message).toMatch(/^Not started/)
+    expect(calls).toEqual([])
+    expect(doors()).toBe(0)
+  })
+
+  it('start with no pm2 app is the page\'s own background process, as before', async () => {
+    await filled()
+    expect(await svc.start('h_pi_one')).toEqual({ by: 'page' })
+    expect(calls).toEqual(['dryRun config.json', 'start start.sh'])
+  })
+
+  it('stop goes through the launcher, and pm2 leaves the door stopped', async () => {
+    await underPm2()
+    await svc.stop('h_pi_one')
+    expect(calls).toEqual(['stop'])
+    expect(svc.status('h_pi_one').state).toBe('stopped')
+    expect(pm2Apps[0].pid).toBeNull()
+  })
+})
+
+describe('a save whose stop ended the door but reported a failure', () => {
+  const edited = { ...RULES, discord: { ...RULES.discord, botLoopLimit: 2 } }
+
+  it('starts the door again on the rules it had, and stores nothing', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    const before = fs.readFileSync(paths().record, 'utf8')
+    calls.length = 0
+    stopKillsButFails = true
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(500)
+    expect(err.message).toMatch(/^Not saved/)
+    expect(err.message).toMatch(/started again on the rules it had/)
+    expect(calls).toEqual(['dryRun config.next.json', 'stop', 'start start.sh'])
+    expect(fs.readFileSync(paths().record, 'utf8')).toBe(before)
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', rulesInForce: true })
+  })
+
+  it('under pm2, has pm2 start it again on the rules it had', async () => {
+    await filled()
+    pm2Apps = [{ id: 7, name: 'door-pi-one', script: paths().startScript, pid: 6262 }]
+    livePids = new Set([6262])
+    writeState('run.json', JSON.stringify({ pid: 6262, project: 'smlab-fake6262', agentId: 'pi-one', policyHash: policyHashOf(RULES), startedAt: NOW.toISOString() }))
+    calls.length = 0
+    stopKillsButFails = true
+    const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 2 }))
+    expect(err.status).toBe(500)
+    expect(calls).toEqual(['dryRun config.next.json', 'stop', 'pm2 restart door-pi-one'])
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', startedBy: 'supervisor', rulesInForce: true })
+    expect(livePids.size).toBe(1)
   })
 })
 

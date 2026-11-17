@@ -358,7 +358,9 @@ describe('pi-discord cell, as written', () => {
     expect(file.networks.cell.internal).toBe(true)
     expect([cell.read_only, cell.user, cell.cap_drop, cell.volumes]).toEqual([true, 'node', ['ALL'], ['lab:/tmp/smlab']])
     // The scratch folder is where the harness is started: in memory, 64 MB, owned by the user the cell runs as.
-    expect(cell.tmpfs).toEqual(['/tmp', '/tmp/smlab/work:size=64m,mode=0700,uid=1000,gid=1000'])
+    expect(cell.tmpfs).toEqual(['/tmp:size=32m,mode=1777,noexec,nosuid,nodev', '/tmp/smlab/work:size=64m,mode=0700,uid=1000,gid=1000'])
+    // /tmp has a size too, in every container of the file, and nothing in it can be run.
+    for (const s of Object.values(file.services)) expect(s.tmpfs[0]).toBe('/tmp:size=32m,mode=1777,noexec,nosuid,nodev')
     // The cell's own folder is in memory too, with a size: a shell in the cell cannot fill this machine's Docker disk.
     expect(file.volumes.lab).toEqual({ driver: 'local', driver_opts: { type: 'tmpfs', device: 'tmpfs', o: 'size=256m,uid=1000,gid=1000,mode=0700,noexec,nosuid,nodev' } })
     expect(cell.environment).toMatchObject({ SMLAB_TOOL_SECONDS: '60', SMLAB_TOOL_OUTPUT_BYTES: '16000', SMLAB_VERDICT_MS: '30000', SMLAB_VETO_MS: '35000' })
@@ -430,7 +432,11 @@ describe('pi-discord cell, as written', () => {
     ['a cell run as root', (f) => { f.services.cell.user = '0' }, /runs as 0/],
     ['a host folder in the cell', (f) => { f.services.cell.volumes!.push('/Users:/mnt/host:ro') }, /mounts something other/],
     ['a scratch folder with no size', (f) => { f.services.cell.tmpfs[1] = '/tmp/smlab/work' }, /scratch folder is not a capped mount/],
-    ['a scratch folder that is not a mount of its own', (f) => { f.services.cell.tmpfs = ['/tmp'] }, /scratch folder is not a capped mount/],
+    ['a scratch folder that is not a mount of its own', (f) => { f.services.cell.tmpfs = [f.services.cell.tmpfs[0]] }, /scratch folder is not a capped mount/],
+    ['a /tmp with no size', (f) => { f.services.cell.tmpfs[0] = '/tmp' }, /the \/tmp of the cell is not in memory with a size/],
+    ['a /tmp bigger than its size', (f) => { f.services.cell.tmpfs[0] = '/tmp:size=2g,mode=1777,noexec,nosuid,nodev' }, /the \/tmp of the cell is not in memory with a size/],
+    ['a /tmp where a file can be run', (f) => { f.services.cell.tmpfs[0] = '/tmp:size=32m,mode=1777,nosuid,nodev' }, /the \/tmp of the cell is not in memory with a size/],
+    ['a relay /tmp with no size', (f) => { f.services.door.tmpfs[0] = '/tmp' }, /the \/tmp of the relay is not in memory with a size/],
     ['a scratch folder somewhere else', (f) => { f.services.cell.tmpfs[1] = '/opt/swarm:size=64m,mode=0700,uid=1000,gid=1000' }, /scratch folder is not a capped mount/],
     ['one more place to write', (f) => { f.services.cell.tmpfs.push('/opt/swarm') }, /scratch folder is not a capped mount/],
     ['a credential-shaped variable in the cell', (f) => { f.services.cell.environment.DISCORD_BOT_TOKEN = 'x' }, /not on its list/],
@@ -456,6 +462,9 @@ describe('pi-discord cell, as written', () => {
     expect(sealProblems(renderCell({ ...options, broken: 'cell-writable' })).join()).toMatch(/write its own disk/)
     expect(sealProblems(renderCell({ ...options, broken: 'cell-scratch-uncapped' })).join()).toMatch(/scratch folder is not a capped mount/)
     expect(sealProblems(renderCell({ ...options, broken: 'cell-folder-uncapped' })).join()).toMatch(/the cell's own folder is not in memory with a size/)
+    expect(sealProblems(renderCell({ ...options, broken: 'cell-tmp-uncapped' }))).toEqual(['the /tmp of the cell is not in memory with a size of its own'])
+    // Breaking the scratch folder leaves /tmp as it is, so each must-fail rig breaks one thing.
+    expect(sealProblems(renderCell({ ...options, broken: 'cell-scratch-uncapped' }))).toEqual(['the cell\'s scratch folder is not a capped mount of its own'])
     // The third is a sealed cell as written, on other blocks than the ones meant for it: only Docker can show that.
     const swapped = renderCell({ ...options, broken: 'cell-other-subnet' })
     expect(sealProblems(swapped)).toEqual([])

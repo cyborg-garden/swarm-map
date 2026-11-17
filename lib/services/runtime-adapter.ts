@@ -189,6 +189,12 @@ export interface DoorStatus {
   startedBy: 'page' | 'supervisor' | 'elsewhere' | null
 }
 
+/**
+ * Who a start or a save left running the door. `page`: a background process this page started.
+ * `supervisor`: the supervisor app named, asked to start it again on the start script as written.
+ */
+export type DoorStarted = { by: 'page' } | { by: 'supervisor'; supervisor: string }
+
 /** Spend from the door's ledger. Null means the door keeps no such figure, or has none yet. */
 export interface DoorUsage {
   /** The calendar month the figures are for, in UTC, as `2026-11`. */
@@ -201,8 +207,8 @@ export interface DoorUsage {
 
 /** The lifecycle seam for door agents: one implementation per launcher. */
 export interface DoorRuntimeAdapter {
-  /** Run the dry run, and start the door only if it ends ready. */
-  start(id: string): Promise<void>
+  /** Run the dry run, and start the door only if it ends ready. Says who started it: the page, or a supervisor asked to. */
+  start(id: string): Promise<DoorStarted>
   stop(id: string): Promise<void>
   status(id: string): DoorStatus
   /** The tail of the door's own log. */

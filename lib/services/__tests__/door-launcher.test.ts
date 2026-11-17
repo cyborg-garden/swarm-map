@@ -13,7 +13,7 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { createCliLauncher, type DoorLauncher } from '../door-launcher'
+import { createCliLauncher, pm2AppFor, type DoorLauncher } from '../door-launcher'
 
 const STAND_IN = `
 import fs from 'node:fs'
@@ -171,5 +171,117 @@ describe('the launcher adapter', () => {
     } finally {
       parent.kill('SIGTERM')
     }
+  })
+})
+
+// A stand-in for the pm2 command. `jlist` prints the list the test wrote; `restart` starts the start
+// script as the child of a process that names itself as pm2's daemon does, as pm2 does. Each call's
+// arguments are written down, one JSON array a line.
+const FAKE_PM2 = (node: string) => `#!${node}
+const fs = require('fs')
+const { spawn } = require('child_process')
+const home = process.env.PM2_HOME
+fs.appendFileSync(home + '/calls', JSON.stringify(process.argv.slice(2)) + '\\n')
+const [cmd] = process.argv.slice(2)
+if (fs.existsSync(home + '/fails') || !fs.existsSync(home + '/list.json')) process.exit(1)
+if (cmd === 'jlist') { process.stdout.write(fs.readFileSync(home + '/list.json', 'utf8')); process.exit(0) }
+if (cmd === 'restart') {
+  const daemon = spawn(process.execPath, ['-e', \`
+    process.title = 'PM2 v0.0.0: God Daemon (stand-in)'
+    const child = require('child_process').spawn('/bin/sh', [\${JSON.stringify(fs.readFileSync(home + '/script', 'utf8'))}], { stdio: 'ignore' })
+    process.on('SIGTERM', () => { child.kill('SIGKILL'); process.exit(0) })
+    setInterval(() => {}, 1000)
+  \`], { detached: true, stdio: 'ignore' })
+  fs.writeFileSync(home + '/daemon.pid', String(daemon.pid))
+  daemon.unref()
+  process.exit(0)
+}
+process.exit(2)
+`
+
+describe('the launcher adapter and pm2', () => {
+  let home: string
+  let savedPath: string | undefined
+  let savedHome: string | undefined
+  const pm2Calls = (): string[][] => (fs.existsSync(path.join(home, 'calls')) ? fs.readFileSync(path.join(home, 'calls'), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [])
+  const list = (apps: unknown[]) => fs.writeFileSync(path.join(home, 'list.json'), JSON.stringify(apps))
+  // pm2's own record of its daemon: a live pid. This test's process stands in for it.
+  const daemonUp = () => fs.writeFileSync(path.join(home, 'pm2.pid'), String(process.pid))
+  const app = (id: number, name: string, script: string, pid: number) => ({ pm_id: id, name, pid, pm2_env: { pm_exec_path: script, status: 'online', SOME_SECRET: 'must-not-travel' } })
+
+  beforeEach(() => {
+    home = path.join(tmp, 'pm2home')
+    fs.mkdirSync(path.join(home, 'bin'), { recursive: true })
+    fs.writeFileSync(path.join(home, 'bin', 'pm2'), FAKE_PM2(process.execPath), { mode: 0o755 })
+    fs.writeFileSync(path.join(home, 'script'), startScript)
+    savedPath = process.env.PATH
+    savedHome = process.env.PM2_HOME
+    process.env.PATH = `${path.join(home, 'bin')}:${savedPath}`
+    process.env.PM2_HOME = home
+  })
+  afterEach(() => {
+    try { process.kill(Number(fs.readFileSync(path.join(home, 'daemon.pid'), 'utf8')), 'SIGTERM') } catch { /* none was started */ }
+    process.env.PATH = savedPath
+    if (savedHome === undefined) delete process.env.PM2_HOME
+    else process.env.PM2_HOME = savedHome
+  })
+
+  it('does not ask pm2 at all while its daemon is not running, since asking would start one', () => {
+    list([app(7, 'door-pi-one', startScript, 1234)])
+    expect(launcher.supervisedBy!({ startScript })).toBeNull()
+    expect(pm2Calls()).toEqual([])
+  })
+
+  it('finds the app that runs this start script, by its path or by the door\'s pid, and hands back only its id and name', () => {
+    daemonUp()
+    const link = path.join(tmp, 'start-link.sh')
+    fs.symlinkSync(startScript, link)
+    list([app(3, 'other', path.join(tmp, 'other.sh'), 99), app(7, 'door-pi-one', link, 1234)])
+    expect(launcher.supervisedBy!({ startScript })).toEqual({ supervisor: 'pm2', id: 7, name: 'door-pi-one' })
+    list([app(7, 'renamed-by-hand', path.join(tmp, 'elsewhere.sh'), 1234)])
+    expect(launcher.supervisedBy!({ startScript, pid: 1234 })).toEqual({ supervisor: 'pm2', id: 7, name: 'renamed-by-hand' })
+    expect(launcher.supervisedBy!({ startScript, pid: 4321 })).toBeNull()
+    expect(pm2Calls().every((c) => JSON.stringify(c) === '["jlist"]')).toBe(true)
+  })
+
+  it('will not pick one of two apps that run the same door', () => {
+    daemonUp()
+    list([app(7, 'door-a', startScript, 1), app(8, 'door-b', startScript, 2)])
+    expect(launcher.supervisedBy!({ startScript })).toEqual({ unknown: expect.stringMatching(/2 apps for this door \(door-a, door-b\)/) })
+  })
+
+  it('says pm2 could not be asked when it fails, or is not on the PATH', () => {
+    daemonUp()
+    list([])
+    fs.writeFileSync(path.join(home, 'fails'), '')
+    expect(launcher.supervisedBy!({ startScript })).toEqual({ unknown: expect.stringMatching(/could not ask it/) })
+    expect(pm2Calls()).toEqual([['jlist']])
+    process.env.PATH = '/nonexistent'
+    expect(launcher.supervisedBy!({ startScript })).toEqual({ unknown: expect.stringMatching(/could not ask it/) })
+  })
+
+  it('reads the list after a warning pm2 prints first, and refuses a list it cannot read', () => {
+    const one = JSON.stringify([app(7, 'door-pi-one', startScript, 1)])
+    expect(pm2AppFor(`>>>> In-memory PM2 is out-of-date, do:\n>>>> $ pm2 update\n${one}`, { startScript })).toEqual({ supervisor: 'pm2', id: 7, name: 'door-pi-one' })
+    expect(pm2AppFor('not a list', { startScript })).toEqual({ unknown: expect.any(String) })
+    expect(pm2AppFor('{"a":1}', { startScript })).toEqual({ unknown: expect.any(String) })
+  })
+
+  it('restarts the app by its id, as an argument and not through a shell, and waits for the door it started', async () => {
+    daemonUp()
+    list([app(7, 'door-pi-one', startScript, 1)])
+    await launcher.restartSupervised!({ supervisor: 'pm2', id: 7, name: 'door-pi-one' }, { stateDir })
+    started = runPid()
+    expect(pm2Calls()).toEqual([['restart', '7']])
+    expect(launcher.alive(started)).toBe(true)
+    expect(launcher.supervisor!(started)).toBe('pm2')
+  })
+
+  it('says so when pm2 does not restart the app', async () => {
+    daemonUp()
+    list([])
+    fs.writeFileSync(path.join(home, 'fails'), '')
+    await expect(launcher.restartSupervised!({ supervisor: 'pm2', id: 7, name: 'door-pi-one' }, { stateDir })).rejects.toThrow(/pm2 did not restart door-pi-one/)
+    expect(fs.existsSync(path.join(stateDir, 'run.json'))).toBe(false)
   })
 })

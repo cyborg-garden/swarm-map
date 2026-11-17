@@ -245,6 +245,7 @@ door that says nothing at the deadline, and that is held by the door's own tests
 | Tool calls per conversation | 30 in an hour | The door |
 | Scratch folder | 64 MB | The mount |
 | The cell's own folder (its harness's settings, sessions and home) | 256 MB, in memory, gone on stop | The mount |
+| The cell's `/tmp` | 32 MB, in memory, nothing in it can be run | The mount |
 | Processes and memory | 256 and 1 GB, as before | Docker |
 
 ## What is a wall and what is a guardrail

@@ -14,6 +14,7 @@ import { usd } from './door-agent-page'
 import { commandsOf, mayChoose, modeOf, namesIn, TOOL_ROWS, withMode } from './door-tools-card'
 import { DEFAULT_COMMANDS } from '@/lib/core/tools/command-policy'
 import { parseConfig, statusOf, toolModes } from '@/lib/lab/pi-discord/config'
+import { toast } from 'sonner'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() } }))
 const nav = vi.hoisted(() => ({ push: vi.fn() }))
@@ -53,6 +54,7 @@ let current: ReturnType<typeof view>
 let receipts: unknown[]
 let requests: Array<{ url: string; method: string; body?: unknown }>
 let fail: Record<string, { status: number; body: unknown }>
+let answers: Record<string, unknown>
 
 const native = { prompt: vi.fn(), confirm: vi.fn(), alert: vi.fn() }
 const RUNNING = { state: 'running', pid: 1, startedAt: '2026-11-16T12:00:00.000Z', cellSealed: true, sealCheckedAt: '2026-11-16T11:59:00.000Z', rulesInForce: true, startedBy: 'page' }
@@ -66,6 +68,8 @@ beforeEach(() => {
   receipts = RECEIPTS
   requests = []
   fail = {}
+  answers = {}
+  vi.mocked(toast.success).mockClear()
   HTMLDialogElement.prototype.showModal = vi.fn()
   HTMLDialogElement.prototype.close = vi.fn()
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -74,6 +78,7 @@ beforeEach(() => {
     let status = 200
     let body: unknown = {}
     if (fail[`${method} ${url}`]) ({ status, body } = fail[`${method} ${url}`])
+    else if (answers[`${method} ${url}`]) body = answers[`${method} ${url}`]
     else if (url === '/api/harnesses') body = [HERMES, { ...ROW, status: 'running' }]
     else if (url === '/api/harnesses/h_pi_one') body = ROW
     else if (url === '/api/harnesses/h_pi_one/door') body = current
@@ -366,6 +371,36 @@ describe('the page of a door agent', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('FAIL S1 only the door answers')
+  })
+})
+
+describe('what the page says a start or a save did, when pm2 runs the door', () => {
+  it('a start handed to pm2 says pm2 is running it, and names the app', async () => {
+    answers['POST /api/harnesses/h_pi_one/start'] = { ok: true, by: 'supervisor', supervisor: 'door-pi-one' }
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('The cell was checked, and pm2 started the door (door-pi-one)'))
+  })
+
+  it('a start by the page says so as before', async () => {
+    answers['POST /api/harnesses/h_pi_one/start'] = { ok: true, by: 'page' }
+    await openPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('The cell was checked and the door is starting'))
+  })
+
+  it('a save that pm2 applied says pm2 restarted the door, and names the app', async () => {
+    answers['PUT /api/harnesses/h_pi_one/door/rules'] = { applied: 'restarted', by: 'supervisor', supervisor: 'door-pi-one', record: current.record }
+    await openPage()
+    await openTab('Rules')
+    fireEvent.change(document.querySelector('input[name="discord.botLoopLimit"]')!, { target: { value: '2' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved. pm2 restarted the door (door-pi-one) on the new rules'))
+  })
+
+  it('says on the Overview that Start and Save go through pm2 once it runs the door', async () => {
+    await openPage()
+    expect(screen.getByText(/Start and Save on this page then go through pm2/)).toBeInTheDocument()
   })
 })
 

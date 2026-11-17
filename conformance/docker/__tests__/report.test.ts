@@ -6,19 +6,19 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { hostConfigProblems, mountProblems, mountsSeen, netProblems, networkProblems, parseReport, readReport, secretProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from '../report.ts'
+import { hostConfigProblems, mountProblems, mountsSeen, netProblems, networkProblems, parseReport, readReport, secretProblems, tmpProblems, tmpSeen, tmpSeenProblems, writeProblems, type DockerNetwork, type HostConfig, type ProbeReport } from '../report.ts'
 
 const closed = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`way out ${i}`, 'ENETUNREACH']))
 const sealed: ProbeReport = {
   who: 'cell', uid: 1000, door: 'open', doorRoute: 'open', net: closed, wrongToken: 'refused',
   secrets: [], searched: { files: 20000, procs: 4 },
   writes: { a: 'EROFS', b: 'EACCES', c: 'EACCES', d: 'EROFS', e: 'EACCES', f: 'EROFS' },
-  dockerSocket: false, mounts: ['/tmp/smlab ext4'], noNewPrivs: '1', capEff: '0000000000000000', ipv6: [], defaultRoutes: [],
+  dockerSocket: false, mounts: ['/tmp/smlab ext4'], tmp: 'tmpfs rw,nosuid,nodev,noexec,relatime,rw,size=32768k,mode=1777', noNewPrivs: '1', capEff: '0000000000000000', ipv6: [], defaultRoutes: [],
 }
 
 describe('judging a probe report', () => {
   it('[U:probe-report] a sealed cell has no problems', () => {
-    expect([...netProblems(sealed), ...secretProblems(sealed), ...writeProblems(sealed), ...mountProblems(sealed)]).toEqual([])
+    expect([...netProblems(sealed), ...secretProblems(sealed), ...writeProblems(sealed), ...mountProblems(sealed), ...tmpSeenProblems(sealed)]).toEqual([])
   })
 
   it('[U:probe-report] one way out that is open is a problem, and so is one that was not tried', () => {
@@ -134,6 +134,48 @@ describe('judging the network Docker made against the one written down', () => {
     expect(judge({ Driver: 'macvlan' })).toEqual(['network smlab-deadbeef_cell is made by another driver (macvlan)'])
     expect(judge({ Options: { 'com.docker.network.bridge.gateway_mode_ipv4': 'routed' } })).toEqual(['network smlab-deadbeef_cell was given an option (com.docker.network.bridge.gateway_mode_ipv4=routed)'])
     expect(judge({ Options: { 'com.docker.network.enable_ipv6': 'true' } })[0]).toContain('was given an option')
+  })
+})
+
+describe('judging a container\'s /tmp', () => {
+  const line = (where: string, mountOptions: string, type: string, superOptions: string) => `36 35 0:30 / ${where} ${mountOptions} - ${type} ${type} ${superOptions}`
+
+  it('[U:tmp] reads /tmp out of mountinfo: its type, its own options and the file system\'s', () => {
+    const lines = [line('/', 'ro,relatime', 'overlay', 'rw'), line('/tmp', 'rw,nosuid,nodev,noexec,relatime', 'tmpfs', 'rw,size=32768k,mode=1777'), line('/tmp/smlab', 'rw', 'tmpfs', 'rw,size=262144k')]
+    expect(tmpSeen(lines)).toBe('tmpfs rw,nosuid,nodev,noexec,relatime,rw,size=32768k,mode=1777')
+    expect(tmpSeen([line('/', 'ro', 'overlay', 'rw')])).toBe('')
+  })
+
+  it('[U:tmp] a /tmp in memory, at its size or smaller, that runs nothing, has no problems, whichever way its size is written', () => {
+    for (const o of ['size=32m,mode=1777,noexec,nosuid,nodev', 'rw,nosuid,nodev,noexec,size=32768k', 'size=33554432,noexec,nosuid,nodev', 'size=8m,noexec,nosuid,nodev']) {
+      expect(tmpProblems(o, 'x', 'kernel'), o).toEqual([])
+      expect(tmpProblems(o, 'x', 'docker'), o).toEqual([])
+    }
+    // Docker mounts a tmpfs noexec, nosuid and nodev unless asked otherwise, and writes only what it was asked.
+    expect(tmpProblems('size=32m,mode=1777', 'x', 'docker')).toEqual([])
+  })
+
+  it('[U:tmp] a /tmp with no size, a bigger one, or one that can run a file, be setuid or hold a device, is a problem', () => {
+    expect(tmpProblems(undefined, 'as Docker made it', 'docker')).toEqual(['as Docker made it: /tmp is not a mount of its own'])
+    // What Docker writes for a tmpfs it was asked for with no options at all.
+    expect(tmpProblems('', 'x', 'docker')).toEqual(['x: /tmp has no size'])
+    expect(tmpProblems('rw,noexec,nosuid,nodev', 'x', 'kernel')).toEqual(['x: /tmp has no size'])
+    expect(tmpProblems('size=33m,noexec,nosuid,nodev', 'x', 'kernel')).toEqual(['x: /tmp is 33 MB, more than its 32 MB'])
+    expect(tmpProblems('size=1g,noexec,nosuid,nodev', 'x', 'docker')).toEqual(['x: /tmp is 1024 MB, more than its 32 MB'])
+    expect(tmpProblems('size=32m,nosuid,nodev', 'x', 'kernel')).toEqual(['x: /tmp is not noexec'])
+    expect(tmpProblems('size=32m,noexec,nodev', 'x', 'kernel')).toEqual(['x: /tmp is not nosuid'])
+    expect(tmpProblems('size=32m,noexec,nosuid', 'x', 'kernel')).toEqual(['x: /tmp is not nodev'])
+    expect(tmpProblems('size=32m,exec', 'x', 'docker')).toEqual(['x: /tmp is not noexec'])
+    expect(tmpProblems('size=32m,suid,dev', 'x', 'docker')).toEqual(['x: /tmp is not nosuid', 'x: /tmp is not nodev'])
+    // A size in a word that only looks like one is no size.
+    expect(tmpProblems('xsize=1m,noexec,nosuid,nodev', 'x', 'kernel')).toEqual(['x: /tmp has no size'])
+  })
+
+  it('[U:tmp] from inside: /tmp on a disk, not in memory, or not reported at all, is a problem', () => {
+    expect(tmpSeenProblems({ ...sealed, tmp: 'ext4 rw,noexec,nosuid,nodev,size=1m' })).toEqual(['inside the container: /tmp is not in memory (ext4)'])
+    expect(tmpSeenProblems({ ...sealed, tmp: '' })).toEqual(['inside the container: /tmp is not a mount of its own'])
+    expect(tmpSeenProblems({ ...sealed, tmp: undefined as never })).toEqual(['inside the container: the probe did not report /tmp, so it was not checked'])
+    expect(tmpSeenProblems({ ...sealed, tmp: 'tmpfs rw,nosuid,nodev,noexec,relatime,rw,size=8126464k,mode=1777' })).toEqual(['inside the container: /tmp is 7936 MB, more than its 32 MB'])
   })
 })
 

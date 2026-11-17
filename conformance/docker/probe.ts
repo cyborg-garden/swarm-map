@@ -19,7 +19,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { BRAIN_PORT, ROUTE_PORT, SINK_PORT, SWARM_ROOT } from './compose.ts'
-import { mountsSeen, type ProbeReport } from './report.ts'
+import { mountsSeen, tmpSeen, type ProbeReport } from './report.ts'
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const i = a.indexOf('='); return [a.slice(0, i), a.slice(i + 1)] }))
 const nonce = args.nonce ?? ''
@@ -208,6 +208,7 @@ async function main(): Promise<void> {
     },
     dockerSocket: ['/var/run/docker.sock', '/run/docker.sock'].some((p) => existsSync(p)),
     mounts: mountsSeen(readFileSync('/proc/self/mountinfo', 'utf8').split('\n')),
+    tmp: tmpSeen(readFileSync('/proc/self/mountinfo', 'utf8').split('\n')),
     noNewPrivs: field('NoNewPrivs'),
     capEff: field('CapEff'),
     ipv6: Object.values(os.networkInterfaces()).flat().filter((a) => a && a.family === 'IPv6' && !a.internal).map((a) => a!.address),
