@@ -770,15 +770,15 @@ describe('door: receipts and heartbeat', () => {
     // The tool name in a tool_request is whatever the shim sends. It could be
     // conversation text or a secret read in the cell.
     for (const posture of ['team', 'public']) {
-      rig = await startRig(team({ posture, 'tools.allow': ['network'] }))
+      rig = await startRig(team({ posture, 'tools.allow': ['chat_post'] }))
       const smuggled = 'CANARY-smuggled-in-a-tool-name'
-      rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `!tool ${smuggled} and !tool fetch` })
+      rig.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `!tool ${smuggled} and !tool post` })
       await rig.door.idle()
       expect(rig.shim.verdicts.map((v) => v.allow)).toEqual([false, true])
       const tools = rig.receipts.all().filter((r) => r.event.kind === 'tool')
       // The name, or the fixed word for a name that was not declared, and the short hash of the call. Nothing else.
       expect(tools.map((r) => r.note)).toEqual([
-        `tool=unmapped call=${callHash(smuggled, { from: 'echo' }).slice(0, 12)}`, `tool=fetch call=${callHash('fetch', { from: 'echo' }).slice(0, 12)}`,
+        `tool=unmapped call=${callHash(smuggled, { from: 'echo' }).slice(0, 12)}`, `tool=post call=${callHash('post', { from: 'echo' }).slice(0, 12)}`,
       ])
       expect(JSON.stringify(rig.receipts.all())).not.toContain(smuggled)
       // The reason sent back to the shim does not echo it either.

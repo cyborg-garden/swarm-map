@@ -69,9 +69,10 @@ describe('the flags the shim gives Pi', () => {
     ])
   })
 
-  it('[U:pi-env] with no tools allowed, Pi is told to load none of its own', () => {
+  it('[U:pi-env] with no tools allowed, Pi is told to load none at all, the gate\'s web tool included', () => {
     const args = piArgs({ ...o, tools: [] })
-    expect(args).toContain('--no-builtin-tools')
+    expect(args).toContain('--no-tools')
+    expect(args).not.toContain('--no-builtin-tools')
     expect(args).not.toContain('--tools')
   })
 

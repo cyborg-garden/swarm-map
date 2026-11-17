@@ -1,5 +1,8 @@
 'use client'
 
+import { useState } from 'react'
+import { parseWebEntry, SUGGESTED_WEB } from '@/lib/core/tools/web'
+import { SHIPPED_ALLOW, SHIPPED_BLOCK } from '@/lib/core/tools/command-defaults'
 import type { LabConfig, ToolsConfig } from '@/lib/lab/pi-discord/config'
 
 /**
@@ -56,18 +59,52 @@ export function withMode(tools: ToolsConfig | undefined, key: ToolClass, mode: M
   return { ...t, enabled, mode: modes }
 }
 
+type WebConfig = NonNullable<ToolsConfig['web']>
+/**
+ * The tools part with the web changed. `null` switches it off. Entries are kept once each. With no
+ * site listed, the public web off and search off, there is no web, and the part is left out.
+ * `keep` keeps it even with nothing on yet: choosing "Listed sites" before adding one.
+ */
+export function withWeb(tools: ToolsConfig | undefined, patch: Partial<WebConfig> | null, keep = false): ToolsConfig {
+  const t = tools ?? EMPTY
+  const { web: old, ...rest } = t
+  if (patch === null) return rest
+  const next: WebConfig = { ...(old ?? { allow: [] }), ...patch }
+  next.allow = [...new Set(next.allow)]
+  if (next.search !== true) delete next.search
+  const on = next.allow.length > 0 || next.mode === 'public' || next.search === true
+  return on || keep ? { ...rest, web: next } : rest
+}
+
+/** The command lists the shell is held to: the record's own, or the shipped ones (as in the launcher). */
+export function commandsOf(tools: ToolsConfig | undefined): { allow: string[]; block: string[] } {
+  return tools?.commands ?? { allow: [...SHIPPED_ALLOW], block: [...SHIPPED_BLOCK] }
+}
+
+/** One list of command names from what was typed: split on spaces and commas. The launcher checks each name. */
+export const namesIn = (text: string): string[] => text.split(/[\s,]+/).filter((n) => n !== '')
+
 const inputClass = 'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
-export function DoorToolsCard({ rules, builtFor, onChange }: {
+export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSearchKeyFile }: {
   rules: LabConfig
   /** Set when this agent's harness has no tools: the name of the one that does. The card is then switched off. */
   builtFor?: string
   onChange: (tools: ToolsConfig) => void
+  /** The search key file's path, kept with the record's other secret paths, never in the rules. */
+  searchKeyFile?: string
+  onSearchKeyFile?: (path: string) => void
 }) {
   const tools = rules.tools
   const anyone = rules.discord.anyoneInChannel
   const off = anyone || builtFor !== undefined
-  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask')
+  const web = tools?.web
+  const webAllow = web?.allow ?? []
+  const webOn = web !== undefined
+  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask') || (webOn && web?.approval === 'ask')
+  const [entry, setEntry] = useState('')
+  const read = entry.trim() === '' ? undefined : parseWebEntry(entry)
+  const add = (more: string[]) => onChange(withWeb(tools, { allow: [...webAllow, ...more] }))
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3" data-testid="door-tools-card">
       <h3 className="font-medium text-sm">Tools</h3>
@@ -81,7 +118,7 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
         </p>
       ) : anyone && (
         <p role="note" className="text-xs text-amber-600">
-          This agent hears anyone in the channel, so it gets no tools. Name who it hears to switch one on.
+          This agent hears anyone in the channel, so it gets no tools in its cell. Name who it hears to switch one on. It can still read listed web pages.
         </p>
       )}
       {TOOL_ROWS.map((row) => (
@@ -109,7 +146,93 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
       <p className="text-xs text-muted-foreground">
         A yes to a shell command is a yes to whatever it leaves behind in the cell, running or written, until the agent is stopped.
       </p>
-      {asks && !off && (
+      <div className="space-y-2 border-t border-[var(--border)] pt-3" data-testid="door-web">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm">Web</p>
+            <p className="text-xs text-muted-foreground">
+              Off by default. The door reads a page for the agent, never the cell: read-only, no logins or cookies, private and local addresses always refused.
+              &quot;Listed sites&quot; reads only the sites below; a host is matched exactly, and a path allows only what is under it. &quot;Public web&quot; reads any public address.
+              What a page says goes to the model as untrusted text, never into the channel.
+            </p>
+          </div>
+          <select
+            name="tools.web.mode" aria-label="Web" className={inputClass} disabled={builtFor !== undefined}
+            value={webOn ? (web?.mode ?? 'allowlist') : 'off'}
+            onChange={(e) => onChange(e.target.value === 'off' ? withWeb(tools, null) : withWeb(tools, { mode: e.target.value as 'allowlist' | 'public' }, true))}
+          >
+            <option value="off">Off</option>
+            <option value="allowlist">Listed sites</option>
+            <option value="public">Public web</option>
+          </select>
+        </div>
+        {webOn && (
+          <label className="flex items-center justify-between gap-4">
+            <span className="text-sm">Each address or search</span>
+            <select
+              name="tools.web.approval" aria-label="Each address or search" className={inputClass} disabled={builtFor !== undefined}
+              value={web?.approval ?? 'allow'} onChange={(e) => onChange(withWeb(tools, { approval: e.target.value as 'allow' | 'ask' }))}
+            >
+              <option value="ask">Ask an admin</option>
+              <option value="allow">Allow</option>
+            </select>
+          </label>
+        )}
+        {webOn && web?.mode === 'public' && (
+          <p role="note" className="text-xs text-amber-600">The public web is on: the agent can read any public page, and what it puts in an address reaches that site.</p>
+        )}
+        {web?.mode !== 'public' && webAllow.length > 0 && (
+          <ul className="flex flex-wrap gap-1.5" aria-label="Allowed sites">
+            {webAllow.map((site) => (
+              <li key={site} className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-0.5 text-xs">
+                <span>{site}</span>
+                <button type="button" aria-label={`Remove ${site}`} disabled={builtFor !== undefined}
+                  onClick={() => onChange(withWeb(tools, { allow: webAllow.filter((s) => s !== site) }))}>×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {builtFor === undefined && web?.mode !== 'public' && (
+          <>
+            <div className="flex gap-2">
+              <input
+                name="tools.web.add" aria-label="Add a site" placeholder="en.wikipedia.org or github.com/some-org" className={`flex-1 ${inputClass}`}
+                value={entry} onChange={(e) => setEntry(e.target.value)}
+              />
+              <button type="button" className={inputClass} disabled={!read || 'problem' in read}
+                onClick={() => { if (read && !('problem' in read)) { add([`${read.host}${read.path}`]); setEntry('') } }}>Add</button>
+            </div>
+            {read && 'problem' in read && <p className="text-xs text-amber-600">That is not a site the door takes: {read.problem}.</p>}
+            <div className="flex flex-wrap gap-1.5" aria-label="Suggested sites">
+              {SUGGESTED_WEB.filter((s) => !s.entries.every((e) => webAllow.includes(e))).map((s) => (
+                <button key={s.label} type="button" title={s.entries.join(', ')}
+                  className="rounded-full border border-dashed border-[var(--border)] px-2 py-0.5 text-xs text-muted-foreground"
+                  onClick={() => add(s.entries)}>+ {s.label}</button>
+              ))}
+            </div>
+          </>
+        )}
+        <label className="flex items-center gap-2">
+          <input type="checkbox" name="tools.web.search" disabled={builtFor !== undefined} checked={web?.search === true}
+            onChange={(e) => onChange(withWeb(tools, { search: e.target.checked }))} />
+          <span className="text-sm">Web search (Brave)</span>
+        </label>
+        {web?.search === true && onSearchKeyFile && (
+          <label className="block space-y-1">
+            <span className="text-sm">Search key file</span>
+            <input name="secrets.searchKeyFile" className={`w-full ${inputClass}`} placeholder="/full/path/to/the/file"
+              value={searchKeyFile ?? ''} onChange={(e) => onSearchKeyFile(e.target.value)} />
+            <span className="block text-xs text-muted-foreground">
+              A file only you can read, outside the repo, holding the key. Only the door reads it; the agent never sees it.
+              Results come back as titles, addresses and snippets, and a result is read only if the setting above allows it.
+            </span>
+          </label>
+        )}
+      </div>
+      {!off && modeOf(tools, 'shell') !== 'never' && (
+        <CommandLists tools={tools ?? EMPTY} asks={modeOf(tools, 'shell') === 'ask'} onChange={onChange} />
+      )}
+      {asks && builtFor === undefined && (
         <label className="block space-y-1">
           <span className="text-sm">Seconds an admin has to answer</span>
           <input
@@ -119,6 +242,45 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
           />
           <span className="block text-xs text-muted-foreground">10 to 600. With no answer by then, the call does not run.</span>
         </label>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The command policy, as three lists: what runs without asking, what never runs, and everything else,
+ * which asks. A command runs without asking only if every part of it is on the first list and it
+ * writes nothing; one with anything on the second never runs. The door reads the command; this only
+ * edits the two lists.
+ */
+function CommandLists({ tools, asks, onChange }: { tools: ToolsConfig; asks: boolean; onChange: (tools: ToolsConfig) => void }) {
+  const lists = commandsOf(tools)
+  const set = (key: 'allow' | 'block', text: string): void => onChange({ ...tools, commands: { ...lists, [key]: namesIn(text) } })
+  const shipped = tools.commands === undefined
+  return (
+    <div className="space-y-2 border-t border-[var(--border)] pt-3" data-testid="door-command-lists">
+      <p className="text-sm">Shell commands</p>
+      {(['allow', 'block'] as const).map((key) => (
+        <label key={key} className="block space-y-1">
+          <span className="text-xs">{key === 'allow' ? 'Run without asking' : 'Never run'}</span>
+          <textarea
+            name={`tools.commands.${key}`} rows={2} className={`w-full font-mono ${inputClass}`}
+            // Typed freely, and read when the field is left, so a space being typed is not taken away.
+            key={`${key}:${lists[key].join(' ')}`} defaultValue={lists[key].join(' ')}
+            onBlur={(e) => { if (namesIn(e.target.value).join(' ') !== lists[key].join(' ')) set(key, e.target.value) }}
+          />
+        </label>
+      ))}
+      <p className="text-xs">
+        <span className="font-medium">{asks ? 'Ask an admin:' : 'Run, as the shell is allowed:'}</span> every other command, and any command with a part not on the first list, a substitution, or a write to a file.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Deleting folders outside the scratch folder never runs either. A shell, an interpreter or a wrapper (sh, bash, python, env, xargs) cannot be on the first list.
+      </p>
+      {!shipped && (
+        <button type="button" className="text-xs underline" onClick={() => { const { commands: _drop, ...rest } = tools; void _drop; onChange(rest) }}>
+          Use the shipped lists
+        </button>
       )}
     </div>
   )

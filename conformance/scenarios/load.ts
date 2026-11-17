@@ -27,7 +27,7 @@ export interface SayStep {
 }
 export type Step =
   | { say: SayStep }
-  | { tool: { room: RoomInput; actor: SenderInput; toolClass: string; toolName: string } }
+  | { tool: { room: RoomInput; actor: SenderInput; toolClass: string; toolName: string; command?: string } }
   | { approval: { room: RoomInput; approver: SenderInput } }
   | { model: { provider: string; model: string } }
   | { outbound: { room: RoomInput; text: string; isDm?: boolean } }
@@ -104,6 +104,7 @@ export function stepEvent(step: Step, canary: string): Event {
     return {
       kind: 'tool', surface: 'fake', room: toRoom(t.room), actor: toPrincipal(t.actor),
       toolClass: t.toolClass as never, toolName: t.toolName, argsDigest: '',
+      ...(t.command !== undefined ? { command: t.command } : {}),
     }
   }
   if ('approval' in step) return { kind: 'approval', surface: 'fake', room: toRoom(step.approval.room), approver: toPrincipal(step.approval.approver) }

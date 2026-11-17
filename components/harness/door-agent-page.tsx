@@ -425,7 +425,8 @@ function RulesForm({ view, running, saving, onSave }: {
             <Field label="USD per million tokens out"><Amount name="model.usdPerMTokOut" value={r.model.usdPerMTokOut} onChange={(usdPerMTokOut) => model({ usdPerMTokOut })} /></Field>
           </div>
         </Card>
-        <DoorToolsCard rules={r} builtFor={view.harness.runtime === 'pi' ? undefined : 'Pi'} onChange={(tools) => set({ ...r, tools })} />
+        <DoorToolsCard rules={r} builtFor={view.harness.runtime === 'pi' ? undefined : 'Pi'} onChange={(tools) => set({ ...r, tools })}
+          searchKeyFile={draft.secrets.searchKeyFile ?? ''} onSearchKeyFile={(searchKeyFile) => secret({ searchKeyFile })} />
         <Card title="Secret files">
           <p className="text-xs text-muted-foreground">
             The bot token and the model key stay in two files that only you can read, outside the repo. Give their paths here.

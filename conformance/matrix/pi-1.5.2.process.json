@@ -112,6 +112,11 @@
       "status": "pass"
     },
     {
+      "id": "K1",
+      "title": "command policy: a command on the allow list runs with no request, one that hides a write waits for a yes, and a blocked one never runs",
+      "status": "pass"
+    },
+    {
       "id": "W1",
       "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
       "status": "pass"
@@ -129,6 +134,56 @@
     {
       "id": "L2",
       "title": "tool output past the size limit does not reach the model",
+      "status": "pass"
+    },
+    {
+      "id": "N1+",
+      "title": "web: an address on the list is fetched by the door, and the page reaches the model as untrusted text",
+      "status": "pass"
+    },
+    {
+      "id": "N1",
+      "title": "web: an address off the list is refused, and nothing is looked up or fetched",
+      "status": "pass"
+    },
+    {
+      "id": "N2",
+      "title": "web: a redirect off the list is not followed",
+      "status": "pass"
+    },
+    {
+      "id": "N3",
+      "title": "web: a listed name that leads to a private address is refused, by its DNS answer or by a redirect",
+      "status": "pass"
+    },
+    {
+      "id": "N4",
+      "title": "web: a fetch carries no credential, cookie or auth header",
+      "status": "pass"
+    },
+    {
+      "id": "N5",
+      "title": "web: a page past the size limit is cut, and a slow one is cut at the time limit",
+      "status": "pass"
+    },
+    {
+      "id": "N6",
+      "title": "web: a page is never posted by the door, and no receipt holds it",
+      "status": "pass"
+    },
+    {
+      "id": "N7",
+      "title": "web: with the public web on, an unlisted public site is read, and a private address is still refused",
+      "status": "pass"
+    },
+    {
+      "id": "N8",
+      "title": "search: results reach the model as untrusted titles, addresses and snippets; the key never reaches the cell, the model or a receipt; a private result is refused",
+      "status": "pass"
+    },
+    {
+      "id": "N9",
+      "title": "search: with no key there is no search, and the provider gets no call at all",
       "status": "pass"
     },
     {
@@ -439,6 +494,16 @@
       ]
     },
     {
+      "rule": "tools.commands",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "K1",
+          "status": "pass"
+        }
+      ]
+    },
+    {
       "rule": "tools.workspace",
       "status": "pass",
       "checks": [
@@ -462,6 +527,94 @@
         },
         {
           "id": "L2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.allow",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N1",
+          "status": "pass"
+        },
+        {
+          "id": "N1+",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.public",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N7",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.search",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N8",
+          "status": "pass"
+        },
+        {
+          "id": "N9",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.redirect",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N2",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.private",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N3",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.no-credentials",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N4",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.limits",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N5",
+          "status": "pass"
+        }
+      ]
+    },
+    {
+      "rule": "web.untrusted",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "N6",
           "status": "pass"
         }
       ]
@@ -580,9 +733,18 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "L1",
-        "L2"
+        "L2",
+        "N1+",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7",
+        "N8"
       ],
       "failed": [
         "C4",
@@ -596,9 +758,18 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "L1",
         "L2",
+        "N1+",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7",
+        "N8",
         "C6m"
       ],
       "suiteCaughtIt": true
@@ -664,6 +835,95 @@
       ],
       "failed": [
         "C6n"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-direct",
+      "mustFail": [
+        "N1+",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7"
+      ],
+      "failed": [
+        "N1+",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7",
+        "N8"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-no-list",
+      "mustFail": [
+        "N1",
+        "N2"
+      ],
+      "failed": [
+        "N1",
+        "N2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "search-key-anyway",
+      "mustFail": [
+        "N9"
+      ],
+      "failed": [
+        "N9"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-no-address-check",
+      "mustFail": [
+        "N3",
+        "N7",
+        "N8"
+      ],
+      "failed": [
+        "N3",
+        "N7",
+        "N8"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-unchecked-redirects",
+      "mustFail": [
+        "N2"
+      ],
+      "failed": [
+        "N2"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-keeps-cookies",
+      "mustFail": [
+        "N4"
+      ],
+      "failed": [
+        "N4"
+      ],
+      "suiteCaughtIt": true
+    },
+    {
+      "shim": "web-no-limits",
+      "mustFail": [
+        "N5"
+      ],
+      "failed": [
+        "N5"
       ],
       "suiteCaughtIt": true
     },
@@ -804,10 +1064,21 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "W1+",
         "L1",
         "L2",
+        "N1+",
+        "N1",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7",
+        "N8",
+        "N9",
         "C6m",
         "C6b",
         "C6s"

@@ -1,0 +1,53 @@
+{
+  "id": "tools.commands/hidden-write-asks",
+  "rule": "tools.commands",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.allow": [],
+    "tools.ask": [
+      "shell"
+    ],
+    "tools.commands": {
+      "allow": [
+        "cat"
+      ],
+      "block": []
+    }
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash",
+        "command": "cat notes.txt > copy.txt"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "ask",
+      "rule": "priv.approval"
+    }
+  },
+  "twin": {
+    "steps": [
+      {
+        "tool": {
+          "room": "r-general",
+          "actor": "u-alice",
+          "toolClass": "shell",
+          "toolName": "bash",
+          "command": "cat notes.txt"
+        }
+      }
+    ],
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.commands"
+      }
+    }
+  }
+}
