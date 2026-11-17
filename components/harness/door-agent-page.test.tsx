@@ -109,7 +109,7 @@ async function openTab(name: string) {
 describe('the page of a door agent', () => {
   it('shows the four tabs that apply, and none of the others', async () => {
     await openPage()
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Overview', 'Rules', 'Receipts', 'Logs'])
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Overview', 'Rules', 'Memory', 'Receipts', 'Logs'])
     expect(screen.getByText('Pi · door')).toBeInTheDocument()
     expect(screen.queryByText('Quick Restart')).toBeNull()
     expect(screen.queryByText('Duplicate')).toBeNull()

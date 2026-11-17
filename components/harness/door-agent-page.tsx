@@ -16,7 +16,9 @@ import type { Harness } from '@/lib/types'
 import type { DoorAgentView } from '@/lib/services/door-agents'
 import type { DoorRulesRecord } from '@/lib/services/door-record'
 import type { Receipt } from '@/lib/door/receipts'
-import { DoorToolsCard } from './door-tools-card'
+import { DoorToolsCard, modeOf } from './door-tools-card'
+import { DoorMemoryCard, DoorPersonaCard } from './door-persona-card'
+import { DoorMemoryTab } from './door-memory-tab'
 
 /**
  * The page of an agent that runs behind a door. It shows the four things
@@ -27,11 +29,12 @@ import { DoorToolsCard } from './door-tools-card'
  *  PUT  /api/harnesses/:id/door/rules      save and apply
  *  GET  /api/harnesses/:id/door/receipts   decisions, newest first
  *  GET  /api/harnesses/:id/logs            the door's log
+ *  GET|PUT|DELETE /api/harnesses/:id/door/memory   the door's notes, and a kept scratch folder
  *  POST /api/harnesses/:id/start | stop
  */
 
 const RUNBOOK = DOOR_RUNBOOK
-const TABS = ['overview', 'rules', 'receipts', 'logs'] as const
+const TABS = ['overview', 'rules', 'memory', 'receipts', 'logs'] as const
 
 /**
  * The tab the address asks for (`?tab=rules`), or the Overview. A new agent's
@@ -174,6 +177,7 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="rules">Rules</TabsTrigger>
+          <TabsTrigger value="memory">Memory</TabsTrigger>
           <TabsTrigger value="receipts">Receipts</TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
@@ -216,6 +220,9 @@ export function DoorAgentPage({ harness }: { harness: Harness }) {
               }}
             />
           ) : <p className="text-muted-foreground">Loading...</p>}
+        </TabsContent>
+        <TabsContent value="memory" className="mt-4">
+          <DoorMemoryTab id={id} name={harness.name} />
         </TabsContent>
         <TabsContent value="receipts" className="mt-4">
           <Receipts id={id} />
@@ -370,12 +377,7 @@ function RulesForm({ view, running, saving, onSave }: {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
-        <Card title="Persona">
-          <Field label="Name"><Text name="persona.name" value={r.persona.name} onChange={(name) => set({ ...r, persona: { ...r.persona, name } })} /></Field>
-          <Field label="Description" hint="One line about what it is for. It cannot give the agent an ability.">
-            <Text name="persona.description" value={r.persona.description} onChange={(description) => set({ ...r, persona: { ...r.persona, description } })} />
-          </Field>
-        </Card>
+        <DoorPersonaCard rules={r} savedPrompt={view.systemPrompt ?? null} onChange={(persona) => set({ ...r, persona })} />
         <Card title="Where">
           <Field label="Server id"><Text name="discord.guildId" value={d.guildId} onChange={(guildId) => discord({ guildId })} placeholder="digits only" /></Field>
           <Field label="Channel id" hint="The one channel. Its threads count as part of it.">
@@ -426,6 +428,15 @@ function RulesForm({ view, running, saving, onSave }: {
           </div>
         </Card>
         <DoorToolsCard rules={r} builtFor={view.harness.runtime === 'pi' ? undefined : 'Pi'} onChange={(tools) => set({ ...r, tools })} />
+        <DoorMemoryCard
+          rules={r} harnessLabel={view.harness.label}
+          writes={view.harness.runtime === 'pi' && !d.anyoneInChannel && (modeOf(r.tools, 'file_write') !== 'never' || modeOf(r.tools, 'shell') !== 'never')}
+          onChange={(patch) => {
+            const next = { ...r, ...patch }
+            if ('memory' in patch && patch.memory === undefined) delete next.memory
+            set(next)
+          }}
+        />
         <Card title="Secret files">
           <p className="text-xs text-muted-foreground">
             The bot token and the model key stay in two files that only you can read, outside the repo. Give their paths here.
