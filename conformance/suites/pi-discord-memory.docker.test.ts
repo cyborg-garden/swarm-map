@@ -76,9 +76,11 @@ describe('pi-discord: persona, notes and a kept scratch folder, across a stop an
     await fake?.close()
   }, 60_000)
 
+  const logs: string[] = []
   const startAgain = async (): Promise<void> => {
     await running?.stop()
-    running = await start({ config, secrets, stateDir, log: () => {}, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
+    logs.length = 0
+    running = await start({ config, secrets, stateDir, log: (line) => { logs.push(line) }, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
   }
   const say = (text: string): string => fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: `<@${fake.selfId}> ${text}`, mentions: [fake.selfId] })
   const until = async (what: () => boolean, ms = 90_000): Promise<void> => {
@@ -141,6 +143,9 @@ describe('pi-discord: persona, notes and a kept scratch folder, across a stop an
     await until(() => fake.posted.length === posts + 1)
     expect(JSON.stringify(requestWith('CANARY-again'))).toContain(NOTE)
     expect(inCell(`cat ${WORK}/kept.txt`).trim()).toBe(`kept ${nonce}`)
+    // Put back once when the cell came up, and once more each time the start had to start the cell again (it comes back empty).
+    const again = logs.filter((l) => /started again/.test(l)).length
+    expect(logs.filter((l) => l === 'the kept scratch folder was put back')).toHaveLength(1 + again)
   }, 240_000)
 
   it('wiped, the notes and the kept folder are gone after the next start, and nothing of them reaches the model', async () => {
