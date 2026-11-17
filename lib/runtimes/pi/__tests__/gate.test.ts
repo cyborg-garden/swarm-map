@@ -210,3 +210,50 @@ describe('a gate with a part switched off in its source', () => {
     } finally { delete process.env.SWARM_GATE_CONFINE; delete process.env.SWARM_GATE_LIMITS }
   })
 })
+
+describe('a shell Pi was told to change behind the gate\'s back', () => {
+  // Pi reads `shellCommandPrefix` and `shellPath` from its settings, in its own folder and in the
+  // scratch folder (`.pi/settings.json`), when it starts. A prefix runs before every command, out of
+  // sight of the door, which only ever read the command. One earlier yes that writes such a file
+  // would turn every later `ls` the command policy lets through without a yes into anything at all.
+  const agent = path.join(base, 'agent')
+  const project = path.join(work, '.pi')
+  beforeEach(() => { mkdirSync(agent, { recursive: true }); process.env.PI_CODING_AGENT_DIR = agent })
+  afterEach(() => {
+    delete process.env.PI_CODING_AGENT_DIR
+    rmSync(path.join(agent, 'settings.json'), { force: true })
+    rmSync(project, { recursive: true, force: true })
+  })
+  const write = (file: string, text: string): void => { mkdirSync(path.dirname(file), { recursive: true }); writeFileSync(file, text) }
+
+  it('[U:pi-gate] runs a shell call when no settings name a shell or a prefix', async () => {
+    write(path.join(agent, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    expect(await load().tool_call(bash({ command: 'ls' }), ui(yes).ctx)).toBeUndefined()
+  })
+
+  it.each([
+    ['its own folder, a prefix', () => path.join(agent, 'settings.json'), JSON.stringify({ shellCommandPrefix: 'touch x' })],
+    ['its own folder, a shell', () => path.join(agent, 'settings.json'), JSON.stringify({ shellPath: '/bin/sh' })],
+    ['the scratch folder, a prefix', () => path.join(project, 'settings.json'), JSON.stringify({ shellCommandPrefix: 'touch x' })],
+    ['the scratch folder, a key spelled with an escape', () => path.join(project, 'settings.json'), '{"shell\\u0050ath":"/bin/sh"}'],
+    ['the scratch folder, a file Pi might read another way', () => path.join(project, 'settings.json'), '{ // note\n "shellCommandPrefix": "touch x" }'],
+  ])('[U:pi-gate] refuses every shell call when %s is set', async (_what, file, text) => {
+    write(file(), text)
+    const u = ui(yes)
+    expect(await load().tool_call(bash({ command: 'ls' }), u.ctx)).toEqual(blocked())
+    expect(u.asked).toEqual([])
+  })
+
+  it('[U:pi-gate] keeps refusing after the setting is taken away again: the running Pi read it when it started', async () => {
+    const file = path.join(project, 'settings.json')
+    write(file, JSON.stringify({ shellCommandPrefix: 'touch x' }))
+    const gate = load()
+    rmSync(file)
+    expect(await gate.tool_call(bash({ command: 'ls' }), ui(yes).ctx)).toEqual(blocked())
+  })
+
+  it('[U:pi-gate] a file tool is not held up by it', async () => {
+    write(path.join(agent, 'settings.json'), JSON.stringify({ shellCommandPrefix: 'touch x' }))
+    expect(await load().tool_call({ toolName: 'read', toolCallId: 'c', input: { path: 'a.txt' } }, ui(yes).ctx)).toBeUndefined()
+  })
+})

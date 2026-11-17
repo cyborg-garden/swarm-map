@@ -13,6 +13,8 @@ import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.t
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
 import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
+import { classifyCommand } from '../core/tools/command-policy.ts'
+import { readWebUrl } from '../core/tools/web.ts'
 import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
 import { ASKED_TO_REMEMBER, MEMORY_TOOL, type MemoryStore } from './memory.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
@@ -21,6 +23,8 @@ import { createObserveBuffer } from './observe-buffer.ts'
 import type { Capabilities, Envelope, FromShim, Usage } from './protocol.ts'
 import type { Receipt, ReceiptLog } from './receipts.ts'
 import { createSanitizer, type Sanitizer } from './sanitizer.ts'
+import { createWebFetcher, untrustedText, type WebFetchOptions } from './web-fetch.ts'
+import { DEFAULT_SEARCH, MAX_QUERY_CHARS, searchBrave, untrustedResults, type SearchOptions } from './web-search.ts'
 
 export interface Heartbeat { agentId: string; policyHash: string; caps?: Capabilities; ts: string }
 
@@ -62,6 +66,14 @@ export interface DoorOptions {
   memory?: MemoryStore
   /** The scratch folder is kept across a stop (`tools.keepScratch`): a request to approve a tool says so. */
   keptScratch?: boolean
+  /** How the door reaches the web for a web tool: DNS, the connection and the limits. Left out, the real ones, https only. */
+  web?: WebFetchOptions
+  /** Test hook: a fetcher with a part left out on purpose (createWebFetcher's `parts`), to show a check goes red without it. */
+  webFetcher?: ReturnType<typeof createWebFetcher>
+  /** Web search: the provider's key, which only the door holds. Left out, a search call is refused, and no search is ever made. */
+  search?: SearchOptions
+  /** Test hook: decide a web call with no look at the allowlist, to prove the check for it goes red without one. */
+  webListUnchecked?: boolean
 }
 
 export interface Door {
@@ -120,7 +132,25 @@ interface Held {
   toolClass: ToolClass
   /** The hash of the call that was shown. The yes that goes back to the cell carries it. */
   hash: string
+  /** A shell call's command, so the yes is checked against the command policy as it is then. */
+  command?: string
+  /** For a web call: the address it was decided on, or a search's query. A yes to it lets the door make that one request, once. */
+  web?: WebAsk
   timer: ReturnType<typeof setTimeout>
+}
+
+/** What a web call asks the door for: one page, or one search. */
+type WebAsk = { url: string } | { query: string }
+/** A web call the door said yes to, and the one request it may make for it. Used once. */
+type WebTicket = { turn: Turn; link: ShimLink; tool: string } & WebAsk
+
+/** A shell call's command, when its input is a command and at most a time limit. Anything else has none. */
+export function commandOf(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined
+  const { command, timeout, ...rest } = input as Record<string, unknown>
+  if (Object.keys(rest).length > 0 || typeof command !== 'string') return undefined
+  if (timeout !== undefined && (typeof timeout !== 'number' || !Number.isFinite(timeout))) return undefined
+  return command
 }
 
 export async function createDoor(opts: DoorOptions): Promise<Door> {
@@ -156,6 +186,11 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const held = new Map<string, Held>()
   // tools.limits: when each conversation's recent tool calls were let through.
   const toolCalls = new Map<string, number[]>()
+  // web.*: the web calls that may be fetched, by the id the shim asked under, and when this agent's recent fetches were made.
+  const webTickets = new Map<string, WebTicket>()
+  let webFetches: number[] = []
+  let searches: number[] = []
+  const fetcher = opts.webFetcher ?? createWebFetcher(opts.web)
   // bots.loop: bot messages delivered in a row, per room, since a person was last delivered there.
   // A thread counts with its parent, so a loop cannot carry on by moving into one.
   // Where the policy names its bots, each named bot has a count of its own in a room. Where it does
@@ -199,6 +234,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
 
   // A call that was waiting for an answer goes with its turn, however the turn ended. Its request can no longer be answered.
   const dropHeld = (turn: Turn): void => {
+    for (const [callId, t] of [...webTickets]) if (t.turn === turn) webTickets.delete(callId)
     for (const h of [...held.values()]) {
       if (h.turn !== turn) continue
       held.delete(h.requestId)
@@ -268,7 +304,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     receipt(tag, who, `answer=${say} ${note}`)
     if (say === 'deny') { settle(h, false, 'An admin said no, so the call does not run.'); return true }
     // The yes is checked against the rules as they are now, not as they were when the door asked.
-    const now = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass: h.toolClass, toolName: h.tool, argsDigest: '' }, {})
+    const now = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass: h.toolClass, toolName: h.tool, argsDigest: '', ...(h.command !== undefined ? { command: h.command } : {}) }, {})
     if (now.verdict === 'deny') { settle(h, false, `The rules changed while the call waited: ${now.why}`, now.rule); return true }
     settle(h, true, 'An admin said yes, so the call runs.')
     return true
@@ -280,6 +316,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
    */
   function settle(h: Held, allow: boolean, why: string, rule = 'priv.approval'): void {
     receipt(about(h.turn.event, 'tool', h.turn.turnId), { verdict: allow ? 'allow' : 'deny', rule, why }, `tool=${h.tool} call=${shortHash(h.hash)}`)
+    if (allow && h.web !== undefined) webTickets.set(h.callId, { turn: h.turn, link: h.link, tool: h.tool, ...h.web })
     h.link.send({ t: 'tool_verdict', callId: h.callId, allow, ...(allow ? { hash: h.hash } : { reason: why }) })
     startClock(h.turn)
   }
@@ -486,7 +523,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         // The hash is of the name the shim sent, so it matches what the cell works out. Only the hash is written down.
         const hash = callHash(typeof msg.tool === 'string' ? msg.tool : '', msg.input)
         const tag = about(e, 'tool', turn.turnId)
-        const note = `tool=${toolName} call=${shortHash(hash)}`
+        // tools.commands: a shell call that is a command and nothing else (a time limit aside) is read by
+        // the command policy. Any other shape is not, so it cannot be let through by it. The receipt
+        // names the rule that decided, never the command.
+        const command = toolClass === 'shell' ? commandOf(msg.input) : undefined
+        const cmdRule = command !== undefined && policy.tools.commands ? ` command=${classifyCommand(command, policy.tools.commands).rule}` : ''
+        const note = `tool=${toolName} call=${shortHash(hash)}${cmdRule}`
         const verdict = (allow: boolean, reason?: string): void => {
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? { hash } : { reason }) })
         }
@@ -496,9 +538,33 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         void factsFor(turn.connector, e).then(async (facts) => {
           // The lookup took time. A turn that ended meanwhile gets a no, whatever the policy says.
           if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
-          const d = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: hash }, facts)
+          const d = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: hash, ...(command !== undefined ? { command } : {}) }, facts)
           if (opts.silentVerdicts) return
           if (d.verdict !== 'allow' && d.verdict !== 'ask') { receipt(tag, d, note); return verdict(false, d.why) }
+
+          // web.allow: a web call takes one address and nothing else, and the address has to be on the list.
+          // What is shown to an admin, and what the door later fetches, is that one address.
+          let web: WebAsk | undefined
+          if (toolClass === 'search') {
+            const input = msg.input as Record<string, unknown> | null
+            if (!opts.search) return refuse('web.search', 'Search is not set up for this agent.')
+            if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join() !== 'query'
+              || typeof input.query !== 'string' || input.query.trim() === '' || input.query.length > MAX_QUERY_CHARS) {
+              return refuse('web.search', `A search takes one query of 1 to ${MAX_QUERY_CHARS} characters and nothing else.`)
+            }
+            web = { query: input.query }
+          }
+          if (toolClass === 'network') {
+            const input = msg.input as Record<string, unknown> | null
+            if (input === null || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).join() !== 'url') {
+              return refuse('web.allow', 'A web call takes one address and nothing else.')
+            }
+            const read = readWebUrl(input.url, fetchSchemes)
+            if ('problem' in read) return refuse('web.allow', `That address is refused: ${read.problem}.`)
+            const e2 = decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, facts)
+            if (e2.verdict !== 'allow' && !opts.webListUnchecked) return refuse(e2.rule, e2.why)
+            web = { url: input.url as string }
+          }
 
           // tools.limits: a conversation gets so many calls an hour. Counted when the rules let a call
           // through, to run or to be asked about, so a call the rules refuse costs nothing.
@@ -530,7 +596,11 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             link.send({ t: 'tool_verdict', callId: msg.callId, allow: done.ok, reason: done.message, ...(done.ok ? { hash } : {}) })
             return
           }
-          if (d.verdict === 'allow') { receipt(tag, d, note); return verdict(true) }
+          if (d.verdict === 'allow') {
+            receipt(tag, d, note)
+            if (web !== undefined) webTickets.set(msg.callId, { turn, link, tool: toolName, ...web })
+            return verdict(true)
+          }
 
           // priv.approval: hold the call, show it in the room, and wait for an admin.
           const no = (why: string): void => refuse('priv.approval', why)
@@ -557,7 +627,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
           if (requestId === '' || held.has(requestId)) { startClock(turn); return no('The request could not be posted, so the call does not run.') }
           const h: Held = {
-            requestId, turn, link, callId: msg.callId, tool: toolName, toolClass, hash,
+            requestId, turn, link, callId: msg.callId, tool: toolName, toolClass, hash, command, ...(web !== undefined ? { web } : {}),
             timer: setTimeout(() => {
               if (held.delete(requestId)) settle(h, false, 'No admin answered in time, so the call does not run.')
             }, approvalMs),
@@ -571,6 +641,14 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         })
         return
       }
+      case 'web_fetch': {
+        void fetchFor(link, msg.callId, msg.url)
+        return
+      }
+      case 'web_search': {
+        void searchFor(link, msg.callId, msg.query)
+        return
+      }
       case 'error': {
         const turn = msg.turnId ? turns.get(msg.turnId) : undefined
         if (turn) {
@@ -582,6 +660,100 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       default:
         return // hello is handled by the brain server; delta, tool_done and health carry no decision
     }
+  }
+
+  const fetchSchemes = opts.web?.schemes ?? ['https:']
+  /**
+   * web.*: fetch the page for a web call the door said yes to. Only the call's own shim may ask,
+   * only for the address the call was decided on, only once, and only while its turn is live.
+   * Each hop is put to the rules as they are now. What comes back goes to that shim and nowhere
+   * else, and the receipt holds the host, the path and the size.
+   */
+  async function fetchFor(link: ShimLink, callId: unknown, url: unknown): Promise<void> {
+    const answer = (ok: boolean, body: { text?: string; reason?: string }): void => {
+      if (typeof callId === 'string') link.send({ t: 'web_result', callId, ok, ...body })
+    }
+    const ticket = typeof callId === 'string' ? webTickets.get(callId) : undefined
+    // Asked for once, used: a wrong address under a call's id spends that call too.
+    if (ticket) webTickets.delete(callId as string)
+    if (!ticket || ticket.link !== link || !('url' in ticket) || ticket.url !== url || turns.get(ticket.turn.turnId) !== ticket.turn) {
+      receipt({ kind: 'egress' }, { verdict: 'deny', rule: 'web.allow', why: 'A page was asked for that is not one the door said yes to.' })
+      return answer(false, { reason: 'not a fetch the door said yes to' })
+    }
+    const e = ticket.turn.event
+    const tag = about(e, 'egress', ticket.turn.turnId)
+    const since = Date.now() - 3_600_000
+    webFetches = webFetches.filter((at) => at > since)
+    if (webFetches.length >= fetcher.limits.perHour) {
+      receipt(tag, { verdict: 'deny', rule: 'web.limits', why: 'This agent has made as many web fetches as it may in an hour.' }, `tool=${ticket.tool}`)
+      return answer(false, { reason: 'too many web fetches this hour' })
+    }
+    webFetches.push(Date.now())
+    const check = (host: string, path: string): string | undefined => {
+      if (opts.webListUnchecked) return undefined
+      const d = decide(policy, { kind: 'egress', host, path, method: 'GET' }, {})
+      return d.verdict === 'allow' ? undefined : d.why
+    }
+    let result: Awaited<ReturnType<typeof fetcher.fetch>>
+    try { result = await fetcher.fetch(ticket.url, check) } catch { result = { ok: false, code: 'error', why: 'the fetch failed' } }
+    const where = result.host === undefined ? '' : `host=${result.host} path=${shownPath(result.path ?? '')}`
+    if (!result.ok) {
+      const rule = { rules: 'web.allow', address: 'web.allow', redirect: 'web.redirect', private: 'web.private', time: 'web.limits', type: 'web.limits', status: 'web.allow', error: 'web.allow' }[result.code]
+      receipt(tag, { verdict: 'deny', rule, why: `The page was not fetched: ${result.why}.` }, [`tool=${ticket.tool}`, `code=${result.code}`, where].filter(Boolean).join(' '))
+      return answer(false, { reason: result.why })
+    }
+    receipt({ ...tag, bytes: result.bytes }, { verdict: 'allow', rule: 'web.allow', why: 'The door fetched the page and handed it to the model only.' },
+      `tool=${ticket.tool} ${where} bytes=${result.bytes} status=${result.status} hops=${result.hops}${result.cut ? ` cut=${result.cut}` : ''}`)
+    answer(true, { text: untrustedText(result, randomUUID().slice(0, 8)) })
+  }
+  /**
+   * web.search: make the search for a call the door said yes to. As for a page: that call's own
+   * shim, that query, once, while its turn is live. The key goes to the provider and nowhere else.
+   * The receipt holds the query's length and the number of results, never the query.
+   */
+  async function searchFor(link: ShimLink, callId: unknown, query: unknown): Promise<void> {
+    const answer = (ok: boolean, body: { text?: string; reason?: string }): void => {
+      if (typeof callId === 'string') link.send({ t: 'web_result', callId, ok, ...body })
+    }
+    const ticket = typeof callId === 'string' ? webTickets.get(callId) : undefined
+    if (ticket) webTickets.delete(callId as string)
+    if (!opts.search || !ticket || ticket.link !== link || !('query' in ticket) || ticket.query !== query || turns.get(ticket.turn.turnId) !== ticket.turn) {
+      receipt({ kind: 'egress' }, { verdict: 'deny', rule: 'web.search', why: 'A search was asked for that is not one the door said yes to.' })
+      return answer(false, { reason: 'not a search the door said yes to' })
+    }
+    const tag = about(ticket.turn.event, 'egress', ticket.turn.turnId)
+    const note = `tool=${ticket.tool} query=${ticket.query.length}chars`
+    const since = Date.now() - 3_600_000
+    searches = searches.filter((at) => at > since)
+    if (searches.length >= (opts.search.perHour ?? DEFAULT_SEARCH.perHour)) {
+      receipt(tag, { verdict: 'deny', rule: 'web.search', why: 'This agent has made as many searches as it may in an hour.' }, note)
+      return answer(false, { reason: 'too many searches this hour' })
+    }
+    searches.push(Date.now())
+    let result: Awaited<ReturnType<typeof searchBrave>>
+    try { result = await searchBrave(ticket.query, opts.search) } catch { result = { ok: false, why: 'the search failed' } }
+    if (!result.ok) {
+      receipt(tag, { verdict: 'deny', rule: 'web.search', why: `The search was not made: ${result.why}.` }, note)
+      return answer(false, { reason: result.why })
+    }
+    // Each result says whether web_fetch may read it under the rules as they are now. Whether its host is a
+    // public one is checked when it is fetched, after DNS, like any other address.
+    const fetchable = (u: string): boolean => {
+      const read = readWebUrl(u, fetchSchemes)
+      return !('problem' in read) && decide(policy, { kind: 'egress', host: read.host, path: read.path, method: 'GET' }, {}).verdict === 'allow'
+    }
+    receipt(tag, { verdict: 'allow', rule: 'web.search', why: 'The door made the search and handed the results to the model only.' }, `${note} results=${result.results.length}`)
+    // A provider sees the key, so it could hand it back. It never reaches the model from here.
+    const key = opts.search.key
+    const text = untrustedResults(result.results, fetchable, randomUUID().slice(0, 8))
+    answer(true, { text: key.length >= 8 ? text.split(key).join('[redacted]') : text })
+  }
+
+  /** A path as a receipt may hold it: plain characters, short, and nothing secret-shaped. Anything else is counted, not shown. */
+  const shownPath = (p: string): string => {
+    let secretShaped = true
+    try { secretShaped = sanitizer.run('outbound', p, { posture: policy.posture, room: { id: '', kind: 'channel' } }).findings.length > 0 } catch { /* counted below */ }
+    return /^[A-Za-z0-9._~/-]{0,160}$/.test(p) && !secretShaped ? p : `(${p.length} characters, not shown)`
   }
 
   const brain: BrainServer = await createBrainServer({

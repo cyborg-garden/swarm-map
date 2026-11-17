@@ -17,6 +17,8 @@ import { createMemoryStore, type MemoryStore } from '../../lib/door/memory.ts'
 import { startModelRoute, type ModelRoute } from '../../lib/door/model-route.ts'
 import { createReceiptLog, type ReceiptLog } from '../../lib/door/receipts.ts'
 import { createSanitizer } from '../../lib/door/sanitizer.ts'
+import { startFakeWeb, type FakeWeb } from '../../lib/door/testing/fake-web.ts'
+import { createWebFetcher, type WebLimits } from '../../lib/door/web-fetch.ts'
 import { createMemoryLedger } from '../../lib/door/spend-ledger.ts'
 import { startChattyShim } from '../broken/chatty.ts'
 import { brokenMemoryStore, type BrokenMemory } from '../broken/memory-stores.ts'
@@ -55,7 +57,7 @@ export interface LabOptions {
    * answer to a request as sent by the fixture's admin, whoever sent it. The door has no way to
    * know better, so it shows that the check on who may answer can go red.
    */
-  rig?: 'answers-as-admin' | BrokenMemory
+  rig?: 'answers-as-admin' | BrokenMemory | 'search-key-anyway' | 'web-no-list' | 'web-no-address-check' | 'web-unchecked-redirects' | 'web-keeps-cookies' | 'web-no-limits'
   /**
    * The door keeps notes for each room (lib/door/memory.ts), in a folder of the lab's own that the
    * harness is never given: not the work dir, which a cell shares. `dir` reuses a folder another lab
@@ -64,6 +66,10 @@ export interface LabOptions {
   memory?: { dir?: string }
   /** What the harness is told it is, as the launcher would tell it, or how to get it. Left out, the harness keeps its own. */
   systemPrompt?: string | (() => Promise<string>)
+  /** Left out or true, the door has a search key (minted per lab) and the fake provider; false, it has none. */
+  searchKey?: boolean
+  /** The door's limits on a web fetch, for a check that wants them small. */
+  webLimits?: Partial<WebLimits>
 }
 
 export interface RemoteCell {
@@ -85,8 +91,10 @@ export interface Lab {
   model: ScriptedModel
   route: ModelRoute
   receipts: ReceiptLog
+  /** The only web the door can reach in a lab: a server on loopback that plays every site, and a fake DNS. */
+  web: FakeWeb
   /** Secrets that must never show up in the cell or in a post. */
-  secrets: { upstream: string; chat: string; brain: string }
+  secrets: { upstream: string; chat: string; brain: string; search: string }
   /**
    * A variable planted in this test process's own environment before the shim
    * started. It is not a secret and not shaped like one. A harness that
@@ -155,7 +163,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     throw err
   }
 
-  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: o.remote?.brainToken ?? `cell-${randomBytes(8).toString('hex')}` }
+  const secrets = { upstream: `UPSTREAM-${nonce}`, chat: `FAKECHAT-${nonce}`, brain: o.remote?.brainToken ?? `cell-${randomBytes(8).toString('hex')}`, search: `SEARCHKEY-${nonce}` }
   const listen = o.remote ? '0.0.0.0' : undefined
   const placeholder = `PLACEHOLDER-${nonce}`
   const policy = (patch: Record<string, unknown> = {}): PolicyRecord =>
@@ -175,7 +183,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     closers.push(() => model.close())
     const receipts = createReceiptLog()
     const fake = createFakeConnector({ nonce })
-    const sanitizer = createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain] })
+    const sanitizer = createSanitizer({ extraSecrets: [secrets.upstream, secrets.chat, secrets.brain, secrets.search] })
     // The notes' folder is the lab's own, outside the work dir, unless a rig puts it where the harness can write.
     let memoryDir: string | undefined
     let memory: MemoryStore | undefined
@@ -191,6 +199,16 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       }
       memory = brokenMemoryStore(o.rig, createMemoryStore({ dir: memoryDir, sanitizer, ...(o.rig === 'memory-no-checks' ? { checks: false } : {}) }))
     }
+    const web = await startFakeWeb()
+    closers.push(() => web.close())
+    const webOptions = { ...web.options, limits: o.webLimits }
+    // A door whose web fetcher is broken on purpose, in one way each, to show the web checks can go red.
+    const broken = { addresses: true, redirects: true, bare: true, limits: true }
+    const webFetcher = o.rig === 'web-no-address-check' ? createWebFetcher(webOptions, { ...broken, addresses: false })
+      : o.rig === 'web-unchecked-redirects' ? createWebFetcher(webOptions, { ...broken, redirects: false })
+        : o.rig === 'web-keeps-cookies' ? createWebFetcher(webOptions, { ...broken, bare: false })
+          : o.rig === 'web-no-limits' ? createWebFetcher(webOptions, { ...broken, limits: false })
+            : undefined
     if (o.rig === 'answers-as-admin') {
       // The surface lies about who answered. Everything else it passes on as it came.
       const admin = { id: 'u-root', display: 'u-root', isBot: false, isSelf: false, roles: [] }
@@ -204,6 +222,9 @@ export async function startLab(o: LabOptions): Promise<Lab> {
       receipts, brainToken: secrets.brain, brainHost: listen, brainPort: o.remote?.brainPort, testing: true, silentVerdicts: o.silentVerdicts,
       sanitizer, memory,
       turnDeadlineMs: o.turnDeadlineMs ?? 8000, approvalTimeoutMs: o.approvalTimeoutMs ?? 5000,
+      web: webOptions, ...(webFetcher ? { webFetcher } : {}),
+      // A lab with no search key has none, unless the rig is broken to hand the door one anyway.
+      ...(o.searchKey !== false || o.rig === 'search-key-anyway' ? { search: { key: secrets.search, endpoint: web.search.endpoint } } : {}), ...(o.rig === 'web-no-list' ? { webListUnchecked: true } : {}),
     })
     closers.push(() => door.close())
     const route = await startModelRoute({
@@ -239,7 +260,7 @@ export async function startLab(o: LabOptions): Promise<Lab> {
     await door.shimConnected()
 
     return {
-      nonce, harness: o.harness, door, fake, model, route, receipts, secrets, hostCanary, dir, policy,
+      nonce, harness: o.harness, door, fake, model, route, receipts, web, secrets, hostCanary, dir, policy,
       canary: (name) => `CANARY-${name}-${nonce}`,
       file: (name) => o.harness.workFile(cell, name),
       outside: () => {

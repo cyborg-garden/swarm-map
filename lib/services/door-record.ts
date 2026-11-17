@@ -17,7 +17,7 @@
 import path from 'path'
 import { parseConfig, type LabConfig } from '@/lib/lab/pi-discord/config'
 import { isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
-import { secretFilePlaceProblem, MODEL_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
+import { secretFilePlaceProblem, MODEL_KEY_FILE_ENV, SEARCH_KEY_FILE_ENV, TOKEN_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
 import { defaultPersona } from '@/lib/lab/pi-discord/persona'
 import type { DoorRuntime } from './runtime-adapter'
 
@@ -37,6 +37,8 @@ export interface DoorSecretPaths {
   discordTokenFile: string
   /** Path of the file that holds the model key. Empty until it is set. */
   modelKeyFile: string
+  /** Path of the file that holds the web search key. Needed only when the rules switch search on. */
+  searchKeyFile?: string
 }
 
 export interface DoorRulesRecord {
@@ -56,10 +58,12 @@ export interface DoorRulesRecord {
 const SECRET_LABELS: Record<keyof DoorSecretPaths, string> = {
   discordTokenFile: 'bot token file',
   modelKeyFile: 'model key file',
+  searchKeyFile: 'search key file',
 }
 const SECRET_ENV: Record<keyof DoorSecretPaths, string> = {
   discordTokenFile: TOKEN_FILE_ENV,
   modelKeyFile: MODEL_KEY_FILE_ENV,
+  searchKeyFile: SEARCH_KEY_FILE_ENV,
 }
 
 /** The folder that holds everything Swarm Map keeps for one door agent. */
@@ -147,7 +151,7 @@ export function checkRecordInput(
     errors.push('secrets: must be an object with the two file paths')
   } else {
     for (const key of Object.keys(secretsIn)) {
-      if (!(key in SECRET_LABELS)) errors.push(`secrets.${key}: not a setting. Only the paths of the two files are kept, never a secret`)
+      if (!(key in SECRET_LABELS)) errors.push(`secrets.${key}: not a setting. Only the paths of the secret files are kept, never a secret`)
     }
     for (const key of Object.keys(SECRET_LABELS) as Array<keyof DoorSecretPaths>) {
       const value = secretsIn[key] ?? ''
@@ -155,7 +159,7 @@ export function checkRecordInput(
       if (typeof value !== 'string' || /[\u0000-\u001f\u007f]/.test(value) || value.length > 1024 || (value !== '' && !path.isAbsolute(value))) {
         errors.push(`secrets.${key}: the ${SECRET_LABELS[key]} must be given as a full path on one line`)
       } else {
-        secrets[key] = value
+        if (key !== 'searchKeyFile' || value !== '') secrets[key] = value
       }
     }
   }
@@ -174,6 +178,8 @@ export function checkRecordInput(
 export function secretProblems(record: DoorRulesRecord, repoRoot: string): string[] {
   const problems: string[] = []
   for (const key of Object.keys(SECRET_LABELS) as Array<keyof DoorSecretPaths>) {
+    // The search key is needed only when search is on. Then it has to be in place like the other two.
+    if (key === 'searchKeyFile' && record.rules.tools?.web?.search !== true) continue
     const name = SECRET_ENV[key]
     const problem = secretFilePlaceProblem(name, { [name]: record.secrets[key] || undefined }, repoRoot)
     if (problem) problems.push(problem.replace(name, `The ${SECRET_LABELS[key]}`).replace('Point it at', 'Give the path of'))
@@ -204,6 +210,7 @@ export function renderStartScript(
     '# Written by Swarm Map from the rules record. Do not edit: it is written again on every save and every start.',
     `export ${TOKEN_FILE_ENV}=${shellQuote(record.secrets.discordTokenFile)}`,
     `export ${MODEL_KEY_FILE_ENV}=${shellQuote(record.secrets.modelKeyFile)}`,
+    ...(record.secrets.searchKeyFile ? [`export ${SEARCH_KEY_FILE_ENV}=${shellQuote(record.secrets.searchKeyFile)}`] : []),
     `export SMLAB_STATE_DIR=${shellQuote(o.stateDir)}`,
     `exec ${shellQuote(o.node)} ${shellQuote(o.cli)} start --config ${shellQuote(o.configPath)}`,
     '',

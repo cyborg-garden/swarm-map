@@ -69,10 +69,10 @@ describe('the flags the shim gives Pi', () => {
     ])
   })
 
-  it('[U:pi-env] with no tools allowed, Pi is told to load none: not its own, and not the door\'s tool the gate registers', () => {
+  it('[U:pi-env] with no tools allowed, Pi is told to load none: not its own, and none the gate registers (the web tools, the door\'s notes tool)', () => {
     const args = piArgs({ ...o, tools: [] })
     expect(args).toContain('--no-tools')
-    // Pi keeps a registered tool under --no-builtin-tools, so that flag would leave the door's tool declared.
+    // Pi keeps a registered tool under --no-builtin-tools, so that flag would leave the gate's tools declared.
     expect(args).not.toContain('--no-builtin-tools')
     expect(args).not.toContain('--tools')
   })

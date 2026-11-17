@@ -114,8 +114,6 @@ describe('decide() properties', () => {
       'tools.perRoom': { 'r-general': { deny: ['shell'] } },
       'tools.browserGuard': 'public-hosts-only',
       'keys': [{ ref: 'k-1', kind: 'model', hosts: [] }],
-      'egress.default': 'allow',
-      'egress.hosts': [{ host: 'example.com' }],
       'egress.blockPrivateRanges': false,
       'memory.threadsPoolIntoParent': false,
       'memory.team.dm': 'read',
@@ -149,7 +147,6 @@ describe('decide() properties', () => {
   it('an event kind with no rule yet is refused, not waved through', () => {
     const policy = withHash(loadFixturePolicy('policy-team.json'))
     const room = { id: 'r-general', kind: 'channel' as const }
-    expect(() => decide(policy, { kind: 'egress', host: 'example.com', method: 'GET' }, {})).toThrow(UnrenderedError)
     expect(() => decide(policy, { kind: 'memory', op: 'read', scope: { kind: 'team' }, room }, {})).toThrow(UnrenderedError)
   })
 })

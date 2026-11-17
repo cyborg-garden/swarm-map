@@ -9,10 +9,16 @@ is a placeholder.
 
 - **Off by default.** An agent has no tools until its rules switch a class of tool on.
 - **Three classes in this slice.** Read files, write files, and a shell. All three run inside the
-  sealed cell and nowhere else. There is no web access.
+  sealed cell and nowhere else.
+- **And the web, through the door.** Two more tools read one web page and search the web. The
+  cell still has no route out: the door makes every request and hands back text. Off by default.
+  See "Web through the door" below.
 - **Each class has a mode.** `never`, `ask` or `allow`. Shell starts at `ask`.
 - **`ask` means a person says yes in the room.** The door posts what the agent wants to run. An
   admin answers. No answer in time is a no.
+- **Not every command needs a yes.** A shell command made only of commands that read and print
+  (`ls`, `cat`, `grep` and so on) runs without asking. One with anything destructive in it never
+  runs. Everything else asks. See "The command policy".
 - **The door decides, not the harness.** Every tool call is put to `decide()`. The harness only
   carries the question and the answer.
 - **An agent anyone can talk to gets none of these.** A public agent loses shell and file tools
@@ -66,9 +72,78 @@ on, so nobody is left thinking a tool is on. `decide()` is the wall behind that 
 2. The agent is public: no to shell, file, code-exec and chat-admin tools, and to any tool it
    cannot classify.
 3. The class is on the deny list: no.
+3a. A shell call whose command the command policy reads as blocked: no. Read as allowed: yes.
 4. The class is on the ask list: **ask**.
 5. The class is on the allow list: yes.
 6. Otherwise: no.
+
+## The command policy
+
+A shell that asks for every `ls` is a shell nobody leaves on. So the record can hold two lists of
+command names, `tools.commands.allow` and `tools.commands.block`, and the door reads each shell
+call against them before it asks anyone.
+
+```json
+"tools": { "enabled": ["shell"], "commands": { "allow": ["ls", "cat", "grep"], "block": ["dd", "curl"] } }
+```
+
+Left out, the shipped lists apply (`lib/core/tools/command-defaults.ts`). The shipped allow list is
+about forty commands that read and print and change nothing. The shipped block list is disk wipers,
+shutdown, and network tools (the cell has no network, so those are only noise).
+
+**A command is read whole, and `allow` is the narrow answer.** The door has a small shell reader of
+its own (`lib/core/tools/command-policy.ts`, no new dependency). It reads words, quotes,
+backslashes, `|`, `||`, `&&`, `;`, new lines and redirections. A command runs without a yes only
+if the reader understood all of it and:
+
+- every command in it is on the allow list, named plainly (`ls`, not `/bin/ls` or `./ls`);
+- none of them has an argument that writes or runs something (`find -exec`, `find -delete`,
+  `sort -o`, `date -s`, a second file to `uniq`, `file -C`);
+- nothing is written by a redirection (a write to `/dev/null` is fine);
+- no word reaches out of the scratch folder: no full path, no `..`, no path fixed to an option
+  (`-f/x`, `--file=/x`), no `--files0-from`. The cell holds more than the scratch folder (its own
+  token in `/proc/1/environ`, other conversations' transcripts, the harness's settings). A file
+  tool cannot reach them, so a command that skips the yes cannot either;
+- `seq` counts to at most five digits: one with no end fills the cell's memory with output
+  faster than the time limit stops it, and takes every conversation down with it.
+
+Anything the reader does not fully understand asks: `$( )`, backticks, `$VAR`, `${ }`, `$'…'`,
+globs, `~`, braces, a subshell, a here-doc, a comment, a job sent to the background, a line that
+runs on, a `VAR=value` prefix, and any character outside plain printable ASCII (look-alike letters,
+invisible marks). So does a call whose input is anything more than a command and a time limit.
+
+**`block` is searched for everywhere.** A second, looser reading goes on past what the strict
+reader gives up on, so a block is found after a `;`, inside `$( )` or backticks, behind `sudo`,
+`env`, `timeout` or `xargs`, and inside `sh -c '…'` or `eval`. Besides the block list, these never
+run: a recursive `rm` that reaches out of the scratch folder (a full path, `~`, `..`, a variable,
+or no path at all, as from `xargs`), `find -delete` the same way, `chmod`/`chown` on a system path,
+a redirection into a system path, a redirection to bash's own network paths (`/dev/tcp/…`,
+`/dev/udp/…`), `kill -1`, and a fork bomb.
+
+**Some names can never be on the allow list:** shells, interpreters and anything that runs another
+command (`sh`, `bash`, `source`, `.`, `eval`, `env`, `xargs`, `sudo`, `timeout`, `python3`, `node`,
+`awk`, `sed`, `git`, `tar` and others). The launcher refuses such a list, and the reader asks
+anyway. Allowing one would let a yes be skipped for a script the agent wrote, which is why a shell
+that asks still cannot go with file writing that does not.
+
+What does not change:
+
+- A command that asks is held, shown and bound to its hash exactly as before.
+- A yes is checked against the lists as they are when it lands: a command the block list caught up
+  with meanwhile does not run.
+- An allowed command still needs the shell to be on, still counts against the calls per hour, and
+  still runs under the gate's time and output limits. A public agent still has no shell.
+- Receipts name the rule that decided (`command=allow:ls,grep`, `command=block:rm-recursive`,
+  `command=ask:redirect`), never the command. Names in a rule come from the lists, never from the
+  command.
+
+The commands found on the cell's `PATH` are the ones the gate's environment names. Pi starts a new
+shell for each call, so a function or alias from an earlier yes does not carry over. Its settings
+do: `shellCommandPrefix` or `shellPath`, in Pi's own folder or in `.pi/settings.json` in the scratch
+folder, would run beside every later command the door let through unread. So the Pi gate refuses
+every shell call while either is set, and for the rest of that Pi's life once it has seen one.
+An earlier yes still reaches past its own command in one way: a link it made in the scratch folder
+is followed by a later allowed command.
 
 ## Approval in the room
 
@@ -213,6 +288,7 @@ says its shim can hold a call. Each has something broken on purpose that must tu
 | C6t | No answer in time: the tool does not run | Gate that asks nobody |
 | C6x | What ran is exactly what was shown | Gate that runs more than it asked about |
 | C6r | A yes is used once | Gate that asks nobody |
+| K1 | A command on the allow list runs with no request, ten that hide a write each wait for a yes, and a blocked one never runs | Gate that asks nobody |
 | W1 | A file tool cannot leave the scratch folder: `..`, a full path, a link | Gate with no path check |
 | W1+ | Positive control: file tools work inside the scratch folder | (a control: it shows W1 was not green because nothing ran) |
 | L1 | A shell call past the time limit is stopped | Gate that applies no limits |
@@ -241,18 +317,158 @@ tool call to the door and takes a plain yes or no, and does not say it can hold 
 matrices list the ten tool checks as not run, with that reason. It is not one of the launcher's
 harnesses, so no config can switch a tool on for it.
 
-## A later tool: fetch through the door
+## Web through the door
 
-Not built. The shape, so that nothing here has to change for it:
+An agent can read web pages and search the web. The cell still has no route out: the agent's tool
+asks the door, and the door makes the request on its behalf. All of it is off by default.
 
-- The tool is a call to the **door**, not a socket in the cell. The cell still has no route out.
-- Its class is `network`. `decide()` gets the host and method (the `egress` event that is already
-  in the contracts), and the rules name the hosts: `egress.hosts`, default deny, private ranges
-  blocked.
-- The door makes the request itself, with no agent credential, follows no redirect to a host that
-  is not listed, caps the size and time, and hands back text. In `ask` mode the URL is what is
-  shown.
-- What comes back is untrusted text. It goes to the model only.
+### What the agent has
+
+| Tool | Class | What it takes | What it gets back |
+|---|---|---|---|
+| `web_fetch` | `network` | One address, `https://` only | The page as text, marked as untrusted, or why not |
+| `web_search` | `search` | One query, up to 400 characters | Titles, addresses and snippets, marked as untrusted, or why not |
+
+### The list
+
+The rules record already had a place for this: `egress.hosts`, with `default: 'deny'` and
+`blockPrivateRanges: true`. This slice is what reads it. The launcher's config and the dashboard's
+Tools card write it from a plainer shape:
+
+```json
+"tools": { "enabled": [], "mode": {}, "approvalSeconds": 120,
+           "web": { "mode": "allowlist", "allow": ["en.wikipedia.org", "github.com/some-org"],
+                    "approval": "allow", "search": false } }
+```
+
+- **Two modes.** `allowlist` (the default) reads only the listed sites. `public` reads any public
+  address, and is written into the record as `egress.default: 'public'`. Every other check below
+  holds the same in both: GET only, no credential, private addresses refused after DNS and on
+  every redirect, the same limits, and what comes back goes to the model only.
+- **Off means off.** No `web`, or `allowlist` with no site listed and no search: no web, and the
+  tools are not even declared to the model.
+- **An entry is a host, or a host and a path.** `en.wikipedia.org` allows that host. `github.com/some-org`
+  allows `/some-org` and what is under it, by whole segments: not `/some-organisation`.
+- **A host is matched exactly.** No wildcard, no subdomain, no other port. A site that lives at
+  `www.` needs that name listed. Names are compared as the URL parser writes them: lower case,
+  an international name in its punycode form, no trailing dot. An address (`10.0.0.1`, `[::1]`,
+  `0x7f.1`) is never an entry.
+- **`approval`** is `allow` (the default) or `ask`, which shows an admin the address or the query
+  first, in the room, as any tool in ask mode is shown.
+- **An agent that hears anyone may have it.** A public agent loses shell and file tools; it keeps
+  the web, still read-only and still on the list. It reads the public web only with `approval:
+  ask`: with no yes, anyone in the room could send the door to any address, and put what the agent
+  knows into it. The launcher refuses that config, and `decide()` says no to a record that has it.
+
+The Tools card offers suggestions as one-click chips. None is on until someone clicks it: the
+project's own GitHub (`github.com`, `api.github.com/repos/…`, `api.github.com/orgs/…` and
+`raw.githubusercontent.com`, each limited to that organisation), `cyborg.garden`,
+`en.wikipedia.org`, `stackoverflow.com`, the Internet Archive (`archive.org`, and `web.archive.org/web` only: its
+`/save/` path fetches any address on request),
+Sefaria (`www.sefaria.org`) and the Library of Congress (`www.loc.gov`).
+
+### What the door does for one fetch
+
+1. **The call is decided like any tool.** `decide()` answers for the class `network`. The address is
+   then put to `decide()` as an `egress` event: GET, a host on the list, a path under one of its
+   prefixes. A call whose input is anything but one address is refused.
+2. **A yes is a ticket for that one address.** The harness then asks the door for the page, by the
+   call's id. The door fetches only the address the call was decided on, only once, and only while
+   the turn is live. Asking under that id for any other address spends the ticket.
+3. **Every hop is checked again.** The address, then each redirect: on the list, under the rules as
+   they are now. Three redirects at most.
+4. **Every DNS answer is checked.** Each address the name has must be a public one. One private,
+   loopback, link-local, multicast, documentation or metadata address refuses the fetch. For IPv6,
+   only global unicast (2000::/3) is public, which leaves out every form that carries an IPv4
+   address inside it.
+5. **The connection goes to the address that was checked**, not to the name, so a second DNS answer
+   cannot move it (DNS rebinding). TLS still checks the certificate against the name.
+6. **The request is bare.** GET, a fixed user agent, `Accept-Encoding: identity`. No cookie, no
+   credential, no auth header, and a cookie the site sets is not sent back on the next hop. An
+   address with a name or password in it is refused. There is no GitHub token in this slice.
+7. **Limits.** 2 MB of body is read and no more, 15 seconds for the whole fetch on the wall clock
+   (every hop and every read, so a site that drips is cut at the same time as one that hangs), 60
+   fetches an hour for the agent, on top of the 30 tool calls an hour a conversation gets. Only
+   text, HTML, JSON and Markdown are read; a compressed body is refused.
+8. **HTML is reduced to its text.** Scripts, styles and markup go; what is left is cut to 15,000
+   bytes, so the page and its marks fit whole under the 16,000-byte cap on a tool's output.
+
+### What comes back
+
+- **It goes to the model only.** The door hands it to the harness that asked. It never posts it.
+  If the model repeats it in a reply, that reply goes through the same outbound checks as any
+  other.
+- **It is marked as untrusted.** It comes between two marks that carry an id the page cannot know,
+  under a line that says it is data from the web and not an instruction. The system prompt says the
+  same.
+- **Nothing in it can act.** An approval is read only from a chat message by an admin's own
+  account, in reply to the request. Page text never reaches the chat, so it cannot answer a request,
+  run a tool or change a rule.
+- **Receipts hold where, not what.** Host, path (when it is plain characters and nothing
+  secret-shaped; otherwise only its length) and size. Never the content.
+
+What an agent puts in an address, or in a query, reaches that site or the search provider. Under
+`allowlist` the list bounds where that can go; under the public web nothing does.
+
+### Rules and checks
+
+| Rule | Says | Checks |
+|---|---|---|
+| `web.allow` | Fetched by the door, GET only, only a listed host and path. Empty list: no web | N1, N1+ |
+| `web.redirect` | A redirect is followed only to a listed address, checked at every step | N2 |
+| `web.private` | Never a private, loopback, link-local or metadata address; connects to the address it checked | N3 |
+| `web.no-credentials` | No credential, cookie or auth header, whatever the agent asks | N4 |
+| `web.limits` | Size, time, content type, and fetches an hour | N5 |
+| `web.untrusted` | To the model only, marked untrusted; never posted; receipts hold no content | N6 |
+| `web.public` | With the public web on, any public address; every other rule unchanged | N7 |
+| `web.search` | The door searches with its own key; results only as untrusted titles, addresses, snippets; own hourly count; no query in receipts; off means no call | N8, N9 |
+
+The checks run against a fake web: one server on loopback that plays every site, a fake DNS that
+answers what a check tells it, and a dial that reaches the server only for an address the fake DNS
+handed out as public. No check fetches from the internet. Each has something broken on purpose
+that turns it red:
+
+| Broken on purpose | Turns red |
+|---|---|
+| A door that decides a web call without the list | N1, N2 |
+| A fetcher that does not check a redirect | N2 |
+| A fetcher with no address check | N3, N7, N8 |
+| A door that has a search key when search is meant to be off | N9 |
+| A fetcher that keeps cookies | N4 |
+| A fetcher with no limits | N5 |
+| A gate whose web tool fetches by itself instead of asking the door | N1+, N2 to N7 |
+| A gate that asks nobody | N1+, N2 to N8, with the other tool checks |
+
+The door's own tests (`lib/door/__tests__/web.test.ts`) cover the same with more cases: rebinding,
+a mixed DNS answer, IPv4 inside IPv6, the cloud metadata address, a ticket used twice or for another
+address, ask mode, a drip and a hang, content types.
+
+### Search
+
+`"search": true` switches on `web_search`. It is off by default.
+
+- **One provider, the Brave Search API, called by the door with its own key.** The key is read
+  from a file, like the bot token and the model key: the file's path is kept in the record with
+  the other secret paths (`secrets.searchKeyFile`), never in the rules, and the start script hands
+  it to the launcher as `SMLAB_SEARCH_KEY_FILE`. The file must be the user's own, unreadable by
+  others, outside the repo. The launcher refuses to start with search on and no key.
+- **The key stays with the door.** It goes in the provider's own header and nowhere else: not to
+  the cell, not to the model, not into a receipt or a post. A result that carries it back is
+  blanked before the model sees it.
+- **Results are titles, addresses and snippets only**, cut to size, between the same marks as a
+  page. Each says whether `web_fetch` may read it under the rules now.
+- **A result is read only through `web_fetch`,** so only if the current mode allows its address,
+  and never when its host is a private one.
+- **Its own count.** 30 searches an hour for the agent, apart from the fetches.
+- **Receipts hold the query's length and the number of results, never the query.**
+- **Off means no call at all.** With no key, or the class not allowed, the provider is never
+  called.
+
+### Scanning what comes back
+
+Not built. Pages and results are marked as untrusted and go to the model only; nothing scans them
+for instructions aimed at the model. A scanner can plug in at the door later, between the fetch and
+the hand-back, where every page and every result already passes.
 
 ## What was left out
 
@@ -260,6 +476,8 @@ Not built. The shape, so that nothing here has to change for it:
   [`persona-memory.md`](persona-memory.md).
 - **Role-holders as approvers** (`approverRoles`). Still refused by `decide()`.
 - **Per-room tool lists**, code-exec, browser, MCP and memory tools.
+- **Scanning pages for prompt injection** (see "Scanning what comes back"), a GitHub token, and web
+  for Letta Code or the Claude Agent SDK: like the other tools, the web tools are Pi's only.
 - **Limits in the rules record.** They are fixed numbers handed to the door and the cell at start.
 - **"Approve always".** Every call in `ask` mode needs its own yes.
 
@@ -279,6 +497,13 @@ room throughout. No real model, no real chat platform, no real credential.
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 | Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
 | Audit mutations | 28 lines broken one at a time in `decide()`, the door's answer handling, the scratch-folder check, the gate, the launcher's config, the cell and the Tools card. All 28 turned a named test red |
+| The command policy | 174 unit tests of the reader, including 3,000 random commands that may be allowed only when everything outside quotes is plain. K1 passes for real Pi 1.5.2 as a process and in the sealed cell, and the gate that asks nobody turns it red. 63 lines broken one at a time in the reader, `decide()`, the door, the launcher's config, the record check and the Tools card: 59 turned a named test red, and 4 change nothing the code does (a check that a later check repeats) |
+| Letta Code and the Claude Agent SDK, after the command policy | Unaffected. Neither shim can hold a call, so K1 is listed as not run for both, with that reason. Their process and Docker runs pass as before |
+| Web and search, real Pi 1.5.2 as a process | 59 checks pass, the ten web checks (N1+, N1 to N9) among them, against a fake web and a fake search provider on loopback. Seven door rigs and gates broken on purpose each turned its named web checks red and left the others green |
+| Web and search, real Pi 1.5.2 in the sealed Docker cell | 60 checks pass, the ten web checks among them: the page and the results reached the model in the cell, and the cell reached nothing but the door |
+| The launcher's own cell, with a fake Discord, after the web change | All 20 tests of the Pi launcher's Docker suite pass |
+| Letta Code and the Claude Agent SDK, after the web change | 26 and 36 checks pass as a process, as before. The web checks are listed as not run, with the tools' reason |
+| Web hand mutations | 67 lines broken one at a time in the allowlist, `decide()`, the fetcher, the search, the door's tickets, the launcher's config, the record, the gate, the shim and the Tools card. 63 turned a named test red. 4 change nothing alone, because a second line holds the same thing; each pair broken together turns a test red, but for the request's own host and port, which only matter if Node ever passed over the checked connection |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
 "Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.

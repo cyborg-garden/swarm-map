@@ -43,6 +43,8 @@ export type ToShim =
    * what it is about to run has that hash.
    */
   | { t: 'tool_verdict'; callId: string; allow: boolean; reason?: string; hash?: string }
+  /** The door's answer to `web_fetch`: the page as untrusted text, or why not. */
+  | { t: 'web_result'; callId: string; ok: boolean; text?: string; reason?: string }
   | { t: 'cancel'; turnId: string }
   | { t: 'reset'; sessionKey: string }
   | { t: 'shutdown' }
@@ -51,6 +53,13 @@ export type FromShim =
   | { t: 'hello'; token: string; protocol: 1; caps: Capabilities }
   | { t: 'tool_request'; callId: string; turnId: string; tool: string; input: unknown }
   | { t: 'tool_done'; callId: string; ok: boolean; summary: string }
+  /**
+   * Fetch the page for a web tool call the door already said yes to, by its call id. The door
+   * fetches it itself, once, and only the address that call was decided on (lib/door/web-fetch.ts).
+   */
+  | { t: 'web_fetch'; callId: string; url: string }
+  /** Make the search for a search call the door already said yes to, by its call id (lib/door/web-search.ts). */
+  | { t: 'web_search'; callId: string; query: string }
   | { t: 'delta'; turnId: string; text: string }
   | { t: 'reply'; turnId: string; text: string; attachments: AttachmentRef[] }
   | { t: 'settled'; turnId: string; usage?: Usage }

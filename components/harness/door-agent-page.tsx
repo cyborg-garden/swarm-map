@@ -427,7 +427,8 @@ function RulesForm({ view, running, saving, onSave }: {
             <Field label="USD per million tokens out"><Amount name="model.usdPerMTokOut" value={r.model.usdPerMTokOut} onChange={(usdPerMTokOut) => model({ usdPerMTokOut })} /></Field>
           </div>
         </Card>
-        <DoorToolsCard rules={r} builtFor={view.harness.runtime === 'pi' ? undefined : 'Pi'} onChange={(tools) => set({ ...r, tools })} />
+        <DoorToolsCard rules={r} builtFor={view.harness.runtime === 'pi' ? undefined : 'Pi'} onChange={(tools) => set({ ...r, tools })}
+          searchKeyFile={draft.secrets.searchKeyFile ?? ''} onSearchKeyFile={(searchKeyFile) => secret({ searchKeyFile })} />
         <DoorMemoryCard
           rules={r} harnessLabel={view.harness.label}
           writes={view.harness.runtime === 'pi' && !d.anyoneInChannel && (modeOf(r.tools, 'file_write') !== 'never' || modeOf(r.tools, 'shell') !== 'never')}

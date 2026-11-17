@@ -24,7 +24,9 @@ function load() {
 describe('the door\'s memory tool in Pi', () => {
   it('[U:pi-memory] the gate registers it under the name the door and the tool map use, class memory', () => {
     const { tools } = load()
-    expect(Object.keys(tools)).toEqual([MEMORY_TOOL])
+    expect(Object.keys(tools).sort()).toEqual([MEMORY_TOOL, 'web_fetch', 'web_search'])
+    // The web tools are the web's classes, never the notes'.
+    expect([PI_TOOL_MAP.web_fetch, PI_TOOL_MAP.web_search]).toEqual(['network', 'search'])
     expect(MEMORY_TOOL).toBe(DOOR_MEMORY_TOOL)
     expect(PI_TOOL_MAP[MEMORY_TOOL]).toBe('memory')
     expect(tools[MEMORY_TOOL].parameters).toEqual(MEMORY_TOOL_DEFINITION.parameters)

@@ -20,6 +20,8 @@ export const GATE_PREFIX = 'swarm-gate:v1:'
 export const GATE_READY = 'swarm-gate:v1:ready'
 /** A request for one of the door's own tools (`memory_note`), sent by the gate as an `input` dialog. Answered with the door's words. */
 export const DOOR_PREFIX = 'swarm-door:v1:'
+/** The web tool asks for its page through an `input` dialog whose title starts with this. */
+export const WEB_PREFIX = 'swarm-web:v1:'
 
 export interface PiProcess {
   stdin: Writable
@@ -29,6 +31,9 @@ export interface PiProcess {
 }
 
 export interface GateCall { tool: string; input: unknown; callId: string }
+/** A page the web tool wants: the call it belongs to (Pi's id for it) and the address. */
+export interface WebCall { callId: string; url?: string; query?: string }
+export interface WebPage { ok: boolean; text?: string; reason?: string }
 export interface PiTurnResult { text: string; aborted: boolean }
 
 export interface PiRpc {
@@ -59,6 +64,8 @@ export interface PiRpcOptions {
    * or on any error, the answer says nothing was done.
    */
   onDoorTool?: (call: GateCall) => Promise<string>
+  /** The door's answer to the web tool. Left out, the web tool gets no page. */
+  onWeb?: (call: WebCall) => Promise<WebPage>
   /** How long the gate has, from process start, to announce itself. Default 15 seconds. */
   gateReadyMs?: number
 }
@@ -93,6 +100,17 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
     send({ type: 'extension_ui_response', id, value })
   }
 
+  const web = async (id: string, title: string): Promise<void> => {
+    let page: WebPage = { ok: false, reason: 'no page' }
+    try {
+      const call = JSON.parse(title.slice(WEB_PREFIX.length)) as WebCall
+      if (opts.onWeb && typeof call?.callId === 'string' && (typeof call.url === 'string') !== (typeof call.query === 'string')) page = await opts.onWeb(call)
+    } catch {
+      page = { ok: false, reason: 'no page' }
+    }
+    send({ type: 'extension_ui_response', id, value: JSON.stringify(page) })
+  }
+
   const decoder = createLineDecoder((raw) => {
     const r = raw as PiRecord
     switch (r.type) {
@@ -101,6 +119,7 @@ export function createPiRpc(proc: PiProcess, opts: PiRpcOptions): PiRpc {
         if (!r.id || !DIALOGS.has(r.method ?? '')) return // other notices need no answer
         if (r.method === 'select' && r.title?.startsWith(GATE_PREFIX)) void gate(r.id, r.title)
         else if (r.method === 'input' && r.title?.startsWith(DOOR_PREFIX)) void doorTool(r.id, r.title)
+        else if (r.method === 'input' && r.title?.startsWith(WEB_PREFIX)) void web(r.id, r.title)
         else send({ type: 'extension_ui_response', id: r.id, cancelled: true }) // nobody is here to answer a dialog
         return
       case 'response':

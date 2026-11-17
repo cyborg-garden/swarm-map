@@ -78,7 +78,8 @@ const withTimeout = <T>(work: Promise<T>, ms: number, what: string): Promise<T> 
 
 export interface StartOptions {
   config: LabConfig
-  secrets: { discordToken: string; modelKey: string }
+  /** `searchKey` only when the config switches web search on. It is handed to the door and to nothing else. */
+  secrets: { discordToken: string; modelKey: string; searchKey?: string }
   stateDir: string
   log: (line: string) => void
   /** Tests only: point the connector at a fake Discord. The command line never sets this. */
@@ -155,7 +156,8 @@ export async function start(o: StartOptions): Promise<Running> {
   const policy = policyFor(o.config)
   const receipts = createReceiptLog({ file: path.join(stateDir, 'receipts.jsonl') })
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const secrets = [o.secrets.discordToken, o.secrets.modelKey]
+  if (o.config.tools?.web?.search === true && !o.secrets.searchKey) throw new Error('web search is on, but there is no search key')
+  const secrets = [o.secrets.discordToken, o.secrets.modelKey, ...(o.secrets.searchKey ? [o.secrets.searchKey] : [])]
   // What the cell holds is no use off this machine, but none of it belongs in a channel either.
   const cellHeld = [brainToken, `PLACEHOLDER-${cellNonce}`, cellNonce]
 
@@ -264,7 +266,8 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
-      receipts, brainToken, brainPort, sanitizer, memory, keptScratch: keep, turnDeadlineMs: turnSecondsOf(o.config) * 1000,
+      receipts, brainToken, brainPort, sanitizer, memory, keptScratch: keep,
+      ...(o.config.tools?.web?.search === true && o.secrets.searchKey ? { search: { key: o.secrets.searchKey } } : {}), turnDeadlineMs: turnSecondsOf(o.config) * 1000,
       approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
     })
     await joinCell({

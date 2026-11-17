@@ -11,7 +11,8 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import HarnessDetailPage from '@/app/(dashboard)/harnesses/[id]/page'
 import HarnessesPage from '@/app/(dashboard)/harnesses/page'
 import { usd } from './door-agent-page'
-import { mayChoose, modeOf, TOOL_ROWS, withMode } from './door-tools-card'
+import { commandsOf, mayChoose, modeOf, namesIn, TOOL_ROWS, withMode } from './door-tools-card'
+import { DEFAULT_COMMANDS } from '@/lib/core/tools/command-policy'
 import { parseConfig, toolModes } from '@/lib/lab/pi-discord/config'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), loading: vi.fn() } }))
@@ -186,7 +187,7 @@ describe('the page of a door agent', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    const selects = within(card).getAllByRole('combobox') as HTMLSelectElement[]
+    const selects = (within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))
     expect(selects.map((el) => [el.getAttribute('aria-label'), el.value, el.disabled])).toEqual([['Read files', 'never', false], ['Write files', 'never', false], ['Shell', 'never', false]])
     // Nothing asks yet, so there is no time to answer to set.
     expect(document.querySelector('input[name="tools.approvalSeconds"]')).toBeNull()
@@ -206,7 +207,7 @@ describe('the page of a door agent', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    const values = () => (within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])
+    const values = () => ((within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))).map((el) => [el.value, el.disabled])
     // Shell with no mode of its own asks: that is its default.
     expect(values()).toEqual([['never', false], ['ask', false], ['ask', false]])
     // While the shell asks, file writing cannot be set to allow: an admin would approve a script's name, not what is in it.
@@ -218,6 +219,45 @@ describe('the page of a door agent', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Anyone in the channel' }))
     expect(values()).toEqual([['never', true], ['never', true], ['never', true]])
     expect(within(card).getByRole('note')).toHaveTextContent('hears anyone in the channel, so it gets no tools')
+  })
+
+  it('shows the shell\'s command lists, shipped by default, and saves an edited list with the rest of the rules', async () => {
+    current = view()
+    current.record.rules = { ...RULES, tools: { enabled: ['shell'], mode: {}, approvalSeconds: 60 } } as typeof RULES
+    await openPage()
+    await openTab('Rules')
+    const card = await screen.findByTestId('door-tools-card')
+    const lists = within(card).getByTestId('door-command-lists')
+    const allow = lists.querySelector('textarea[name="tools.commands.allow"]') as HTMLTextAreaElement
+    const block = lists.querySelector('textarea[name="tools.commands.block"]') as HTMLTextAreaElement
+    expect(allow.value).toBe(DEFAULT_COMMANDS.allow.join(' '))
+    expect(block.value).toBe(DEFAULT_COMMANDS.block.join(' '))
+    expect(lists).toHaveTextContent('Ask an admin: every other command')
+    fireEvent.change(allow, { target: { value: 'ls, cat  grep' } })
+    fireEvent.blur(allow)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT')).toBe(true))
+    expect((requests.find((r) => r.method === 'PUT')!.body as { rules: { tools: unknown } }).rules.tools).toEqual({
+      enabled: ['shell'], mode: {}, approvalSeconds: 60, commands: { allow: ['ls', 'cat', 'grep'], block: DEFAULT_COMMANDS.block },
+    })
+  })
+
+  it('has no command lists while the shell is off', async () => {
+    current = view()
+    current.record.rules = { ...RULES, tools: { enabled: ['file_read'], mode: {}, approvalSeconds: 60 } } as typeof RULES
+    await openPage()
+    await openTab('Rules')
+    const card = await screen.findByTestId('door-tools-card')
+    expect(within(card).queryByTestId('door-command-lists')).toBeNull()
+  })
+
+  it('the card\'s shipped lists are the launcher\'s, and an edited list is a config the launcher takes', () => {
+    expect(commandsOf(undefined)).toEqual(DEFAULT_COMMANDS)
+    expect(namesIn(' ls,cat\n grep ')).toEqual(['ls', 'cat', 'grep'])
+    const base = { agentId: 'pi-one', discord: RULES.discord, budget: RULES.budget, model: RULES.model }
+    const edited = { enabled: ['shell'], mode: {}, approvalSeconds: 60, commands: { allow: namesIn('ls cat'), block: namesIn('dd') } }
+    expect(parseConfig({ ...base, tools: edited }).errors).toEqual([])
+    expect(parseConfig({ ...base, tools: { ...edited, commands: { allow: ['sh'], block: [] } } }).errors.join()).toMatch(/sh runs other commands/)
   })
 
   it('the Tools card reads a record the way the launcher does, and what it writes is a config the launcher takes', () => {
@@ -375,7 +415,7 @@ describe('a Letta Code agent behind a door', () => {
     await openPage()
     await openTab('Rules')
     const card = await screen.findByTestId('door-tools-card')
-    expect((within(card).getAllByRole('combobox') as HTMLSelectElement[]).map((el) => [el.value, el.disabled])).toEqual([['never', true], ['never', true], ['never', true]])
+    expect(((within(card).getAllByRole('combobox') as HTMLSelectElement[]).filter((el) => !el.name.startsWith('tools.web.'))).map((el) => [el.value, el.disabled])).toEqual([['never', true], ['never', true], ['never', true]])
     expect(within(card).getByRole('note')).toHaveTextContent('Tools are built for Pi only')
   })
 

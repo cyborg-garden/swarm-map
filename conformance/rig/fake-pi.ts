@@ -41,12 +41,11 @@ const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name)
   return i === -1 ? undefined : argv[i + 1]
 }
-// As in Pi 1.5.2: --tools is an allowlist of built-in and registered tools alike; --no-tools declares none at
-// all; --no-builtin-tools drops the built-in ones and keeps every tool an extension registers.
-const BUILTIN = ['read', 'bash', 'edit', 'write', 'ls', 'grep', 'find']
-const builtinOnly = argv.includes('--no-builtin-tools')
-const allowlist = argv.includes('--no-tools') ? [] : builtinOnly ? undefined : (flag('--tools') ?? 'read,bash,edit,write').split(',')
-const declared = (name: string): boolean => (allowlist ? allowlist.includes(name) : builtinOnly ? !BUILTIN.includes(name) && registered.has(name) : false)
+// As in the real Pi: --no-tools leaves none at all, --no-builtin-tools leaves an extension's, --tools names every one.
+const tools = argv.includes('--no-tools') ? []
+  : argv.includes('--no-builtin-tools') ? null
+    : (flag('--tools') ?? 'read,bash,edit,write').split(',')
+const declared = (name: string): boolean => (tools === null ? Object.hasOwn(extensionTools, name) : tools.includes(name))
 
 const systemPrompt = flag('--system-prompt')
 const models = JSON.parse(readFileSync(path.join(process.env.PI_CODING_AGENT_DIR ?? '', 'models.json'), 'utf8'))
@@ -60,9 +59,9 @@ emit({ type: 'fake_pi', mimics: '1.5.2' })
 
 type Handler = (event: unknown, ctx: unknown) => Promise<unknown>
 const handlers: Record<string, Handler[]> = {}
-/** Tools an extension registered, by name. They run their own `execute`, after the `tool_call` handlers, as in Pi. */
-interface RegisteredTool { name: string; execute: (id: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown) => Promise<{ content?: { type: string; text?: string }[] }> }
-const registered = new Map<string, RegisteredTool>()
+type ExtensionTool = { execute(id: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown): Promise<{ content: { type: string; text?: string }[] }> }
+/** Tools an extension registered, by name. Like Pi's, one is declared only when --tools names it. */
+const extensionTools: Record<string, ExtensionTool> = {}
 const waiting = new Map<string, (value: string | undefined) => void>()
 
 const ctx = {
@@ -77,13 +76,13 @@ const ctx = {
         waiting.set(id, (value) => { clearTimeout(timer); waiting.delete(id); resolve(value) })
         emit({ type: 'extension_ui_request', id, method: 'select', title, options, ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) })
       }),
-    // A text answer: given by the client, or undefined at the timeout.
-    input: (title: string, placeholder = '', opts: { timeout?: number } = {}): Promise<string | undefined> =>
+    // A dialog for free text: answered by the client, or undefined at the timeout.
+    input: (title: string, _placeholder?: string, opts: { timeout?: number } = {}): Promise<string | undefined> =>
       new Promise((resolve) => {
         const id = randomUUID()
         const timer = opts.timeout === undefined ? undefined : setTimeout(() => { waiting.delete(id); resolve(undefined) }, opts.timeout)
         waiting.set(id, (value) => { clearTimeout(timer); waiting.delete(id); resolve(value) })
-        emit({ type: 'extension_ui_request', id, method: 'input', title, placeholder, ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) })
+        emit({ type: 'extension_ui_request', id, method: 'input', title, ...(opts.timeout === undefined ? {} : { timeout: opts.timeout }) })
       }),
     // Fire and forget.
     notify: (message: string, notifyType = 'info'): void => {
@@ -104,7 +103,7 @@ for (let i = 0; i < argv.length; i++) {
     const mod = await import(pathToFileURL(file).href)
     await mod.default({
       on: (name: string, handler: Handler) => { (handlers[name] ??= []).push(handler) },
-      registerTool: (tool: RegisteredTool) => { registered.set(tool.name, tool) },
+      registerTool: (tool: ExtensionTool & { name: string }) => { extensionTools[tool.name] = tool },
     })
   } catch (err) {
     fatal(file, `Failed to load extension: ${(err as Error).message}`)
@@ -149,6 +148,17 @@ const UNSUPPORTED: Ran = { text: 'fake pi: command not supported', isError: true
  *   printf '%s%s\n' <a> <b> [> <path>]         head -c <n> /dev/zero | tr '\0' x
  * A call that sleeps past its `timeout` (seconds) stops there, as the real one is killed.
  */
+/** Make the files a part of a command would make, as a shell would. How many it made. */
+function sideEffects(part: string): number {
+  let made = 0
+  for (const m of part.matchAll(/(touch|tee|mkdir|>>|>)\s*(\/[^\s`)\\;"]+)/g)) {
+    if (m[1] === 'mkdir') mkdirSync(m[2], { recursive: true })
+    else writeFileSync(m[2], '')
+    made++
+  }
+  return made
+}
+
 async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<Ran> {
   const limit = typeof args.timeout === 'number' && args.timeout > 0 ? args.timeout : undefined
   let out = ''
@@ -171,6 +181,10 @@ async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<
       else out += `${m[1]}${m[2]}\n`
     }
     else if ((m = /^head -c (\d+) \/dev\/zero \| tr '\\0' x$/.exec(part))) out += 'x'.repeat(Number(m[1]))
+    else if ((m = /^echo (\S+) \| grep \S+$/.exec(part))) out += `${m[1]}\n`
+    // The command policy's check (K1) hides a write in a command that looks harmless. A real shell would
+    // make it, so this does too: every file a touch, tee, mkdir or redirection in it names, wherever it sits.
+    else if (sideEffects(part) > 0 || /^(ls|echo\b.*|"\s*)$/.test(part)) continue
     else return UNSUPPORTED
   }
   return { text: out === '' ? '(no output)' : out, isError: false }
@@ -178,10 +192,9 @@ async function runBash(args: { command?: unknown; timeout?: unknown }): Promise<
 
 async function runTool(name: string, args: Record<string, unknown>, id: string): Promise<Ran> {
   try {
-    const own = registered.get(name)
-    if (own) {
-      const out = await own.execute(id, args, undefined, undefined, ctx)
-      return { text: (out.content ?? []).map((part) => part.text ?? '').join(''), isError: false }
+    if (Object.hasOwn(extensionTools, name)) {
+      const out = await extensionTools[name].execute(id, args, undefined, undefined, ctx)
+      return { text: out.content.map((part) => part.text ?? '').join(''), isError: false }
     }
     if (name === 'bash') return await runBash(args)
     const file = String(args.path ?? '.')

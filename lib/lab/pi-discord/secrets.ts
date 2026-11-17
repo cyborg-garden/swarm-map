@@ -8,6 +8,8 @@ import path from 'node:path'
 
 export const TOKEN_FILE_ENV = 'SMLAB_DISCORD_TOKEN_FILE'
 export const MODEL_KEY_FILE_ENV = 'SMLAB_MODEL_KEY_FILE'
+/** The search provider's key, needed only when the config switches web search on. */
+export const SEARCH_KEY_FILE_ENV = 'SMLAB_SEARCH_KEY_FILE'
 
 function inside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child)

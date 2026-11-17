@@ -10,11 +10,18 @@ import { PROTOCOL_VERSION, type Capabilities, type FromShim, type ToShim } from 
 /** `hash` comes with a yes: the hash of the call the sidecar said yes to. */
 export interface ToolAnswer { allow: boolean; reason?: string; hash?: string }
 
+export interface WebAnswer { ok: boolean; text?: string; reason?: string }
+
 export interface ShimClient {
   send(msg: FromShim): void
   onMessage(cb: (msg: ToShim) => void): void
   /** Ask the sidecar. Timeout, a lost link, or anything but an explicit yes is a no. */
-  requestTool(turnId: string, tool: string, input: unknown): Promise<ToolAnswer>
+  /** `named` is told the id the call is put to the door under: a web call's page is asked for by it. */
+  requestTool(turnId: string, tool: string, input: unknown, named?: (callId: string) => void): Promise<ToolAnswer>
+  /** Ask the door to fetch the page for a web call it said yes to. Timeout or a lost link is a failure. */
+  webFetch(callId: string, url: string, timeoutMs?: number): Promise<WebAnswer>
+  /** Ask the door to make the search for a search call it said yes to. */
+  webSearch(callId: string, query: string, timeoutMs?: number): Promise<WebAnswer>
   close(): void
 }
 
@@ -31,6 +38,7 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
     const socket = net.connect({ host: opts.host, port: opts.port })
     const listeners: ((msg: ToShim) => void)[] = []
     const waiting = new Map<string, (answer: ToolAnswer) => void>()
+    const pages = new Map<string, (answer: WebAnswer) => void>()
 
     const decoder = createLineDecoder((record) => {
       const msg = record as ToShim
@@ -42,6 +50,12 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
         })
         return
       }
+      if (msg.t === 'web_result') {
+        pages.get(msg.callId)?.({
+          ok: msg.ok === true, ...(typeof msg.text === 'string' ? { text: msg.text } : {}), ...(typeof msg.reason === 'string' ? { reason: msg.reason } : {}),
+        })
+        return
+      }
       for (const cb of listeners) cb(msg)
     })
 
@@ -49,6 +63,7 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
     socket.on('error', reject)
     socket.on('close', () => {
       for (const answer of [...waiting.values()]) answer({ allow: false, reason: 'link closed' })
+      for (const answer of [...pages.values()]) answer({ ok: false, reason: 'link closed' })
     })
     socket.on('connect', () => {
       socket.off('error', reject)
@@ -58,8 +73,9 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
       resolve({
         send,
         onMessage: (cb) => { listeners.push(cb) },
-        requestTool: (turnId, tool, input) => new Promise<ToolAnswer>((done) => {
+        requestTool: (turnId, tool, input, named) => new Promise<ToolAnswer>((done) => {
           const callId = randomUUID()
+          named?.(callId)
           const finish = (answer: ToolAnswer): void => {
             if (!waiting.delete(callId)) return
             clearTimeout(timer)
@@ -70,8 +86,24 @@ export function connectShim(opts: ShimClientOptions): Promise<ShimClient> {
           if (socket.destroyed) return finish({ allow: false, reason: 'link closed' })
           send({ t: 'tool_request', callId, turnId, tool, input })
         }),
+        webFetch: (callId, url, timeoutMs) => web(callId, { t: 'web_fetch', callId, url }, timeoutMs),
+        webSearch: (callId, query, timeoutMs) => web(callId, { t: 'web_search', callId, query }, timeoutMs),
         close: () => socket.destroy(),
       })
+      function web(callId: string, msg: FromShim, timeoutMs?: number): Promise<WebAnswer> {
+        return new Promise<WebAnswer>((done) => {
+          if (pages.has(callId)) return done({ ok: false, reason: 'already asked' })
+          const finish = (answer: WebAnswer): void => {
+            if (!pages.delete(callId)) return
+            clearTimeout(timer)
+            done(answer)
+          }
+          const timer = setTimeout(() => finish({ ok: false, reason: 'no answer in time' }), timeoutMs ?? 30_000)
+          pages.set(callId, finish)
+          if (socket.destroyed) return finish({ ok: false, reason: 'link closed' })
+          send(msg)
+        })
+      }
     })
   })
 }

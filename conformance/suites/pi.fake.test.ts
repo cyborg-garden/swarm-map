@@ -42,7 +42,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
       ['answers-as-admin', 'chatty', 'covers-failures', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env',
-        'memory-cached', 'memory-in-scratch', 'memory-no-checks', 'memory-one-room', 'no-limits', 'no-path-check', 'no-system-prompt', 'runs-more', 'silence-is-yes', 'unwatched'])
+        'memory-cached', 'memory-in-scratch', 'memory-no-checks', 'memory-one-room', 'no-limits', 'no-path-check', 'no-system-prompt', 'runs-more', 'search-key-anyway', 'silence-is-yes', 'unwatched',
+        'web-direct', 'web-keeps-cookies', 'web-no-address-check', 'web-no-limits', 'web-no-list', 'web-unchecked-redirects'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)
@@ -95,6 +96,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(await detail('no-limits', 'L1')).toBe('a call ran on past the time limit')
     expect(await detail('no-limits', 'L2')).toContain('output past the size limit reached the model')
     expect(await detail('silence-is-yes', 'C5v')).toContain('the tool ran with no verdict')
+    expect(await detail('ignores-verdicts', 'K1')).toContain('a hidden write ran with no yes (case 0)')
+    expect(await detail('ignores-verdicts', 'K1')).toContain('a blocked command ran')
     expect(await detail('covers-failures', 'C6m')).toContain('the room was not told why: "All done."')
     expect(await detail('covers-failures', 'C6b')).toContain('the room was not told why: "All done."')
   }, 120_000)
