@@ -196,6 +196,15 @@ describe('model route: every call it does not complete says why', () => {
     expect(failures).toEqual([{ rule: 'budget.cap', why: expect.stringMatching(/budget/i) }])
   })
 
+  it('[U:model-failed] a refusal for any reason but the budget is reported in a fixed sentence: what the policy check said stays in the receipt', async () => {
+    const model = await scripted([{ match: 'CANARY', text: 'x' }])
+    const bad = withHash({ ...policy(), budget: { monthlyUsd: 'not-a-number', onExceed: 'refuse' } } as never)
+    const { receipts, failures } = await routeTo(model.baseUrl, { p: bad })
+    expect((await ask({ model: 'scripted', messages: [{ role: 'user', content: 'CANARY' }] })).status).toBe(402)
+    expect(trail(receipts).at(-1)).toBe('deny/ctl.valid')
+    expect(failures).toEqual([{ rule: 'ctl.valid', why: 'The agent\'s rules refused the call, so it was not made.' }])
+  })
+
   // Refused before anything is forwarded. Each was a 4xx with no receipt and no report.
   const REFUSED: [string, () => Promise<Response>, string][] = [
     ['a model with no price, so it cannot be metered', () => ask(toolTurn('vendor/unpriced')), 'no-price'],

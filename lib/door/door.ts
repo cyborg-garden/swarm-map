@@ -95,7 +95,7 @@ type Ending = 'no-reply' | 'error' | 'timeout'
 export const NOTICES: Record<Ending, string> & { failed(why: string): string } = {
   'no-reply': 'No answer this time: the agent finished without a reply.',
   'error': 'No answer this time: something went wrong inside the agent.',
-  'timeout': 'No answer this time: the agent took too long, so it was stopped.',
+  'timeout': 'No answer this time: the agent took too long, so the door stopped waiting for it.',
   failed: (why) => `No answer this time. ${why}`,
 }
 /** Is this a line the door posted because a turn had no answer? */
@@ -205,6 +205,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     const tag = about(turn.event, 'outbound', turn.turnId)
     const failure = lastFailure !== undefined && lastFailure.at >= turn.startedAt ? lastFailure : undefined
     if (failure) receipt(tag, { verdict: 'drop', rule: failure.rule, why: `The turn has no answer because a model call did not complete: ${failure.why}` })
+    // A bot is not told. The line would be one more message for it to answer, so a turn that
+    // ended in silence, or a failure, would keep a bot loop going instead of ending it.
+    if (turn.event.sender.isBot) {
+      receipt(tag, { verdict: 'drop', rule: 'turn.to-bot', why: 'The turn was started by a bot, so the room is not told it has no answer.' })
+      return
+    }
     try {
       await outbound(turn, failure ? NOTICES.failed(failure.why) : NOTICES[ending])
     } catch {

@@ -239,7 +239,9 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       rule = d.rule
       receipt(d.verdict === 'allow' ? 'allow' : 'deny', d.why, Buffer.byteLength(raw))
       if (d.verdict !== 'allow') {
-        report({ rule: d.rule, why: d.why })
+        // The room is shown `why`. The budget's sentences are fixed; any other refusal (a policy
+        // record that is not valid, say) can name parts of the rules, so it is told in one fixed sentence.
+        report({ rule: d.rule, why: d.rule === 'budget.cap' ? d.why : 'The agent\'s rules refused the call, so it was not made.' })
         return fail(res, 402, d.why)
       }
 

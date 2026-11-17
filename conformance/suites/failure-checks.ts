@@ -81,7 +81,7 @@ export const MODEL_FAILURE_CHECKS: Check[] = [
     },
   },
   {
-    id: 'C6s', title: 'tools on: a model call slower than the turn is allowed tells the room the turn was stopped',
+    id: 'C6s', title: 'tools on: a model call slower than the turn is allowed tells the room the door stopped waiting',
     lab: { ...HELD, turnDeadlineMs: 6000 },
     async run(lab) {
       const p: Outcome = []

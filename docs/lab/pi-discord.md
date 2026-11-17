@@ -214,6 +214,7 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `deny model.provider` | The model provider refused the call, never answered, or ended its reply with an error. The note has the status or a code. The channel is told |
 | `deny model.route` | The call was not forwarded: no price for the model, or a request the route could not read. The channel is told |
 | `drop turn.no-reply` | The agent finished without a reply. The channel is told |
+| `drop turn.to-bot` | A turn a bot started has no answer. The channel is not told, so a bot is not given something to answer |
 
 ## 9. Stop
 

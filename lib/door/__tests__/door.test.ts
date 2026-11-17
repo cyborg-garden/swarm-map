@@ -54,7 +54,7 @@ async function bareShim(r: Rig, brainToken: string, caps: Partial<Capabilities>)
 const NOTICE = {
   noReply: 'No answer this time: the agent finished without a reply.',
   error: 'No answer this time: something went wrong inside the agent.',
-  timeout: 'No answer this time: the agent took too long, so it was stopped.',
+  timeout: 'No answer this time: the agent took too long, so the door stopped waiting for it.',
   failed: (why: string) => `No answer this time. ${why}`,
 }
 
@@ -866,6 +866,24 @@ describe('door: bot loops', () => {
   const bot = { id: 'b-other', isBot: true }
   const loopy = (max: number) => team({ [F + 'bots.mode']: 'all', [F + 'bots.maxAlternatingTurns']: max })
   const verdicts = (r: Rig) => r.receipts.all().filter((x) => x.event.kind === 'inbound').map((x) => `${x.verdict}/${x.rule}`)
+
+  // A bot is never told that a turn has no answer. A line for it is one more message for it
+  // to answer, so silence (or a failure) would feed the loop instead of ending it.
+  it('[P:bot-loop] a turn a bot started that ends with no answer posts nothing: a receipt only', async () => {
+    rig = await startRig(loopy(4), { mode: 'silent-later' })
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'one' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(1)
+    rig.shim.client.send({ t: 'settled', turnId: rig.shim.heard[0].turnId })
+    await rig.door.idle()
+    rig.fake.say({ room: 'r-lounge', sender: bot, text: 'two' })
+    await expect.poll(() => rig!.shim.heard.length).toBe(2)
+    rig.door.modelFailed({ rule: 'model.provider', why: 'The model provider refused the call (status 400).' })
+    rig.shim.client.send({ t: 'error', turnId: rig.shim.heard[1].turnId, message: 'x' })
+    await rig.door.idle()
+    expect(rig.fake.ledger).toEqual([])
+    const rules = rig.receipts.all().filter((r) => r.event.kind === 'outbound').map((r) => `${r.verdict}/${r.rule}`)
+    expect(rules).toEqual(['drop/turn.no-reply', 'drop/turn.to-bot', 'drop/out.still-allowed', 'drop/model.provider', 'drop/turn.to-bot'])
+  })
 
   it('[P:bot-loop] after the limit, a bot is not heard again until a person is', async () => {
     rig = await startRig(loopy(2))
