@@ -10,6 +10,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PI_VERSION } from '../../../lib/runtimes/pi/caps.ts'
 import { buildMatrix, KNOWN_CHECK_IDS, type Matrix } from '../../matrix.ts'
+import { MODEL_FAILURE_CHECKS } from '../../suites/failure-checks.ts'
 import { BROKEN_RIGS as SHARED_RIGS, IN_CELL as SHARED_IN_CELL, SKIPPED_IN_CELL, TOOL_RIGS, TOOLS_IN_CELL } from '../broken.ts'
 import { SEAL_CHECKS } from '../runner.ts'
 
@@ -30,7 +31,8 @@ describe('the committed Docker matrix for the pinned Pi', () => {
   })
 
   it('[U:docker-matrix] has a result for every check the Docker run makes today, under today\'s title', () => {
-    expect(Object.keys(rows).sort()).toEqual([...KNOWN_CHECK_IDS].sort())
+    // Plus Pi's own: the checks that a failed model call is told to the room.
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id)])].sort())
     for (const check of [...SEAL_CHECKS, ...IN_CELL]) {
       expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance:docker`).toBeDefined()
       expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)
@@ -51,7 +53,7 @@ describe('the committed Docker matrix for the pinned Pi', () => {
     for (const id of ['S0', 'S1', 'S2', 'S3', 'C8', 'C9', 'C10']) expect([...covered], id).toContain(id)
     // And so does a tool check of each kind: held for an admin, what ran is what was shown, the scratch folder, the limits.
     for (const id of ['C6', 'C6x', 'W1', 'L1', 'L2', 'C5v']) expect([...covered], id).toContain(id)
-    for (const rig of Object.values(BROKEN_RIGS)) for (const id of [...rig.red, ...rig.green]) expect(KNOWN_CHECK_IDS).toContain(id)
+    for (const rig of Object.values(BROKEN_RIGS)) for (const id of [...rig.red, ...rig.green]) expect([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id)]).toContain(id)
   })
 })
 

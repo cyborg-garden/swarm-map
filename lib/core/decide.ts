@@ -134,7 +134,10 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
     return heard('observe', 'addr.observe', 'Not addressed: kept as context, not answered.', privilege)
   }
   trace.push({ rule, outcome: 'fail' })
-  return { verdict: 'drop', rule, why: 'This room needs a mention and there was none.', privilege, trace }
+  const why = e.roleMention === 'other' ? 'This room needs a mention and there was none: a role was mentioned, not the agent.'
+    : e.roleMention === 'unlearned' ? "This room needs a mention and there was none: a role was mentioned, and the agent's own role is not known yet."
+      : 'This room needs a mention and there was none.'
+  return { verdict: 'drop', rule, why, privilege, trace }
 }
 
 /** Tool classes a public agent never gets, whatever its allow list says. */

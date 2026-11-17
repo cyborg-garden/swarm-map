@@ -10,7 +10,7 @@ import { withHash } from '../../core/policy/canonical.ts'
 import type { PolicyRecord } from '../../core/policy/types.ts'
 import { callHash, MAX_SHOWN_CHARS, readShown } from '../../core/tools/call.ts'
 import { MAX_REQUEST_CHARS, readAnswer, readReaction, requestText, shownIn } from '../approvals.ts'
-import type { DoorOptions } from '../door.ts'
+import { NOTICES, type DoorOptions } from '../door.ts'
 import { startRig, type Rig } from '../testing/rig.ts'
 
 armTripwire()
@@ -364,7 +364,9 @@ describe('door: no answer, and answers that come too late', () => {
     reply(r, (await request(r)).id, 'approve')
     await r.door.idle()
     expect(r.shim.toolsRan).toHaveLength(1)
-    expect(r.receipts.all().at(-1)).toMatchObject({ verdict: 'drop', why: 'The harness did not finish the turn in time.' })
+    expect(r.receipts.all().some((x) => x.verdict === 'drop' && x.why === 'The harness did not finish the turn in time.')).toBe(true)
+    // And the room is told, under the request and the answer.
+    expect(r.fake.ledger.at(-1)?.text).toBe(NOTICES.timeout)
   }, 3000)
 
   it('[P:approval-timeout] positive control: the same turn with nobody asked is given up on at its deadline', async () => {

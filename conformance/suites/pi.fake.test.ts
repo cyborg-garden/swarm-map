@@ -16,6 +16,7 @@ import { fakePiCommand, PI_CHECKS as CHECKS, piHarness } from '../harnesses/pi.t
 import { runChecks as runShared, type CheckResult } from './checks.ts'
 import { KNOWN_CHECK_IDS, type Matrix } from '../matrix.ts'
 import { brokenVariants } from './harness.ts'
+import { MODEL_FAILURE_CHECKS } from './failure-checks.ts'
 import { TOOL_CHECKS } from './tool-checks.ts'
 
 armTripwire()
@@ -39,7 +40,7 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('every way of breaking the shim is listed, and each names a check that exists', () => {
     expect(Object.keys(variants).sort()).toEqual(
-      ['answers-as-admin', 'chatty', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'no-limits', 'no-path-check', 'runs-more', 'silence-is-yes', 'unwatched'])
+      ['answers-as-admin', 'chatty', 'covers-failures', 'dials-out', 'gate-missing', 'gate-silent', 'ignores-verdicts', 'inherits-env', 'leaks-env', 'no-limits', 'no-path-check', 'runs-more', 'silence-is-yes', 'unwatched'])
     const ids = CHECKS.map((c) => c.id)
     for (const [name, v] of Object.entries(variants)) {
       expect(v.red.length, name).toBeGreaterThan(0)
@@ -55,7 +56,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
 
   it('[U:must-fail] every tool check has something broken on purpose that must turn it red', () => {
     const covered = new Set(Object.values(variants).flatMap((v) => v.red))
-    for (const check of TOOL_CHECKS) if (check.id !== 'W1+') expect([...covered], check.id).toContain(check.id)
+    // C6s waits out a turn that never ends, so a shim has nothing to cover up in it. What turns it red is a door that says nothing at the deadline: door.test.ts [P:one-reply].
+    for (const check of [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]) if (check.id !== 'W1+' && check.id !== 'C6s') expect([...covered], check.id).toContain(check.id)
   })
 
   it('[U:must-fail] each tool check goes red for the reason it names', async () => {
@@ -76,6 +78,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(await detail('silence-is-yes', 'C5v')).toContain('the tool ran with no verdict')
     expect(await detail('ignores-verdicts', 'K1')).toContain('a hidden write ran with no yes (case 0)')
     expect(await detail('ignores-verdicts', 'K1')).toContain('a blocked command ran')
+    expect(await detail('covers-failures', 'C6m')).toContain('the room was not told why: "All done."')
+    expect(await detail('covers-failures', 'C6b')).toContain('the room was not told why: "All done."')
   }, 120_000)
 
   it('[U:must-fail] a harness that ran with no tripwire inside it fails C9p for that reason, not for another', async () => {
@@ -116,7 +120,8 @@ describe('the committed matrix for the pinned Pi', () => {
   it('[U:matrix-fresh] has a result for every check the suite runs today, under today\'s title', () => {
     const rows = Object.fromEntries(committed.rows.map((r) => [r.id, r]))
     // Every check anyone knows of has a row, run or not, and there is no row for one nobody knows.
-    expect(Object.keys(rows).sort()).toEqual([...KNOWN_CHECK_IDS].sort())
+    // Plus Pi's own: the checks that a failed model call is told to the room.
+    expect(Object.keys(rows).sort()).toEqual([...new Set([...KNOWN_CHECK_IDS, ...MODEL_FAILURE_CHECKS.map((c) => c.id)])].sort())
     for (const check of CHECKS) {
       expect(rows[check.id], `${check.id} is not in the matrix: run npm run conformance`).toBeDefined()
       expect(['pass', 'fail'], check.id).toContain(rows[check.id].status)

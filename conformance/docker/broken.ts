@@ -3,6 +3,7 @@
 // suite so a test that needs no Docker can hold the committed matrix to it.
 import { CHECKS, type Check } from '../suites/checks.ts'
 import { DOCKER_CHECKS } from './checks.ts'
+import { MODEL_FAILURE_CHECKS } from '../suites/failure-checks.ts'
 import { TOOL_CHECKS } from '../suites/tool-checks.ts'
 import type { GateVariant, RigVariant } from './compose.ts'
 
@@ -63,7 +64,7 @@ export const BROKEN_RIGS: Record<string, BrokenRig> = {
 }
 
 /** The tool checks, for a harness whose shim can run them. They run in a cell like the rest, one rig each. */
-export const TOOLS_IN_CELL: Check[] = TOOL_CHECKS
+export const TOOLS_IN_CELL: Check[] = [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS]
 
 /**
  * Cells whose tool gate is broken in one way each, for the tool checks. The
@@ -73,7 +74,8 @@ export const TOOLS_IN_CELL: Check[] = TOOL_CHECKS
 export const TOOL_RIGS: Record<string, BrokenRig> = {
   'gate-asks-nobody': {
     what: 'The gate in the cell lets every tool run without asking, so nothing is held for an admin',
-    variant: 'good', gate: 'allows-all', seal: false, checks: ['C6', 'C6d'], red: ['C6', 'C6d'], green: [],
+    // C6m too: with no request to answer, the tool never waits, and the check sees no request posted.
+    variant: 'good', gate: 'allows-all', seal: false, checks: ['C6', 'C6d', 'C6m', 'C6b'], red: ['C6', 'C6d', 'C6m'], green: ['C6b'],
   },
   'gate-silence-is-yes': {
     what: 'The gate in the cell lets a tool run when nobody answers it in time',

@@ -11,7 +11,7 @@ import { labImages } from '../../../../conformance/docker/compose.ts'
 import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subnets.ts'
 import { decide } from '../../../core/decide.ts'
 import { CELL_ENV, launcherImages, networksWritten, renderCell, sealProblems, type CellOptions } from '../cell.ts'
-import { approvalSecondsOf, botsLine, parseConfig, policyFor, systemPromptFor, toolModes, toolsLine } from '../config.ts'
+import { approvalSecondsOf, botsLine, turnSecondsOf, parseConfig, policyFor, systemPromptFor, toolModes, toolsLine } from '../config.ts'
 import { DEFAULT_COMMANDS } from '../../../core/tools/command-policy.ts'
 import { harnessFacts } from '../harnesses.ts'
 import { prepareStateDir, REPO_ROOT } from '../launch.ts'
@@ -197,6 +197,15 @@ describe('pi-discord config', () => {
       if (shell === 'ask' && fileWrite === 'allow') continue
       expect(withTools({ enabled: ['shell', 'file_write'], mode: { shell, file_write: fileWrite } }).errors, `${shell}/${fileWrite}`).toEqual([])
     }
+  })
+
+  it('a turn with tools on is given as long as one model call may take: two slow calls in a row do not run out the clock', () => {
+    // A tool turn makes a model call, runs the tool, and calls the model again. A model that takes
+    // 150 seconds a call would end a three-minute turn before its answer, with the reply dropped.
+    expect(turnSecondsOf(parseConfig(good()).config!)).toBe(180)
+    expect(turnSecondsOf(withTools({ enabled: ['file_read'] }).config!)).toBe(600)
+    expect(turnSecondsOf(withTools({ enabled: ['shell'], mode: { shell: 'ask' } }).config!)).toBe(600)
+    expect(turnSecondsOf(withTools({ enabled: ['shell'], mode: { shell: 'never' } }).config!)).toBe(180)
   })
 
   it('a mode is what the record says: ask, allow, or never for a class that is listed and switched off again', () => {

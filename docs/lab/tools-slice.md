@@ -190,6 +190,37 @@ The chain is gate, shim, door. Each link says no on its own when the next one is
 Where `ask` is in use the launcher gives the shim and the gate a little longer than the door's
 approval time, so the door's no arrives first. If it does not, theirs does.
 
+## When a model call fails
+
+A turn with tools on makes more model calls than one without, and each can fail. None of them
+fails quietly.
+
+- **Every call that does not complete leaves a receipt that says why.** The model route writes
+  one when it refuses a call (`model.route`: no price, so it cannot be metered; not a model call;
+  not readable; the wrong stand-in key), when the budget refuses it (`budget.cap`), and when the
+  provider refuses it, never answers, or ends its reply with an error (`model.provider`, with the
+  status or a fixed code in the note). The provider's own words are never written down.
+- **The room is told in one short line.** When a turn ends with nothing to post, the door posts
+  `No answer this time.` and the reason, under the message that started the turn. With no model
+  failure to point at, it says the agent finished without a reply, that something went wrong
+  inside the agent, or that it took too long and the door stopped waiting. The line is the door's
+  own text and goes through the same outbound checks as a reply. A message deleted mid-turn gets
+  no line. A turn a bot started gets no line either, only the receipt (`turn.to-bot`): a line
+  would be one more message for the bot to answer, and would keep a bot loop going.
+- **Metering is unchanged.** A call the route cannot meter is still not forwarded. A call it
+  forwards is charged by the usage the provider reports, or by size when it reports none, and
+  that includes a reply that ends in an error.
+- **A slow model is not a failure.** A call can take minutes. The route waits up to ten. With
+  tools on, a turn is allowed ten minutes too, not counting time spent waiting for an admin, since
+  it makes at least two calls; with none it is allowed three. After that the room is told the door
+  stopped waiting. The harness is not stopped: if it answers later, the answer is dropped, with a
+  `turn.known` receipt.
+
+The checks for this are C6m, C6b and C6s in `conformance/suites/failure-checks.ts`. A shim link
+that reports a failed turn as one that answered "All done." must turn C6m and C6b red. C6s waits
+out a model that never answers, so a shim has nothing to cover up there: what turns it red is a
+door that says nothing at the deadline, and that is held by the door's own tests.
+
 ## Limits
 
 | Limit | Default | Enforced by |
@@ -249,6 +280,9 @@ says its shim can hold a call. Each has something broken on purpose that must tu
 | L2 | Output past the cap does not reach the model | Gate that applies no limits |
 | C5v | (existing) The gate says no on its own when nobody answers | Gate that takes silence for yes |
 | C9 | (existing, Docker) A tool reaches nothing but the door | A cell with a route out |
+| C6m | A model call the provider refuses, after a tool ran, leaves a receipt and tells the room why | A shim that reports a failed turn as one that answered; in a cell, a gate that asks nobody |
+| C6b | A model call refused because the budget is spent leaves a receipt and tells the room why | A shim that reports a failed turn as one that answered |
+| C6s | A model call slower than the turn is allowed tells the room the door stopped waiting | (none in the harness suite: the door's own tests) |
 
 Results are in "What was run".
 

@@ -100,6 +100,16 @@ export function toolModes(c: Pick<LabConfig, 'tools'>): Record<SliceClass, ToolM
 export function commandsOf(c: Pick<LabConfig, 'tools'>): CommandLists {
   return c.tools?.commands ?? DEFAULT_COMMANDS
 }
+/**
+ * How long the door gives one turn, not counting time spent waiting for an admin. With no tools a
+ * turn is one model call, and three minutes is plenty. With tools a turn is a model call, a tool,
+ * and another model call, and a slow model can take minutes for each: the turn is then given as
+ * long as the model route waits for one call (ten minutes). The harness does not stop when the
+ * door stops waiting, so a shorter limit only drops an answer that was still coming.
+ */
+export function turnSecondsOf(c: Pick<LabConfig, 'tools'>): number {
+  return Object.values(toolModes(c)).some((m) => m !== 'never') ? 600 : 180
+}
 /** The seconds the door waits for an admin, or undefined when no class asks. */
 export function approvalSecondsOf(c: Pick<LabConfig, 'tools'>): number | undefined {
   return Object.values(toolModes(c)).includes('ask') ? (c.tools ?? NO_TOOLS).approvalSeconds : undefined

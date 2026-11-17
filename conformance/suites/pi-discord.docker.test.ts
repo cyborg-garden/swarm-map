@@ -15,6 +15,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { NOTICES } from '../../lib/door/door.ts'
 import { IDS } from '../../lib/door/testing/discord-rig.ts'
 import { assertFakeDiscord, startFakeDiscord, type FakeDiscord } from '../../lib/door/testing/fake-discord.ts'
 import { docker, dockerProblems, networksWritten, runningCellProblems, type LiveFile } from '../../lib/lab/pi-discord/cell.ts'
@@ -210,6 +211,15 @@ describe('pi-discord: tools, end to end, through real Pi in the sealed cell', ()
     // One request was posted, for the one write that stayed inside the folder. Reading and listing ask nobody.
     expect(fake.posted.slice(posts).filter((p) => p.content.startsWith('Approval needed.'))).toHaveLength(1)
   }, 180_000)
+
+  it('a model call the provider refuses is not silent: the channel is told why, and a receipt says so', async () => {
+    script.unshift({ match: 'CANARY-refused', text: 'never said', status: 400 })
+    const before = fake.posted.length
+    const asked = say('CANARY-refused')
+    await until(() => fake.posted.length === before + 1)
+    expect(fake.posted.at(-1)).toMatchObject({ channel: IDS.home, replyTo: asked, content: NOTICES.failed('The model provider refused the call (status 400).') })
+    expect(receipts().some((r) => r.event.kind === 'model' && r.verdict === 'deny' && r.rule === 'model.provider')).toBe(true)
+  }, 120_000)
 
   it('stopping the agent takes the scratch folder with it', async () => {
     const project = readRun(stateDir)!.project
