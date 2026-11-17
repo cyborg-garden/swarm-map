@@ -76,6 +76,7 @@ export interface FakePost {
   webhook?: boolean
   id?: string
 }
+export interface FakeRole { id: string; name: string; guild?: string; botId?: string; listed?: boolean }
 export interface Posted { id: string; channel: string; content: string; allowedMentions: unknown; replyTo?: string }
 
 export interface FakeDiscord {
@@ -86,6 +87,13 @@ export interface FakeDiscord {
   selfId: string
   /** Channels and threads the gateway lists at connect, and REST knows about. */
   addChannel(c: { id: string; type?: number; parent?: string; listed?: boolean; guild?: string }): void
+  /**
+   * A role in a server, listed at connect unless `listed` is false. `botId` makes it the
+   * managed role Discord gives a bot when it joins: `managed` set, `tags.bot_id` naming the bot.
+   */
+  addRole(r: FakeRole): void
+  /** Tell every connected bot a role was made, changed or removed, as Discord's GUILD_ROLE_* events do. */
+  roleEvent(what: 'create' | 'update' | 'delete', role: FakeRole): void
   /** Send a message to every connected bot. Returns its id. */
   post(m: FakePost): string
   /** Tell every connected bot that someone reacted to a message. `bare` leaves out what Discord says about who. */
@@ -136,6 +144,8 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
   const selfId = '9000000000000000001'
   const sessionId = `sess-${nonce}`
   const channels = new Map<string, { id: string; type: number; parent_id?: string; listed: boolean; guild: string }>()
+  const roles = new Map<string, FakeRole>()
+  const roleBody = (r: FakeRole) => ({ id: r.id, name: r.name, managed: r.botId !== undefined, ...(r.botId ? { tags: { bot_id: r.botId } } : {}) })
   const conns = new Set<Conn>()
   const sockets = new Set<Duplex>()
   /** Every dispatch sent, so a resume can replay what a connection missed. */
@@ -257,6 +267,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
             const mine = [...channels.values()].filter((c) => c.listed && c.guild === guild)
             conn.send({ op: 0, t: 'GUILD_CREATE', s: ++seq, d: {
               id: guild,
+              roles: [...roles.values()].filter((r) => r.listed !== false && (r.guild ?? FAKE_GUILD) === guild).map(roleBody),
               channels: mine.filter((c) => ![10, 11, 12].includes(c.type)),
               threads: mine.filter((c) => [10, 11, 12].includes(c.type)),
             } })
@@ -285,6 +296,13 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
     gatewayUrl,
     addChannel(c: { id: string; type?: number; parent?: string; listed?: boolean; guild?: string }) {
       channels.set(c.id, { id: c.id, type: c.type ?? 0, ...(c.parent ? { parent_id: c.parent } : {}), listed: c.listed ?? true, guild: c.guild ?? FAKE_GUILD })
+    },
+    addRole(r: FakeRole) { roles.set(r.id, r) },
+    roleEvent(what: 'create' | 'update' | 'delete', r: FakeRole) {
+      const guild_id = r.guild ?? FAKE_GUILD
+      if (what === 'delete') { roles.delete(r.id); dispatch('GUILD_ROLE_DELETE', { guild_id, role_id: r.id }); return }
+      roles.set(r.id, r)
+      dispatch(what === 'create' ? 'GUILD_ROLE_CREATE' : 'GUILD_ROLE_UPDATE', { guild_id, role: roleBody(r) })
     },
     post(m: FakePost): string {
       const id = m.id ?? String(++nextId)

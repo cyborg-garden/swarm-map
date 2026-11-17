@@ -35,6 +35,12 @@ export interface InboundEvent {
   /** The agent's name is written in the text itself. */
   inlineMention: boolean
   replyToAgent: boolean
+  /**
+   * A role was pinged that is not the agent's own: 'other', or 'unlearned' when
+   * the agent's own role was not known yet to tell them apart. It only changes
+   * the words a drop is explained with. It never makes a message heard.
+   */
+  roleMention?: 'other' | 'unlearned'
   text: string
   attachments: AttachmentRef[]
 }

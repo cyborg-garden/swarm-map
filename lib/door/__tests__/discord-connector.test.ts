@@ -130,6 +130,37 @@ describe('Discord connector: what a message becomes', () => {
     expect(t).toMatchObject({ room: { id: IDS.thread, kind: 'thread', parentId: IDS.home }, inlineMention: true, sender: { isBot: true } })
   })
 
+  it("the role Discord made for this bot counts as a mention of it; a namesake, another bot's role, or one in another server does not", async () => {
+    const OTHER_GUILD = '7000000000000000009'
+    const b = await start({ connect: false })
+    const self = b.fake.selfId
+    b.fake.addChannel({ id: '7100000000000000009', guild: OTHER_GUILD })
+    b.fake.addRole({ id: '8500000000000000002', name: 'Agent', botId: self })
+    b.fake.addRole({ id: '8500000000000000003', name: 'Agent' })
+    b.fake.addRole({ id: '8500000000000000004', name: 'Agent', botId: IDS.bot })
+    // This bot's own role, but in a server it was not started for: not learned.
+    b.fake.addRole({ id: '8500000000000000005', name: 'Agent', botId: self, guild: OTHER_GUILD })
+    await b.connector.connect({ token: b.fake.token })
+    const ping = (role: string, guild: string = IDS.guild, channel: string = IDS.home): string =>
+      b.fake.post({ channel, guild, author: { id: IDS.member }, content: `<@&${role}> hi`, roleMentions: [role] })
+    ping('8500000000000000002')
+    ping('8500000000000000003')
+    ping('8500000000000000004')
+    ping('8500000000000000005', OTHER_GUILD, '7100000000000000009')
+    b.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: '@everyone hi', everyone: true })
+    await until(() => inbound(b).length === 5)
+    const [own, namesake, theirs, away, everyone] = inbound(b)
+    expect(own).toMatchObject({ mention: true, inlineMention: true })
+    expect(own).not.toHaveProperty('roleMention')
+    expect(namesake).toMatchObject({ mention: false, inlineMention: false, roleMention: 'other' })
+    expect(theirs).toMatchObject({ mention: false, inlineMention: false, roleMention: 'other' })
+    expect(away).toMatchObject({ mention: false, inlineMention: false, roleMention: 'unlearned' })
+    expect(everyone).toMatchObject({ mention: false, inlineMention: false })
+    expect(everyone).not.toHaveProperty('roleMention')
+    // Roles come with the GUILDS intent it already asks for. Nothing more is asked.
+    expect(b.fake.identifies).toEqual([{ intents: INTENTS.GUILDS | INTENTS.GUILD_MESSAGES }])
+  })
+
   it('joins, pins and other system messages are not messages', async () => {
     const b = await start()
     b.fake.post({ channel: IDS.home, guild: IDS.guild, author: { id: IDS.member }, content: '', type: 7 })

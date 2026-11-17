@@ -24,7 +24,12 @@ export const IDS = {
   stranger: '8000000000000000003',
   bot: '8900000000000000001',
   role: '8500000000000000001',
+  botRole: '8500000000000000002', // the managed role Discord made for this bot when it joined
+  namesake: '8500000000000000003', // an ordinary role that happens to share the bot's name
 } as const
+
+/** The name the bot's managed role and its namesake share. */
+export const BOT_ROLE_NAME = 'Lab Agent'
 
 export interface DiscordRig {
   fake: FakeDiscord
@@ -52,6 +57,8 @@ export async function startDiscordRig(policy: PolicyRecord, opts: {
   /** What the echo shim says of itself at hello, on top of its usual capabilities, and how long it waits for a verdict. */
   shimCaps?: Partial<Capabilities>
   verdictTimeoutMs?: number
+  /** Leave the bot's own managed role out of what the gateway lists at connect, so the connector does not know it. */
+  hideBotRole?: boolean
 } = {}): Promise<DiscordRig> {
   const fake = await startFakeDiscord({ heartbeatMs: opts.heartbeatMs })
   try {
@@ -64,6 +71,8 @@ export async function startDiscordRig(policy: PolicyRecord, opts: {
   fake.addChannel({ id: IDS.other })
   fake.addChannel({ id: IDS.thread, type: 11, parent: IDS.home })
   fake.addChannel({ id: IDS.strayThread, type: 11, parent: IDS.other })
+  fake.addRole({ id: IDS.botRole, name: BOT_ROLE_NAME, botId: fake.selfId, listed: !opts.hideBotRole })
+  fake.addRole({ id: IDS.namesake, name: BOT_ROLE_NAME })
 
   const logs: string[] = []
   const connector = createDiscordConnector({
