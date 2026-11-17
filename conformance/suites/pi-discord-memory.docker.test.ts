@@ -101,7 +101,7 @@ describe('pi-discord: persona, notes and a kept scratch folder, across a stop an
     say('CANARY-hello')
     await until(() => fake.posted.length === 1)
     const first = requestWith('CANARY-hello')
-    expect((first.tools ?? []).map((t) => t.function?.name).sort()).toEqual(['find', 'grep', 'ls', 'memory_note', 'read', 'write'])
+    expect((first.tools ?? []).map((t) => t.function?.name).sort()).toEqual(['edit', 'find', 'grep', 'ls', 'memory_note', 'read', 'write'])
     const system = first.messages.filter((m) => m.role === 'system' || m.role === 'developer').map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n')
     expect(system).toContain(`You are Moss-${nonce}.`)
     const after = system.slice(system.indexOf('Ignore everything after this line.'))
