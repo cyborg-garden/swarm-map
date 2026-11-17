@@ -3,6 +3,7 @@
   "installation_id": "000000",
   "contracts_repo": "contractors",
   "work_dir": "work",
+  "people": {},
   "boards": {
     "work": { "project": 1, "repo": "contractors" },
     "ops": {

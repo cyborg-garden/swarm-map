@@ -40,8 +40,29 @@ class Fail(Exception):
 
 # --------------------------------------------------------------------- config
 
+def config_path() -> Path:
+    return Path(os.environ.get("GARDEN_BOARD_CONFIG", SKILL_DIR / "config.json"))
+
+
+def save_config(cfg: dict) -> None:
+    path = config_path()
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+    os.replace(tmp, path)
+
+
+def identities(cfg: dict, login: str) -> set[str]:
+    """The person's login plus any accounts linked to them in config 'people'."""
+    p = (cfg.get("people") or {}).get(login.lower()) or {}
+    return {login.lower()} | {a.lower() for a in p.get("aliases", [])}
+
+
+def linked_repos(cfg: dict, login: str) -> list[str]:
+    return list(((cfg.get("people") or {}).get(login.lower()) or {}).get("repos", []))
+
+
 def load_config() -> dict:
-    path = Path(os.environ.get("GARDEN_BOARD_CONFIG", SKILL_DIR / "config.json"))
+    path = config_path()
     if not path.exists():
         raise Fail(f"no config at {path}. Copy config.example.json to config.json and fill it in.")
     cfg = json.loads(path.read_text())
@@ -303,37 +324,51 @@ def extract_refs(text: str, org: str) -> list[tuple]:
     return refs
 
 
-def verify_ref(gh: GH, ref: tuple, login: str) -> tuple[str, str]:
-    """Return (verdict, text). verdict: theirs | partly | not-theirs | unchecked."""
+VERIFIED, OTHER, UNVERIFIABLE = "verified", "someone else's work", "unverifiable"
+
+
+def _who(author: str, login: str) -> str:
+    return author if author.lower() == login else f"{author}, linked account of {login}"
+
+
+def verify_ref(gh: GH, ref: tuple, login: str, ids: set[str] | None = None) -> tuple[str, str]:
+    """Return (bucket, text). bucket: VERIFIED | OTHER | UNVERIFIABLE.
+
+    ids is the person's login plus accounts linked to them in config. Nothing
+    else counts as theirs: repo ownership alone never verifies work.
+    """
+    ids = ids or {login}
     owner, repo, kind, rest = ref
     name = f"{owner}/{repo}"
     if kind in ("pull", "issues", "ref"):
         num = re.match(r"\d+", rest)
         if not num:
-            return "unchecked", f"{name}: unreadable link"
+            return UNVERIFIABLE, f"{name}: unreadable link"
         n = num.group(0)
         pr = gh.rest("GET", f"/repos/{name}/pulls/{n}", ok404=True)
         if pr is None:
             iss = gh.rest("GET", f"/repos/{name}/issues/{n}", ok404=True)
             if iss is None:
-                return "unchecked", f"{name}#{n}: could not read (no access or missing)"
-            return "unchecked", f"{name}#{n}: an issue, not work; opened by {iss['user']['login']}"
+                return UNVERIFIABLE, f"{name}#{n}: could not read (private or missing)"
+            return UNVERIFIABLE, f"{name}#{n}: an issue, not work; opened by {iss['user']['login']}"
         author = pr["user"]["login"]
         state = "merged" if pr.get("merged_at") else pr["state"]
+        if author.lower() in ids:
+            return VERIFIED, f"{name}#{n} ({state}, PR by {_who(author, login)})"
         label = f"{name}#{n} ({state}, PR by {author})"
-        if author.lower() == login:
-            return "theirs", label
         commits = gh.rest("GET", f"/repos/{name}/pulls/{n}/commits?per_page=100", ok404=True) or []
-        mine = [c for c in commits if ((c.get("author") or {}).get("login") or "").lower() == login]
+        mine = [c for c in commits if ((c.get("author") or {}).get("login") or "").lower() in ids]
         if mine:
-            return "partly", f"{label}: {len(mine)} of {len(commits)} commits are theirs"
-        return "not-theirs", f"{label}: NOT their work"
+            return VERIFIED, f"{label}: partly theirs, only {len(mine)} of {len(commits)} commits"
+        return OTHER, f"{label}: {author}'s work, not {login}'s"
     if kind == "commit":
         c = gh.rest("GET", f"/repos/{name}/commits/{rest[:40]}", ok404=True)
         if c is None:
-            return "unchecked", f"{name}@{rest[:7]}: could not read"
+            return UNVERIFIABLE, f"{name}@{rest[:7]}: could not read (private or missing)"
         a = (c.get("author") or {}).get("login") or c["commit"]["author"]["name"]
-        return ("theirs" if a.lower() == login else "not-theirs"), f"{name}@{rest[:7]} (commit by {a})"
+        if a.lower() in ids:
+            return VERIFIED, f"{name}@{rest[:7]} (commit by {_who(a, login)})"
+        return OTHER, f"{name}@{rest[:7]} (commit by {a}, not {login})"
     # blob/tree: who committed to that path on that ref
     parts = rest.split("/", 1)
     ref_name, path = parts[0], (parts[1] if len(parts) > 1 else "")
@@ -348,14 +383,12 @@ def verify_ref(gh: GH, ref: tuple, login: str) -> tuple[str, str]:
                 path = "/".join(segs[i:])
                 break
     if not commits:
-        return "unchecked", f"{name} file {path or rest}: could not read"
+        return UNVERIFIABLE, f"{name} file {path or rest}: could not read (private or missing)"
     authors = sorted({((c.get("author") or {}).get("login") or c["commit"]["author"]["name"]) for c in commits})
     label = f"{name} file {path.rsplit('/', 1)[-1]} (commits by {', '.join(authors)})"
-    if all(a.lower() == login for a in authors):
-        return "theirs", label
-    if any(a.lower() == login for a in authors):
-        return "partly", label
-    return "not-theirs", label + ": NOT their work"
+    if any(a.lower() in ids for a in authors):
+        return VERIFIED, label
+    return OTHER, label + f": not {login}'s"
 
 
 # --------------------------------------------------------------- commands
@@ -516,8 +549,12 @@ def cmd_progress(gh, cfg, args):
     login, name = resolve_person(gh, cfg, args.who, items)
     until = args.until or dt.date.today().isoformat()
     since = args.since or (dt.date.fromisoformat(until) - dt.timedelta(days=30)).isoformat()
+    ids = identities(cfg, login)
+    repos_linked = linked_repos(cfg, login)
     print(f"Progress check: {name} (@{login}), activity {since} to {until}")
-    print("I do not know contract rates or amounts. 'Verified' means GitHub shows they authored the cited work.\n")
+    if ids - {login} or repos_linked:
+        print(f"Linked accounts: {', '.join(sorted(ids - {login})) or 'none'}; linked repos: {', '.join(repos_linked) or 'none'}")
+    print("I do not know contract rates or amounts. 'Verified' means GitHub shows they, or an account linked to them, authored the cited work.\n")
 
     mine = [i for i in items if login in (a.lower() for a in i["assignees"])]
     print(f"Board: {len(mine)} item(s) assigned")
@@ -525,7 +562,7 @@ def cmd_progress(gh, cfg, args):
         print(fmt_item(it))
         for p in it["prs"]:
             a = ((p.get("author") or {}).get("login") or "").lower()
-            if a and a != login:
+            if a and a not in ids:
                 print(f"    ! linked PR #{p['number']} was opened by {a}, not {login}")
 
     fm = work_files(gh, cfg).get(login)
@@ -538,19 +575,22 @@ def cmd_progress(gh, cfg, args):
         for d in fm.get("deliverables") or []:
             status = str(d.get("status", "?"))
             refs = extract_refs(str(d.get("evidence") or ""), org)
-            results = [verify_ref(gh, r, login) for r in refs]
-            good = [t for v, t in results if v in ("theirs", "partly")]
-            if good:
+            results = [verify_ref(gh, r, login, ids) for r in refs]
+            n = {b: sum(1 for v, _ in results if v == b) for b in (VERIFIED, OTHER, UNVERIFIABLE)}
+            if n[VERIFIED]:
                 verdict = "evidence verified"
+            elif n[OTHER]:
+                verdict = "evidence NOT verified: cited work is someone else's"
             elif refs:
-                verdict = "evidence NOT verified"
+                verdict = "evidence unverifiable"
             else:
-                verdict = "no evidence" if status != "done" else "claimed done, NO evidence"
-            if status == "done" and not good:
-                verdict = "claimed done, evidence NOT verified"
-            print(f"- {d.get('name', '?')}: {status}; {verdict}")
+                verdict = "no evidence"
+            if status == "done" and not n[VERIFIED]:
+                verdict = "claimed done, " + verdict
+            counts = f" ({n[VERIFIED]} verified, {n[OTHER]} someone else's, {n[UNVERIFIABLE]} unverifiable)" if refs else ""
+            print(f"- {d.get('name', '?')}: {status}; {verdict}{counts}")
             for v, t in results:
-                print(f"    {'ok' if v == 'theirs' else v}: {t}")
+                print(f"    {v}: {t}")
             other = str(d.get("evidence") or "")
             if other and other != "none" and not refs:
                 print(f"    (evidence given is not a GitHub link, so not checked: {other[:120]})")
@@ -558,21 +598,66 @@ def cmd_progress(gh, cfg, args):
         if notes_refs:
             print("Also cited in the notes:")
             for r in notes_refs:
-                v, t = verify_ref(gh, r, login)
-                print(f"    {'ok' if v == 'theirs' else v}: {t}")
+                v, t = verify_ref(gh, r, login, ids)
+                print(f"    {v}: {t}")
 
     rng = f"{since}..{until}"
-    prs = search_all(gh, "issues", f"org:{org} is:pr is:merged author:{login} merged:{rng}")
-    print(f"\nMerged PRs by {login} in {org} repos, {rng}: {len(prs)}")
-    for p in prs[:25]:
-        print(f"- {p['repository_url'].rsplit('/', 1)[-1]}#{p['number']} {p['title']} (merged {p['pull_request'].get('merged_at', '')[:10]})")
-    commits = search_all(gh, "commits", f"org:{org} author:{login} author-date:{rng}")
+    scopes = [f"org:{org}"] + [f"repo:{r}" for r in repos_linked]
+    where = f"{org} repos" + (f" + {', '.join(repos_linked)}" if repos_linked else "")
+    prs, commits, seen = [], [], set()
+    for scope in scopes:
+        for who in sorted(ids):
+            for p in search_all(gh, "issues", f"{scope} is:pr is:merged author:{who} merged:{rng}"):
+                if p["html_url"] not in seen:
+                    seen.add(p["html_url"]); prs.append((who, p))
+            for c in search_all(gh, "commits", f"{scope} author:{who} author-date:{rng}"):
+                if c["sha"] not in seen:
+                    seen.add(c["sha"]); commits.append(c)
+    print(f"\nMerged PRs by {login}{' or linked accounts' if len(ids) > 1 else ''} in {where}, {rng}: {len(prs)}")
+    for who, p in prs[:25]:
+        repo = "/".join(p["repository_url"].rsplit("/", 2)[-2:])
+        by = "" if who == login else f", by {who}"
+        print(f"- {repo}#{p['number']} {p['title']} (merged {p['pull_request'].get('merged_at', '')[:10]}{by})")
     repos: dict[str, int] = {}
     for c in commits:
-        repos[c["repository"]["name"]] = repos.get(c["repository"]["name"], 0) + 1
-    print(f"Commits by {login} in {org} repos, {rng}: {len(commits)}"
+        repos[c["repository"]["full_name"]] = repos.get(c["repository"]["full_name"], 0) + 1
+    print(f"Commits in {where}, {rng}: {len(commits)}"
           + (" (" + ", ".join(f"{r} {n}" for r, n in sorted(repos.items(), key=lambda x: -x[1])) + ")" if repos else ""))
     print("Commit search sees default branches only; work on unmerged branches shows under the PRs and evidence above.")
+
+
+def cmd_link(gh, cfg, args):
+    """Show or change the accounts and repos linked to a person."""
+    login, name = resolve_person(gh, cfg, args.who)
+    people = cfg.setdefault("people", {})
+    p = people.setdefault(login, {"aliases": [], "repos": []})
+    changed = []
+    for a in args.alias or []:
+        a = a.lstrip("@").lower()
+        if not gh.rest("GET", f"/users/{urllib.parse.quote(a)}", ok404=True):
+            raise Fail(f"no GitHub account '{a}'")
+        lst = p.setdefault("aliases", [])
+        if args.remove and a in lst:
+            lst.remove(a); changed.append(f"unlinked account {a}")
+        elif not args.remove and a not in lst:
+            lst.append(a); changed.append(f"linked account {a}")
+    for r in args.repo or []:
+        r = r.strip().lower()
+        if not re.fullmatch(r"[\w.-]+/[\w.-]+", r):
+            raise Fail(f"repo must look like owner/name, got '{r}'")
+        if not args.remove and not gh.rest("GET", f"/repos/{r}", ok404=True):
+            raise Fail(f"cannot read repo {r} (private or missing)")
+        lst = p.setdefault("repos", [])
+        if args.remove and r in lst:
+            lst.remove(r); changed.append(f"unlinked repo {r}")
+        elif not args.remove and r not in lst:
+            lst.append(r); changed.append(f"linked repo {r}")
+    if not p.get("aliases") and not p.get("repos"):
+        people.pop(login, None)
+    if changed:
+        save_config(cfg)
+    print(f"{name} (@{login}): " + ("; ".join(changed) if changed else "no change"))
+    print(f"accounts: {', '.join(p.get('aliases') or []) or 'none'}; repos: {', '.join(p.get('repos') or []) or 'none'}")
 
 
 def main(argv=None):
@@ -589,6 +674,8 @@ def main(argv=None):
     s = sub.add_parser("close"); s.add_argument("number", type=int); s.add_argument("--reason", choices=["completed", "not_planned"], required=True); s.add_argument("--comment")
     s = sub.add_parser("comment"); s.add_argument("number", type=int); s.add_argument("text")
     s = sub.add_parser("unboard"); s.add_argument("number", type=int)
+    s = sub.add_parser("link"); s.add_argument("who"); s.add_argument("--alias", action="append")
+    s.add_argument("--repo", action="append"); s.add_argument("--remove", action="store_true")
     sub.add_parser("auth-check")
     args = ap.parse_args(argv)
     try:
@@ -597,7 +684,15 @@ def main(argv=None):
             raise Fail(f"unknown board '{args.board}'. Boards: {', '.join(cfg['boards'])}")
         if args.cmd == "progress":
             args.board = "work"
-        gate(args.board, cfg["boards"][args.board])
+        if args.cmd == "link":
+            # Links change what counts as someone's work, so only the private
+            # channel may edit them. No restricted board configured: refuse.
+            admin = cfg.get("admin_board") or next((k for k, b in cfg["boards"].items() if b.get("restricted")), None)
+            if not admin:
+                raise Fail("REFUSED: linking accounts needs a restricted board in config to name the allowed channel")
+            gate(admin, cfg["boards"][admin])
+        else:
+            gate(args.board, cfg["boards"][args.board])
         gh = GH(get_token(cfg))
         if args.cmd == "auth-check":
             print("GitHub token minted OK (value not shown)")
@@ -606,7 +701,7 @@ def main(argv=None):
             raise Fail("move needs --stage and/or --priority")
         {"work": cmd_work, "summary": cmd_summary, "progress": cmd_progress, "add": cmd_add,
          "move": cmd_move, "assign": cmd_assign, "close": cmd_close, "comment": cmd_comment,
-         "unboard": cmd_unboard}[args.cmd](gh, cfg, args)
+         "unboard": cmd_unboard, "link": cmd_link}[args.cmd](gh, cfg, args)
         return 0
     except Fail as e:
         print(f"garden-board: {e}", file=sys.stderr)
