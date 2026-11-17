@@ -74,6 +74,12 @@ export interface ModelShape {
   usage(json: unknown, call: CallState): { inTokens: number; outTokens: number } | undefined
   /** Does this stream event carry any output at all: text, a tool call, reasoning? A usage figure sent before it does not cover it. */
   hasOutput(json: unknown): boolean
+  /**
+   * Does this stream event, or this whole reply body, say the call failed? A provider that
+   * fails after it has started a stream cannot change the status it already sent, so it says
+   * so in the stream instead.
+   */
+  failed?(json: unknown): boolean
   /** The running text in one parsed stream event. The route redacts across these. */
   streamText(json: unknown): StreamText[]
   /** A stream event carrying only `text` for run `key`, for text still held back when the stream ends. */
@@ -113,6 +119,14 @@ export const OPENAI_CHAT: ModelShape = {
     const full = (part: unknown): boolean => part !== null && typeof part === 'object' && Object.values(part).some((value) => !empty(value))
     return choices.some((choice) => choice !== null && typeof choice === 'object'
       && (full(choice.delta) || full((choice as { message?: unknown }).message)))
+  },
+  failed(json) {
+    if (json === null || typeof json !== 'object') return false
+    // OpenRouter, and other OpenAI-compatible gateways: a top-level `error`, and a choice that finished with 'error'.
+    const error = (json as { error?: unknown }).error
+    if (error !== undefined && error !== null && error !== false) return true
+    const choices = (json as OpenAiChunk).choices
+    return Array.isArray(choices) && choices.some((c) => c !== null && typeof c === 'object' && c.finish_reason === 'error')
   },
   streamText(json) {
     const choices = (json as OpenAiChunk | null)?.choices
@@ -221,6 +235,8 @@ export const ANTHROPIC_MESSAGES: ModelShape = {
     const content = j.message?.content
     return Array.isArray(content) && content.length > 0
   },
+  // An `error` event in a stream, or a reply body that is one.
+  failed: (json) => (json as AnthropicEvent | null)?.type === 'error',
   streamText(json) {
     const j = json as AnthropicEvent | null
     if (j === null || typeof j !== 'object' || typeof j.index !== 'number') return []

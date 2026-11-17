@@ -34,6 +34,12 @@
 // The real key goes to the provider that was named and nowhere else: a
 // redirect from the provider is refused, not followed, with a receipt.
 //
+// No call fails quietly. A call the route refuses, and a call the provider
+// refuses, never answers, or ends with an error, each leaves a receipt that says
+// why and is handed to `onFailure`, so the door can tell the room. A harness
+// that gets an error back often says nothing at all, so without this a failed
+// call looked, from the room, exactly like a model that was still thinking.
+//
 // What it cannot do: tell a figure that is false but could be true. A provider
 // that reports one token for a long reply is believed.
 import http from 'node:http'
@@ -45,6 +51,8 @@ import type { ReceiptLog } from './receipts.ts'
 import type { SpendLedger } from './spend-ledger.ts'
 
 export interface Price { inPerMTok: number; outPerMTok: number }
+/** A model call that did not complete: the rule of its receipt, and one plain sentence a room can be shown. Never the provider's own words. */
+export interface ModelFailure { rule: string; why: string }
 export interface Meter { requests: number; inTokens: number; outTokens: number; usd: number }
 
 export interface ModelRouteOptions {
@@ -68,6 +76,8 @@ export interface ModelRouteOptions {
   upstreamTimeoutMs?: number
   host?: string
   port?: number
+  /** Told of every call that was refused or failed, after its receipt is written. */
+  onFailure?: (failure: ModelFailure) => void
 }
 
 export interface ModelRoute {
@@ -144,11 +154,25 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: { message } }))
   }
+  /** Tell whoever listens. A listener that throws does not change what the route does. */
+  const report = (failure: ModelFailure): void => {
+    try { opts.onFailure?.(failure) } catch { /* the receipt is already written */ }
+  }
+  /** A model call refused before anything was forwarded: a receipt with a fixed code, a report, and the error to the caller. */
+  const refuse = (res: http.ServerResponse, status: number, note: string, why: string, message = `model route: ${why}`): void => {
+    const policy = opts.policy()
+    opts.receipts.write({
+      ts: now().toISOString(), agentId: policy.agentId, policyHash: policy.hash,
+      event: { kind: 'model' }, verdict: 'deny', rule: 'model.route', why, note,
+    })
+    report({ rule: 'model.route', why })
+    fail(res, status, message)
+  }
 
   async function handle(req: http.IncomingMessage, res: http.ServerResponse, raw: string): Promise<void> {
     if (shape.presented(req.headers) !== opts.placeholder) {
       state.refused++
-      return fail(res, 401, 'model route: not the placeholder for this cell')
+      return refuse(res, 401, 'placeholder', 'The call did not present this cell\'s stand-in key, so it was not forwarded.', 'model route: not the placeholder for this cell')
     }
     const url = new URL(req.url ?? '/', 'http://local')
     // "Which models are there?" is answered here, from the price list. No call is made for it.
@@ -165,19 +189,24 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       return
     }
     if (req.method !== 'POST' || url.pathname !== shape.path) {
-      return fail(res, 404, `model route: only ${shape.id} calls (POST ${shape.path}) are forwarded`)
+      return refuse(res, 404, 'path', 'The harness asked for something other than a model call, so it was not forwarded.', `model route: only ${shape.id} calls (POST ${shape.path}) are forwarded`)
     }
 
     let body: { model?: string; stream?: boolean } & Record<string, unknown>
-    try { body = JSON.parse(raw) } catch { return fail(res, 400, 'model route: body is not JSON') }
-    if (body === null || typeof body !== 'object') return fail(res, 400, 'model route: body is not a JSON object')
+    const NOT_JSON = 'The harness sent a model call that could not be read, so it was not forwarded.'
+    try { body = JSON.parse(raw) } catch { return refuse(res, 400, 'not-json', NOT_JSON, 'model route: body is not JSON') }
+    if (body === null || typeof body !== 'object') return refuse(res, 400, 'not-json', NOT_JSON, 'model route: body is not a JSON object')
     const model = typeof body.model === 'string' ? body.model : ''
     const rate = (n: unknown): boolean => typeof n === 'number' && Number.isFinite(n) && n >= 0
     const price = Object.hasOwn(opts.prices, model) ? opts.prices[model] as Price | null : undefined
-    if (!price || !rate(price.inPerMTok) || !rate(price.outPerMTok)) return fail(res, 400, 'model route: no price for that model, so it cannot be metered')
+    if (!price || !rate(price.inPerMTok) || !rate(price.outPerMTok)) {
+      return refuse(res, 400, 'no-price', 'The model has no price here, so its cost could not be counted and the call was not made.', 'model route: no price for that model, so it cannot be metered')
+    }
     // A call whose cost would not show in its usage figure is not forwarded either.
     const hidden = shape.unmetered?.(body)
-    if (hidden !== undefined) return fail(res, 400, `model route: ${hidden}, so it cannot be metered`)
+    if (hidden !== undefined) {
+      return refuse(res, 400, 'unmetered', 'The call asked for something whose cost could not be counted, so it was not made.', `model route: ${hidden}, so it cannot be metered`)
+    }
     // What the provider needs of the request besides its body: named headers, named query parameters, nothing else.
     const passed: Record<string, string> = {}
     for (const name of shape.passHeaders ?? []) {
@@ -203,12 +232,18 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       const NO_LEDGER = 'Spend cannot be recorded, so no model call is forwarded.'
       if (!ledgerWritable()) {
         receipt('deny', NO_LEDGER, Buffer.byteLength(raw), 'ledger')
+        report({ rule, why: NO_LEDGER })
         return fail(res, 503, NO_LEDGER)
       }
       const d = decide(policy, { kind: 'model', provider: shape.id, model }, { spentUsdThisMonth: opts.ledger.spent(now()) })
       rule = d.rule
       receipt(d.verdict === 'allow' ? 'allow' : 'deny', d.why, Buffer.byteLength(raw))
-      if (d.verdict !== 'allow') return fail(res, 402, d.why)
+      if (d.verdict !== 'allow') {
+        // The room is shown `why`. The budget's sentences are fixed; any other refusal (a policy
+        // record that is not valid, say) can name parts of the rules, so it is told in one fixed sentence.
+        report({ rule: d.rule, why: d.rule === 'budget.cap' ? d.why : 'The agent\'s rules refused the call, so it was not made.' })
+        return fail(res, 402, d.why)
+      }
 
       presented.push(opts.placeholder)
       meter.requests++
@@ -221,6 +256,10 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
       let received = 0
       // Until the provider itself refuses the call, assume it was run and will be billed.
       let billable = true
+      // Why the call did not complete, if it did not: a fixed code for the receipt and a sentence for the room.
+      let failed: { note: string; why: string } | undefined
+      const PROVIDER_ERROR = { note: 'stream-error', why: 'The model provider ended the reply with an error.' }
+      let answered = false
       try {
         const upstream = await fetch(upstreamUrl, {
           method: 'POST',
@@ -231,13 +270,16 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
           // is never followed: a client that follows one sends `x-api-key` on to wherever it points.
           redirect: 'manual',
         })
+        answered = true
         billable = upstream.ok
         if (upstream.status >= 300 && upstream.status < 400) {
           await upstream.body?.cancel().catch(() => {})
           const REDIRECT = 'The provider answered with a redirect. It was not followed, and the key went nowhere else.'
           receipt('deny', REDIRECT, 0, 'redirect')
+          report({ rule: 'model.provider', why: REDIRECT })
           return fail(res, 502, `model route: ${REDIRECT}`)
         }
+        if (!upstream.ok) failed = { note: `status=${upstream.status}`, why: `The model provider refused the call (status ${upstream.status}).` }
         await relay(upstream, res, Boolean(body.stream), {
           // One event, or the whole of a plain reply. A figure that can be believed stands. A
           // figure covers what came before it, so output that comes with no such figure, or
@@ -248,8 +290,17 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
             else if (output) usage = undefined
           },
           received: (n) => { received += n },
+          failed: (body) => { failed ??= body ? { ...PROVIDER_ERROR, note: 'error-body' } : PROVIDER_ERROR },
           call: {},
         })
+      } catch (err) {
+        const timedOut = (err as Error)?.name === 'TimeoutError' || (err as Error)?.name === 'AbortError'
+        failed ??= !answered
+          ? (timedOut
+            ? { note: 'no-answer', why: 'The model provider did not answer in time.' }
+            : { note: 'unreachable', why: 'The model provider could not be reached.' })
+          : { note: 'cut-off', why: 'The model provider\'s reply was cut off.' }
+        throw err
       } finally {
         let recorded = true
         if (usage) recorded = charge(model, usage)
@@ -259,6 +310,11 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
           receipt('allow', 'The provider reported no usage, so the call was charged at one token per byte.', received, 'unmetered')
         }
         if (!recorded) receipt('deny', 'A charge could not be recorded. No further model call is forwarded.', received, 'ledger')
+        if (failed) {
+          rule = 'model.provider'
+          receipt('deny', failed.why, received, failed.note)
+          report({ rule, why: failed.why })
+        }
       }
     } finally {
       release()
@@ -288,6 +344,8 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
   type Seen = {
     event(usage: { inTokens: number; outTokens: number } | undefined, output: boolean): void
     received(bytes: number): void
+    /** The reply says the call failed: in a stream event, or as a whole body that is an error (`body`). */
+    failed(body?: boolean): void
     /** What the shape keeps between the events of this one call. */
     call: CallState
   }
@@ -301,6 +359,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
     let json: unknown
     try { json = JSON.parse(text) } catch { return redact(text) } // not JSON: it reports no usage
     seen.event(shape.usage(json, seen.call), false)
+    if (shape.failed?.(json)) seen.failed(true)
     if (typeof json === 'string') return redact(json) === json ? redact(text) : JSON.stringify(redact(json))
     return redactDeep(json) ? redact(JSON.stringify(json)) : redact(text)
   }
@@ -348,6 +407,7 @@ export function startModelRoute(opts: ModelRouteOptions): Promise<ModelRoute> {
         return write(event)
       }
       seen.event(shape.usage(json, seen.call), shape.hasOutput(json))
+      if (shape.failed?.(json)) seen.failed()
       for (const piece of shape.streamText(json)) {
         const clean = redact((held.get(piece.key) ?? '') + piece.text)
         const keep = piece.last ? 0 : heldBack(clean, opts.upstreamKey)

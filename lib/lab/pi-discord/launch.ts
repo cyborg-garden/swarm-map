@@ -23,7 +23,7 @@ import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
 import { cellDown, cellStopStart, cellUp, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
-import { approvalSecondsOf, harnessOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
+import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, systemPromptFor, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -187,6 +187,8 @@ export async function start(o: StartOptions): Promise<Running> {
       prices: { [o.config.model.id]: { inPerMTok: o.config.model.usdPerMTokIn, outPerMTok: o.config.model.usdPerMTokOut } },
       ledger: createFileLedger(path.join(stateDir, 'spend.json')),
       host: '127.0.0.1', port: routePort,
+      // A call that is refused or fails is told to the room by the door, so the agent is never just silent.
+      onFailure: (failure) => door?.modelFailed(failure),
     })
 
     // The cell comes up, and is looked at from outside, before anything is connected to Discord.
@@ -214,7 +216,7 @@ export async function start(o: StartOptions): Promise<Running> {
     })
     door = await createDoor({
       policy, connectors: [connector], creds: { discord: { token: o.secrets.discordToken } }, live: ['discord'],
-      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: 180_000,
+      receipts, brainToken, brainPort, sanitizer: createSanitizer({ extraSecrets: [...secrets, ...cellHeld] }), turnDeadlineMs: turnSecondsOf(o.config) * 1000,
       approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
     })
     await joinCell({

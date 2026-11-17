@@ -211,7 +211,11 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | `drop in.once` | An edited message is not read again; a reply to a deleted message is not posted |
 | `allow out.still-allowed` | A reply was posted |
 | `allow out.size` | The reply was too long and was cut |
-| `deny budget.cap` | The month's budget is spent |
+| `deny budget.cap` | The month's budget is spent. The channel is told so |
+| `deny model.provider` | The model provider refused the call, never answered, or ended its reply with an error. The note has the status or a code. The channel is told |
+| `deny model.route` | The call was not forwarded: no price for the model, or a request the route could not read. The channel is told |
+| `drop turn.no-reply` | The agent finished without a reply. The channel is told |
+| `drop turn.to-bot` | A turn a bot started has no answer. The channel is not told, so a bot is not given something to answer |
 
 ## 9. Stop
 
@@ -291,3 +295,6 @@ What is and is not shown for Letta Code itself is in [`letta-code.md`](letta-cod
 8. **The budget is counted with the prices you give.** They are not checked against the
    provider's. One call can overshoot the cap, because the cap is checked before a call.
 9. **The bot-loop count is kept in memory.** It starts again from nothing when the door restarts.
+10. **A turn with no answer is told to the channel, not explained in full.** The door posts one
+    line, `No answer this time.` and a short reason. When two turns run at once and a model call
+    fails, either may be the one that is told. The receipts say which call failed.

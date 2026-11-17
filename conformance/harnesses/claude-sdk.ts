@@ -4,6 +4,7 @@
 // catch, the checks only it needs, and which spec checks do not apply.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { isNotice } from '../../lib/door/door.ts'
 import { ANTHROPIC_MESSAGES } from '../../lib/door/model-shapes.ts'
 import { CLAUDE_SDK_CAPS } from '../../lib/runtimes/claude-sdk/caps.ts'
 import type { ClaudeSdk } from '../../lib/runtimes/claude-sdk/sdk.ts'
@@ -20,6 +21,8 @@ type Outcome = string[]
 const want = (problems: Outcome, ok: boolean, what: string): void => { if (!ok) problems.push(what) }
 const F = 'surfaces.fake.'
 const toolReceipts = (lab: Lab) => lab.receipts.all().filter((r) => r.event.kind === 'tool')
+/** What the harness posted: the room's posts, less the door's own line for a turn with no answer. */
+const replies = (lab: Lab): number => lab.fake.ledger.filter((post) => !isNotice(post.text)).length
 const say = (lab: Lab, text: string): string => lab.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text })
 
 /** The tools each model request offered, by name. A request that is not JSON counts as offering something unknown. */
@@ -122,7 +125,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       // What the model was offered is the map, no more and no less.
       const offered = [...new Set(lab.model.requests.flatMap((r) => offeredTo(r.body)))].sort()
       want(p, offered.join() === mapped.join(), `the model was offered ${offered.join(', ') || 'nothing'}, and the shim maps ${mapped.join(', ')}`)
-      want(p, lab.fake.ledger.length === 1 + drives.length, `expected ${1 + drives.length} posts, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 1 + drives.length, `expected ${1 + drives.length} replies, got ${replies(lab)}`)
       return p
     },
   },
@@ -139,7 +142,9 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       say(lab, `wait for ${stuck}`)
       await lab.door.idle()
       want(p, lab.model.heard(stuck), 'the turn never reached the model, so nothing was checked')
-      want(p, lab.fake.ledger.length === 0, 'a turn the model never answered was answered')
+      // The one line in the room is the door's, saying there is no answer: nothing from the model. This shim gives up
+      // at the same deadline as the door, so which of the door's lines it is depends on which gets there first.
+      want(p, lab.fake.ledger.length === 1 && isNotice(lab.fake.ledger[0].text), 'a turn the model never answered was answered, or the room was not told it had no answer')
       const gaveUp = lab.receipts.all().filter((r) => r.event.kind === 'outbound' && r.verdict === 'drop').length
       want(p, gaveUp === 1, `expected one receipt for the turn that was given up on, got ${gaveUp}`)
       // From here the model answers. The next message of the same room must not be left waiting behind the first.
@@ -147,7 +152,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       say(lab, `and now ${next}`)
       await lab.door.idle()
       want(p, lab.model.heard(next), 'the next turn never reached the model: the harness is still waiting on the one before')
-      want(p, lab.fake.ledger.length === 1, `expected 1 post, got ${lab.fake.ledger.length}`)
+      want(p, lab.fake.ledger.length === 2, `expected 2 posts, got ${lab.fake.ledger.length}`)
       // The room kept its thread: what was said in the turn that hung is in what the model is sent now.
       want(p, lab.model.requests.some((r) => r.body.includes(next) && r.body.includes(stuck)), 'the room lost its thread when the turn was given up on')
       return p
@@ -165,7 +170,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       const whole = existsSync(kept) ? readFileSync(kept, 'utf8') : ''
       // From here on the policy allows no tool at all, so none is offered.
       lab.door.setPolicy(lab.policy({ version: 2, 'tools.allow': [] }))
-      const setup = { requests: lab.model.requests.length, receipts: toolReceipts(lab).length, posts: lab.fake.ledger.length }
+      const setup = { requests: lab.model.requests.length, receipts: toolReceipts(lab).length, posts: replies(lab) }
       // One turn for each: a shell, the three file tools, and three it has that the door has no class for.
       const asks: [string, NativeToolCall][] = [
         ['shell', lab.harness.shell.touch(touched)],
@@ -195,7 +200,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       const offered = [...new Set(after.flatMap((r) => offeredTo(r.body)))].sort()
       want(p, offered.length === 0, `the model was offered tools: ${offered.join(', ')}`)
       want(p, toolReceipts(lab).length === setup.receipts, 'the harness asked to run a tool it was never offered')
-      want(p, lab.fake.ledger.length === setup.posts + asks.length, `expected ${asks.length} posts, got ${lab.fake.ledger.length - setup.posts}`)
+      want(p, replies(lab) === setup.posts + asks.length, `expected ${asks.length} replies, got ${replies(lab) - setup.posts}`)
       return p
     },
   },
@@ -216,7 +221,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       // Not because it forgets everything: the first room still has its own thread.
       want(p, sent(third).every((r) => r.body.includes(first)) && sent(third).length > 0, 'a room lost its own thread')
       want(p, !sent(third).some((r) => r.body.includes(second)), 'what was said in the second room came back into the first')
-      want(p, lab.fake.ledger.length === 3, `expected 3 posts, got ${lab.fake.ledger.length}`)
+      want(p, replies(lab) === 3, `expected 3 replies, got ${replies(lab)}`)
       return p
     },
   },
@@ -235,7 +240,7 @@ export const CLAUDE_SDK_CHECKS: Check[] = [
       // And the same policy still serves its rooms.
       say(lab, `hello ${room}`)
       await lab.door.idle()
-      want(p, lab.model.heard(room) && lab.fake.ledger.length === 1, 'a room message was not answered under the same policy, so the refusal proves little')
+      want(p, lab.model.heard(room) && replies(lab) === 1, 'a room message was not answered under the same policy, so the refusal proves little')
       return p
     },
   },
