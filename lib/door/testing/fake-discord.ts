@@ -79,6 +79,10 @@ export interface FakePost {
 /** `managed` defaults to whether `botId` is set, as on Discord; set it to send a combination Discord should not. */
 export interface FakeRole { id: string; name: string; guild?: string; botId?: string; managed?: boolean; listed?: boolean }
 export interface Posted { id: string; channel: string; content: string; allowedMentions: unknown; replyTo?: string }
+/** A reaction the bot put on a message (`on`) or took off it, or a typing indicator it sent. In the order the fake was asked. */
+export type StatusCall =
+  | { what: 'reaction'; channel: string; messageId: string; emoji: string; on: boolean; at: number }
+  | { what: 'typing'; channel: string; at: number }
 
 export interface FakeDiscord {
   nonce: string
@@ -115,6 +119,15 @@ export interface FakeDiscord {
   failPosts(count: number, status: number): void
   /** The next `count` posts are kept, and then answered 502: the post happened, the answer was lost. */
   loseAnswers(count: number): void
+  /** Every reaction and typing call the bot made that the fake took. A refused one is in `requests` only. */
+  status: StatusCall[]
+  /** The bot's own reactions on a message now, as Discord would show them. */
+  reactionsOn(messageId: string): string[]
+  /**
+   * The next `count` reaction calls (or typing calls) are refused: 429 with `retryAfterSec`, or
+   * the status given (403 is what Discord says when the bot lacks Add Reactions in the channel).
+   */
+  refuseStatus(what: 'reaction' | 'typing', count: number, how: { status: 403 | 404 | 500 } | { retryAfterSec: number }): void
   /** Close every gateway connection with this code. */
   drop(code: number): void
   /** Send a raw gateway payload to every connection. */
@@ -156,6 +169,11 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
   let limited = { count: 0, retryAfterSec: 0 }
   let failing = { count: 0, status: 500 }
   let losing = 0
+  const statusRefusals: Record<'reaction' | 'typing', { count: number; how: { status: number } | { retryAfterSec: number } }> = {
+    reaction: { count: 0, how: { status: 500 } }, typing: { count: 0, how: { status: 500 } },
+  }
+  /** The bot's reactions, by message id. */
+  const ownReactions = new Map<string, string[]>()
   // As Discord does with `enforce_nonce`: a post that repeats a nonce in the same channel is not made again.
   const byNonce = new Map<string, string>()
   let mute = false
@@ -164,7 +182,7 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
 
   const fake = {
     nonce, token, selfId, posted: [] as Posted[], requests: [] as string[], identifies: [] as { intents: number }[],
-    resumes: 0, heartbeats: 0, unauthorized: 0,
+    resumes: 0, heartbeats: 0, unauthorized: 0, status: [] as StatusCall[],
   }
 
   const dispatch = (t: string, d: unknown): void => {
@@ -190,6 +208,30 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
       if (req.method === 'GET' && ch) {
         const known = channels.get(decodeURIComponent(ch[1]))
         return known ? reply(200, { id: known.id, type: known.type, parent_id: known.parent_id, guild_id: known.guild }) : reply(404, { message: 'Unknown Channel' })
+      }
+      // Reactions and the typing indicator answer 204 with no body, as Discord's do.
+      const reaction = path.match(/^\/channels\/([^/]+)\/messages\/([^/]+)\/reactions\/([^/]+)\/@me$/)
+      const typing = path.match(/^\/channels\/([^/]+)\/typing$/)
+      if ((reaction && (req.method === 'PUT' || req.method === 'DELETE')) || (typing && req.method === 'POST')) {
+        const refusal = statusRefusals[reaction ? 'reaction' : 'typing']
+        if (refusal.count > 0) {
+          refusal.count--
+          return 'retryAfterSec' in refusal.how
+            ? reply(429, { message: 'You are being rate limited.', retry_after: refusal.how.retryAfterSec, global: false })
+            : reply(refusal.how.status, { message: 'no' })
+        }
+        if (reaction) {
+          const [channel, messageId, emoji] = [reaction[1], reaction[2], reaction[3]].map(decodeURIComponent)
+          const on = req.method === 'PUT'
+          const now = (ownReactions.get(messageId) ?? []).filter((e) => e !== emoji)
+          ownReactions.set(messageId, on ? [...now, emoji] : now)
+          fake.status.push({ what: 'reaction', channel, messageId, emoji, on, at: Date.now() })
+        } else {
+          fake.status.push({ what: 'typing', channel: decodeURIComponent(typing![1]), at: Date.now() })
+        }
+        res.writeHead(204)
+        res.end()
+        return
       }
       const msg = path.match(/^\/channels\/([^/]+)\/messages$/)
       if (req.method === 'POST' && msg) {
@@ -334,6 +376,8 @@ export async function startFakeDiscord(opts: { heartbeatMs?: number } = {}): Pro
     rateLimit(count: number, retryAfterSec: number) { limited = { count, retryAfterSec } },
     failPosts(count: number, status: number) { failing = { count, status } },
     loseAnswers(count: number) { losing = count },
+    reactionsOn: (messageId: string) => [...(ownReactions.get(messageId) ?? [])],
+    refuseStatus(what: 'reaction' | 'typing', count: number, how: { status: 403 | 404 | 500 } | { retryAfterSec: number }) { statusRefusals[what] = { count, how } },
     drop(code: number) { for (const c of [...conns]) c.close(code) },
     sendOp(op: number, d?: unknown) { for (const c of conns) c.send({ op, d }) },
     muteHeartbeats(m: boolean) { mute = m },

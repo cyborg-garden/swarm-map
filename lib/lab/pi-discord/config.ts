@@ -62,6 +62,13 @@ export interface LabConfig {
     botLoopLimit: number
     /** Ask Discord for the text of every message, not only the ones that mention the bot. */
     readAllMessages: boolean
+    /**
+     * 👀 on a message the agent is handling, then ✅ when it has answered or ⚠️ when it has not.
+     * Left out, on. Needs Add Reactions in the channel. Changes no rule: it is not in the policy.
+     */
+    statusReactions?: boolean
+    /** Discord's typing indicator while the agent works on a message. Left out, on. Not in the policy either. */
+    typing?: boolean
   }
   budget: { monthlyUsd: number }
   /** Tools the agent may use, all inside its sealed cell. Left out, it has none. See docs/lab/tools-slice.md. */
@@ -183,7 +190,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   // With no persona the agent is named for its id and says nothing more about itself.
   const p: Record<string, unknown> = { name: root.agentId, description: '', ...(root.persona === undefined ? {} : obj(root.persona, 'persona', ['name', 'description', 'document'])) }
   const mem = root.memory === undefined ? undefined : obj(root.memory, 'memory', ['notes'])
-  const d: Record<string, unknown> = { ...DEFAULTS, ...obj(root.discord, 'discord', ['guildId', 'channelId', 'adminUserIds', 'allowedUserIds', 'allowedRoleIds', 'anyoneInChannel', 'mentionRequired', 'bots', 'allowedBotIds', 'botLoopLimit', 'readAllMessages']) }
+  const d: Record<string, unknown> = { ...DEFAULTS, ...obj(root.discord, 'discord', ['guildId', 'channelId', 'adminUserIds', 'allowedUserIds', 'allowedRoleIds', 'anyoneInChannel', 'mentionRequired', 'bots', 'allowedBotIds', 'botLoopLimit', 'readAllMessages', 'statusReactions', 'typing']) }
   const b = obj(root.budget, 'budget', ['monthlyUsd'])
   const t: Record<string, unknown> = { ...NO_TOOLS, ...(root.tools === undefined ? {} : obj(root.tools, 'tools', ['enabled', 'mode', 'approvalSeconds', 'keepScratch', 'web', 'commands'])) }
   const m = obj(root.model, 'model', ['baseUrl', 'id', 'usdPerMTokIn', 'usdPerMTokOut'])
@@ -215,6 +222,9 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   flag(d.anyoneInChannel, 'discord.anyoneInChannel')
   flag(d.mentionRequired, 'discord.mentionRequired')
   flag(d.readAllMessages, 'discord.readAllMessages')
+  // Left out means on, and a config that leaves them out is written as it always was.
+  if (d.statusReactions !== undefined) flag(d.statusReactions, 'discord.statusReactions')
+  if (d.typing !== undefined) flag(d.typing, 'discord.typing')
   if (d.bots !== 'none' && d.bots !== 'mentions') errors.push("discord.bots: must be 'none' or 'mentions'")
   if (!Number.isInteger(d.botLoopLimit) || (d.botLoopLimit as number) < 0 || (d.botLoopLimit as number) > 20) errors.push('discord.botLoopLimit: a whole number from 0 to 20')
   // Without the text of unmentioned messages there is nothing to answer in a room that needs no mention.
@@ -417,6 +427,24 @@ export function toolsLine(c: LabConfig): string {
   const policyLine = modes.shell === 'never' ? '' : `. Shell commands: ${cmds.allow.length} names run without a yes, ${cmds.block.length} never run`
   const cell = on.length === 0 ? '' : `all inside the cell: ${on.map((k) => `${names[k]} (${modes[k] === 'ask' ? 'an admin has to say yes' : 'allowed'})`).join(', ')}${policyLine}`
   return `tools, ${[cell, webPart].filter(Boolean).join('; ')}${wait === undefined ? '' : `. An admin has ${wait} seconds to answer`}`
+}
+
+/** Whether the door shows that it is working on a message: a reaction on it, and the typing indicator. Both on unless switched off. */
+export function statusOf(c: Pick<LabConfig, 'discord'>): { reactions: boolean; typing: boolean } {
+  return { reactions: c.discord.statusReactions !== false, typing: c.discord.typing !== false }
+}
+
+/**
+ * The dry run's line about status reactions and typing. Whether the bot may add reactions in the
+ * channel can only be learned over a connection, which the dry run never opens: so it says what to allow.
+ */
+export function statusLine(c: Pick<LabConfig, 'discord'>): string {
+  const { reactions, typing } = statusOf(c)
+  const shown = [reactions ? 'a reaction on each message it answers (👀, then ✅ or ⚠️)' : '', typing ? 'typing while it works' : ''].filter(Boolean).join(' and ')
+  if (!shown) return '  ok    no sign that it is working: status reactions and typing are off'
+  return reactions
+    ? `  note  it shows ${shown}. Allow Add Reactions for the bot in the channel, or the reactions fail (the turn does not). The dry run connects to nothing, so it cannot check`
+    : `  ok    it shows ${shown}`
 }
 
 /** Which other bots are heard, in one plain line, for the dry run. */

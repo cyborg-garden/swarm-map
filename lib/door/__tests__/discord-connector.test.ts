@@ -347,6 +347,36 @@ describe('Discord connector: posting', () => {
     await expect(b.connector.send(home, { text: '  \n ' })).rejects.toThrow(/nothing to post/)
   })
 
+  it('a status reaction and typing go to the channel they are for, and are refused anywhere a post would be', async () => {
+    const b = await start()
+    await b.connector.react!(home, '5550001', '👀', true)
+    await b.connector.react!({ id: IDS.thread, kind: 'thread', parentId: IDS.home }, '5550002', '✅', true)
+    await b.connector.react!(home, '5550001', '👀', false)
+    await b.connector.typing!(home)
+    expect(b.fake.status.map((c) => (c.what === 'reaction' ? `${c.on ? '+' : '-'}${c.emoji} ${c.channel}/${c.messageId}` : `typing ${c.channel}`))).toEqual([
+      `+👀 ${IDS.home}/5550001`, `+✅ ${IDS.thread}/5550002`, `-👀 ${IDS.home}/5550001`, `typing ${IDS.home}`,
+    ])
+    const before = b.fake.requests.length
+    for (const room of [{ id: '7100000000000000002', kind: 'channel' as const }, { id: IDS.home, kind: 'dm' as const }, { id: '7200000000000000002', kind: 'thread' as const, parentId: '7100000000000000002' }]) {
+      await expect(b.connector.react!(room, '5550001', '👀', true)).rejects.toThrow(/refusing to post outside/)
+      await expect(b.connector.typing!(room)).rejects.toThrow(/refusing to post outside/)
+    }
+    expect(b.fake.requests.length).toBe(before)
+  })
+
+  it('typing never waits on a rate limit; a reaction waits a short one, and gives up on a long one', async () => {
+    const b = await start({ maxStatusWaitMs: 200 })
+    b.fake.refuseStatus('typing', 1, { retryAfterSec: 0.05 })
+    await expect(b.connector.typing!(home)).rejects.toThrow(/rate limited for longer/)
+    b.fake.refuseStatus('reaction', 1, { retryAfterSec: 0.05 })
+    await b.connector.react!(home, '5550001', '👀', true)
+    expect(b.fake.reactionsOn('5550001')).toEqual(['👀'])
+    b.fake.refuseStatus('reaction', 1, { retryAfterSec: 30 })
+    await expect(b.connector.react!(home, '5550001', '✅', true)).rejects.toThrow(/rate limited for longer/)
+    b.fake.refuseStatus('reaction', 1, { status: 403 })
+    await expect(b.connector.react!(home, '5550001', '✅', true)).rejects.toThrow('discord: PUT failed with status 403')
+  })
+
   it('[U:discord-chunk] chunk() never makes a piece too long, loses nothing, and never splits a character', () => {
     expect(chunk('')).toEqual([])
     expect(chunk('short')).toEqual(['short'])
