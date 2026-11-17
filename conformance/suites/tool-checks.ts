@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { callHash, readShown, shortHash } from '../../lib/core/tools/call.ts'
+import { DEFAULT_COMMANDS } from '../../lib/core/tools/command-policy.ts'
 import { shownIn } from '../../lib/door/approvals.ts'
 import type { LedgerEntry } from '../../lib/door/connectors/fake.ts'
 import type { Check } from './checks.ts'
@@ -72,6 +73,24 @@ const surface = (lab: Lab): ToolSurface => {
   if (!lab.harness.tools) throw new Error('this harness has no tool surface for the tool checks')
   return lab.harness.tools
 }
+
+/**
+ * Commands that look like something on the allow list and hide a write to `file`. Under the command
+ * policy each has to wait for a yes. The unit tests show a reader that looks at the first word only
+ * would let most of them through.
+ */
+export const HIDDEN_WRITES: ((file: string) => string)[] = [
+  (f) => `echo x > ${f}`,
+  (f) => `cat /dev/null >> ${f}`,
+  (f) => `ls; touch ${f}`,
+  (f) => `ls && touch ${f}`,
+  (f) => `ls $(touch ${f})`,
+  (f) => `ls \`touch ${f}\``,
+  (f) => `echo "a;" ; touch ${f}`,
+  (f) => `env X=1 touch ${f}`,
+  (f) => `find . -maxdepth 0 -exec touch ${f} \\;`,
+  (f) => `ls | tee ${f}`,
+]
 
 export const TOOL_CHECKS: Check[] = [
   {
@@ -215,6 +234,38 @@ export const TOOL_CHECKS: Check[] = [
       await lab.door.idle()
       want(p, existsSync(file) && statSync(file).mtimeMs === ranAt, 'the call ran a second time on the yes that was given to the first')
       want(p, steps(lab).join(' ') === 'tool:ask approval:allow tool:allow tool:ask tool:deny', `the receipts are ${steps(lab).join(' ') || 'missing'}`)
+      return p
+    },
+  },
+  {
+    id: 'K1', title: 'command policy: a command on the allow list runs with no request, one that hides a write waits for a yes, and a blocked one never runs',
+    lab: {
+      ...HELD, approvalTimeoutMs: 700, turnDeadlineMs: 40_000,
+      policy: { ...ASK, 'tools.commands': { allow: DEFAULT_COMMANDS.allow, block: [...DEFAULT_COMMANDS.block, 'mkdir'] } },
+    },
+    async run(lab) {
+      const p: Outcome = []
+      const canary = lab.canary('k1')
+      const hidden = HIDDEN_WRITES.map((make, i) => ({ file: lab.file(`k1.hidden-${i}`), make }))
+      const blockedDir = lab.file('k1.blocked')
+      const ran = `K1-ALLOWED-${lab.nonce}`
+      lab.script({
+        match: canary, text: 'done',
+        tools: [
+          lab.harness.shell.exec(`echo ${ran} | grep K1`),
+          ...hidden.map((h) => lab.harness.shell.exec(h.make(h.file))),
+          lab.harness.shell.exec(`ls; mkdir ${blockedDir}`),
+        ],
+      })
+      say(lab, `try ${canary}`)
+      await lab.door.idle()
+      want(p, toolResults(lab).some((r) => r.includes(ran)), 'the command on the allow list did not run, so nothing was checked')
+      for (const [i, h] of hidden.entries()) want(p, !existsSync(h.file), `a hidden write ran with no yes (case ${i})`)
+      want(p, !existsSync(blockedDir), 'a blocked command ran')
+      want(p, requests(lab).length === hidden.length, `expected ${hidden.length} requests in the room, one for each hidden write, got ${requests(lab).length}`)
+      const tools = lab.receipts.all().filter((r) => r.event.kind === 'tool' && r.rule === 'tools.commands')
+      want(p, tools.map((r) => r.verdict).join(' ') === 'allow deny', `the command policy's receipts are ${tools.map((r) => r.verdict).join(' ') || 'missing'}`)
+      want(p, oneReply(lab), 'the turn did not end with one reply from the model')
       return p
     },
   },

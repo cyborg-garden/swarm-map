@@ -5,6 +5,7 @@
 // value decide() does not recognise can never fall through to "allowed".
 //
 // Returns one line per problem, `<path>: <what is wrong>`. Never throws.
+import { commandListsProblems } from '../tools/command-policy.ts'
 import { parseWebEntry } from '../tools/web.ts'
 
 const POSTURES = ['private', 'team', 'public']
@@ -113,6 +114,7 @@ export function shapeErrors(policy: unknown): string[] {
       })
     }
     oneOf('tools.browserGuard', tools.browserGuard, BROWSER_GUARDS)
+    if (tools.commands !== undefined) for (const problem of commandListsProblems(tools.commands)) errors.push(`tools.commands.${problem}`)
   })
 
   list('keys', p.keys, (kp, grant) => obj(kp, grant, (g) => {

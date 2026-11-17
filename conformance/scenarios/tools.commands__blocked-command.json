@@ -1,0 +1,47 @@
+{
+  "id": "tools.commands/blocked-command",
+  "rule": "tools.commands",
+  "policy": "policy-team.json",
+  "patch": {
+    "tools.allow": [
+      "shell"
+    ],
+    "tools.ask": [],
+    "tools.commands": {
+      "allow": [
+        "ls"
+      ],
+      "block": [
+        "dd"
+      ]
+    }
+  },
+  "steps": [
+    {
+      "tool": {
+        "room": "r-general",
+        "actor": "u-alice",
+        "toolClass": "shell",
+        "toolName": "bash",
+        "command": "ls; dd if=a of=b"
+      }
+    }
+  ],
+  "expect": {
+    "receipt": {
+      "verdict": "deny",
+      "rule": "tools.commands"
+    }
+  },
+  "twin": {
+    "patch": {
+      "tools.commands.block": []
+    },
+    "expect": {
+      "receipt": {
+        "verdict": "allow",
+        "rule": "tools.lists"
+      }
+    }
+  }
+}

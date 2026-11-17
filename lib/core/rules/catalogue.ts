@@ -120,6 +120,12 @@ export const RULES: Rule[] = [
     tests: ['D:priv.approval/ask-holds', 'D:priv.approval/ask-without-allow', 'D:priv.approval/admin-answers', 'D:priv.approval/member-answers', 'D:priv.approval/role-is-not-enough', 'D:priv.approval/bot-answers', 'D:priv.approval/agent-answers', 'D:priv.approval/surface-off',
       'U:call-hash', 'U:call-shown', 'P:approval', 'P:approval-who', 'P:approval-once', 'P:approval-shown', 'P:approval-timeout', 'P:approval-recheck', 'P:approval-receipts'],
     checks: ['C6', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r'] },
+  // The door reads the command and decides. That what runs is the command it read is the gate's: a yes
+  // carries the hash of the call (as in priv.approval), so K1 is the harness's part.
+  { id: 'tools.commands', statement: 'A shell command whose every part is on the allow list runs without a yes, a command with anything on the block list or anything clearly destructive never runs, and every other command waits for a yes.',
+    klass: 'security', kind: 'guardrail', reads: ['tools.commands.allow', 'tools.commands.block', 'tools.ask', 'tools.allow'], surfaces: 'all', enforcer: 'gate',
+    tests: ['D:tools.commands/allowed-command-skips-the-yes', 'D:tools.commands/blocked-command', 'D:tools.commands/hidden-write-asks', 'U:command-policy', 'P:command-policy'],
+    checks: ['K1'] },
   { id: 'tools.workspace', statement: 'A file tool reaches only the scratch folder: not by two dots, a full path or a link.',
     klass: 'security', kind: 'guardrail', reads: [], surfaces: 'all', enforcer: 'gate', tests: ['U:workspace-path'], checks: ['W1', 'W1+'] },
   { id: 'tools.limits', statement: 'A shell call is stopped at a time limit, a call\'s output is cut at a size limit before the model sees it, and a conversation gets a set number of tool calls an hour.',

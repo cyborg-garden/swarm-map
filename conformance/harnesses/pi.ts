@@ -33,7 +33,7 @@ const allBut = (...red: string[]): string[] => [...SHARED, ...TOOLS].filter((id)
 /** The shared checks, but for the ones named: for a fault the tool checks have nothing to say about. */
 const sharedBut = (...red: string[]): string[] => SHARED.filter((id) => !red.includes(id))
 // What a gate that asks nobody turns red among the tool checks: every one that waits for an answer, the scratch folder, and both limits.
-const UNGATED = ['C6', 'C6m', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'W1', 'L1', 'L2']
+const UNGATED = ['C6', 'C6m', 'C6n', 'C6d', 'C6t', 'C6x', 'C6r', 'K1', 'W1', 'L1', 'L2']
 /** The web checks. */
 const WEB = ['N1+', 'N1', 'N2', 'N3', 'N4', 'N5', 'N6', 'N7', 'N8', 'N9']
 // A gate that adds no web tool, or whose web tool never reaches the door: every web check that needs a page fetched goes red.

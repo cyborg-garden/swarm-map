@@ -16,6 +16,9 @@ is a placeholder.
 - **Each class has a mode.** `never`, `ask` or `allow`. Shell starts at `ask`.
 - **`ask` means a person says yes in the room.** The door posts what the agent wants to run. An
   admin answers. No answer in time is a no.
+- **Not every command needs a yes.** A shell command made only of commands that read and print
+  (`ls`, `cat`, `grep` and so on) runs without asking. One with anything destructive in it never
+  runs. Everything else asks. See "The command policy".
 - **The door decides, not the harness.** Every tool call is put to `decide()`. The harness only
   carries the question and the answer.
 - **An agent anyone can talk to gets none of these.** A public agent loses shell and file tools
@@ -69,9 +72,78 @@ on, so nobody is left thinking a tool is on. `decide()` is the wall behind that 
 2. The agent is public: no to shell, file, code-exec and chat-admin tools, and to any tool it
    cannot classify.
 3. The class is on the deny list: no.
+3a. A shell call whose command the command policy reads as blocked: no. Read as allowed: yes.
 4. The class is on the ask list: **ask**.
 5. The class is on the allow list: yes.
 6. Otherwise: no.
+
+## The command policy
+
+A shell that asks for every `ls` is a shell nobody leaves on. So the record can hold two lists of
+command names, `tools.commands.allow` and `tools.commands.block`, and the door reads each shell
+call against them before it asks anyone.
+
+```json
+"tools": { "enabled": ["shell"], "commands": { "allow": ["ls", "cat", "grep"], "block": ["dd", "curl"] } }
+```
+
+Left out, the shipped lists apply (`lib/core/tools/command-defaults.ts`). The shipped allow list is
+about forty commands that read and print and change nothing. The shipped block list is disk wipers,
+shutdown, and network tools (the cell has no network, so those are only noise).
+
+**A command is read whole, and `allow` is the narrow answer.** The door has a small shell reader of
+its own (`lib/core/tools/command-policy.ts`, no new dependency). It reads words, quotes,
+backslashes, `|`, `||`, `&&`, `;`, new lines and redirections. A command runs without a yes only
+if the reader understood all of it and:
+
+- every command in it is on the allow list, named plainly (`ls`, not `/bin/ls` or `./ls`);
+- none of them has an argument that writes or runs something (`find -exec`, `find -delete`,
+  `sort -o`, `date -s`, a second file to `uniq`, `file -C`);
+- nothing is written by a redirection (a write to `/dev/null` is fine);
+- no word reaches out of the scratch folder: no full path, no `..`, no path fixed to an option
+  (`-f/x`, `--file=/x`), no `--files0-from`. The cell holds more than the scratch folder (its own
+  token in `/proc/1/environ`, other conversations' transcripts, the harness's settings). A file
+  tool cannot reach them, so a command that skips the yes cannot either;
+- `seq` counts to at most five digits: one with no end fills the cell's memory with output
+  faster than the time limit stops it, and takes every conversation down with it.
+
+Anything the reader does not fully understand asks: `$( )`, backticks, `$VAR`, `${ }`, `$'…'`,
+globs, `~`, braces, a subshell, a here-doc, a comment, a job sent to the background, a line that
+runs on, a `VAR=value` prefix, and any character outside plain printable ASCII (look-alike letters,
+invisible marks). So does a call whose input is anything more than a command and a time limit.
+
+**`block` is searched for everywhere.** A second, looser reading goes on past what the strict
+reader gives up on, so a block is found after a `;`, inside `$( )` or backticks, behind `sudo`,
+`env`, `timeout` or `xargs`, and inside `sh -c '…'` or `eval`. Besides the block list, these never
+run: a recursive `rm` that reaches out of the scratch folder (a full path, `~`, `..`, a variable,
+or no path at all, as from `xargs`), `find -delete` the same way, `chmod`/`chown` on a system path,
+a redirection into a system path, a redirection to bash's own network paths (`/dev/tcp/…`,
+`/dev/udp/…`), `kill -1`, and a fork bomb.
+
+**Some names can never be on the allow list:** shells, interpreters and anything that runs another
+command (`sh`, `bash`, `source`, `.`, `eval`, `env`, `xargs`, `sudo`, `timeout`, `python3`, `node`,
+`awk`, `sed`, `git`, `tar` and others). The launcher refuses such a list, and the reader asks
+anyway. Allowing one would let a yes be skipped for a script the agent wrote, which is why a shell
+that asks still cannot go with file writing that does not.
+
+What does not change:
+
+- A command that asks is held, shown and bound to its hash exactly as before.
+- A yes is checked against the lists as they are when it lands: a command the block list caught up
+  with meanwhile does not run.
+- An allowed command still needs the shell to be on, still counts against the calls per hour, and
+  still runs under the gate's time and output limits. A public agent still has no shell.
+- Receipts name the rule that decided (`command=allow:ls,grep`, `command=block:rm-recursive`,
+  `command=ask:redirect`), never the command. Names in a rule come from the lists, never from the
+  command.
+
+The commands found on the cell's `PATH` are the ones the gate's environment names. Pi starts a new
+shell for each call, so a function or alias from an earlier yes does not carry over. Its settings
+do: `shellCommandPrefix` or `shellPath`, in Pi's own folder or in `.pi/settings.json` in the scratch
+folder, would run beside every later command the door let through unread. So the Pi gate refuses
+every shell call while either is set, and for the rest of that Pi's life once it has seen one.
+An earlier yes still reaches past its own command in one way: a link it made in the scratch folder
+is followed by a later allowed command.
 
 ## Approval in the room
 
@@ -216,6 +288,7 @@ says its shim can hold a call. Each has something broken on purpose that must tu
 | C6t | No answer in time: the tool does not run | Gate that asks nobody |
 | C6x | What ran is exactly what was shown | Gate that runs more than it asked about |
 | C6r | A yes is used once | Gate that asks nobody |
+| K1 | A command on the allow list runs with no request, ten that hide a write each wait for a yes, and a blocked one never runs | Gate that asks nobody |
 | W1 | A file tool cannot leave the scratch folder: `..`, a full path, a link | Gate with no path check |
 | W1+ | Positive control: file tools work inside the scratch folder | (a control: it shows W1 was not green because nothing ran) |
 | L1 | A shell call past the time limit is stopped | Gate that applies no limits |
@@ -424,6 +497,8 @@ room throughout. No real model, no real chat platform, no real credential.
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 | Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
 | Audit mutations | 28 lines broken one at a time in `decide()`, the door's answer handling, the scratch-folder check, the gate, the launcher's config, the cell and the Tools card. All 28 turned a named test red |
+| The command policy | 174 unit tests of the reader, including 3,000 random commands that may be allowed only when everything outside quotes is plain. K1 passes for real Pi 1.5.2 as a process and in the sealed cell, and the gate that asks nobody turns it red. 63 lines broken one at a time in the reader, `decide()`, the door, the launcher's config, the record check and the Tools card: 59 turned a named test red, and 4 change nothing the code does (a check that a later check repeats) |
+| Letta Code and the Claude Agent SDK, after the command policy | Unaffected. Neither shim can hold a call, so K1 is listed as not run for both, with that reason. Their process and Docker runs pass as before |
 | Web and search, real Pi 1.5.2 as a process | 59 checks pass, the ten web checks (N1+, N1 to N9) among them, against a fake web and a fake search provider on loopback. Seven door rigs and gates broken on purpose each turned its named web checks red and left the others green |
 | Web and search, real Pi 1.5.2 in the sealed Docker cell | 60 checks pass, the ten web checks among them: the page and the results reached the model in the cell, and the cell reached nothing but the door |
 | The launcher's own cell, with a fake Discord, after the web change | All 20 tests of the Pi launcher's Docker suite pass |

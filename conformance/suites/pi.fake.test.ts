@@ -77,6 +77,8 @@ describe('must-fail: broken shims turn their named checks red', () => {
     expect(await detail('no-limits', 'L1')).toBe('a call ran on past the time limit')
     expect(await detail('no-limits', 'L2')).toContain('output past the size limit reached the model')
     expect(await detail('silence-is-yes', 'C5v')).toContain('the tool ran with no verdict')
+    expect(await detail('ignores-verdicts', 'K1')).toContain('a hidden write ran with no yes (case 0)')
+    expect(await detail('ignores-verdicts', 'K1')).toContain('a blocked command ran')
     expect(await detail('covers-failures', 'C6m')).toContain('the room was not told why: "All done."')
     expect(await detail('covers-failures', 'C6b')).toContain('the room was not told why: "All done."')
   }, 120_000)

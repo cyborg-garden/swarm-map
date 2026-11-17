@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { parseWebEntry, SUGGESTED_WEB } from '@/lib/core/tools/web'
+import { SHIPPED_ALLOW, SHIPPED_BLOCK } from '@/lib/core/tools/command-defaults'
 import type { LabConfig, ToolsConfig } from '@/lib/lab/pi-discord/config'
 
 /**
@@ -74,6 +75,14 @@ export function withWeb(tools: ToolsConfig | undefined, patch: Partial<WebConfig
   const on = next.allow.length > 0 || next.mode === 'public' || next.search === true
   return on || keep ? { ...rest, web: next } : rest
 }
+
+/** The command lists the shell is held to: the record's own, or the shipped ones (as in the launcher). */
+export function commandsOf(tools: ToolsConfig | undefined): { allow: string[]; block: string[] } {
+  return tools?.commands ?? { allow: [...SHIPPED_ALLOW], block: [...SHIPPED_BLOCK] }
+}
+
+/** One list of command names from what was typed: split on spaces and commas. The launcher checks each name. */
+export const namesIn = (text: string): string[] => text.split(/[\s,]+/).filter((n) => n !== '')
 
 const inputClass = 'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
@@ -220,6 +229,9 @@ export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSear
           </label>
         )}
       </div>
+      {!off && modeOf(tools, 'shell') !== 'never' && (
+        <CommandLists tools={tools ?? EMPTY} asks={modeOf(tools, 'shell') === 'ask'} onChange={onChange} />
+      )}
       {asks && builtFor === undefined && (
         <label className="block space-y-1">
           <span className="text-sm">Seconds an admin has to answer</span>
@@ -230,6 +242,45 @@ export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSear
           />
           <span className="block text-xs text-muted-foreground">10 to 600. With no answer by then, the call does not run.</span>
         </label>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The command policy, as three lists: what runs without asking, what never runs, and everything else,
+ * which asks. A command runs without asking only if every part of it is on the first list and it
+ * writes nothing; one with anything on the second never runs. The door reads the command; this only
+ * edits the two lists.
+ */
+function CommandLists({ tools, asks, onChange }: { tools: ToolsConfig; asks: boolean; onChange: (tools: ToolsConfig) => void }) {
+  const lists = commandsOf(tools)
+  const set = (key: 'allow' | 'block', text: string): void => onChange({ ...tools, commands: { ...lists, [key]: namesIn(text) } })
+  const shipped = tools.commands === undefined
+  return (
+    <div className="space-y-2 border-t border-[var(--border)] pt-3" data-testid="door-command-lists">
+      <p className="text-sm">Shell commands</p>
+      {(['allow', 'block'] as const).map((key) => (
+        <label key={key} className="block space-y-1">
+          <span className="text-xs">{key === 'allow' ? 'Run without asking' : 'Never run'}</span>
+          <textarea
+            name={`tools.commands.${key}`} rows={2} className={`w-full font-mono ${inputClass}`}
+            // Typed freely, and read when the field is left, so a space being typed is not taken away.
+            key={`${key}:${lists[key].join(' ')}`} defaultValue={lists[key].join(' ')}
+            onBlur={(e) => { if (namesIn(e.target.value).join(' ') !== lists[key].join(' ')) set(key, e.target.value) }}
+          />
+        </label>
+      ))}
+      <p className="text-xs">
+        <span className="font-medium">{asks ? 'Ask an admin:' : 'Run, as the shell is allowed:'}</span> every other command, and any command with a part not on the first list, a substitution, or a write to a file.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Deleting folders outside the scratch folder never runs either. A shell, an interpreter or a wrapper (sh, bash, python, env, xargs) cannot be on the first list.
+      </p>
+      {!shipped && (
+        <button type="button" className="text-xs underline" onClick={() => { const { commands: _drop, ...rest } = tools; void _drop; onChange(rest) }}>
+          Use the shipped lists
+        </button>
       )}
     </div>
   )

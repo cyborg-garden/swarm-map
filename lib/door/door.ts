@@ -13,6 +13,7 @@ import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.t
 import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
 import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
+import { classifyCommand } from '../core/tools/command-policy.ts'
 import { readWebUrl } from '../core/tools/web.ts'
 import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
@@ -123,6 +124,8 @@ interface Held {
   toolClass: ToolClass
   /** The hash of the call that was shown. The yes that goes back to the cell carries it. */
   hash: string
+  /** A shell call's command, so the yes is checked against the command policy as it is then. */
+  command?: string
   /** For a web call: the address it was decided on, or a search's query. A yes to it lets the door make that one request, once. */
   web?: WebAsk
   timer: ReturnType<typeof setTimeout>
@@ -132,6 +135,15 @@ interface Held {
 type WebAsk = { url: string } | { query: string }
 /** A web call the door said yes to, and the one request it may make for it. Used once. */
 type WebTicket = { turn: Turn; link: ShimLink; tool: string } & WebAsk
+
+/** A shell call's command, when its input is a command and at most a time limit. Anything else has none. */
+export function commandOf(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined
+  const { command, timeout, ...rest } = input as Record<string, unknown>
+  if (Object.keys(rest).length > 0 || typeof command !== 'string') return undefined
+  if (timeout !== undefined && (typeof timeout !== 'number' || !Number.isFinite(timeout))) return undefined
+  return command
+}
 
 export async function createDoor(opts: DoorOptions): Promise<Door> {
   // F1. A connector that is not the fake one is refused unless its surface was named in `live`.
@@ -277,7 +289,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     receipt(tag, who, `answer=${say} ${note}`)
     if (say === 'deny') { settle(h, false, 'An admin said no, so the call does not run.'); return true }
     // The yes is checked against the rules as they are now, not as they were when the door asked.
-    const now = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass: h.toolClass, toolName: h.tool, argsDigest: '' }, {})
+    const now = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass: h.toolClass, toolName: h.tool, argsDigest: '', ...(h.command !== undefined ? { command: h.command } : {}) }, {})
     if (now.verdict === 'deny') { settle(h, false, `The rules changed while the call waited: ${now.why}`, now.rule); return true }
     settle(h, true, 'An admin said yes, so the call runs.')
     return true
@@ -475,7 +487,12 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         // The hash is of the name the shim sent, so it matches what the cell works out. Only the hash is written down.
         const hash = callHash(typeof msg.tool === 'string' ? msg.tool : '', msg.input)
         const tag = about(e, 'tool', turn.turnId)
-        const note = `tool=${toolName} call=${shortHash(hash)}`
+        // tools.commands: a shell call that is a command and nothing else (a time limit aside) is read by
+        // the command policy. Any other shape is not, so it cannot be let through by it. The receipt
+        // names the rule that decided, never the command.
+        const command = toolClass === 'shell' ? commandOf(msg.input) : undefined
+        const cmdRule = command !== undefined && policy.tools.commands ? ` command=${classifyCommand(command, policy.tools.commands).rule}` : ''
+        const note = `tool=${toolName} call=${shortHash(hash)}${cmdRule}`
         const verdict = (allow: boolean, reason?: string): void => {
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? { hash } : { reason }) })
         }
@@ -485,7 +502,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         void factsFor(turn.connector, e).then(async (facts) => {
           // The lookup took time. A turn that ended meanwhile gets a no, whatever the policy says.
           if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
-          const d = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: hash }, facts)
+          const d = decide(policy, { kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: hash, ...(command !== undefined ? { command } : {}) }, facts)
           if (opts.silentVerdicts) return
           if (d.verdict !== 'allow' && d.verdict !== 'ask') { receipt(tag, d, note); return verdict(false, d.why) }
 
@@ -551,7 +568,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (turns.get(msg.turnId) !== turn) return refuse('turn.known', 'The turn ended before the tool could be decided.')
           if (requestId === '' || held.has(requestId)) { startClock(turn); return no('The request could not be posted, so the call does not run.') }
           const h: Held = {
-            requestId, turn, link, callId: msg.callId, tool: toolName, toolClass, hash, ...(web !== undefined ? { web } : {}),
+            requestId, turn, link, callId: msg.callId, tool: toolName, toolClass, hash, command, ...(web !== undefined ? { web } : {}),
             timer: setTimeout(() => {
               if (held.delete(requestId)) settle(h, false, 'No admin answered in time, so the call does not run.')
             }, approvalMs),

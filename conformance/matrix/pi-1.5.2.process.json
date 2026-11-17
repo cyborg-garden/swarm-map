@@ -112,6 +112,11 @@
       "status": "pass"
     },
     {
+      "id": "K1",
+      "title": "command policy: a command on the allow list runs with no request, one that hides a write waits for a yes, and a blocked one never runs",
+      "status": "pass"
+    },
+    {
       "id": "W1",
       "title": "a file tool cannot leave the scratch folder: not by two dots, a full path or a link",
       "status": "pass"
@@ -489,6 +494,16 @@
       ]
     },
     {
+      "rule": "tools.commands",
+      "status": "pass",
+      "checks": [
+        {
+          "id": "K1",
+          "status": "pass"
+        }
+      ]
+    },
+    {
       "rule": "tools.workspace",
       "status": "pass",
       "checks": [
@@ -718,6 +733,7 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "L1",
         "L2",
@@ -742,6 +758,7 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "L1",
         "L2",
@@ -1047,6 +1064,7 @@
         "C6t",
         "C6x",
         "C6r",
+        "K1",
         "W1",
         "W1+",
         "L1",
