@@ -342,3 +342,13 @@ describe('web: what comes back', () => {
     expect(htmlToText('<p>a&amp;b</p><script>evil()</script><!-- c --><li>d<br>e &#65;&#x42;')).toBe('a&b\n\n- d\ne AB')
   })
 })
+
+describe('web: a hostile page', () => {
+  it('[P:web-limits] reducing a page takes time in step with its size, whatever tags it holds', () => {
+    for (const page of ['<script'.repeat(300_000), '<!--'.repeat(500_000), '<style x'.repeat(250_000), '<a '.repeat(600_000)]) {
+      const t0 = Date.now()
+      htmlToText(page)
+      expect(Date.now() - t0, page.slice(0, 8)).toBeLessThan(1500)
+    }
+  })
+})

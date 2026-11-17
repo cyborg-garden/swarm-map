@@ -1,5 +1,7 @@
 'use client'
 
+import { useState } from 'react'
+import { parseWebEntry, SUGGESTED_WEB } from '@/lib/core/tools/web'
 import type { LabConfig, ToolsConfig } from '@/lib/lab/pi-discord/config'
 
 /**
@@ -56,6 +58,16 @@ export function withMode(tools: ToolsConfig | undefined, key: ToolClass, mode: M
   return { ...t, enabled, mode: modes }
 }
 
+/** The web allowlist with entries added, each at most once. An empty list switches the web off. */
+export function withWeb(tools: ToolsConfig | undefined, allow: string[], mode?: 'allow' | 'ask'): ToolsConfig {
+  const t = tools ?? EMPTY
+  const unique = [...new Set(allow)]
+  const { web: _old, ...rest } = t
+  void _old
+  const nextMode = mode ?? t.web?.mode
+  return unique.length === 0 ? rest : { ...rest, web: { allow: unique, ...(nextMode ? { mode: nextMode } : {}) } }
+}
+
 const inputClass = 'rounded-md border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5 text-sm'
 
 export function DoorToolsCard({ rules, builtFor, onChange }: {
@@ -67,7 +79,11 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
   const tools = rules.tools
   const anyone = rules.discord.anyoneInChannel
   const off = anyone || builtFor !== undefined
-  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask')
+  const webAllow = tools?.web?.allow ?? []
+  const asks = TOOL_ROWS.some((r) => modeOf(tools, r.key) === 'ask') || (webAllow.length > 0 && tools?.web?.mode === 'ask')
+  const [entry, setEntry] = useState('')
+  const read = entry.trim() === '' ? undefined : parseWebEntry(entry)
+  const add = (more: string[]) => onChange(withWeb(tools, [...webAllow, ...more]))
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 space-y-3" data-testid="door-tools-card">
       <h3 className="font-medium text-sm">Tools</h3>
@@ -81,7 +97,7 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
         </p>
       ) : anyone && (
         <p role="note" className="text-xs text-amber-600">
-          This agent hears anyone in the channel, so it gets no tools. Name who it hears to switch one on.
+          This agent hears anyone in the channel, so it gets no tools in its cell. Name who it hears to switch one on. It can still read listed web pages.
         </p>
       )}
       {TOOL_ROWS.map((row) => (
@@ -109,7 +125,59 @@ export function DoorToolsCard({ rules, builtFor, onChange }: {
       <p className="text-xs text-muted-foreground">
         A yes to a shell command is a yes to whatever it leaves behind in the cell, running or written, until the agent is stopped.
       </p>
-      {asks && !off && (
+      <div className="space-y-2 border-t border-[var(--border)] pt-3" data-testid="door-web">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm">Web pages</p>
+            <p className="text-xs text-muted-foreground">
+              Off until a site is listed. The door fetches a page for the agent, never the cell: read-only, no logins or cookies, private addresses refused.
+              A host is matched exactly; add a path to allow only what is under it. What a page says goes to the model as untrusted text, never into the channel.
+            </p>
+          </div>
+          {webAllow.length > 0 && (
+            <select
+              name="tools.web.mode" aria-label="Web pages" className={inputClass} disabled={builtFor !== undefined}
+              value={tools?.web?.mode ?? 'allow'}
+              onChange={(e) => onChange(withWeb(tools, webAllow, e.target.value as 'allow' | 'ask'))}
+            >
+              <option value="ask">Ask an admin</option>
+              <option value="allow">Allow listed sites</option>
+            </select>
+          )}
+        </div>
+        {webAllow.length > 0 && (
+          <ul className="flex flex-wrap gap-1.5" aria-label="Allowed sites">
+            {webAllow.map((site) => (
+              <li key={site} className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-2 py-0.5 text-xs">
+                <span>{site}</span>
+                <button type="button" aria-label={`Remove ${site}`} disabled={builtFor !== undefined}
+                  onClick={() => onChange(withWeb(tools, webAllow.filter((s) => s !== site)))}>×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {builtFor === undefined && (
+          <>
+            <div className="flex gap-2">
+              <input
+                name="tools.web.add" aria-label="Add a site" placeholder="en.wikipedia.org or github.com/some-org" className={`flex-1 ${inputClass}`}
+                value={entry} onChange={(e) => setEntry(e.target.value)}
+              />
+              <button type="button" className={inputClass} disabled={!read || 'problem' in read}
+                onClick={() => { if (read && !('problem' in read)) { add([`${read.host}${read.path}`]); setEntry('') } }}>Add</button>
+            </div>
+            {read && 'problem' in read && <p className="text-xs text-amber-600">That is not a site the door takes: {read.problem}.</p>}
+            <div className="flex flex-wrap gap-1.5" aria-label="Suggested sites">
+              {SUGGESTED_WEB.filter((s) => !s.entries.every((e) => webAllow.includes(e))).map((s) => (
+                <button key={s.label} type="button" title={s.entries.join(', ')}
+                  className="rounded-full border border-dashed border-[var(--border)] px-2 py-0.5 text-xs text-muted-foreground"
+                  onClick={() => add(s.entries)}>+ {s.label}</button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+      {asks && builtFor === undefined && (
         <label className="block space-y-1">
           <span className="text-sm">Seconds an admin has to answer</span>
           <input

@@ -9,7 +9,10 @@ is a placeholder.
 
 - **Off by default.** An agent has no tools until its rules switch a class of tool on.
 - **Three classes in this slice.** Read files, write files, and a shell. All three run inside the
-  sealed cell and nowhere else. There is no web access.
+  sealed cell and nowhere else.
+- **And web pages, through the door.** A fourth tool reads one web page from a list of sites. The
+  cell still has no route out: the door fetches the page and hands back text. See "Web through the
+  door" below.
 - **Each class has a mode.** `never`, `ask` or `allow`. Shell starts at `ask`.
 - **`ask` means a person says yes in the room.** The door posts what the agent wants to run. An
   admin answers. No answer in time is a no.
@@ -241,18 +244,136 @@ tool call to the door and takes a plain yes or no, and does not say it can hold 
 matrices list the ten tool checks as not run, with that reason. It is not one of the launcher's
 harnesses, so no config can switch a tool on for it.
 
-## A later tool: fetch through the door
+## Web through the door
 
-Not built. The shape, so that nothing here has to change for it:
+An agent can read web pages from a list of sites, and nothing else on the web. The cell still has
+no route out: the agent's tool asks the door, and the door fetches the page on its behalf.
 
-- The tool is a call to the **door**, not a socket in the cell. The cell still has no route out.
-- Its class is `network`. `decide()` gets the host and method (the `egress` event that is already
-  in the contracts), and the rules name the hosts: `egress.hosts`, default deny, private ranges
-  blocked.
-- The door makes the request itself, with no agent credential, follows no redirect to a host that
-  is not listed, caps the size and time, and hands back text. In `ask` mode the URL is what is
-  shown.
-- What comes back is untrusted text. It goes to the model only.
+### What the agent has
+
+| Tool | Class | What it takes | What it gets back |
+|---|---|---|---|
+| `web_fetch` | `network` | One address, `https://` only | The page as text, marked as untrusted, or why not |
+
+There is no `web_search`. See "Search, as a design" below.
+
+### The list
+
+The rules record already had a place for this: `egress.hosts`, with `default: 'deny'` and
+`blockPrivateRanges: true`. This slice is what reads it. The launcher's config and the dashboard's
+Tools card write it from a plainer shape:
+
+```json
+"tools": { "enabled": [], "mode": {}, "approvalSeconds": 120,
+           "web": { "allow": ["en.wikipedia.org", "github.com/some-org"], "mode": "allow" } }
+```
+
+- **Empty means off.** No site listed, no web, and the tool is not even declared to the model.
+- **An entry is a host, or a host and a path.** `en.wikipedia.org` allows that host. `github.com/some-org`
+  allows `/some-org` and what is under it, by whole segments: not `/some-organisation`.
+- **A host is matched exactly.** No wildcard, no subdomain, no other port. A site that lives at
+  `www.` needs that name listed. Names are compared as the URL parser writes them: lower case,
+  an international name in its punycode form, no trailing dot. An address (`10.0.0.1`, `[::1]`,
+  `0x7f.1`) is never an entry.
+- **`mode`** is `allow` (the default) or `ask`, which shows an admin the address first, in the room,
+  as any tool in ask mode is shown.
+- **An agent that hears anyone may have it.** A public agent loses shell and file tools; it keeps
+  the web, still read-only and still on the list.
+
+The Tools card offers suggestions as one-click chips. None is on until someone clicks it: the
+project's own GitHub (`github.com`, `api.github.com/repos/…`, `api.github.com/orgs/…` and
+`raw.githubusercontent.com`, each limited to that organisation), `cyborg.garden`,
+`en.wikipedia.org`, `stackoverflow.com`, the Internet Archive (`archive.org`, `web.archive.org`),
+Sefaria (`www.sefaria.org`) and the Library of Congress (`www.loc.gov`).
+
+### What the door does for one fetch
+
+1. **The call is decided like any tool.** `decide()` answers for the class `network`. The address is
+   then put to `decide()` as an `egress` event: GET, a host on the list, a path under one of its
+   prefixes. A call whose input is anything but one address is refused.
+2. **A yes is a ticket for that one address.** The harness then asks the door for the page, by the
+   call's id. The door fetches only the address the call was decided on, only once, and only while
+   the turn is live. Asking under that id for any other address spends the ticket.
+3. **Every hop is checked again.** The address, then each redirect: on the list, under the rules as
+   they are now. Three redirects at most.
+4. **Every DNS answer is checked.** Each address the name has must be a public one. One private,
+   loopback, link-local, multicast, documentation or metadata address refuses the fetch. For IPv6,
+   only global unicast (2000::/3) is public, which leaves out every form that carries an IPv4
+   address inside it.
+5. **The connection goes to the address that was checked**, not to the name, so a second DNS answer
+   cannot move it (DNS rebinding). TLS still checks the certificate against the name.
+6. **The request is bare.** GET, a fixed user agent, `Accept-Encoding: identity`. No cookie, no
+   credential, no auth header, and a cookie the site sets is not sent back on the next hop. An
+   address with a name or password in it is refused. There is no GitHub token in this slice.
+7. **Limits.** 2 MB of body is read and no more, 15 seconds for the whole fetch on the wall clock
+   (every hop and every read, so a site that drips is cut at the same time as one that hangs), 60
+   fetches an hour for the agent, on top of the 30 tool calls an hour a conversation gets. Only
+   text, HTML, JSON and Markdown are read; a compressed body is refused.
+8. **HTML is reduced to its text.** Scripts, styles and markup go; what is left is cut to 15,000
+   bytes, so the page and its marks fit whole under the 16,000-byte cap on a tool's output.
+
+### What comes back
+
+- **It goes to the model only.** The door hands it to the harness that asked. It never posts it.
+  If the model repeats it in a reply, that reply goes through the same outbound checks as any
+  other.
+- **It is marked as untrusted.** It comes between two marks that carry an id the page cannot know,
+  under a line that says it is data from the web and not an instruction. The system prompt says the
+  same.
+- **Nothing in it can act.** An approval is read only from a chat message by an admin's own
+  account, in reply to the request. Page text never reaches the chat, so it cannot answer a request,
+  run a tool or change a rule.
+- **Receipts hold where, not what.** Host, path (when it is plain characters and nothing
+  secret-shaped; otherwise only its length) and size. Never the content.
+
+What an agent puts in an address reaches that site. The list is what bounds that.
+
+### Rules and checks
+
+| Rule | Says | Checks |
+|---|---|---|
+| `web.allow` | Fetched by the door, GET only, only a listed host and path. Empty list: no web | N1, N1+ |
+| `web.redirect` | A redirect is followed only to a listed address, checked at every step | N2 |
+| `web.private` | Never a private, loopback, link-local or metadata address; connects to the address it checked | N3 |
+| `web.no-credentials` | No credential, cookie or auth header, whatever the agent asks | N4 |
+| `web.limits` | Size, time, content type, and fetches an hour | N5 |
+| `web.untrusted` | To the model only, marked untrusted; never posted; receipts hold no content | N6 |
+
+The checks run against a fake web: one server on loopback that plays every site, a fake DNS that
+answers what a check tells it, and a dial that reaches the server only for an address the fake DNS
+handed out as public. No check fetches from the internet. Each has something broken on purpose
+that turns it red:
+
+| Broken on purpose | Turns red |
+|---|---|
+| A door that decides a web call without the list | N1, N2 |
+| A fetcher that does not check a redirect | N2 |
+| A fetcher with no address check | N3 |
+| A fetcher that keeps cookies | N4 |
+| A fetcher with no limits | N5 |
+| A gate whose web tool fetches by itself instead of asking the door | N1+, N2 to N6 |
+| A gate that asks nobody | N1+, N2 to N6, with the other tool checks |
+
+The door's own tests (`lib/door/__tests__/web.test.ts`) cover the same with more cases: rebinding,
+a mixed DNS answer, IPv4 inside IPv6, the cloud metadata address, a ticket used twice or for another
+address, ask mode, a drip and a hang, content types.
+
+### Search, as a design
+
+Not built. This is the shape for switching search on later, kept small:
+
+- **One provider, called by the door with its own key.** The key lives with the door, like the
+  model key. The cell never sees it and never reaches the provider.
+- **Results are titles, addresses and snippets only**, marked untrusted like a page, and cut to a
+  size.
+- **A result is fetched only through `web_fetch`**, so only if its address is on the list. A second,
+  separate mode could let `web_fetch` reach any public address (every other check above still
+  applies); it would be its own switch, off by default, and an admin's choice.
+- **Its own class and rule** (`search`, `web.search`), its own count an hour, and receipts that
+  hold the query's length, not the query.
+
+It is left out here because no provider can be reached without a key, and this slice holds no key
+for the web.
 
 ## What was left out
 
@@ -260,6 +381,8 @@ Not built. The shape, so that nothing here has to change for it:
   a plain Docker volume has no size cap.
 - **Role-holders as approvers** (`approverRoles`). Still refused by `decide()`.
 - **Per-room tool lists**, code-exec, browser, MCP and memory tools.
+- **Web search** (see "Search, as a design"), a GitHub token, and web for Letta Code or the Claude
+  Agent SDK: like the other tools, the web tool is Pi's only.
 - **Limits in the rules record.** They are fixed numbers handed to the door and the cell at start.
 - **"Approve always".** Every call in `ask` mode needs its own yes.
 

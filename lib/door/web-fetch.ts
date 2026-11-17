@@ -34,7 +34,7 @@ export interface WebLimits {
   /** Fetches the door makes for one agent in an hour. */
   perHour: number
 }
-export const DEFAULT_WEB_LIMITS: WebLimits = { bodyBytes: 2_000_000, textBytes: 16_000, timeoutMs: 15_000, maxRedirects: 3, perHour: 60 }
+export const DEFAULT_WEB_LIMITS: WebLimits = { bodyBytes: 2_000_000, textBytes: 15_000, timeoutMs: 15_000, maxRedirects: 3, perHour: 60 }
 
 /** Every address a host name has. */
 export type Resolve = (host: string) => Promise<string[]>
@@ -87,11 +87,47 @@ export function isPublicAddress(ip: string): boolean {
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', mdash: '-', ndash: '-', hellip: '...', copy: '(c)' }
 
+const DROPPED = ['script', 'style', 'noscript', 'template', 'svg', 'iframe', 'object', 'head']
+
+/**
+ * Take out comments and the elements whose content is not text, in one pass from left to right.
+ * No regular expression with a backreference: on a page with many unclosed tags that would go
+ * back over the rest of the page for each one, and a page is untrusted.
+ */
+function dropNonText(html: string): string {
+  const lower = html.toLowerCase()
+  let out = ''
+  let at = 0
+  while (at < html.length) {
+    const lt = lower.indexOf('<', at)
+    if (lt === -1) { out += html.slice(at); break }
+    out += html.slice(at, lt)
+    if (lower.startsWith('<!--', lt)) {
+      const close = lower.indexOf('-->', lt + 4)
+      if (close === -1) break
+      out += ' '
+      at = close + 3
+      continue
+    }
+    const name = DROPPED.find((tag) => lower.startsWith(`<${tag}`, lt) && !/[a-z0-9-]/.test(lower[lt + tag.length + 1] ?? ''))
+    if (name) {
+      const close = lower.indexOf(`</${name}`, lt + 1)
+      if (close === -1) break
+      const end = lower.indexOf('>', close)
+      if (end === -1) break
+      out += ' '
+      at = end + 1
+      continue
+    }
+    out += '<'
+    at = lt + 1
+  }
+  return out
+}
+
 /** The readable text of a page: no script, style or markup, entities decoded, blank space folded. */
 export function htmlToText(html: string): string {
-  const text = html
-    .replace(/<!--[\s\S]*?(-->|$)/g, ' ')
-    .replace(/<(script|style|noscript|template|svg|iframe|object|head)\b[\s\S]*?(<\/\1\s*>|$)/gi, ' ')
+  const text = dropNonText(html)
     .replace(/<(br|hr)\b[^>]*>/gi, '\n')
     .replace(/<li\b[^>]*>/gi, '\n- ')
     .replace(/<\/(p|div|section|article|li|ul|ol|h[1-6]|tr|table|pre|blockquote|header|footer|nav|main)\s*>/gi, '\n')
@@ -103,7 +139,7 @@ export function htmlToText(html: string): string {
       }
       return ENTITIES[name.toLowerCase()] ?? whole
     })
-  return text.replace(/[ \t\f\v\r ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim()
+  return text.replace(/[ \t\f\v\r\u00a0]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
 /** Cut text to at most `max` bytes, on a character boundary. */
