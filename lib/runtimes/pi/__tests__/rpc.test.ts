@@ -2,7 +2,7 @@
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createLineDecoder } from '../../../door/framing.ts'
-import { createPiRpc, GATE_READY, type PiProcess } from '../rpc.ts'
+import { createPiRpc, DOOR_PREFIX, GATE_READY, type PiProcess } from '../rpc.ts'
 
 /**
  * A stand-in for the Pi child process: the test plays Pi's side by hand.
@@ -196,5 +196,38 @@ describe('Pi RPC pump', () => {
     pi.emit(assistant('partial'))
     pi.emit({ type: 'agent_settled', aborted: true })
     expect(await turn).toEqual({ text: '', aborted: true })
+  })
+})
+
+describe('the Pi RPC pump: the door\'s own tool', () => {
+  const ready = () => {
+    const pi = fakeProcess()
+    pi.announce()
+    return pi
+  }
+  it('[U:pi-rpc] an input dialog with the door prefix is put to the caller, and its answer is the reply', async () => {
+    const pi = ready()
+    const calls: unknown[] = []
+    createPiRpc(pi.proc, { onGate: async () => ({ allow: false }), onDoorTool: async (call) => { calls.push(call); return 'Saved.' } })
+    pi.emit({ type: 'extension_ui_request', id: 'd1', method: 'input', title: DOOR_PREFIX + JSON.stringify({ tool: 'memory_note', input: { file: 'room' }, callId: 'c1' }) })
+    await tick()
+    expect(calls).toEqual([{ tool: 'memory_note', input: { file: 'room' }, callId: 'c1' }])
+    expect(pi.sent).toEqual([{ type: 'extension_ui_response', id: 'd1', value: 'Saved.' }])
+  })
+  it('[U:pi-rpc] with no caller, an unreadable request or a throw, the reply says nothing was saved; other input dialogs are cancelled', async () => {
+    const pi = ready()
+    createPiRpc(pi.proc, { onGate: async () => ({ allow: false }) })
+    pi.emit({ type: 'extension_ui_request', id: 'd1', method: 'input', title: DOOR_PREFIX + '{}' })
+    pi.emit({ type: 'extension_ui_request', id: 'd2', method: 'input', title: 'Your name?' })
+    const other = ready()
+    createPiRpc(other.proc, { onGate: async () => ({ allow: false }), onDoorTool: async () => { throw new Error('x') } })
+    other.emit({ type: 'extension_ui_request', id: 'd3', method: 'input', title: DOOR_PREFIX + '{not json' })
+    other.emit({ type: 'extension_ui_request', id: 'd4', method: 'input', title: DOOR_PREFIX + '{}' })
+    await tick()
+    expect(pi.sent).toEqual([
+      { type: 'extension_ui_response', id: 'd1', value: 'Not saved: the door could not be asked.' },
+      { type: 'extension_ui_response', id: 'd2', cancelled: true },
+    ])
+    expect(other.sent.map((r) => (r as { value: string }).value)).toEqual(['Not saved: the door could not be asked.', 'Not saved: the door could not be asked.'])
   })
 })

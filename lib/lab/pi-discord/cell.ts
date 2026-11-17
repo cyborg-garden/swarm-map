@@ -121,7 +121,7 @@ export function renderCell(o: CellOptions): LiveFile {
   const name = `smlab-${o.nonce}`
   if (!PROJECT_NAME.test(name)) throw new RefusingToRun('F5', `not a lab nonce: ${o.nonce}`)
   if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
-  if (o.systemPrompt === '' || o.systemPrompt.length > 4000) throw new RefusingToRun('F5', 'not a system prompt')
+  if (o.systemPrompt === '' || o.systemPrompt.length > 16_000) throw new RefusingToRun('F5', 'not a system prompt')
   const kind = cellKind(o.harness)
   const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages(o.harness)
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }

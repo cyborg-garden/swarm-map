@@ -6,7 +6,7 @@
 //                 lines, send the turn.
 // Outbound order: is the turn still live and still allowed, redact, post,
 //                 receipt.
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { decide } from '../core/decide.ts'
 import type { Decision, Event, Facts, Principal } from '../core/events.ts'
 import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.ts'
@@ -14,6 +14,7 @@ import { validatePolicy } from '../core/policy/validate.ts'
 import type { PolicyRecord, SurfaceId, ToolClass } from '../core/policy/types.ts'
 import { callHash, DEFAULT_TOOL_LIMITS, shortHash, showInput } from '../core/tools/call.ts'
 import { readAnswer, readReaction, requestText, type Answer } from './approvals.ts'
+import { ASKED_TO_REMEMBER, type MemoryStore } from './memory.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
 import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
@@ -54,6 +55,11 @@ export interface DoorOptions {
   /** Test hook: never answer a tool request, to prove silence means no. */
   silentVerdicts?: boolean
   onUsage?: (turnId: string, usage: Usage) => void
+  /**
+   * Notes kept for each room, by the door (memory.ts). Left out, the agent keeps none: no notes
+   * are given, and a `memory` tool is refused. docs/lab/persona-memory.md.
+   */
+  memory?: MemoryStore
 }
 
 export interface Door {
@@ -131,6 +137,10 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   const roomKey = (e: ConnectorInbound): string => `${e.surface}:${e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id}`
   const botKey = (e: ConnectorInbound): string => ((policy.surfaces[e.surface]?.bots.ids ?? []).includes(e.sender.id) ? e.sender.id : '')
   const runOf = (e: ConnectorInbound): number => botRuns.get(roomKey(e))?.get(botKey(e)) ?? 0
+  // mem.notes: the notes each conversation was last given, by a hash of them, on the shim that is
+  // connected now. A conversation is given its room's notes when it starts and again when they change.
+  // A shim that connects again is a harness that may remember nothing, so it starts from none.
+  const notesGiven = new Map<string, string>()
 
   // idle() bookkeeping: messages being handled plus live turns.
   let busy = 0
@@ -295,10 +305,26 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
         kind: 'tool', surface: e.surface, room: e.room, actor: e.sender, toolClass, toolName, argsDigest: '',
       }, facts).verdict))
       .map(([toolName]) => toolName)
+    // mem.notes: this room's notes, read from disk now, so an edit or a wipe on the dashboard counts at once.
+    // Only this room's: the folder is the room's, and a thread reads its parent's.
+    let memory: string | undefined
+    if (opts.memory) {
+      let notes: string | undefined
+      try { notes = opts.memory.render(roomKey(e)) } catch { notes = undefined }
+      const key = notes === undefined ? '' : createHash('sha256').update(notes).digest('hex')
+      const before = notesGiven.get(sessionKey)
+      // Notes this conversation was given are gone: it starts again, so the harness holds nothing of them.
+      if (before !== undefined && before !== '' && key === '') {
+        shim.link.send({ t: 'reset', sessionKey })
+        receipt(about(e, 'inbound'), { verdict: 'deliver', rule: 'mem.notes', why: 'The notes for this room were removed, so the conversation was started again without them.' })
+      }
+      if (key !== '' && before !== key) memory = notes
+      notesGiven.set(sessionKey, key)
+    }
     const env: Envelope = {
       id: e.messageId, turnId, sessionKey, surface: e.surface, room: e.room,
       sender: { id: e.sender.id, display: e.sender.display, isBot: e.sender.isBot },
-      text, attachments: e.attachments, context: { observed: observed.drain(sessionKey) },
+      text, attachments: e.attachments, context: { observed: observed.drain(sessionKey), ...(memory === undefined ? {} : { memory }) },
       tools, whenBusy: 'queue', deadlineMs,
     }
     const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never }
@@ -423,6 +449,16 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (recent.length >= callsPerHour) return refuse('tools.limits', 'This conversation has made as many tool calls as it may in an hour.')
           toolCalls.set(turn.sessionKey, [...recent, Date.now()])
 
+          // mem.notes: the door's own tool. It runs here, on the host, and never in the cell: the cell
+          // carries the request and the answer, and the answer says what the door did.
+          if (toolClass === 'memory') {
+            if (d.verdict !== 'allow') return refuse('mem.notes', 'Notes are written or refused at once, never held for an admin.')
+            if (!opts.memory) return refuse('mem.notes', 'This agent keeps no notes.')
+            const done = opts.memory.apply(roomKey(e), msg.input, { speaker: { id: e.sender.id, display: e.sender.display }, asked: ASKED_TO_REMEMBER.test(e.text) })
+            receipt(tag, { verdict: done.ok ? 'allow' : 'deny', rule: 'mem.notes', why: done.ok ? 'A note for this room was written.' : 'A note for this room was refused.' }, `${note} result=${done.code}`)
+            link.send({ t: 'tool_verdict', callId: msg.callId, allow: done.ok, reason: done.message, ...(done.ok ? { hash } : {}) })
+            return
+          }
           if (d.verdict === 'allow') { receipt(tag, d, note); return verdict(true) }
 
           // priv.approval: hold the call, show it in the room, and wait for an admin.
@@ -481,6 +517,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     token: opts.brainToken, host: opts.brainHost, port: opts.brainPort,
     onShim: (link, caps) => {
       shim = { link, caps }
+      notesGiven.clear()
       link.onMessage((msg) => fromShim(link, caps, msg))
       link.onClose(() => { if (shim?.link === link) shim = undefined })
     },

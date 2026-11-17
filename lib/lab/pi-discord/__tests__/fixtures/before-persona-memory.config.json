@@ -1,0 +1,42 @@
+{
+  "$generated": "Written by Swarm Map from the rules record. Do not edit: it is written again on every save and every start.",
+  "agentId": "ember",
+  "persona": {
+    "name": "Ember",
+    "description": "Helps the team keep track of the garden beds."
+  },
+  "discord": {
+    "guildId": "100000000000000010",
+    "channelId": "100000000000000011",
+    "adminUserIds": [
+      "100000000000000012"
+    ],
+    "allowedUserIds": [
+      "100000000000000013"
+    ],
+    "allowedRoleIds": [],
+    "anyoneInChannel": false,
+    "mentionRequired": true,
+    "bots": "none",
+    "allowedBotIds": [],
+    "botLoopLimit": 4,
+    "readAllMessages": false
+  },
+  "budget": {
+    "monthlyUsd": 5
+  },
+  "tools": {
+    "enabled": [
+      "file_read",
+      "shell"
+    ],
+    "mode": {},
+    "approvalSeconds": 120
+  },
+  "model": {
+    "baseUrl": "https://model.example/v1",
+    "id": "provider/model",
+    "usdPerMTokIn": 1,
+    "usdPerMTokOut": 2
+  }
+}

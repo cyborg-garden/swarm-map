@@ -17,6 +17,7 @@ import path from 'node:path'
 import type { Envelope } from '../../door/protocol.ts'
 import { connectShim, type ShimClient } from '../../door/shim-client.ts'
 import { PI_CAPS } from './caps.ts'
+import { MEMORY_TOOL } from './cell/gate.ts'
 import { renderPrompt } from './preamble.ts'
 import { createPiRpc, type PiProcess, type PiRpc } from './rpc.ts'
 
@@ -57,9 +58,12 @@ export interface PiShim { close(): void }
  * a prompt that names a file as that file's contents, so one that does is
  * refused: the prompt is text, never a way to read something in the cell.
  */
+/** The longest system prompt handed to Pi: a persona of up to 8 KB, and what the launcher writes after it. */
+export const SYSTEM_PROMPT_MAX = 16_000
+
 export function systemPromptProblem(prompt: string, workDir: string): string | undefined {
   if (prompt === '') return 'the system prompt is empty'
-  if (prompt.length > 4000) return 'the system prompt is too long'
+  if (prompt.length > SYSTEM_PROMPT_MAX) return 'the system prompt is too long'
   if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(prompt)) return 'the system prompt is not plain text'
   if (existsSync(path.resolve(workDir, prompt))) return 'the system prompt names a file'
   return undefined
@@ -72,7 +76,9 @@ export function piArgs(o: { sessionDir: string; tools: string[]; gate: { path: s
     ...(o.resume ? ['--continue'] : []),
     '--provider', 'swarm', '--model', o.model,
     ...(o.systemPrompt !== undefined ? ['--system-prompt', o.systemPrompt] : []),
-    ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-builtin-tools']),
+    // --no-tools, not --no-builtin-tools: the gate registers the door's own tool, and Pi keeps a registered tool
+    // under --no-builtin-tools. A turn that is given no tool must not be able to call that one either.
+    ...(o.tools.length > 0 ? ['--tools', o.tools.join(',')] : ['--no-tools']),
     '--no-context-files', '--no-skills', '--no-mcp', '--no-extensions', '--no-prompt-templates',
     '-e', o.gate.path,
   ]
@@ -142,6 +148,13 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
         onGate: async (call) => {
           if (!live.turnId) return { allow: false }
           return client.requestTool(live.turnId, call.tool, call.input)
+        },
+        // The door's own tool. Only that one name is carried this way, and the door decides it like any other call.
+        onDoorTool: async (call) => {
+          if (call.tool !== MEMORY_TOOL) return 'Not saved: that is not one of the door\'s tools.'
+          if (!live.turnId) return 'Not saved: no turn is live.'
+          const answer = await client.requestTool(live.turnId, call.tool, call.input)
+          return answer.reason ?? (answer.allow ? 'Done.' : 'Not saved.')
         },
       }),
     }

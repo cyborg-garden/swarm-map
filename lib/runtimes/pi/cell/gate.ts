@@ -15,6 +15,12 @@
 //   4. If the call changed while it waited, it does not run.
 // And after a tool has run, its output is cut to a size before the model sees it.
 //
+// It also gives Pi one tool of the door's own: `memory_note`. That tool does
+// nothing in the cell. It hands the request to the door through the same
+// channel, as an `input` dialog, and gives the model the door's answer. The
+// door decides, checks, writes and receipts (lib/door/memory.ts). Pi only
+// declares it when the door lists it for a turn, like every other tool.
+//
 // When the session starts it says so on the same channel (GATE_READY). The
 // shim sends Pi no turn until it has seen that, so a Pi that came up without
 // this file loaded never gets a prompt, and so never calls a tool ungated.
@@ -45,7 +51,18 @@ interface PiContext {
   }
 }
 interface PiBlock { block: true; reason: string }
+interface PiDialogContext { hasUI: boolean; ui: { input(title: string, placeholder?: string, opts?: { timeout?: number }): Promise<string | undefined> } }
+interface PiToolResult { content: PiContent[]; details: Record<string, never> }
+export interface PiToolDefinition {
+  name: string
+  label: string
+  description: string
+  /** JSON Schema. Pi checks a call's arguments against it before anything runs. */
+  parameters: Record<string, unknown>
+  execute(toolCallId: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: PiDialogContext): Promise<PiToolResult>
+}
 export interface PiApi {
+  registerTool(tool: PiToolDefinition): void
   on(event: 'session_start', handler: (event: unknown, ctx: PiContext) => Promise<void>): void
   on(event: 'tool_call', handler: (event: PiToolCallEvent, ctx: PiContext) => Promise<PiBlock | undefined>): void
   on(event: 'tool_result', handler: (event: PiToolResultEvent, ctx: PiContext) => Promise<{ content: PiContent[] } | undefined>): void
@@ -54,6 +71,33 @@ export interface PiApi {
 // The same two strings as in ../rpc.ts.
 const GATE_PREFIX = 'swarm-gate:v1:'
 const GATE_READY = 'swarm-gate:v1:ready'
+// The same string as in ../rpc.ts: a request for one of the door's own tools.
+const DOOR_PREFIX = 'swarm-door:v1:'
+/** The door's tool for its notes. Same name as MEMORY_TOOL in lib/door/memory.ts. */
+export const MEMORY_TOOL = 'memory_note'
+
+/** What the model is told the tool is for. The rules it is held to are the door's. */
+export const MEMORY_TOOL_DEFINITION: Omit<PiToolDefinition, 'execute'> = {
+  name: MEMORY_TOOL,
+  label: 'Memory note',
+  description: [
+    'Ask the door to change the notes it keeps for this room. They are given back to you when a conversation starts, after a restart too.',
+    'file: room (about this room), people (about the person speaking, only when they asked you to remember), threads (what is still going on).',
+    'op: add a note, replace one (old is the exact note, text the new one), or remove one (old is the exact note).',
+    'One short line per note. Notes name nobody, and hold no secret: the door refuses those and says why. Everyone you talk to in this room may be told what is in these notes.',
+  ].join(' '),
+  parameters: {
+    type: 'object',
+    properties: {
+      file: { type: 'string', enum: ['room', 'people', 'threads'] },
+      op: { type: 'string', enum: ['add', 'replace', 'remove'] },
+      text: { type: 'string', description: 'The note, one line.' },
+      old: { type: 'string', description: 'The exact note to replace or remove.' },
+    },
+    required: ['file', 'op'],
+    additionalProperties: false,
+  },
+}
 
 /** Pi's tools that take a path. Every one of them names it `path`. */
 const FILE_TOOLS = new Set(['read', 'write', 'edit', 'ls', 'grep', 'find'])
@@ -88,12 +132,27 @@ function cut(text: string, max: number, keep: 'start' | 'end'): string {
  */
 export function createGate(parts: { confine: boolean; limits: boolean } = { confine: true, limits: true }): (pi: PiApi) => void {
   return (pi) => {
+    pi.registerTool({
+      ...MEMORY_TOOL_DEFINITION,
+      async execute(toolCallId, params, _signal, _onUpdate, ctx) {
+        const say = (text: string): PiToolResult => ({ content: [{ type: 'text', text }], details: {} })
+        try {
+          if (!ctx?.hasUI) return say('Not saved: there is no channel to the door.')
+          const answer = await ctx.ui.input(DOOR_PREFIX + JSON.stringify({ tool: MEMORY_TOOL, input: params, callId: toolCallId }), '', { timeout: setting('SWARM_GATE_TIMEOUT_MS', 30_000) })
+          return say(typeof answer === 'string' && answer !== '' ? answer : 'Not saved: the door did not answer.')
+        } catch {
+          return say('Not saved: the door could not be asked.')
+        }
+      },
+    })
     pi.on('session_start', async (_event, ctx) => {
       // If this cannot be said, the shim never sends a turn. That is the safe side.
       ctx.ui.notify(GATE_READY, 'info')
     })
     pi.on('tool_call', async (event, ctx) => {
       try {
+        // The door's own tool asks the door itself when it runs, and does nothing in the cell.
+        if (event.toolName === MEMORY_TOOL) return undefined
         if (!ctx.hasUI) return block('no channel to the sidecar')
         const input = event.input
         if (parts.confine && FILE_TOOLS.has(event.toolName)) {
