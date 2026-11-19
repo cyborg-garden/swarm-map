@@ -15,13 +15,13 @@ The first design used one bind-mounted unix socket per agent. It doesn't fit her
 
 - A socket crossing Docker Desktop's VM needs a host socket forwarder that depends
   on mount syntax and Desktop version, and a broker restart leaves a stale inode.
-- It needs a new mount on every agent, and new mounts have wedged the fleet before.
-- Agents share a VPN network namespace, so a network address can't identify one.
+- It needs a new mount on every agent, and adding a mount means recreating every container.
+- Agents can share a VPN network namespace, so a network address can't identify one.
 
 So the broker listens on `127.0.0.1:8799` and each agent proves who it is with a
 secret in its own home. No mount or compose change is needed. Containers reach the
-host's loopback through `host.docker.internal`, the same route as other host
-services, and the VPN firewall already allows it.
+host's loopback through `host.docker.internal`, the same route they use for Swarm Map
+and other host services.
 
 ## Files
 
@@ -40,7 +40,9 @@ In each agent's home: `github-broker.json` (URL and secret) and an empty
 
 ## Commands
 
-`ghkey` runs on the laptop. `ghkey install` puts it at `~/bin/ghkey`.
+`ghkey` runs on your own machine and reaches the host over SSH. Set `GHKEY_SSH_HOST` to
+the host's SSH name, and `GHKEY_DOWNLOADS` if your browser saves somewhere other than
+`~/Downloads`. `ghkey install` puts it at `~/bin/ghkey`.
 
 | Command | What it does |
 | --- | --- |
@@ -94,10 +96,11 @@ agent's `extraEnv`, and HSM refuses one in `extraEnv` for an agent already on th
 
 ## Rules worth knowing
 
-- `roll` never builds. If an image lacks the broker code it stops and asks for an
-  HSM rebuild, because a hand-run build blinds the drift check. A rebuild uses the
-  branch the build source is on (`fleet-live` on the Mini), so the code has to be
-  merged there first or the rebuild changes nothing.
+- `roll` never builds. If an image lacks the broker code it stops and asks for a
+  rebuild through Swarm Map, because a hand-run build hides the image's source
+  commit from the drift check. A rebuild uses whatever branch the build source has
+  checked out, so the broker code has to be merged into that branch first, or the
+  rebuild changes nothing.
 - `roll` checks git and gh as the `hermes` user with `HOME=/opt/data/home`, where
   agents really run them, against a private repo. Any failure restores the agent.
 - A broker failure doesn't fall back to App credentials in `.env`, so a broken setup
