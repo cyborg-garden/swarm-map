@@ -1,84 +1,87 @@
 # Migrating Existing Hermes Agents
 
-Already running Hermes agents? HSM can manage them — and optionally upgrade them to full multi-tenant with per-context memory isolation.
+Swarm Map can manage Hermes agents you already run.
+It can also move them to the multi-tenant fork, [hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt), which keeps a separate memory per group or DM.
 
-**Your existing data is never modified in place.** The import wizard creates a copy of your agent's data directory with the HSM patches applied. Your original stays untouched as a backup. If you don't like the result, just point back at your original.
+**Import never changes your data in place.** It copies the agent's data directory and applies Swarm Map's changes to the copy. Your original stays as a backup. If you don't like the result, point back at the original.
+
+There are three levels, from least to most change. Import (below) does levels 2 and 3 in one step.
 
 ## Running Without Docker?
 
-HSM's wizard deploys Docker containers, but if you're running Hermes bare-metal (via `hermes gateway` or `pip install`), you can still use HSM for fleet management. HSM discovers agents by scanning data directories — Docker is optional for monitoring. For the full multi-tenant upgrade, you have two paths:
+The wizard and Import deploy Docker containers.
+If you run Hermes bare-metal (`hermes gateway` or a `pip install`), you have two paths:
 
-1. **Stay bare-metal:** Apply the Tier 2 changes manually (env vars + plugins). Install the MT fork via `pip install -e ".[all]"` from the [hermes-agent-mt repo](https://github.com/cyborg-garden/hermes-agent-mt). Memory scoping works the same way regardless of deployment method.
-2. **Move to Docker:** The wizard containerizes your agent with security hardening. Your data directory is mounted as a volume — same files, just managed by Docker now.
+1. **Stay bare-metal.** Add the level 2 env vars and plugins by hand. Install the fork with `pip install -e ".[all]"` from the [hermes-agent-mt repo](https://github.com/cyborg-garden/hermes-agent-mt). Memory scoping works the same either way.
+2. **Move to Docker.** Import containerizes the agent with hardening. The data directory is mounted as a volume: the same files, now run by Docker.
 
-## Tier 1: Fleet Management (No Changes)
+## Level 1: Fleet Management (No Changes)
 
-If you just want to manage existing agents from the HSM dashboard:
+To see existing agents on the dashboard without changing them:
 
-1. Install HSM: `git clone ... && npm install && npm run seed && npm run dev`
-2. Go to Settings and set your **Hermes Directory** to the parent folder containing your compose files
-3. HSM auto-discovers running Hermes containers
+1. Install Swarm Map: `git clone ... && pnpm install && pnpm seed && pnpm dev`
+2. Open `/setup`. It looks for folders holding Hermes compose files. Select yours.
+3. Swarm Map lists the `hermes-*` containers defined in those compose files.
 
-You get: dashboard, logs, restart/rebuild, model cascade view, cost tracking.
+You get: the dashboard, logs, restart and rebuild, the model cascade view and cost tracking.
 
-You don't get: group policy enforcement, memory scoping, budget limits.
+You don't get: group policy, admin checks, memory scoping or budget limits.
 
-## Tier 2: HSM Integration (Plugin Install)
+## Level 2: Swarm Map Integration (Plugins)
 
-Add HSM-aware plugins to your existing agents without changing the Docker image.
+Add Swarm Map's plugins to an agent without changing its Docker image.
 
 ### What gets added
 
 | Component | Purpose |
 |-----------|---------|
-| `HSM_URL` env var | Agent phones home to HSM for group policy checks |
-| `HERMES_AGENT_NAME` env var | Identifies this agent in HSM |
-| `swarm_map_policy` plugin | Group approval, admin resolution, tool gating |
-| `boot_md` plugin | Startup checklist execution |
-| `lifecycle-notify` hook | Announces startup to home channel |
+| `HSM_URL` and `SWARM_MAP_POLICY_URL` env vars | Where the agent reaches Swarm Map for policy checks |
+| `HERMES_AGENT_NAME` env var | The agent's name in Swarm Map |
+| `swarm_map_policy` plugin | Admin resolution, admin-only approval tools, the public browser guard |
+| `person_memory`, `credential_redactor` plugins | The other plugins every new agent gets |
+| `lifecycle-notify` hook | Announces startup to the home channel |
+
+The list of what every agent gets is [`infra/artifacts.json`](../infra/artifacts.json).
 
 ### Manual steps
 
-Add to your agent's `.env`:
+Add to the agent's `.env`. Use Swarm Map's port (3000 unless you set `PORT`):
+
 ```bash
-# HSM integration
+# Swarm Map integration
 HSM_URL=http://host.docker.internal:3000
 SWARM_MAP_POLICY_URL=http://host.docker.internal:3000
 HERMES_AGENT_NAME=your-agent-name
-HERMES_MEMORY_SCOPE=channel
-
-# Security defaults (if not already set)
-HERMES_DM_POLICY=approved-only
-HERMES_APPROVAL_ADMIN_ONLY=true
 ```
 
-Copy the baseline plugins from HSM into your agent's data directory:
+Copy the plugins and hook from this repo into the agent's data directory:
+
 ```bash
-# From the hermes-swarm-map repo
 cp -r infra/templates/plugins/swarm_map_policy ~/.hermes-your-agent/plugins/
-cp -r infra/templates/plugins/boot_md ~/.hermes-your-agent/plugins/
+cp -r infra/templates/plugins/person_memory ~/.hermes-your-agent/plugins/
+cp -r infra/templates/plugins/credential_redactor ~/.hermes-your-agent/plugins/
 cp -r infra/templates/hooks/lifecycle-notify ~/.hermes-your-agent/hooks/
 ```
 
-Restart your agent. It will now check with HSM before responding in new groups.
+Then list the plugins under `plugins.enabled` in the agent's `config.yaml` and restart it.
+A copied plugin that is not listed there does not load.
 
-**Note:** Memory is still global at this tier. The upstream image doesn't support per-context isolation.
+**Note:** memory is still global at this level. The upstream image has no per-context memory.
 
-## Tier 3: Full Multi-Tenant (Image Switch)
+## Level 3: Full Multi-Tenant (Image Switch)
 
-Switch to the MT fork image for per-context memory isolation — the core feature.
+Switch to the fork's image to get a separate memory per group or DM.
 
-> **Canonical image path:** `ghcr.io/cyborg-garden/hermes-agent-mt:latest`. Use this one.
-> It is what the wizard deploys, what `lib/seed.ts` defaults to, and the only path we
-> publish to. If you have a compose file, script, or runbook pinning the image under any
-> other namespace, repoint it here.
+> **Image path:** `ghcr.io/cyborg-garden/hermes-agent-mt:latest`.
+> The wizard deploys it, `lib/seed.ts` defaults to it, and it is the only path the image is published to.
+> If a compose file, script or runbook pins the image under another namespace, change it to this one.
 
 ### What changes
 
 | Before | After |
 |--------|-------|
 | `nousresearch/hermes-agent:latest` | `ghcr.io/cyborg-garden/hermes-agent-mt:latest` |
-| Global memory (all conversations share one MEMORY.md) | Per-context memory (each group/DM gets its own) |
+| Global memory (all conversations share one MEMORY.md) | Per-context memory (each group or DM gets its own) |
 | No context ID sanitization | Path traversal protection on context IDs |
 
 ### Steps
@@ -91,74 +94,66 @@ Switch to the MT fork image for per-context memory isolation — the core featur
        # everything else stays the same
    ```
 
-2. Rebuild:
+2. Pull and restart:
    ```bash
    docker compose pull
    docker compose up -d
    ```
 
-That's it. Your data directory is mounted as a volume — nothing moves, nothing changes. The MT fork reads the same `config.yaml`, `.env`, `SOUL.md`, and `memories/` directory.
+The data directory is a mounted volume, so nothing moves. The fork reads the same `config.yaml`, `.env`, `SOUL.md` and `memories/` directory.
 
 ### What happens to existing memories
 
-- **Existing memories stay global** — they remain in `memories/MEMORY.md` and `memories/USER.md`
-- **New memories from group chats** go to `memories/contexts/{chat_id}/MEMORY.md`
-- **Reads merge both** — the agent sees global knowledge + context-specific knowledge
-- **No migration needed** — the merge happens automatically at runtime
+- **Existing memories stay global.** They remain in `memories/MEMORY.md` and `memories/USER.md`.
+- **New memories from group chats** go to `memories/contexts/{chat_id}/MEMORY.md`.
+- **Reads merge both.** The agent sees global knowledge plus what belongs to the current context.
+- **No migration step.** The merge happens at runtime.
 
 ### What happens to existing skills
 
-Nothing. Skills are stored in the data directory and loaded at runtime. The MT fork reads them the same way upstream does.
+Nothing. Skills live in the data directory and load at runtime. The fork reads them the same way upstream does.
 
-## Via HSM Import (Recommended)
+## Via Import (Recommended)
 
-The fastest path. From the HSM dashboard:
+The fastest path. On the **Harnesses** page:
 
-1. Click **Import** on the harnesses page
-2. Enter the path to your agent's data directory (e.g., `~/.hermes/` or `~/.hermes-myagent/`)
+1. Click **Import**
+2. Enter the path to the agent's data directory (for example `~/.hermes/` or `~/.hermes-myagent/`). It must hold a `.env` or a `config.yaml`.
 3. Give it a name
 
-HSM handles the rest automatically:
+Swarm Map then:
 
-- **Copies** your entire data directory to `~/.hermes-{name}/` — your original is never modified
-- **Appends** HSM env vars to the copy's `.env` (only adds what's missing, never overwrites)
-- **Installs** baseline plugins (swarm_map_policy, boot_md) and the OCR skill
-- **Writes** BOOT.md startup checklist (if not already present)
-- **Generates** a hardened Docker compose file with the MT fork image
-- **Registers** the agent in the dashboard
+- **Copies** the whole data directory to `~/.hermes-{name}/`. An agent named `personal` goes to `~/.hermes/`. The import stops if the destination already exists.
+- **Adds** missing vars to the copy's `.env`: `HSM_URL`, `SWARM_MAP_POLICY_URL`, `HERMES_AGENT_NAME`, and `*_REQUIRE_MENTION=true` for Signal, Telegram and Mattermost. It never overwrites a value you set, but it does fill an empty mention setting, because the runtime reads empty as "answer everything". A Discord agent without `DISCORD_THREAD_REQUIRE_MENTION` gets `true`.
+- **Installs** the base package: the plugins and hook above, plus the `session-handoff` and `garden-orientation` skills. Your own plugins, skills, persona and memory stay.
+- **Writes** a `BOOT.md` startup checklist, if there isn't one
+- **Generates** a hardened compose file for the fork's image, in Swarm Map's data folder under `compose/{name}/`
+- **Registers** the agent on the dashboard
 
-If anything goes wrong, your original directory is untouched. Delete `~/.hermes-{name}/` and you're back to where you started.
+If anything goes wrong, the original is untouched. Delete `~/.hermes-{name}/` and you're back where you started.
 
 ### What to back up first
 
-The import copies for you, but if you want extra safety:
+Import copies for you. For extra safety:
 
 ```bash
 cp -r ~/.hermes ~/hermes-backup-$(date +%Y%m%d)
 ```
 
-### What's preserved in the copy
+### What the copy keeps
 
-Everything:
-- `SOUL.md` (your personality)
+- `SOUL.md` (the persona)
 - `memories/` (all existing memories)
 - `skills/` (all your skills)
-- `config.yaml` (your model config — HSM adds sections, doesn't overwrite)
-- Custom plugins and hooks you've installed
-- `.env` secrets (HSM appends new vars, doesn't touch existing ones)
+- `config.yaml` (Swarm Map adds entries; it doesn't replace your model config)
+- Plugins and hooks you installed
+- `.env` secrets (Swarm Map adds vars; it doesn't change existing ones)
 
-### What's added
-
-- `HSM_URL` and `HERMES_AGENT_NAME` in `.env`
-- `swarm_map_policy` plugin (group policy enforcement)
-- `boot_md` plugin (startup checklist)
-- `lifecycle-notify` hook (startup notification)
-- `BOOT.md` (startup checklist content)
-- `ocr-and-documents` skill (PDF/image text extraction)
+One exception: a GitHub token broker secret (`github-broker.json`) is not copied, because it identifies the source agent. See [the token broker](../scripts/token-broker/README.md).
 
 ## Recommended: Opinionated Config
 
-While migrating, consider adding our production-tested defaults to your `config.yaml`:
+These are the values Swarm Map writes into `config.yaml` for a new agent ([`lib/templates/config-yaml.ts`](../lib/templates/config-yaml.ts)). Consider them for an imported one:
 
 ```yaml
 compression:
@@ -170,14 +165,15 @@ compression:
 memory:
   memory_enabled: true
   user_profile_enabled: true
-  memory_char_limit: 2200
+  memory_char_limit: 5000
+  user_char_limit: 2000
 
 session_reset:
   mode: both
   idle_minutes: 1440
-  at_hour: 4  # a UTC hour: Hermes containers run in UTC; use the UTC hour of your local 4am
+  at_hour: 4  # read as a UTC hour: Hermes containers run in UTC, so use the UTC hour of your local 4am
 
-group_sessions_per_user: true
+group_sessions_per_user: false  # one shared session per group; true gives each person their own
 
 agent:
   max_turns: 60
@@ -188,27 +184,27 @@ stt:
     model: "base"
 ```
 
-These prevent common production issues: runaway context length, unbounded token costs, and missing voice transcription.
+They keep context length and token costs bounded, and they turn on voice transcription.
 
 ## FAQ
 
 **Will my agent lose its personality?**
-No. Your SOUL.md is untouched. The MT fork reads it the same way.
+No. `SOUL.md` is copied as it is, and the fork reads it the same way.
 
 **Will my agent forget what it knows?**
-No. Existing memories stay in place. New group memories are written alongside them, not replacing them.
+No. Existing memories stay where they are. New group memories are written beside them.
 
 **Can I go back to upstream?**
-Yes. Switch the image back to `nousresearch/hermes-agent:latest`. Context-scoped memories will be ignored (but not deleted) — the agent reverts to global-only.
+Yes. Switch the image back to `nousresearch/hermes-agent:latest`. The agent ignores the per-context memories (they are not deleted) and uses global memory only.
 
 **Do I need to rebase anything?**
-No. If you're using the Docker image, it's a simple image swap. Your data directory is the same. No code merges needed.
+Not with the Docker image. It is an image swap, and the data directory stays the same.
 
 **What if I'm not using Docker?**
-Install the MT fork via pip: `pip install -e ".[all]"` from the [hermes-agent-mt repo](https://github.com/cyborg-garden/hermes-agent-mt). Your data directory works the same way — the fork reads the same config.yaml, SOUL.md, and memories. HSM can still manage your agent for monitoring and config, even without Docker.
+Install the fork with `pip install -e ".[all]"` from the [hermes-agent-mt repo](https://github.com/cyborg-garden/hermes-agent-mt). It reads the same `config.yaml`, `SOUL.md` and memories.
 
-**What if I customized the Hermes source code?**
-If you built from source with custom modifications, you'd need to rebase your changes onto the MT fork. The MT fork has 27 patches — mostly adapter improvements. Conflicts are typically minimal. See the [rebase journal](https://github.com/cyborg-garden/hermes-agent-mt) for guidance.
+**What if I changed the Hermes source code?**
+Rebase your changes onto the fork. Most of its patches are adapter changes. See the [hermes-agent-mt repo](https://github.com/cyborg-garden/hermes-agent-mt).
 
-**Will the import wizard modify my original files?**
-No. It copies your data directory to a new location and applies changes to the copy. Your original is never touched.
+**Will Import change my original files?**
+No. It copies the data directory and changes only the copy.

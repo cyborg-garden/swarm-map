@@ -8,27 +8,32 @@ Thanks for your interest in contributing. This guide covers setup, project struc
 
 ### Prerequisites
 
-- **Node.js 18+**
-- **npm** (ships with Node)
+- **Node.js 20.9 or newer** (Next.js 16 needs it). Door agent work needs 22.18 or newer.
+- **pnpm**
+- **Docker**, if you want to run agents. The tests don't need it.
+- **Python 3**, to run the sanitization gate locally.
 
 ### Install and run
 
 ```bash
 git clone https://github.com/cyborg-garden/swarm-map.git
 cd swarm-map
-npm install
-npm run dev
+pnpm install
+pnpm seed    # first run only
+pnpm dev
 ```
 
-The app runs at `http://localhost:3000`.
+The app runs at `http://localhost:3000`, or the next free port up to 3010.
 
 ### Run tests
 
 ```bash
-npx vitest run
+pnpm vitest run
 ```
 
-Tests use [Vitest](https://vitest.dev/) with `happy-dom` and `@testing-library/react`.
+Tests use [Vitest](https://vitest.dev/) with `jsdom` and `@testing-library/react`. They mock Docker and the filesystem, so no real containers are needed.
+
+The runtime conformance suite has its own scripts: `pnpm conformance`, and `pnpm conformance:docker` for the version that runs each harness in a sealed Docker cell. Build its images first with `pnpm conformance:docker:build`.
 
 ---
 
@@ -48,17 +53,25 @@ swarm-map/
 │   ├── shared/                 # Reusable components (modals, forms)
 │   ├── shell/                  # App shell (sidebar, header)
 │   ├── surfaces/               # Surface configuration (Telegram, Signal, etc.)
+│   ├── fleet/                  # Fleet table and status
 │   ├── ui/                     # Primitives (buttons, inputs, cards)
 │   └── wizard/                 # Setup wizard steps
 │
 ├── lib/                    # Core logic
 │   ├── services/               # Backend services (docker, config, encryption, etc.)
+│   ├── surfaces/               # Per-surface permission registry
+│   ├── core/                   # Door agents: the rule engine (decide)
+│   ├── door/                   # Door agents: the guard process
+│   ├── runtimes/               # Door agents: harness shims (pi, letta-code, claude-sdk)
 │   ├── hooks/                  # React hooks
 │   ├── __tests__/              # Unit tests
 │   ├── types.ts                # Shared TypeScript types
 │   ├── constants.ts            # App constants
 │   └── utils.ts                # Utility functions
 │
+├── conformance/            # Harness-neutral runtime conformance suite
+├── infra/                  # Agent templates, base package, signal-cli
+├── scripts/                # Sanitization gate, token broker, helpers
 └── bin/                    # Dev scripts
 ```
 
@@ -66,7 +79,7 @@ swarm-map/
 
 ## Code Style
 
-- **TypeScript** throughout — no `any` unless unavoidable.
+- **TypeScript** throughout. No `any` unless unavoidable.
 - **Tailwind CSS** for styling. Use `cn()` (from `lib/utils.ts`) for conditional classes.
 - **Server Components by default.** Only add `"use client"` when you need interactivity or browser APIs.
 - Keep components focused. If a file grows past ~200 lines, extract subcomponents.
@@ -87,10 +100,11 @@ docs/setup-instructions
 
 ### Before submitting
 
-1. Run tests: `npx vitest run`
-2. Run the linter: `npm run lint`
-3. Test manually in the browser — verify the UI flow you changed works end-to-end.
-4. Keep PRs focused: one logical change per PR.
+1. Run tests: `pnpm vitest run`
+2. Run the linter: `pnpm lint`
+3. Test manually in the browser. Check that the UI flow you changed works end to end.
+4. Run the sanitization gate on what you changed: `python scripts/check_sanitization.py --deterministic-only <files>`. CI runs both layers on every PR. See [the sanitization gate](docs/sanitization-gate.md).
+5. Keep PRs focused: one logical change per PR.
 
 ### PR description
 
