@@ -14,7 +14,7 @@ import os from 'os'
 // unchanged assignment writes nothing, and personal never received
 // CAPSOLVER_API_KEY. resync() rewrites an assigned key into its agents' .env.
 //
-// The layout below mirrors the Mini: personal's data dir is ~/.hermes, and a
+// The layout below mirrors a live host: personal's data dir is ~/.hermes, and a
 // stray ~/.hermes-personal/ exists beside it that no container mounts.
 describe('KeysService.resync()', () => {
   let tmpHome: string
@@ -50,19 +50,19 @@ describe('KeysService.resync()', () => {
     fs.rmSync(tmpStore, { recursive: true, force: true })
   })
 
-  // A key recorded as assigned to personal + nimbleco, with only nimbleco's
+  // A key recorded as assigned to personal + harbor, with only harbor's
   // .env carrying the right var. Personal holds the pre-#151 misnamed var.
   function seedDriftedFleet() {
     seedEnv(envFor('personal'), 'MATTERMOST_TOKEN=mm\nCUSTOM_API_KEY=' + CAP + '\n')
     seedEnv(path.join(tmpHome, '.hermes-personal', '.env'), 'STRAY=1\n')
-    seedEnv(envFor('nimbleco'), 'CAPSOLVER_API_KEY=' + CAP + '\n')
+    seedEnv(envFor('harbor'), 'CAPSOLVER_API_KEY=' + CAP + '\n')
     seedEnv(envFor('osint'), 'OTHER=1\n')
-    return keys.add({ provider: 'custom', name: 'capsolver', envVar: 'CAPSOLVER_API_KEY', value: CAP, assignedTo: ['h_personal', 'h_nimbleco'] })
+    return keys.add({ provider: 'custom', name: 'capsolver', envVar: 'CAPSOLVER_API_KEY', value: CAP, assignedTo: ['h_personal', 'h_harbor'] })
   }
 
   it('setAssignment() with an unchanged assignment cannot repair drift (why resync exists)', () => {
     const key = seedDriftedFleet()
-    expect(keys.setAssignment(key.id, ['h_personal', 'h_nimbleco'])).toEqual([])
+    expect(keys.setAssignment(key.id, ['h_personal', 'h_harbor'])).toEqual([])
     expect(readEnv(envFor('personal'))).not.toMatch(/^CAPSOLVER_API_KEY=/m)
   })
 
@@ -93,7 +93,7 @@ describe('KeysService.resync()', () => {
 
   it('does not rewrite an already-correct .env (no mtime churn)', () => {
     const key = seedDriftedFleet()
-    const p = envFor('nimbleco')
+    const p = envFor('harbor')
     const old = new Date('2026-01-01T00:00:00Z')
     fs.utimesSync(p, old, old)
     keys.resync(key.id)

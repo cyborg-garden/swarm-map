@@ -1,12 +1,12 @@
 /**
- * The real config.yaml shapes on the fleet (read on the Mini, 2026-09-22),
+ * The real config.yaml shapes on the fleet (read on a live host, 2026-09-22),
  * block style, with the surrounding keys a live file has. Both conventions
  * coexist:
  *
- *  - primary NOT repeated in fallback_providers (cyborg, matilde, iris —
+ *  - primary NOT repeated in fallback_providers (cyborg, matilde, heron —
  *    hand-edited, or written by `hermes fallback`)
- *  - primary repeated as fallback_providers[0] (cryptids/nimbleco/osint,
- *    blackhouse — saved by the HSM editor, which wrote that convention)
+ *  - primary repeated as fallback_providers[0] (badger/harbor/osint,
+ *    kestrel — saved by the HSM editor, which wrote that convention)
  *
  * The runtime reads the primary from model.provider / model.default and the
  * fallbacks from fallback_providers in order; a row identical to the current
@@ -64,8 +64,8 @@ export const MATILDE = [
   '',
 ].join('\n')
 
-/** cryptids / nimbleco / osint: HSM-saved, primary duplicated as row 0. */
-export const CRYPTIDS = [
+/** badger / harbor / osint: HSM-saved, primary duplicated as row 0. */
+export const BADGER = [
   'model:',
   '  provider: openrouter',
   '  default: z-ai/glm-5.3',
@@ -85,8 +85,8 @@ export const CRYPTIDS = [
   '',
 ].join('\n')
 
-/** blackhouse: duplicate only — the primary is the ONLY row. */
-export const BLACKHOUSE = [
+/** kestrel: duplicate only — the primary is the ONLY row. */
+export const KESTREL = [
   'model:',
   '  provider: openrouter',
   '  default: z-ai/glm-5.2',
@@ -99,7 +99,7 @@ export const BLACKHOUSE = [
   '',
 ].join('\n')
 
-export const IRIS = [
+export const HERON = [
   'model:',
   '  provider: openrouter',
   '  default: z-ai/glm-5.3',
@@ -138,4 +138,4 @@ export const P2 = [
   '',
 ].join('\n')
 
-export const FLEET_SHAPES: Record<string, string> = { cyborg: CYBORG, matilde: MATILDE, cryptids: CRYPTIDS, blackhouse: BLACKHOUSE, iris: IRIS, p2: P2 }
+export const FLEET_SHAPES: Record<string, string> = { cyborg: CYBORG, matilde: MATILDE, badger: BADGER, kestrel: KESTREL, heron: HERON, p2: P2 }

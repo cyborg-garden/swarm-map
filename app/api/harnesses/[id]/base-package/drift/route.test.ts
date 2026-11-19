@@ -15,10 +15,10 @@ describe('GET /api/harnesses/:id/base-package/drift', () => {
 
   it('returns the report and never calls sync (report-only)', async () => {
     ;(services.harness.basePackageDrift as any).mockReturnValue({ ok: false, findings: [{ id: 'required-key-missing' }] })
-    const res = await GET(new Request('http://localhost/x'), params('h_cyborg_public'))
+    const res = await GET(new Request('http://localhost/x'), params('h_public_bot'))
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ ok: false })
-    expect(services.harness.basePackageDrift).toHaveBeenCalledWith('h_cyborg_public', services.keys)
+    expect(services.harness.basePackageDrift).toHaveBeenCalledWith('h_public_bot', services.keys)
     expect(services.harness.syncArtifacts).not.toHaveBeenCalled()
   })
 

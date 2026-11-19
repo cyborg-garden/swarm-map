@@ -676,7 +676,7 @@ describe('extraEnv on an agent on the GitHub broker', () => {
 
   it.each(['GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'GITHUB_APP_PRIVATE_KEY_B64'])('refuses %s, whatever it holds', (name) => {
     expect(validateExtraEnv({ [name]: 'x' }, marked)).toMatch(/GitHub token broker/)
-    expect(() => generateStandaloneCompose('mare', 3000, marked, { extraEnv: { [name]: 'x' } })).toThrow(/GitHub token broker/)
+    expect(() => generateStandaloneCompose('wren', 3000, marked, { extraEnv: { [name]: 'x' } })).toThrow(/GitHub token broker/)
   })
 
   it('refuses a GitHub token under any name, and does not print it', () => {
@@ -691,7 +691,7 @@ describe('extraEnv on an agent on the GitHub broker', () => {
   })
 
   it('leaves other variables and agents not on the broker alone', () => {
-    expect(validateExtraEnv({ IRIS_INTAKE_DIR: '/opt/x' }, marked)).toBeNull()
+    expect(validateExtraEnv({ HERON_INTAKE_DIR: '/opt/x' }, marked)).toBeNull()
     expect(validateExtraEnv({ GH_TOKEN: 'x' }, plain)).toBeNull()
     expect(validateExtraEnv({ GH_TOKEN: 'x' })).toBeNull()
   })

@@ -88,7 +88,7 @@ describe('surface connect — applies env by recreating the container', () => {
     // Signal connect runs a pre-flight daemon health check via fetch.
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ result: [] }) })))
 
-    const req = new Request('http://localhost/api/harnesses/h_nimbleco/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_harbor/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({
         platform: 'signal',
@@ -96,7 +96,7 @@ describe('surface connect — applies env by recreating the container', () => {
       }),
     })
 
-    const res = await POST(req, makeParams('h_nimbleco'))
+    const res = await POST(req, makeParams('h_harbor'))
     expect(res.status).toBe(200)
 
     // Target the .env write — connect now also writes config.yaml afterwards.
@@ -109,16 +109,16 @@ describe('surface connect — applies env by recreating the container', () => {
 
   it('resolves telegram @handles to numeric IDs and normalizes multiple admins', async () => {
     resolveTelegramUsernameMock.mockResolvedValue({
-      display: '@juniper',
+      display: '@operator',
       nativeId: '424242',
-      profileName: 'Juniper',
+      profileName: 'Operator',
     })
 
     const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({
         platform: 'telegram',
-        config: { token: 'new-bot-token', adminUser: '123456789, @juniper' },
+        config: { token: 'new-bot-token', adminUser: '123456789, @operator' },
       }),
     })
 
@@ -126,7 +126,7 @@ describe('surface connect — applies env by recreating the container', () => {
     expect(res.status).toBe(200)
 
     // The token from the request payload is used (the .env may not have it yet).
-    expect(resolveTelegramUsernameMock).toHaveBeenCalledWith('h_seraph', '@juniper', 'new-bot-token')
+    expect(resolveTelegramUsernameMock).toHaveBeenCalledWith('h_seraph', '@operator', 'new-bot-token')
 
     // Numeric IDs only in the env — never a raw @handle.
     const envCall = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
@@ -137,7 +137,7 @@ describe('surface connect — applies env by recreating the container', () => {
     expect(resolvedCall).toBeTruthy()
     expect(JSON.parse(resolvedCall![1] as string).telegram).toEqual([
       { display: '123456789', nativeId: '123456789' },
-      { display: '@juniper', nativeId: '424242', profileName: 'Juniper' },
+      { display: '@operator', nativeId: '424242', profileName: 'Operator' },
     ])
 
     // Policy-plane overlay kept converged with the allowlist just written.

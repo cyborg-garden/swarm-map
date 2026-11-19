@@ -23,12 +23,12 @@ beforeEach(() => {
 describe('POST /api/surfaces/signal/profile', () => {
   it('calls updateProfile with account + given-name', async () => {
     callSignalRpcMock.mockResolvedValueOnce({ result: {} })
-    const res = await POST(req({ phone: '+15551234567', displayName: 'Cryptids Hermes' }))
+    const res = await POST(req({ phone: '+15551234567', displayName: 'Badger Hermes' }))
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ success: true })
     expect(callSignalRpcMock).toHaveBeenCalledWith('updateProfile', {
       account: '+15551234567',
-      'given-name': 'Cryptids Hermes',
+      'given-name': 'Badger Hermes',
     })
   })
 

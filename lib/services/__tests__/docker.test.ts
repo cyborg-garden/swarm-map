@@ -207,7 +207,7 @@ describe('DockerService', () => {
       return Buffer.from('true|running|3|2026-06-18T23:10:59Z')
     })
 
-    const state = docker.inspectState('hermes-nimbleco')
+    const state = docker.inspectState('hermes-harbor')
     expect(state).not.toBeNull()
     expect(state).toEqual({
       running: true,
@@ -451,14 +451,14 @@ describe('DockerService', () => {
   describe('diffContainer', () => {
     it('returns docker diff lines via an argv array (no shell)', async () => {
       mockExecFileAsync.mockResolvedValueOnce({
-        stdout: 'C /opt\nA /opt/iris\nC /opt/hermes/agent/tools.py\n',
+        stdout: 'C /opt\nA /opt/heron\nC /opt/hermes/agent/tools.py\n',
         stderr: '',
       })
-      const lines = await docker.diffContainer('hermes-iris')
-      expect(lines).toEqual(['C /opt', 'A /opt/iris', 'C /opt/hermes/agent/tools.py'])
+      const lines = await docker.diffContainer('hermes-heron')
+      expect(lines).toEqual(['C /opt', 'A /opt/heron', 'C /opt/hermes/agent/tools.py'])
       const [file, argv] = mockExecFileAsync.mock.calls[0]
       expect(file).toBe('docker')
-      expect(argv).toEqual(['diff', 'hermes-iris'])
+      expect(argv).toEqual(['diff', 'hermes-heron'])
     })
 
     it('returns [] when docker fails rather than throwing into the sweep', async () => {

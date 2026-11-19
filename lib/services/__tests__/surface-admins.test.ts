@@ -291,7 +291,7 @@ describe('SurfaceAdminService.syncFromAllowlist — store convergence', () => {
     storage.write('harnesses.json', [
       { id: 'h_seraph', surfaceAdmins: { telegram: ['999'] } },
     ])
-    svc.syncFromAllowlist('h_seraph', 'telegram', ['@juniper', '111', '*', '111'])
+    svc.syncFromAllowlist('h_seraph', 'telegram', ['@operator', '111', '*', '111'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
     expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.telegram).toEqual(['111'])
   })
@@ -445,15 +445,15 @@ describe('SurfaceAdminService.isGroupAllowed', () => {
   })
 })
 
-// Ids that exist on the Mini (ls ~/.hermes-* + docker ps, 2026-10-22), the
+// Every harness id shape seen on a live host (ls ~/.hermes-* + docker ps), the
 // bare slug the policy plugin sends, and a Letta id from deploy-route tests.
 const REAL_IDS = [
-  'h_personal', 'h_cyborg', 'h_cyborg_public', 'h_evil_duck', 'h_garden_admin',
-  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'cyborg-public', 'h_letta_server',
+  'h_personal', 'h_cyborg', 'h_public_bot', 'h_grey_duck', 'h_site_admin',
+  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'public-bot', 'h_letta_server',
   'h_letta_agent-xyz', 'h_letta_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
 ]
 const TRAVERSAL_IDS = [
-  'x/../.hermes-cryptids', '../.hermes-cryptids', '..', '.', '', 'h_a/b', 'h_a\\b',
+  'x/../.hermes-badger', '../.hermes-badger', '..', '.', '', 'h_a/b', 'h_a\\b',
   'h_a.b', '_h', '-h', 'h_a\n', 'h_a b', 'h_%2e%2e', 'h_' + 'a'.repeat(200),
 ]
 
@@ -467,9 +467,9 @@ describe('isValidHarnessId', () => {
     expect(isValidHarnessId(42)).toBe(false)
   })
   it('agentDataDir throws instead of resolving outside ~/.hermes-*', () => {
-    expect(() => agentDataDir('x/../.hermes-cryptids')).toThrow('Invalid harness id')
+    expect(() => agentDataDir('x/../.hermes-badger')).toThrow('Invalid harness id')
     expect(agentDataDir('h_personal')).toBe(path.join(home, '.hermes'))
-    expect(agentDataDir('h_evil_duck')).toBe(path.join(home, '.hermes-evil-duck'))
+    expect(agentDataDir('h_grey_duck')).toBe(path.join(home, '.hermes-grey-duck'))
   })
 })
 
@@ -488,9 +488,9 @@ describe('sanitizeGroupId', () => {
 describe('traversal ids on the agent-callable paths', () => {
   it('approveGroupInvite 400s and isGroupAllowed fails closed for a traversal id', () => {
     // A real agent .env one level up from the would-be traversal target.
-    writeAgentEnv('cryptids', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n')
+    writeAgentEnv('badger', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n')
     fs.mkdirSync(path.join(home, '.hermes-x'), { recursive: true })
-    const evil = 'x/../.hermes-cryptids'
+    const evil = 'x/../.hermes-badger'
     expect(svc.isGroupAllowed(evil, 'telegram', '-100')).toBe(false)
     expect(svc.approveGroupInvite(evil, 'telegram', '-100', '111')).toMatchObject({
       ok: false, status: 400, error: 'Invalid harness id',
@@ -811,10 +811,10 @@ describe('SurfaceAdminService — every kind of agent on a fleet still resolves'
   }
 
   it.each([
-    ['mare', 'h_mare'],
-    ['h_mare', 'h_mare'],
-    ['garden-admin', 'h_garden_admin'],
-    ['h_garden_admin', 'h_garden_admin'],
+    ['wren', 'h_wren'],
+    ['h_wren', 'h_wren'],
+    ['site-admin', 'h_site_admin'],
+    ['h_site_admin', 'h_site_admin'],
   ])('a stored row with a name: %s', (id, storedId) => {
     const name = storedId.replace(/^h_/, '').replace(/_/g, '-')
     writeAgentEnv(name, ENV)
@@ -834,17 +834,17 @@ describe('SurfaceAdminService — every kind of agent on a fleet still resolves'
   })
 
   it.each([
-    ['evil-duck', 'h_evil_duck'],
-    ['h_evil_duck', 'h_evil_duck'],
+    ['grey-duck', 'h_grey_duck'],
+    ['h_grey_duck', 'h_grey_duck'],
     ['seraph-doer', 'h_seraph_doer'],
     ['egregore', 'h_egregore'],
   ])('a running agent with no stored row: %s', (id, storedId) => {
     const name = storedId.replace(/^h_/, '').replace(/_/g, '-')
     writeAgentEnv(name, ENV)
     // Other agents have rows; this one does not.
-    storage.write('harnesses.json', [{ id: 'h_mare', name: 'mare' }, { id: 'h_personal', name: null }])
+    storage.write('harnesses.json', [{ id: 'h_wren', name: 'wren' }, { id: 'h_personal', name: null }])
     expectWorks(id, storedId, `.hermes-${name}`)
-    expect(storage.read<Array<{ id: string }>>('harnesses.json', []).map((h) => h.id)).toEqual(['h_mare', 'h_personal'])
+    expect(storage.read<Array<{ id: string }>>('harnesses.json', []).map((h) => h.id)).toEqual(['h_wren', 'h_personal'])
   })
 
   it('an explicit admin list on a null-name row is found by the slug', () => {

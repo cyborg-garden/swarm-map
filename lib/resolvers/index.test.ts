@@ -49,7 +49,7 @@ describe('expandSignalAllowlist', () => {
       nativeId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     })
 
-    const result = await expandSignalAllowlist('h_nimbleco', ['+15550001234'])
+    const result = await expandSignalAllowlist('h_harbor', ['+15550001234'])
 
     expect(result).toEqual([
       '+15550001234',
@@ -58,7 +58,7 @@ describe('expandSignalAllowlist', () => {
   })
 
   it('passes a UUID entry through without resolving', async () => {
-    const result = await expandSignalAllowlist('h_nimbleco', [
+    const result = await expandSignalAllowlist('h_harbor', [
       'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     ])
 
@@ -67,7 +67,7 @@ describe('expandSignalAllowlist', () => {
   })
 
   it('passes the "*" wildcard through untouched', async () => {
-    const result = await expandSignalAllowlist('h_nimbleco', ['*'])
+    const result = await expandSignalAllowlist('h_harbor', ['*'])
 
     expect(result).toEqual(['*'])
     expect(mockResolve).not.toHaveBeenCalled()
@@ -76,7 +76,7 @@ describe('expandSignalAllowlist', () => {
   it('keeps the phone number when resolution fails', async () => {
     mockResolve.mockResolvedValue(null)
 
-    const result = await expandSignalAllowlist('h_nimbleco', ['+15550001234'])
+    const result = await expandSignalAllowlist('h_harbor', ['+15550001234'])
 
     expect(result).toEqual(['+15550001234'])
   })
@@ -87,7 +87,7 @@ describe('expandSignalAllowlist', () => {
       nativeId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     })
 
-    const result = await expandSignalAllowlist('h_nimbleco', [
+    const result = await expandSignalAllowlist('h_harbor', [
       '+15550001234',
       'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
     ])
@@ -116,17 +116,17 @@ describe('resolveTelegramAdmins (strict — connect path)', () => {
   })
 
   it('resolves @usernames to numeric IDs, passing the explicit bot token through', async () => {
-    mockTgResolve.mockResolvedValue({ display: '@juniper', nativeId: '424242', profileName: 'Juniper' })
-    const result = await resolveTelegramAdmins('h_x', ['111', ' @juniper '], 'tok:abc')
+    mockTgResolve.mockResolvedValue({ display: '@operator', nativeId: '424242', profileName: 'Operator' })
+    const result = await resolveTelegramAdmins('h_x', ['111', ' @operator '], 'tok:abc')
     expect(result).toEqual({
       ok: true,
       ids: ['111', '424242'],
       resolved: [
         { display: '111', nativeId: '111' },
-        { display: '@juniper', nativeId: '424242', profileName: 'Juniper' },
+        { display: '@operator', nativeId: '424242', profileName: 'Operator' },
       ],
     })
-    expect(mockTgResolve).toHaveBeenCalledWith('h_x', '@juniper', 'tok:abc')
+    expect(mockTgResolve).toHaveBeenCalledWith('h_x', '@operator', 'tok:abc')
   })
 
   it('fails (never stores the raw handle) when a handle does not resolve', async () => {
@@ -152,8 +152,8 @@ describe('expandTelegramAllowlist (best-effort — settings path)', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('expands an @username entry to include its resolved numeric ID', async () => {
-    mockTgResolve.mockResolvedValue({ display: '@juniper', nativeId: '424242' })
-    expect(await expandTelegramAllowlist('h_x', ['@juniper'])).toEqual(['@juniper', '424242'])
+    mockTgResolve.mockResolvedValue({ display: '@operator', nativeId: '424242' })
+    expect(await expandTelegramAllowlist('h_x', ['@operator'])).toEqual(['@operator', '424242'])
   })
 
   it('passes numeric IDs and the "*" wildcard through without resolving', async () => {
@@ -167,8 +167,8 @@ describe('expandTelegramAllowlist (best-effort — settings path)', () => {
   })
 
   it('does not duplicate an ID already present in the list', async () => {
-    mockTgResolve.mockResolvedValue({ display: '@juniper', nativeId: '424242' })
-    expect(await expandTelegramAllowlist('h_x', ['@juniper', '424242'])).toEqual(['@juniper', '424242'])
+    mockTgResolve.mockResolvedValue({ display: '@operator', nativeId: '424242' })
+    expect(await expandTelegramAllowlist('h_x', ['@operator', '424242'])).toEqual(['@operator', '424242'])
   })
 
   it('sends an over-long numeric (21 digits — outside the canonical bound) to resolution, keeping it raw on failure', async () => {
@@ -230,8 +230,8 @@ describe('resolveIdentifier — native-id skips agree with registry.identity.nat
     })
     expect(mockMmResolve).not.toHaveBeenCalled()
     mockMmResolve.mockResolvedValue(null)
-    await resolveIdentifier('h_x', 'mattermost', 'juniper')
-    expect(mockMmResolve).toHaveBeenCalledWith('h_x', 'juniper')
+    await resolveIdentifier('h_x', 'mattermost', 'operator')
+    expect(mockMmResolve).toHaveBeenCalledWith('h_x', 'operator')
   })
 
   it('signal: a full canonical UUID skips (any case); a phone still resolves', async () => {

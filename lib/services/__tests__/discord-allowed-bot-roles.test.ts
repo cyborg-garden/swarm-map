@@ -83,11 +83,11 @@ describe('fleet sync + posture', () => {
   let home: string
   const dir = (n: string) => path.join(home, `.hermes-${n}`)
   const envOf = (n: string) => fs.readFileSync(path.join(dir(n), '.env'), 'utf-8')
-  const targets = () => ['iris', 'mare', 'personal', 'gone'].map((name) => ({ name, dataDir: dir(name) }))
+  const targets = () => ['heron', 'wren', 'personal', 'gone'].map((name) => ({ name, dataDir: dir(name) }))
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-roles-'))
-    for (const n of ['iris', 'mare']) {
+    for (const n of ['heron', 'wren']) {
       fs.mkdirSync(dir(n), { recursive: true })
       fs.writeFileSync(path.join(dir(n), '.env'), BASE, { mode: 0o600 })
     }
@@ -101,26 +101,26 @@ describe('fleet sync + posture', () => {
 
   it('writes Discord agents only, keeps the .env mode, and is idempotent', () => {
     const r = syncDiscordAllowedBotRoles(targets(), [ROLE])
-    expect(r.updated).toEqual(['iris', 'mare'])
+    expect(r.updated).toEqual(['heron', 'wren'])
     expect(r.skipped).toEqual([{ name: 'personal', reason: 'no-discord' }, { name: 'gone', reason: 'no-env' }])
-    expect(envOf('iris')).toContain(`${DISCORD_ALLOWED_BOT_ROLES_VAR}=${ROLE}`)
+    expect(envOf('heron')).toContain(`${DISCORD_ALLOWED_BOT_ROLES_VAR}=${ROLE}`)
     expect(envOf('personal')).toBe('SIGNAL_ACCOUNT=+1\n')
-    expect(fs.statSync(path.join(dir('iris'), '.env')).mode & 0o777).toBe(0o600)
-    expect(syncDiscordAllowedBotRoles(targets(), [ROLE]).unchanged).toEqual(['iris', 'mare'])
+    expect(fs.statSync(path.join(dir('heron'), '.env')).mode & 0o777).toBe(0o600)
+    expect(syncDiscordAllowedBotRoles(targets(), [ROLE]).unchanged).toEqual(['heron', 'wren'])
   })
 
   it('never throws on a bad list; reports every agent as failed instead', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const r = syncDiscordAllowedBotRoles(targets(), ['nope'])
-    expect(r.failed).toEqual(['iris', 'mare'])
-    expect(envOf('iris')).toBe(BASE)
+    expect(r.failed).toEqual(['heron', 'wren'])
+    expect(envOf('heron')).toBe(BASE)
   })
 
   it('posture reports drift and allow_bots without writing', () => {
     const p = discordAllowedBotRolesPosture(targets(), [ROLE])
-    expect(p.drift).toEqual(['iris', 'mare'])
-    expect(p.agents[0]).toEqual({ name: 'iris', status: 'drift', roles: [], allowBots: 'mentions' })
-    expect(envOf('iris')).toBe(BASE)
+    expect(p.drift).toEqual(['heron', 'wren'])
+    expect(p.agents[0]).toEqual({ name: 'heron', status: 'drift', roles: [], allowBots: 'mentions' })
+    expect(envOf('heron')).toBe(BASE)
     expect(discordAllowedBotRolesPosture(targets(), null).agents.every((a) => a.status === 'unmanaged')).toBe(true)
   })
 })

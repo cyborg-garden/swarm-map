@@ -30,7 +30,7 @@ const keys: Key[] = [
 
 const harnessNames = (ids: string[]): string =>
   ids
-    .map((id) => ({ h1: 'matilde', h2: 'mare', h3: 'hermes-prime' }[id] ?? id))
+    .map((id) => ({ h1: 'matilde', h2: 'wren', h3: 'hermes-prime' }[id] ?? id))
     .join(', ')
 
 describe('filterKeys', () => {

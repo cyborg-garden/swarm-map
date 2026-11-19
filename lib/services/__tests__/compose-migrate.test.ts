@@ -7,7 +7,7 @@ import {
 } from '@/lib/services/harness-compose'
 import { generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 
-// Pre-PR2 fixtures: what real compose files on the Mini look like TODAY
+// Pre-PR2 fixtures: what real compose files on a live host look like TODAY
 // (generated before the init-service era). The transform must migrate these
 // without regenerating them.
 

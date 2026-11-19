@@ -228,7 +228,7 @@ describe('useSurfaceRegister — telegram', () => {
     )
     act(() => {
       result.current.setToken('123456:ABCdef')
-      result.current.setAdminUser('123456789, @juniper')
+      result.current.setAdminUser('123456789, @operator')
     })
     await act(async () => { await result.current.verify() })
     expect(result.current.step).toBe('verified')
@@ -242,7 +242,7 @@ describe('useSurfaceRegister — telegram', () => {
     expect(body.platform).toBe('telegram')
     // Multiple admins ride as a comma-separated adminUser; the connect route
     // splits, resolves @handles, and normalizes to numeric IDs server-side.
-    expect(body.config).toMatchObject({ token: '123456:ABCdef', adminUser: '123456789, @juniper' })
+    expect(body.config).toMatchObject({ token: '123456:ABCdef', adminUser: '123456789, @operator' })
     expect(onConnected).toHaveBeenCalled()
   })
 

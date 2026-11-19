@@ -50,8 +50,8 @@ import {
   vpnProjectName,
 } from '@/lib/services/shared-vpn'
 
-const NAME = 'vera'
-const ID = 'h_vera'
+const NAME = 'otter'
+const ID = 'h_otter'
 const PORT = 8722
 
 function params() {
@@ -434,7 +434,7 @@ describe('Settings PUT — shared VPN', () => {
   it('a hand-made network_mode is reported off and left alone by an unrelated save', async () => {
     const handMade = readCompose().replace(
       '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
-      '    network_mode: "container:gluetun-vera"\n',
+      '    network_mode: "container:gluetun-otter"\n',
     )
     writeAgent(handMade)
     const got = await (await GET(new Request('http://x'), params())).json()
@@ -447,7 +447,7 @@ describe('Settings PUT — shared VPN', () => {
   it('a hand-made network_mode refuses an explicit turn-on (migrate it first)', async () => {
     const handMade = readCompose().replace(
       '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
-      '    network_mode: "container:gluetun-vera"\n',
+      '    network_mode: "container:gluetun-otter"\n',
     )
     writeAgent(handMade)
     const res = await PUT(put({ ...BASE, sharedVpn: 'private' }), params())
@@ -483,7 +483,7 @@ describe('Settings PUT — shared VPN', () => {
     it('a resources regeneration REFUSES rather than drop a hand-made network_mode', async () => {
       const handMade = readCompose().replace(
         '    extra_hosts:\n      - "host.docker.internal:host-gateway"\n',
-        '    network_mode: "container:gluetun-vera"\n',
+        '    network_mode: "container:gluetun-otter"\n',
       )
       writeAgent(handMade)
       const res = await PUT(put({ ...BASE, resources: { memory: '4G' } }), params())

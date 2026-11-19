@@ -40,11 +40,11 @@ const REPORT = {
   enabled: true,
   mode: 'notify',
   harnesses: [
-    { id: 'h_iris', name: 'iris', entries: [
+    { id: 'h_heron', name: 'heron', entries: [
       { provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', kind: 'version' },
       { provider: 'anthropic', model: 'claude-sonnet-4-6', tracked: false, retired: false },
     ] },
-    { id: 'h_mare', name: 'mare', entries: [
+    { id: 'h_wren', name: 'wren', entries: [
       { provider: 'anthropic', model: 'claude-3-opus', tracked: false, retired: true, successor: 'claude-opus-4-7', kind: 'version', applied: true },
       { provider: 'openrouter', model: 'meta/llama-3', tracked: false, retired: false, successor: 'meta/llama-4', blocked: 'price-ceiling' },
     ] },
@@ -135,10 +135,10 @@ describe('ModelUpdatesCard — report', () => {
     const list = await screen.findByRole('list', { name: /pending model updates/i })
     const items = within(list).getAllByRole('listitem')
     expect(items).toHaveLength(2)
-    expect(items[0]).toHaveTextContent('iris')
+    expect(items[0]).toHaveTextContent('heron')
     expect(items[0]).toHaveTextContent('z-ai/glm-5.2')
     expect(items[0]).toHaveTextContent('z-ai/glm-5.3')
-    expect(items[1]).toHaveTextContent('mare')
+    expect(items[1]).toHaveTextContent('wren')
     expect(items[1]).toHaveTextContent('meta/llama-4')
     expect(items[1]).toHaveTextContent(/price-ceiling/)
     expect(screen.queryByText('claude-opus-4-7')).toBeNull()
@@ -173,8 +173,8 @@ describe('ModelUpdatesCard — report', () => {
         enabled: true,
         mode: 'apply',
         harnesses: [
-          { id: 'h_bh', name: 'blackhouse', entries: [{ provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', kind: 'version', applied: true }] },
-          { id: 'h_iris', name: 'iris', entries: [{ provider: 'openrouter', model: 'moonshotai/kimi-k2.7', tracked: false, retired: false, successor: 'moonshotai/kimi-k3', kind: 'version' }] },
+          { id: 'h_bh', name: 'kestrel', entries: [{ provider: 'openrouter', model: 'z-ai/glm-5.2', tracked: true, retired: false, successor: 'z-ai/glm-5.3', kind: 'version', applied: true }] },
+          { id: 'h_heron', name: 'heron', entries: [{ provider: 'openrouter', model: 'moonshotai/kimi-k2.7', tracked: false, retired: false, successor: 'moonshotai/kimi-k3', kind: 'version' }] },
         ],
       },
     }
@@ -183,7 +183,7 @@ describe('ModelUpdatesCard — report', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled())
     const msg = String(vi.mocked(toast.success).mock.calls[0][0])
     expect(msg).toMatch(/1 update applied/)
-    expect(msg).toMatch(/blackhouse/)
+    expect(msg).toMatch(/kestrel/)
     expect(msg).toMatch(/restart/)
     expect(msg).toMatch(/1 more available/)
     expect(msg).not.toMatch(/every model is current/)
@@ -205,12 +205,12 @@ describe('ModelUpdatesCard — report', () => {
 
   it('per-row Update posts {harnessId, from, to} to the fleet apply route and refetches', async () => {
     routes['GET /api/fleet/model-updates'] = { status: 200, body: REPORT }
-    routes['POST /api/fleet/model-updates/apply'] = { status: 200, body: { ok: true, harnessId: 'h_iris', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' } }
+    routes['POST /api/fleet/model-updates/apply'] = { status: 200, body: { ok: true, harnessId: 'h_heron', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' } }
     render(<ModelUpdatesCard />)
     fireEvent.click(await screen.findByRole('button', { name: /update z-ai\/glm-5\.2 to z-ai\/glm-5\.3/i }))
     await waitFor(() => expect(calls.some((c) => c.url === '/api/fleet/model-updates/apply')).toBe(true))
     const apply = calls.find((c) => c.url === '/api/fleet/model-updates/apply')!
-    expect(JSON.parse(String(apply.init?.body))).toEqual({ harnessId: 'h_iris', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' })
+    expect(JSON.parse(String(apply.init?.body))).toEqual({ harnessId: 'h_heron', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' })
     await waitFor(() => expect(calls.filter((c) => c.url === '/api/fleet/model-updates' && !c.init?.method).length).toBeGreaterThanOrEqual(2))
     expect(toast.success).toHaveBeenCalled()
   })

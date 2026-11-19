@@ -199,9 +199,9 @@ describe('HarnessService.duplicate — slug normalization', () => {
   it('rejects when the slugged name collides with an existing harness', async () => {
     storage.write('harnesses.json', [
       { id: 'h_srcagent', name: 'srcagent', tier: 'team' },
-      { id: 'h_mare', name: 'mare' },
+      { id: 'h_wren', name: 'wren' },
     ])
-    const result = await service.duplicateOverlay('h_srcagent', 'Mare')
+    const result = await service.duplicateOverlay('h_srcagent', 'Wren')
     expect(result).toBeUndefined()
   })
 
@@ -217,7 +217,7 @@ describe('HarnessService.duplicate — slug normalization', () => {
 // the whole source onto the new overlay three lines later. That left the compose
 // and the overlay silently divergent, and the next unrelated settings PUT
 // regenerates FROM the overlay: at that point the duplicate holds the source's
-// mounts, at the source's paths, at the source's mode. For the iris agent one of
+// mounts, at the source's paths, at the source's mode. For the heron agent one of
 // those is the approval-gate spool at mode 'rw' — a second agent able to drop
 // cards into a gate that is not its own. There is no console field for
 // extraMounts, so nothing would ever have surfaced it.
@@ -228,8 +228,8 @@ describe('HarnessService.duplicate — host access is not inherited', () => {
   let service: HarnessService
 
   const SPOOL = {
-    hostPath: '/srv/iris/nimbleco/intake',
-    containerPath: '/opt/iris-intake',
+    hostPath: '/srv/heron/harbor/intake',
+    containerPath: '/opt/heron-intake',
     mode: 'rw' as const,
     note: 'approval-gate spool',
   }
@@ -248,11 +248,11 @@ describe('HarnessService.duplicate — host access is not inherited', () => {
       new ConfigService(storage),
     )
     storage.write('harnesses.json', [{
-      id: 'h_iris',
-      name: 'iris',
+      id: 'h_heron',
+      name: 'heron',
       tier: 'team',
       extraMounts: [SPOOL],
-      extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+      extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
     }])
   })
 
@@ -262,38 +262,38 @@ describe('HarnessService.duplicate — host access is not inherited', () => {
   })
 
   it('does NOT copy the source\'s extraMounts/extraEnv onto the duplicate', async () => {
-    const result = await service.duplicateOverlay('h_iris', 'iris-copy')
+    const result = await service.duplicateOverlay('h_heron', 'heron-copy')
     expect(result).toBeDefined()
     expect(result!.extraMounts).toBeUndefined()
     expect(result!.extraEnv).toBeUndefined()
 
     // And not on disk either — the overlay is what a later regeneration reads.
     const onDisk = storage.read<Partial<Harness>[]>('harnesses.json', [])
-    const persisted = onDisk.find((h) => h.id === 'h_iris_copy')
+    const persisted = onDisk.find((h) => h.id === 'h_heron_copy')
     expect(persisted).toBeDefined()
     expect(persisted!.extraMounts).toBeUndefined()
     expect(persisted!.extraEnv).toBeUndefined()
 
     // The source keeps its own.
-    const src = onDisk.find((h) => h.id === 'h_iris')
+    const src = onDisk.find((h) => h.id === 'h_heron')
     expect(src!.extraMounts).toEqual([SPOOL])
   })
 
   it('leaves the duplicate\'s overlay and its generated compose in agreement', async () => {
     // The real failure was divergence, not the copy per se: the compose never
     // had the mounts, the overlay did, and regeneration believed the overlay.
-    const result = await service.duplicateOverlay('h_iris', 'iris-copy')
+    const result = await service.duplicateOverlay('h_heron', 'heron-copy')
     const compose = fs.readFileSync(result!.composeFile!, 'utf-8')
-    expect(compose).not.toContain('/opt/iris-intake')
-    expect(compose).not.toContain('IRIS_INTAKE_DIR')
+    expect(compose).not.toContain('/opt/heron-intake')
+    expect(compose).not.toContain('HERON_INTAKE_DIR')
     expect(result!.extraMounts ?? []).toEqual([])
   })
 
   it('still carries the non-host-access fields it always did', async () => {
     // Guard against over-stripping: only the two host-access fields go.
-    const result = await service.duplicateOverlay('h_iris', 'iris-copy')
+    const result = await service.duplicateOverlay('h_heron', 'heron-copy')
     expect(result!.tier).toBe('team')
-    expect(result!.parentId).toBe('h_iris')
+    expect(result!.parentId).toBe('h_heron')
   })
 })
 

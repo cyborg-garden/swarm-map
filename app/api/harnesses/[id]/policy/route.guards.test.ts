@@ -44,9 +44,9 @@ afterEach(() => {
 
 describe('GET /api/harnesses/:id/policy', () => {
   it('rejects a traversal id with 400 instead of reading the other .env', async () => {
-    writeEnv('cryptids', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\n')
+    writeEnv('badger', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\n')
     fs.mkdirSync(path.join(home, '.hermes-x'), { recursive: true })
-    const id = 'x/../.hermes-cryptids'
+    const id = 'x/../.hermes-badger'
     const res = await GET(new Request(`http://x/api/harnesses/x/policy?platform=telegram&chatId=1`), ctx(id))
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ error: 'Invalid harness id' })
@@ -62,10 +62,10 @@ describe('GET /api/harnesses/:id/policy', () => {
 
 describe('POST /api/harnesses/:id/policy', () => {
   it('rejects a traversal id before touching the filesystem', async () => {
-    writeEnv('cryptids', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
-    const res = await post('x/../.hermes-cryptids', { action: 'group-register', platform: 'telegram', chatId: '-2' })
+    writeEnv('badger', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
+    const res = await post('x/../.hermes-badger', { action: 'group-register', platform: 'telegram', chatId: '-2' })
     expect(res.status).toBe(400)
-    expect(fs.readFileSync(envOf('cryptids'), 'utf-8')).toBe('TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
+    expect(fs.readFileSync(envOf('badger'), 'utf-8')).toBe('TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
   })
   it('rejects a chatId carrying a newline (no new .env line)', async () => {
     const before = 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\nOTHER=keep\n'

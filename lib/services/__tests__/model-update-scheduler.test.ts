@@ -10,7 +10,7 @@ import path from 'path'
 import os from 'os'
 import { Storage } from '../storage'
 import { readFallbackProviders, readCascade, cascadeChain } from '../harness'
-import { CYBORG, CRYPTIDS, MATILDE } from './fleet-shapes'
+import { CYBORG, BADGER, MATILDE } from './fleet-shapes'
 import {
   checkModelUpdates,
   applyModelUpdate,
@@ -1028,11 +1028,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
     ])
   })
 
-  it('cryptids (primary duplicated as row 0): ONE entry for the primary, not two', async () => {
+  it('badger (primary duplicated as row 0): ONE entry for the primary, not two', async () => {
     settings = { ...settings, mode: 'notify' }
-    makeHarness('cryptids', { config: CRYPTIDS })
+    makeHarness('badger', { config: BADGER })
     const report = await checkModelUpdates(deps)
-    const entries = report.harnesses.find((h) => h.id === 'h_cryptids')!.entries
+    const entries = report.harnesses.find((h) => h.id === 'h_badger')!.entries
     expect(entries.map((e) => [e.model, e.role])).toEqual([
       ['z-ai/glm-5.3', 'primary'],
       ['claude-sonnet-4-6', 'fallback'],
@@ -1053,11 +1053,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
   })
 
   it('rotating a tracked PRIMARY on a file that repeats it rewrites model.default AND the duplicate row 0 together', async () => {
-    const cfg = CRYPTIDS.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.2')
+    const cfg = BADGER.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.2')
     makeHarness('cry', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
     const report = await checkModelUpdates(deps)
     expect(entryFor(report, 'h_cry', 'z-ai/glm-5.2')!.applied).toBe(true)
-    expect(readConfig('cry')).toBe(CRYPTIDS)
+    expect(readConfig('cry')).toBe(BADGER)
     const after = readCascade(path.join(root, 'cry'))
     expect(after.primaryDuplicatedAsRow0).toBe(true)
     // A duplicate row that no longer matched the primary after a rotation would be a bug.

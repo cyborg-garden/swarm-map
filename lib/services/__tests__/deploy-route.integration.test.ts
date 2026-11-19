@@ -204,10 +204,10 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
     // A shared-VPN agent keeps its port only as the stashed `#~ published:`
     // line in its compose; docker shows no published port for it.
     const { generateAgentCompose } = await import('@/lib/services/agent-deploy-templates')
-    const dir = path.join(h.tmpData, 'compose', 'vera')
+    const dir = path.join(h.tmpData, 'compose', 'otter')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'docker-compose.yml'),
-      generateAgentCompose('vera', 8642, path.join(h.tmpHome, '.hermes-vera'), { image: 'x' }, { sharedVpn: 'private' }))
+      generateAgentCompose('otter', 8642, path.join(h.tmpHome, '.hermes-otter'), { image: 'x' }, { sharedVpn: 'private' }))
     const res = await deploy({ name: 'newbie', provider: 'anthropic', primaryModel: 'claude-opus-4-6', llmKey: 'sk-ant-api-X' })
     expect((await res.json()).ok).toBe(true)
     const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-newbie', '.env'), 'utf-8')
@@ -256,11 +256,11 @@ describe('POST /api/setup/deploy — Phase 1 wiring', () => {
   it('writes no GitHub credential for a new agent on a broker host, so a roll has nothing to strip', async () => {
     fs.mkdirSync(path.join(h.tmpHome, '.config/hermes/github-app'), { recursive: true })
     fs.writeFileSync(path.join(h.tmpHome, '.config/hermes/github-app/private-key.pem'), 'unused')
-    const res = await deploy({ name: 'sprite', provider: 'anthropic', primaryModel: 'm', llmKey: 'k' })
+    const res = await deploy({ name: 'pixel', provider: 'anthropic', primaryModel: 'm', llmKey: 'k' })
     expect((await res.json()).ok).toBe(true)
-    const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-sprite', '.env'), 'utf-8')
+    const env = fs.readFileSync(path.join(h.tmpHome, '.hermes-pixel', '.env'), 'utf-8')
     expect(env).not.toMatch(/GITHUB|GH_TOKEN/)
-    expect(fs.readFileSync(path.join(h.tmpHome, '.hermes-sprite', 'config.yaml'), 'utf-8')).not.toMatch(/GITHUB_PERSONAL_ACCESS_TOKEN/)
+    expect(fs.readFileSync(path.join(h.tmpHome, '.hermes-pixel', 'config.yaml'), 'utf-8')).not.toMatch(/GITHUB_PERSONAL_ACCESS_TOKEN/)
     expect(scanEnvText(env)).toEqual([])
   })
 

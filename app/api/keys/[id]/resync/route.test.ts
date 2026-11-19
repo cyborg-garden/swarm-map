@@ -59,10 +59,10 @@ describe('POST /api/keys/:id/resync', () => {
     fs.mkdirSync(tmpStore, { recursive: true })
     mockRestart.mockReset()
     seed(path.join(tmpHome, '.hermes', '.env'), 'CUSTOM_API_KEY=' + CAP + '\n')
-    seed(path.join(tmpHome, '.hermes-nimbleco', '.env'), 'CAPSOLVER_API_KEY=' + CAP + '\n')
+    seed(path.join(tmpHome, '.hermes-harbor', '.env'), 'CAPSOLVER_API_KEY=' + CAP + '\n')
     keyId = services.keys.add({
       provider: 'custom', name: 'capsolver', envVar: 'CAPSOLVER_API_KEY', value: CAP,
-      assignedTo: ['h_personal', 'h_nimbleco'],
+      assignedTo: ['h_personal', 'h_harbor'],
     }).id
   })
   afterAll(() => {
@@ -87,7 +87,7 @@ describe('POST /api/keys/:id/resync', () => {
   it('with no body resyncs every assigned agent, recreating nothing already correct', async () => {
     const json = await (await call(keyId)).json()
     expect(json.changed).toEqual(['h_personal'])
-    expect(mockRestart).not.toHaveBeenCalledWith('h_nimbleco', expect.anything())
+    expect(mockRestart).not.toHaveBeenCalledWith('h_harbor', expect.anything())
   })
 
   it('does not echo the key value', async () => {

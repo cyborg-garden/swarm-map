@@ -30,7 +30,7 @@ const ENV = [
   'GITHUB_APP_ID=1',
   `GITHUB_APP_PRIVATE_KEY_B64=${FAKE_KEY}`,
   'GITHUB_APP_INSTALLATION_ID=2',
-  'HERMES_AGENT_NAME=mare',
+  'HERMES_AGENT_NAME=wren',
   '',
 ].join('\n')
 
@@ -65,7 +65,7 @@ describe('rollout', () => {
   let port: number
 
   const opts = (extra = {}) => ({
-    agent: 'mare', homeRoot: root, dir, docker, pollMs: 1, verifyDeadlineMs: 20,
+    agent: 'wren', homeRoot: root, dir, docker, pollMs: 1, verifyDeadlineMs: 20,
     dockerEnv: { FD: fd, AGENT_HOME: home }, ...extra,
   })
   const calls = () => fs.readFileSync(path.join(fd, 'calls.log'), 'utf-8')
@@ -78,10 +78,10 @@ describe('rollout', () => {
     fd = fs.mkdtempSync(path.join(os.tmpdir(), 'rollout-fd-'))
     docker = path.join(fd, 'docker')
     fs.writeFileSync(docker, FAKE_DOCKER, { mode: 0o755 })
-    writeFd('inspect.txt', 'mare|/compose/mare/docker-compose.yml|hermes-mare|true\n')
+    writeFd('inspect.txt', 'wren|/compose/wren/docker-compose.yml|hermes-wren|true\n')
     writeFd('verify.out', 'ok\n')
     writeFd('calls.log', '')
-    home = path.join(root, '.hermes-mare')
+    home = path.join(root, '.hermes-wren')
     fs.mkdirSync(home)
     fs.writeFileSync(path.join(home, '.env'), ENV, { mode: 0o600 })
     fs.writeFileSync(path.join(home, 'config.yaml'), 'model: x\n')
@@ -100,7 +100,7 @@ describe('rollout', () => {
 
   it('strips only GitHub credentials, including exported and commented ones', () => {
     const out = stripGithubCredentials(`${ENV}export GH_TOKEN=x\n# GITHUB_PAT=y\nGITHUB_APP_PRIVATE_KEY_PATH=/k\nNOT_GITHUB_TOKEN=keep\n`)
-    expect(out).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=mare\nNOT_GITHUB_TOKEN=keep\n')
+    expect(out).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=wren\nNOT_GITHUB_TOKEN=keep\n')
   })
 
   it('names a token-shaped value under any other variable, without the value', () => {
@@ -147,7 +147,7 @@ describe('rollout', () => {
       expect(fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '').not.toContain(FAKE_PAT)
     }
     const keyPath = path.join(dir, 'private-key.pem')
-    expect(checkGithubCredentials({ agents: [{ name: 'mare', dataDir: home }], keyPath }).failing).toEqual([])
+    expect(checkGithubCredentials({ agents: [{ name: 'wren', dataDir: home }], keyPath }).failing).toEqual([])
   })
 
   it('dry-runs by default: reports names and changes nothing', async () => {
@@ -209,13 +209,13 @@ describe('rollout', () => {
     const r = await rollout(opts({ apply: true }))
     expect(r.ok).toBe(true)
     const stripped = fs.readFileSync(path.join(home, '.env'), 'utf-8')
-    expect(stripped).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=mare\n')
+    expect(stripped).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=wren\n')
     expect(fs.statSync(path.join(home, '.env')).mode & 0o777).toBe(0o600)
     expect(fs.readFileSync(path.join(fd, 'recreate-0.env'), 'utf-8')).toBe(stripped)
     expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(true)
     expect(JSON.parse(fs.readFileSync(path.join(home, 'github-broker.json'), 'utf-8')).url).toBe(`http://host.docker.internal:${port}`)
     const compose = calls().split('\n').find((l) => l.startsWith('compose')) ?? ''
-    expect(compose).toContain('-p mare -f /compose/mare/docker-compose.yml up -d --no-deps --no-build --force-recreate hermes-mare')
+    expect(compose).toContain('-p wren -f /compose/wren/docker-compose.yml up -d --no-deps --no-build --force-recreate hermes-wren')
     expect(compose).not.toMatch(/ build( |$)/)
     const backups = fs.readdirSync(path.join(dir, 'env-backups'))
     expect(backups).toHaveLength(1)
@@ -241,7 +241,7 @@ describe('rollout', () => {
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
     expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
     expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.wren).toBeUndefined()
     expect(fs.readFileSync(path.join(fd, 'recreate-1.env'), 'utf-8')).toBe(ENV)
     expect(r.lines.join('\n')).toContain('git-no-token')
     expect(r.lines.join('\n')).toMatch(/restored/i)
@@ -268,7 +268,7 @@ describe('rollout', () => {
     fs.writeFileSync(path.join(home, '.env.bak'), ENV)
     fs.writeFileSync(path.join(home, '.env.example'), 'NOTHING=here\n')
     await rollout(opts({ apply: true }))
-    expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=mare\n')
+    expect(fs.readFileSync(path.join(home, '.env.bak'), 'utf-8')).toBe('DISCORD_BOT_TOKEN=keep-me\nHERMES_AGENT_NAME=wren\n')
     expect(fs.existsSync(path.join(home, '.env.example'))).toBe(true)
   })
 
@@ -304,7 +304,7 @@ describe('rollout', () => {
     ['the running image lacks the broker code', () => writeFd('module.rc', '1'), /rebuild/i],
     ['the broker is down', () => { fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ port: 1 })) }, /broker/i],
     ['there is no App key on the host', () => fs.rmSync(path.join(dir, 'private-key.pem')), /ghkey/i],
-    ['the container is not running', () => writeFd('inspect.txt', 'mare|/c.yml|hermes-mare|false\n'), /not running/i],
+    ['the container is not running', () => writeFd('inspect.txt', 'wren|/c.yml|hermes-wren|false\n'), /not running/i],
     ['config.yaml relies on the PAT for an MCP server', () => fs.appendFileSync(path.join(home, 'config.yaml'), 'x: ${GITHUB_PERSONAL_ACCESS_TOKEN}\n'), /MCP/],
   ])('refuses before changing anything when %s', async (_name, arrange, message) => {
     arrange()
@@ -348,18 +348,18 @@ describe('rollout', () => {
   })
 
   describe('an agent marked as moved but missing from the registry', () => {
-    const report = () => checkGithubCredentials({ agents: [{ name: 'mare', dataDir: home }], keyPath: path.join(dir, 'private-key.pem') })
+    const report = () => checkGithubCredentials({ agents: [{ name: 'wren', dataDir: home }], keyPath: path.join(dir, 'private-key.pem') })
     const dropFromRegistry = () => {
       const file = path.join(dir, 'registry.json')
       const r = JSON.parse(fs.readFileSync(file, 'utf-8'))
-      delete r.agents.mare
+      delete r.agents.wren
       fs.writeFileSync(file, JSON.stringify(r))
     }
 
     it('the advice the health check gives repairs it', async () => {
       await rollout(opts({ apply: true }))
       dropFromRegistry()
-      expect(report().broker.notEnrolled).toEqual(['mare'])
+      expect(report().broker.notEnrolled).toEqual(['wren'])
       const dry = await rollout(opts())
       expect(dry.lines.join('\n')).toContain('not enrolled')
       const r = await rollout(opts({ apply: true }))
@@ -371,12 +371,12 @@ describe('rollout', () => {
       await rollout(opts({ apply: true }))
       const file = path.join(dir, 'registry.json')
       const reg = JSON.parse(fs.readFileSync(file, 'utf-8'))
-      reg.agents.mare = { ...reg.agents.mare, secret_sha256: 'ab'.repeat(32), repos: ['one'] }
+      reg.agents.wren = { ...reg.agents.wren, secret_sha256: 'ab'.repeat(32), repos: ['one'] }
       fs.writeFileSync(file, JSON.stringify(reg))
-      expect(report().broker.notEnrolled).toEqual(['mare'])
+      expect(report().broker.notEnrolled).toEqual(['wren'])
       expect((await rollout(opts({ apply: true }))).ok).toBe(true)
       expect(report().broker.notEnrolled).toEqual([])
-      expect(JSON.parse(fs.readFileSync(file, 'utf-8')).agents.mare.repos).toEqual(['one'])
+      expect(JSON.parse(fs.readFileSync(file, 'utf-8')).agents.wren.repos).toEqual(['one'])
     })
 
     it('if the repair fails it stays marked and enrolled, and says so', async () => {
@@ -485,8 +485,8 @@ describe('rollout', () => {
 
   it('blocks a credential in the compose file, which outranks .env and which it can not remove', async () => {
     const composeFile = path.join(fd, 'docker-compose.yml')
-    fs.writeFileSync(composeFile, `services:\n  hermes-mare:\n    environment:\n      - GH_TOKEN=${FAKE_PAT}\n`)
-    writeFd('inspect.txt', `mare|${composeFile}|hermes-mare|true\n`)
+    fs.writeFileSync(composeFile, `services:\n  hermes-wren:\n    environment:\n      - GH_TOKEN=${FAKE_PAT}\n`)
+    writeFd('inspect.txt', `wren|${composeFile}|hermes-wren|true\n`)
     const r = await rollout(opts({ apply: true, acceptLoss: true }))
     expect(r.ok).toBe(false)
     expect(r.lines.join('\n')).toMatch(/BLOCKED: docker-compose.yml sets GH_TOKEN/)
@@ -738,7 +738,7 @@ describe('rollout', () => {
 
   it('undo brings back only the GitHub lines, keeping everything changed since', async () => {
     await rollout(opts({ apply: true }))
-    fs.writeFileSync(path.join(home, '.env'), 'DISCORD_BOT_TOKEN=ROTATED\nHERMES_AGENT_NAME=mare\nNEW_SURFACE=added-later\n')
+    fs.writeFileSync(path.join(home, '.env'), 'DISCORD_BOT_TOKEN=ROTATED\nHERMES_AGENT_NAME=wren\nNEW_SURFACE=added-later\n')
     expect((await undo(opts())).ok).toBe(true)
     const after = fs.readFileSync(path.join(home, '.env'), 'utf-8')
     expect(after).toContain('DISCORD_BOT_TOKEN=ROTATED\n')
@@ -815,7 +815,7 @@ describe('rollout', () => {
       expect(r.lines.join('\n')).toMatch(/restored/i)
       expectPutBack()
       expect(fs.readFileSync(path.join(prof, '.env'), 'utf-8')).toBe(ENV)
-      expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+      expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.wren).toBeUndefined()
     })
 
     it('puts the agent back when the registry has a typo, and does not overwrite the file', async () => {
@@ -851,7 +851,7 @@ describe('rollout', () => {
       fs.chmodSync(home, 0o700)
       fs.rmSync(path.join(fd, 'lock-home-during-recreate'))
       expect(r.ok).toBe(false)
-      expect(r.lines.join('\n')).toMatch(/ghkey undo mare/)
+      expect(r.lines.join('\n')).toMatch(/ghkey undo wren/)
       expect(backups()).toHaveLength(1)
       expect((await undo(opts())).ok).toBe(true)
       expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
@@ -862,7 +862,7 @@ describe('rollout', () => {
       fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {},}')
       const r = await undo(opts())
       expect(r.ok).toBe(false)
-      expect(r.lines.join('\n')).toMatch(/ghkey undo mare/)
+      expect(r.lines.join('\n')).toMatch(/ghkey undo wren/)
       fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {}}')
       expect((await undo(opts())).ok).toBe(true)
       expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe(ENV)
@@ -956,7 +956,7 @@ describe('rollout', () => {
       })
 
       it.each([
-        ['stamped by boot', `${MANAGED}[user]\n\tname = mare\n`],
+        ['stamped by boot', `${MANAGED}[user]\n\tname = wren\n`],
         ['from before the stamp', '[credential]\n\thelper = store\n[url "https://github.com/"]\n\tinsteadOf = git' + AT + 'github.com:\n\tinsteadOf = ssh://git' + AT + 'github.com/\n'],
         ['by hand but already using the helper', '[credential]\n\thelper = "!python -m hermes_cli.github_app_token get-credential"\n'],
       ])('lets a .gitconfig %s through', async (_name, text) => {
@@ -1181,15 +1181,15 @@ rm "$FD/on-recreate.sh"
     expect(r.lines.join()).toContain('no backup to restore')
     expect(fs.existsSync(path.join(home, 'github-broker.json'))).toBe(false)
     expect(fs.existsSync(path.join(home, '.hsm-github-broker'))).toBe(false)
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.wren).toBeUndefined()
     expect(fs.readFileSync(path.join(home, '.env'), 'utf-8')).toBe('DISCORD_BOT_TOKEN=keep-me\n')
     expect(calls().split('\n').filter((l) => l.startsWith('compose')).length).toBe(before + 1)
   })
 
   it('undo clears a registry entry left with no files in the home', async () => {
-    fs.writeFileSync(path.join(dir, 'registry.json'), JSON.stringify({ agents: { mare: { secret_sha256: 'aa', repos: 'all', permissions: 'all' } } }))
+    fs.writeFileSync(path.join(dir, 'registry.json'), JSON.stringify({ agents: { wren: { secret_sha256: 'aa', repos: 'all', permissions: 'all' } } }))
     expect((await undo(opts())).ok).toBe(true)
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.mare).toBeUndefined()
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).agents.wren).toBeUndefined()
   })
 
   it('undo with no backup says so and changes nothing', async () => {
@@ -1212,7 +1212,7 @@ rm "$FD/on-recreate.sh"
   })
 
   it('lists which agents still carry the App key, for the old-key delete hold', () => {
-    expect(agentsHoldingAppKey(root)).toEqual(['mare'])
+    expect(agentsHoldingAppKey(root)).toEqual(['wren'])
     fs.writeFileSync(path.join(home, '.env'), 'OK=1\n')
     expect(agentsHoldingAppKey(root)).toEqual([])
   })

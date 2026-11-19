@@ -186,7 +186,7 @@ describe('Settings API — PUT', () => {
     // SurfaceAdminService overlay (served live to the policy plugin). A settings
     // write must keep them converged — and expand @handles to numeric IDs, since
     // the gateway matches numeric sender IDs verbatim.
-    ;(expandTelegramAllowlist as ReturnType<typeof vi.fn>).mockResolvedValueOnce(['@juniper', '424242'])
+    ;(expandTelegramAllowlist as ReturnType<typeof vi.fn>).mockResolvedValueOnce(['@operator', '424242'])
     const body = {
       dmPolicy: 'approved-only',
       groupInvitePolicy: 'approved-only',
@@ -195,8 +195,8 @@ describe('Settings API — PUT', () => {
       memoryScope: 'channel',
       surfaces: {
         telegram: {
-          allowedUsers: ['@juniper'],
-          adminUsers: ['@juniper'],
+          allowedUsers: ['@operator'],
+          adminUsers: ['@operator'],
           allowedGroups: [],
           allowAll: false,
           allowAllGroups: false,
@@ -205,9 +205,9 @@ describe('Settings API — PUT', () => {
     }
     await PUT(makeRequest(body), makeParams('h_test'))
 
-    expect(expandTelegramAllowlist).toHaveBeenCalledWith('h_test', ['@juniper'])
+    expect(expandTelegramAllowlist).toHaveBeenCalledWith('h_test', ['@operator'])
     expect(services.surfaceAdmins.syncFromAllowlist).toHaveBeenCalledWith(
-      'h_test', 'telegram', ['@juniper', '424242'],
+      'h_test', 'telegram', ['@operator', '424242'],
     )
   })
 
@@ -257,7 +257,7 @@ describe('Settings API — GET mention-gating reflects the runtime', () => {
   })
 
   it('reports NOT gated when the value is empty — the runtime treats "" as false', async () => {
-    // This is the Mare bug: an empty value reads as false at runtime, but the UI
+    // This is the Wren bug: an empty value reads as false at runtime, but the UI
     // used to claim "@mention only", so the agent answered every message while
     // the setting appeared on.
     expect((await getWithEnv('SIGNAL_REQUIRE_MENTION=\n')).mentionGating).toBe(false)
@@ -1073,8 +1073,8 @@ describe('Settings API — restart arms beyond .env changes', () => {
 // leave every one of its tests green.)
 describe('Settings API — extraMounts/extraEnv survive compose regeneration (#222)', () => {
   const SPOOL = {
-    hostPath: '/Users/juni/.iris/nimbleco/intake',
-    containerPath: '/opt/iris-intake',
+    hostPath: '/Users/operator/.heron/harbor/intake',
+    containerPath: '/opt/heron-intake',
     mode: 'rw' as const,
   }
 
@@ -1090,18 +1090,18 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('passes the harness\'s saved extraMounts/extraEnv into generateCompose', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
       resources: { memory: '1G', cpus: '1.0' },
-      composeFile: '/tmp/iris.yml',
+      composeFile: '/tmp/heron.yml',
       extraMounts: [SPOOL],
-      extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+      extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
     } as never)
 
     const res = await PUT(makeRequest({
       dmPolicy: 'approved-only',
       resources: { memory: '2G', cpus: '2.0' },
-    }), makeParams('h_iris'))
+    }), makeParams('h_heron'))
     expect(res.status).toBe(200)
 
     // The assertion that fails if route.ts stops forwarding the fields: not
@@ -1110,22 +1110,22 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
     expect(generateStandaloneCompose).toHaveBeenCalledTimes(1)
     const options = vi.mocked(generateStandaloneCompose).mock.calls[0][3]
     expect(options?.extraMounts).toEqual([SPOOL])
-    expect(options?.extraEnv).toEqual({ IRIS_INTAKE_DIR: '/opt/iris-intake' })
+    expect(options?.extraEnv).toEqual({ HERON_INTAKE_DIR: '/opt/heron-intake' })
   })
 
   it('a regenerate keeps the configured apiBindHost', async () => {
     vi.mocked(services.config.getSettings).mockReturnValue({ apiBindHost: '100.64.0.9' } as never)
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
       resources: { memory: '1G', cpus: '1.0' },
-      composeFile: '/tmp/iris.yml',
+      composeFile: '/tmp/heron.yml',
     } as never)
 
     const res = await PUT(makeRequest({
       dmPolicy: 'approved-only',
       resources: { memory: '2G', cpus: '2.0' },
-    }), makeParams('h_iris'))
+    }), makeParams('h_heron'))
     expect(res.status).toBe(200)
 
     expect(generateStandaloneCompose).toHaveBeenCalledTimes(1)
@@ -1140,17 +1140,17 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
     // overlay, every subsequent PUT throws at the same line: the agent becomes
     // unreconfigurable through the API. Refuse first, write nothing.
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
       resources: { memory: '1G', cpus: '1.0' },
-      composeFile: '/tmp/iris.yml',
-      extraMounts: [{ hostPath: 'relative/spool', containerPath: '/opt/iris-intake' }],
+      composeFile: '/tmp/heron.yml',
+      extraMounts: [{ hostPath: 'relative/spool', containerPath: '/opt/heron-intake' }],
     } as never)
 
     const res = await PUT(makeRequest({
       dmPolicy: 'approved-only',
       resources: { memory: '2G', cpus: '2.0' },
-    }), makeParams('h_iris'))
+    }), makeParams('h_heron'))
 
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/absolute/)
@@ -1163,10 +1163,10 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('passes the harness\'s saved extraAptPackages into generateCompose', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'cyborg-public',
+      name: 'public-bot',
       runtime: 'hermes',
       resources: { memory: '1G', cpus: '1.0' },
-      composeFile: '/tmp/cyborg-public.yml',
+      composeFile: '/tmp/public-bot.yml',
       extraAptPackages: ['libreoffice-writer-nogui', 'pandoc'],
     } as never)
 
@@ -1181,9 +1181,9 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('REFUSES (400, nothing written) a saved extraAptPackages entry apt would read as an option', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'cyborg-public',
+      name: 'public-bot',
       runtime: 'hermes',
-      composeFile: '/tmp/cyborg-public.yml',
+      composeFile: '/tmp/public-bot.yml',
       extraAptPackages: ['--allow-unauthenticated'],
     } as never)
 
@@ -1196,13 +1196,13 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('REFUSES (400) a reserved extraEnv name rather than silently overriding .env policy', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
-      composeFile: '/tmp/iris.yml',
+      composeFile: '/tmp/heron.yml',
       extraEnv: { DISCORD_ALLOWED_USERS: '999' },
     } as never)
 
-    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_iris'))
+    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_heron'))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/reserved/)
     expect((fs.writeFileSync as unknown as { mock: { calls: unknown[][] } }).mock.calls)
@@ -1211,14 +1211,14 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('REFUSES (400) a GitHub credential in extraEnv on an agent on the token broker', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
-      composeFile: '/tmp/iris.yml',
+      composeFile: '/tmp/heron.yml',
       extraEnv: { GH_TOKEN: 'x' },
     } as never)
     vi.spyOn(fs, 'existsSync').mockImplementation(((p: string) => String(p).endsWith('.hsm-github-broker') || String(p).endsWith('.env')) as never)
 
-    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_iris'))
+    const res = await PUT(makeRequest({ dmPolicy: 'approved-only' }), makeParams('h_heron'))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toMatch(/GitHub token broker/)
     expect((fs.writeFileSync as unknown as { mock: { calls: unknown[][] } }).mock.calls)
@@ -1227,17 +1227,17 @@ describe('Settings API — extraMounts/extraEnv survive compose regeneration (#2
 
   it('accepts a ~-prefixed host path — the spelling every other host path takes', async () => {
     vi.mocked(services.harness.get).mockReturnValue({
-      name: 'iris',
+      name: 'heron',
       runtime: 'hermes',
       resources: { memory: '1G', cpus: '1.0' },
-      composeFile: '/tmp/iris.yml',
-      extraMounts: [{ hostPath: '~/.iris/nimbleco/intake', containerPath: '/opt/iris-intake', mode: 'rw' }],
+      composeFile: '/tmp/heron.yml',
+      extraMounts: [{ hostPath: '~/.heron/harbor/intake', containerPath: '/opt/heron-intake', mode: 'rw' }],
     } as never)
 
     const res = await PUT(makeRequest({
       dmPolicy: 'approved-only',
       resources: { memory: '2G', cpus: '2.0' },
-    }), makeParams('h_iris'))
+    }), makeParams('h_heron'))
     expect(res.status).toBe(200)
     expect(generateStandaloneCompose).toHaveBeenCalledTimes(1)
   })

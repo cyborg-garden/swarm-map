@@ -20,7 +20,7 @@ let responders: Array<(url: string, init?: RequestInit) => { status: number; bod
 
 const LIB = [
   { name: 'Cheap', chain: [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, { provider: 'ollama', model: 'qwen3:8b', base_url: 'http://x' }], createdAt: 1, updatedAt: 1 },
-  { name: 'Frontier', chain: [{ provider: 'anthropic', model: 'claude-opus-4-7' }], createdAt: 2, updatedAt: 2, sourceHarness: 'h_iris' },
+  { name: 'Frontier', chain: [{ provider: 'anthropic', model: 'claude-opus-4-7' }], createdAt: 2, updatedAt: 2, sourceHarness: 'h_heron' },
 ]
 
 function installFetch() {

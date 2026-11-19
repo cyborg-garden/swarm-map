@@ -187,7 +187,7 @@ describe('ensurePluginsEnabled', () => {
     expect(content).toMatch(/  enabled:\n    - swarm_map_policy\n    - captcha_cascade/)
   })
 
-  // Inline `enabled: []` is why cyborg-public loaded 0 of its 4 plugins and
+  // Inline `enabled: []` is why public-bot loaded 0 of its 4 plugins and
   // why sync used to refuse to touch it (base package v1, spec §2). It is now
   // rewritten as a block list in place — never a second plugins key.
   it('converts an inline enabled: [] into a block list (no duplicate plugins key)', () => {

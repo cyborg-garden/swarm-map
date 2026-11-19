@@ -2,8 +2,8 @@
  * Tests for GET /api/surfaces
  *
  * Regression: listSurfaces() was called with no arguments, so it fell back to
- * a hardcoded DEFAULT_HARNESS_NAMES list. Harnesses added later (e.g. nimbleco,
- * evil-duck) were never iterated, so their connected surfaces never rendered —
+ * a hardcoded DEFAULT_HARNESS_NAMES list. Harnesses added later (e.g. harbor,
+ * grey-duck) were never iterated, so their connected surfaces never rendered —
  * the UI showed them as "not connected" even when fully configured.
  *
  * The route must pass the LIVE harness names from harness.list() so every
@@ -35,8 +35,8 @@ describe('GET /api/surfaces', () => {
   it('passes live harness names — including non-default ones — to listSurfaces', async () => {
     listMock.mockReturnValue([
       { id: 'h_personal', name: 'personal' },
-      { id: 'h_nimbleco', name: 'nimbleco' },
-      { id: 'h_evil_duck', name: 'evil-duck' },
+      { id: 'h_harbor', name: 'harbor' },
+      { id: 'h_grey_duck', name: 'grey-duck' },
     ])
 
     await GET()
@@ -44,8 +44,8 @@ describe('GET /api/surfaces', () => {
     expect(listSurfacesMock).toHaveBeenCalledTimes(1)
     const namesArg = listSurfacesMock.mock.calls[0][0]
     expect(namesArg).toBeDefined()
-    expect(namesArg).toContain('nimbleco')
-    expect(namesArg).toContain('evil-duck')
+    expect(namesArg).toContain('harbor')
+    expect(namesArg).toContain('grey-duck')
     expect(namesArg).toContain('personal')
   })
 

@@ -4,11 +4,11 @@ import { FleetAnalytics } from './fleet-analytics'
 
 const sample = {
   days: [
-    { date: '2026-09-21', cost: 2, tokens: 10, sessions: 3, toolCalls: 1, byHarness: { iris: { cost: 2, tokens: 10, sessions: 3 } }, bySource: { discord: 3 } },
+    { date: '2026-09-21', cost: 2, tokens: 10, sessions: 3, toolCalls: 1, byHarness: { heron: { cost: 2, tokens: 10, sessions: 3 } }, bySource: { discord: 3 } },
     { date: '2026-09-22', cost: 1, tokens: 5, sessions: 1, toolCalls: 0, byHarness: { osint: { cost: 1, tokens: 5, sessions: 1 } }, bySource: { cli: 1 } },
   ],
   harnesses: [
-    { harnessId: 'h_iris', name: 'iris', cost: 2, tokens: 10, sessions: 3, toolCalls: 1, costStatus: 'estimated', stale: false, pending: false },
+    { harnessId: 'h_heron', name: 'heron', cost: 2, tokens: 10, sessions: 3, toolCalls: 1, costStatus: 'estimated', stale: false, pending: false },
     { harnessId: 'h_osint', name: 'osint', cost: 1, tokens: 5, sessions: 1, toolCalls: 0, costStatus: 'estimated', stale: true, pending: false },
     { harnessId: 'h_new', name: 'new', cost: null, tokens: null, sessions: null, toolCalls: null, costStatus: 'unknown', stale: false, pending: true },
   ],
@@ -34,7 +34,7 @@ describe('FleetAnalytics', () => {
     expect(calls[0]).toBe('/api/fleet/analytics?days=30')
     expect(screen.getByRole('img', { name: /sessions by surface/i })).toBeInTheDocument()
     const table = screen.getByRole('table', { name: /per harness/i })
-    expect(table).toHaveTextContent('iris')
+    expect(table).toHaveTextContent('heron')
     expect(table).toHaveTextContent('$2.00')
     // Pending harness: "pending", never $0.
     const newRow = screen.getByRole('row', { name: /new/i })

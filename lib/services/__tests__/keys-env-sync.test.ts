@@ -87,22 +87,22 @@ describe('keys .env sync (assign / unassign / remove)', () => {
   // ASSUMPTION (bug): deleting a key leaves its var in each assigned agent's
   // .env — the agent keeps running with a credential the operator thinks is gone.
   it('remove() strips the key var from every assigned harness .env', () => {
-    const key = keys.add({ provider: 'github', value: GH, assignedTo: ['h_nimbleco'] })
-    keys.writeKeyToEnv('h_nimbleco', 'github', GH)
-    expect(readEnv('nimbleco')).toMatch(/^GITHUB_TOKEN=/m)
+    const key = keys.add({ provider: 'github', value: GH, assignedTo: ['h_harbor'] })
+    keys.writeKeyToEnv('h_harbor', 'github', GH)
+    expect(readEnv('harbor')).toMatch(/^GITHUB_TOKEN=/m)
 
     keys.remove(key.id)
-    expect(readEnv('nimbleco')).not.toMatch(/^GITHUB_TOKEN=/m)
+    expect(readEnv('harbor')).not.toMatch(/^GITHUB_TOKEN=/m)
   })
 
   it('remove() preserves unrelated vars in the assigned .env', () => {
-    fs.mkdirSync(path.join(tmpHome, '.hermes-nimbleco'), { recursive: true })
-    fs.writeFileSync(envFor('nimbleco'), 'SIGNAL_ACCOUNT=+100\n')
-    const key = keys.add({ provider: 'github', value: GH, assignedTo: ['h_nimbleco'] })
-    keys.writeKeyToEnv('h_nimbleco', 'github', GH)
+    fs.mkdirSync(path.join(tmpHome, '.hermes-harbor'), { recursive: true })
+    fs.writeFileSync(envFor('harbor'), 'SIGNAL_ACCOUNT=+100\n')
+    const key = keys.add({ provider: 'github', value: GH, assignedTo: ['h_harbor'] })
+    keys.writeKeyToEnv('h_harbor', 'github', GH)
 
     keys.remove(key.id)
-    const env = readEnv('nimbleco')
+    const env = readEnv('harbor')
     expect(env).toMatch(/^SIGNAL_ACCOUNT=\+100$/m)
     expect(env).not.toMatch(/^GITHUB_TOKEN=/m)
   })
@@ -112,25 +112,25 @@ describe('keys .env sync (assign / unassign / remove)', () => {
   // service-level primitive that does both (routes should call it).
   it('setAssignment() writes the value into a newly-assigned harness .env', () => {
     const key = keys.add({ provider: 'github', value: GH }) // added, unassigned, no env write
-    expect(readEnv('nimbleco')).not.toMatch(/GITHUB_TOKEN/)
+    expect(readEnv('harbor')).not.toMatch(/GITHUB_TOKEN/)
 
-    keys.setAssignment(key.id, ['h_nimbleco'])
-    expect(readEnv('nimbleco')).toMatch(new RegExp(`^GITHUB_TOKEN=${GH}$`, 'm'))
+    keys.setAssignment(key.id, ['h_harbor'])
+    expect(readEnv('harbor')).toMatch(new RegExp(`^GITHUB_TOKEN=${GH}$`, 'm'))
   })
 
   it('setAssignment() removes the var from a dropped harness .env', () => {
     const key = keys.add({ provider: 'github', value: GH })
-    keys.setAssignment(key.id, ['h_nimbleco'])
-    expect(readEnv('nimbleco')).toMatch(/^GITHUB_TOKEN=/m)
+    keys.setAssignment(key.id, ['h_harbor'])
+    expect(readEnv('harbor')).toMatch(/^GITHUB_TOKEN=/m)
 
     keys.setAssignment(key.id, [])
-    expect(readEnv('nimbleco')).not.toMatch(/^GITHUB_TOKEN=/m)
+    expect(readEnv('harbor')).not.toMatch(/^GITHUB_TOKEN=/m)
   })
 
   it('setAssignment() reflects the assignment in keys.json / list()', () => {
     const key = keys.add({ provider: 'github', value: GH })
-    keys.setAssignment(key.id, ['h_nimbleco'])
-    expect(keys.list([]).find((k) => k.id === key.id)!.assignedTo).toEqual(['h_nimbleco'])
+    keys.setAssignment(key.id, ['h_harbor'])
+    expect(keys.list([]).find((k) => k.id === key.id)!.assignedTo).toEqual(['h_harbor'])
   })
 
   // setAssignment returns exactly the harnesses whose .env changed, so the route
@@ -173,36 +173,36 @@ describe('bluesky pair .env sync (assign / unassign / remove)', () => {
   const PASS = 'abcd-efgh-ijkl-mnop'
 
   it('setAssignment() writes both vars into a newly-assigned harness .env', () => {
-    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'nimbleco.ai' })
-    keys.setAssignment(key.id, ['h_iris'])
-    const env = readEnv('iris')
+    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'handle.example.com' })
+    keys.setAssignment(key.id, ['h_heron'])
+    const env = readEnv('heron')
     expect(env).toMatch(new RegExp(`^BLUESKY_APP_PASSWORD=${PASS}$`, 'm'))
-    expect(env).toMatch(/^BLUESKY_IDENTIFIER=nimbleco\.ai$/m)
+    expect(env).toMatch(/^BLUESKY_IDENTIFIER=handle\.example\.com$/m)
   })
 
   it('setAssignment() strips both vars from a dropped harness .env', () => {
-    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'nimbleco.ai' })
-    keys.setAssignment(key.id, ['h_iris'])
+    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'handle.example.com' })
+    keys.setAssignment(key.id, ['h_heron'])
     keys.setAssignment(key.id, [])
-    const env = readEnv('iris')
+    const env = readEnv('heron')
     expect(env).not.toMatch(/BLUESKY_APP_PASSWORD/)
     expect(env).not.toMatch(/BLUESKY_IDENTIFIER/)
   })
 
   it('remove() strips both vars from every assigned harness .env', () => {
-    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'nimbleco.ai' })
-    keys.setAssignment(key.id, ['h_iris'])
+    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'handle.example.com' })
+    keys.setAssignment(key.id, ['h_heron'])
     keys.remove(key.id)
-    const env = readEnv('iris')
+    const env = readEnv('heron')
     expect(env).not.toMatch(/BLUESKY_APP_PASSWORD/)
     expect(env).not.toMatch(/BLUESKY_IDENTIFIER/)
   })
 
   it('rotateValue() rewrites the pair with the (possibly updated) identifier', () => {
     const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'old.handle' })
-    keys.setAssignment(key.id, ['h_iris'])
+    keys.setAssignment(key.id, ['h_heron'])
     keys.rotateValue(key.id, 'qrst-uvwx-yzab-cdef', { identifier: 'new.handle' })
-    const env = readEnv('iris')
+    const env = readEnv('heron')
     expect(env).toMatch(/^BLUESKY_APP_PASSWORD=qrst-uvwx-yzab-cdef$/m)
     expect(env).toMatch(/^BLUESKY_IDENTIFIER=new\.handle$/m)
   })

@@ -18,7 +18,7 @@ vi.mock('@/lib/services', () => ({
 import { syncFleetDiscordApproverRolesAtStartup } from '../discord-approver-roles-fleet'
 import { GET, POST } from '@/app/api/fleet/discord-approver-roles/route'
 
-const OPERATOR = '1533670688001495051'
+const OPERATOR = '1500000000000000051'
 const APPROVER = '1534000000000000001'
 const YAML = `platforms:\n  discord:\n    extra:\n      require_admin_for_exec_approval: true\n      allow_admin_from: '111111111111111111'\n      approver_roles: '${OPERATOR}'\n`
 
@@ -29,14 +29,14 @@ const yamlOf = (n: string) => fs.readFileSync(path.join(dir(n), 'config.yaml'), 
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'approver-fleet-'))
   vi.spyOn(os, 'homedir').mockReturnValue(home)
-  for (const n of ['iris', 'mare']) {
+  for (const n of ['heron', 'wren']) {
     fs.mkdirSync(dir(n), { recursive: true })
     fs.writeFileSync(path.join(dir(n), '.env'), 'DISCORD_BOT_TOKEN=t\n')
     fs.writeFileSync(path.join(dir(n), 'config.yaml'), YAML)
   }
   listMock.mockReturnValue([
-    { id: 'h_iris', name: 'iris', runtime: 'hermes' },
-    { id: 'h_mare', name: 'mare', runtime: 'hermes' },
+    { id: 'h_heron', name: 'heron', runtime: 'hermes' },
+    { id: 'h_wren', name: 'wren', runtime: 'hermes' },
     // A listed agent with no data dir on disk: skipped, never created.
     { id: 'h_l', name: 'l', runtime: 'hermes' },
   ])
@@ -49,9 +49,9 @@ afterEach(() => {
 
 describe('syncFleetDiscordApproverRolesAtStartup', () => {
   it('writes the setting into every Discord agent', () => {
-    expect(syncFleetDiscordApproverRolesAtStartup()?.updated).toEqual(['iris', 'mare'])
-    expect(yamlOf('iris')).toContain(`approver_roles: '${APPROVER}'`)
-    expect(yamlOf('iris')).toContain("allow_admin_from: '111111111111111111'")
+    expect(syncFleetDiscordApproverRolesAtStartup()?.updated).toEqual(['heron', 'wren'])
+    expect(yamlOf('heron')).toContain(`approver_roles: '${APPROVER}'`)
+    expect(yamlOf('heron')).toContain("allow_admin_from: '111111111111111111'")
   })
 
   it('ignores a hand-edited setting that is not a list of role IDs, writing nothing', () => {
@@ -60,8 +60,8 @@ describe('syncFleetDiscordApproverRolesAtStartup', () => {
       getSettingsMock.mockReturnValue({ discordApproverRoles: bad })
       expect(syncFleetDiscordApproverRolesAtStartup()).toBeNull()
     }
-    expect(yamlOf('iris')).toBe(YAML)
-    expect(yamlOf('mare')).toBe(YAML)
+    expect(yamlOf('heron')).toBe(YAML)
+    expect(yamlOf('wren')).toBe(YAML)
   })
 
   it('does nothing when the setting is unset or null (unmanaged)', () => {
@@ -69,7 +69,7 @@ describe('syncFleetDiscordApproverRolesAtStartup', () => {
     expect(syncFleetDiscordApproverRolesAtStartup()).toBeNull()
     getSettingsMock.mockReturnValue({ discordApproverRoles: null })
     expect(syncFleetDiscordApproverRolesAtStartup()).toBeNull()
-    expect(yamlOf('iris')).toBe(YAML)
+    expect(yamlOf('heron')).toBe(YAML)
   })
 
   it('never throws', () => {
@@ -83,23 +83,23 @@ describe('/api/fleet/discord-approver-roles', () => {
     const res = await GET()
     const body = await res.json()
     expect(body.desired).toEqual([APPROVER])
-    expect(body.drift).toEqual(['iris', 'mare'])
-    expect(yamlOf('iris')).toBe(YAML)
+    expect(body.drift).toEqual(['heron', 'wren'])
+    expect(yamlOf('heron')).toBe(YAML)
   })
 
   it('POST applies the setting and says a restart is needed', async () => {
     const res = await POST()
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.updated).toEqual(['iris', 'mare'])
-    expect(body.restartNeeded).toEqual(['iris', 'mare'])
-    expect(yamlOf('mare')).toContain(`approver_roles: '${APPROVER}'`)
+    expect(body.updated).toEqual(['heron', 'wren'])
+    expect(body.restartNeeded).toEqual(['heron', 'wren'])
+    expect(yamlOf('wren')).toContain(`approver_roles: '${APPROVER}'`)
   })
 
   it('POST refuses when the setting is unmanaged', async () => {
     getSettingsMock.mockReturnValue({})
     const res = await POST()
     expect(res.status).toBe(409)
-    expect(yamlOf('iris')).toBe(YAML)
+    expect(yamlOf('heron')).toBe(YAML)
   })
 })

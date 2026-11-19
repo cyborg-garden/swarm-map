@@ -410,11 +410,11 @@ describe('buildConnectEnvVars parity with the replaced switch', () => {
 
   it('signal: profileName written only when truthy', () => {
     expect(
-      buildConnectEnvVars('signal', { phone: '+1', url: 'http://x:1', profileName: 'Iris' }),
+      buildConnectEnvVars('signal', { phone: '+1', url: 'http://x:1', profileName: 'Heron' }),
     ).toEqual({
       SIGNAL_ACCOUNT: '+1',
       SIGNAL_HTTP_URL: 'http://x:1',
-      SIGNAL_PROFILE_NAME: 'Iris',
+      SIGNAL_PROFILE_NAME: 'Heron',
     })
     expect(
       buildConnectEnvVars('signal', { phone: '+1', url: 'http://x:1', profileName: '' }),

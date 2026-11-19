@@ -324,9 +324,9 @@ describe('AnalyticsService', () => {
   }
 
   it('resolves a harness by id through the injected target list', () => {
-    const t = seed('iris', 2)
+    const t = seed('heron', 2)
     const svc = new AnalyticsService({ listTargets: () => [t], now: noonToday })
-    const r = svc.getHarnessAnalytics('h_iris', 7)
+    const r = svc.getHarnessAnalytics('h_heron', 7)
     expect(r).not.toBeNull()
     expect(r!.days[6].sessions).toBe(2)
   })
@@ -337,25 +337,25 @@ describe('AnalyticsService', () => {
   })
 
   it('caches per (harnessId, days) for the TTL and clearCache() invalidates', () => {
-    const t = seed('iris', 1)
+    const t = seed('heron', 1)
     let calls = 0
     const svc = new AnalyticsService({
       listTargets: () => { calls++; return [t] },
       now: noonToday,
       ttlMs: 60_000,
     })
-    svc.getHarnessAnalytics('h_iris', 7)
-    svc.getHarnessAnalytics('h_iris', 7)
+    svc.getHarnessAnalytics('h_heron', 7)
+    svc.getHarnessAnalytics('h_heron', 7)
     expect(calls).toBe(1)
-    svc.getHarnessAnalytics('h_iris', 30)
+    svc.getHarnessAnalytics('h_heron', 30)
     expect(calls).toBe(2)
     svc.clearCache()
-    svc.getHarnessAnalytics('h_iris', 7)
+    svc.getHarnessAnalytics('h_heron', 7)
     expect(calls).toBe(3)
   })
 
   it('expires the cache after ttlMs', () => {
-    const t = seed('iris', 1)
+    const t = seed('heron', 1)
     let calls = 0
     let clock = noonToday()
     const svc = new AnalyticsService({
@@ -363,9 +363,9 @@ describe('AnalyticsService', () => {
       now: () => clock,
       ttlMs: 1000,
     })
-    svc.getHarnessAnalytics('h_iris', 7)
+    svc.getHarnessAnalytics('h_heron', 7)
     clock += 2 // seconds; still inside the 1s TTL? no — ttl is ms, clock is s: 2s > 1s
-    svc.getHarnessAnalytics('h_iris', 7)
+    svc.getHarnessAnalytics('h_heron', 7)
     expect(calls).toBe(2)
   })
 

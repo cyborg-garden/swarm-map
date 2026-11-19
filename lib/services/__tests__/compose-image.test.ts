@@ -20,10 +20,10 @@ describe('readComposeBuildContext', () => {
     const c = [
       'services:',
       '  hermes-cyborg:',
-      '    build: /Users/juni/Documents/GitHub/hermes-agent-mt',
+      '    build: /Users/operator/Documents/GitHub/hermes-agent-mt',
       '    container_name: hermes-cyborg',
     ].join('\n')
-    expect(readComposeBuildContext(c)).toBe('/Users/juni/Documents/GitHub/hermes-agent-mt')
+    expect(readComposeBuildContext(c)).toBe('/Users/operator/Documents/GitHub/hermes-agent-mt')
   })
 
   it('returns null for an image-only compose (nothing to git-sync)', () => {

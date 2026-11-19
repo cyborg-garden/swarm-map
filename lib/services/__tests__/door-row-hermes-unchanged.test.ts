@@ -24,7 +24,7 @@ import os from 'os'
 vi.mock('../docker')
 
 const HERMES_ROWS = [
-  { id: 'h_iris', name: 'iris', runtime: 'hermes', tier: 'team' },
+  { id: 'h_heron', name: 'heron', runtime: 'hermes', tier: 'team' },
   { id: 'h_legacy', name: 'legacy' },
 ]
 const DOOR_ROWS = [
@@ -54,7 +54,7 @@ beforeEach(() => {
   // Two live containers: a Hermes agent, and one whose name maps to the door agent's id.
   mock(docker.listComposeProjects).mockReturnValue([{ name: 'fleet', status: 'running', configFiles: [composeFile] }])
   mock(docker.inspectContainers).mockReturnValue([
-    { name: 'hermes-iris', service: 'hermes-iris', state: 'running', status: 'Up', ports: [{ published: 8642, target: 8000 }], composeFile },
+    { name: 'hermes-heron', service: 'hermes-heron', state: 'running', status: 'Up', ports: [{ published: 8642, target: 8000 }], composeFile },
     { name: 'hermes-pi-one', service: 'hermes-pi-one', state: 'running', status: 'Up', ports: [], composeFile },
   ])
 })
@@ -72,7 +72,7 @@ describe('HarnessService beside door agents', () => {
     storage.write('harnesses.json', [...HERMES_ROWS, ...DOOR_ROWS])
     const beside = service.list()
     expect(beside).toEqual(alone)
-    expect(beside.map((h) => h.id).sort()).toEqual(['h_iris', 'h_legacy'])
+    expect(beside.map((h) => h.id).sort()).toEqual(['h_heron', 'h_legacy'])
   })
 
   it('never lists, gets or projects a container onto a door agent', () => {
@@ -100,7 +100,7 @@ describe('HarnessService beside door agents', () => {
     expect(service.list().map((h) => h.id)).toContain('h_pi_one')
     expect(service.nameTaken('pi-one')).toBe(false)
     expect(agentNameTaken(service, 'pi-one')).toBe(true)
-    expect(agentNameTaken(service, 'iris')).toBe(true)
+    expect(agentNameTaken(service, 'heron')).toBe(true)
     expect(agentNameTaken(service, 'nobody-yet')).toBe(false)
   })
 
