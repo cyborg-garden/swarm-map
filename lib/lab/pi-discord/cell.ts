@@ -75,8 +75,16 @@ export interface CellOptions {
   limits?: ToolLimits
   /** How long the door waits for an admin to answer a request, when a class of tool asks. The cell is told to wait a little longer. */
   approvalMs?: number
-  /** Tests only: break the seal in one named way, to show the checks go red. */
-  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped' | 'cell-folder-uncapped' | 'cell-tmp-uncapped'
+  /**
+   * `reduced`: the second cell, for the rooms with fewer tools than the agent's own. It holds the web,
+   * search and the door's notes, and no shell or file tool (SMLAB_TOOLS). Pi only. Left out, the agent's own cell.
+   */
+  tools?: 'reduced'
+  /**
+   * Tests only: break the seal in one named way, to show the checks go red. `reduced-with-shell` is a second
+   * cell started without its tool set, so it holds the shell and the file tools.
+   */
+  broken?: 'cell-on-egress' | 'cell-writable' | 'cell-other-subnet' | 'cell-scratch-uncapped' | 'cell-folder-uncapped' | 'cell-tmp-uncapped' | 'reduced-with-shell'
 }
 
 /** The scratch folder: where the harness is started, and the one place its file tools reach. */
@@ -106,6 +114,11 @@ export const networksWritten = (file: Pick<LiveFile, 'networks'>): Record<string
 
 /** Every name the cell's environment may hold. Listed by hand; nothing is inherited. */
 export const CELL_ENV = ['SMLAB_GATE', 'SMLAB_MODEL', 'SMLAB_SYSTEM_PROMPT', 'SMLAB_TOOL_OUTPUT_BYTES', 'SMLAB_TOOL_SECONDS', 'SMLAB_VERDICT_MS', 'SMLAB_VETO_MS', 'SWARMLAB_BRAIN', 'SWARMLAB_NONCE']
+/** The second cell's list: the same, and the tool set it holds. */
+export const REDUCED_CELL_ENV = [...CELL_ENV, 'SMLAB_TOOLS'].sort()
+/** Which cell a file or a container is meant to be: the agent's own, or the second, for the rooms with fewer tools. */
+export type CellRole = 'own' | 'reduced'
+const envFor = (role: CellRole): string[] => (role === 'reduced' ? REDUCED_CELL_ENV : CELL_ENV)
 const FORBIDDEN_KEYS = ['ports', 'privileged', 'network_mode', 'extra_hosts', 'env_file', 'cap_add', 'pid', 'devices', 'dns']
 
 function service(image: string, script: string, networks: string[], environment: Record<string, string>): Service {
@@ -123,6 +136,8 @@ export function renderCell(o: CellOptions): LiveFile {
   if (!/^[0-9a-f]{32}$/.test(o.cellNonce) || o.brainToken.slice(0, 39) !== `BRAIN-${o.cellNonce}-`) throw new RefusingToRun('F5', 'not a cell nonce and its token')
   if (o.systemPrompt === '' || o.systemPrompt.length > 16_000) throw new RefusingToRun('F5', 'not a system prompt')
   const kind = cellKind(o.harness)
+  // Only Pi's cell can be told to hold fewer tools. No other harness has tools here at all.
+  if (o.tools === 'reduced' && kind.harness !== DEFAULT_HARNESS) throw new RefusingToRun('F5', `a second cell is built for ${harnessFacts(DEFAULT_HARNESS).label} only`)
   const { cell: CELL_IMAGE, rig: RIG_IMAGE } = o.images ?? launcherImages(o.harness)
   const port = (n: number): number => { if (!Number.isInteger(n) || n < 1024 || n > 65535) throw new RefusingToRun('F5', 'not a port'); return n }
   const limits = o.limits ?? DEFAULT_TOOL_LIMITS
@@ -138,6 +153,7 @@ export function renderCell(o: CellOptions): LiveFile {
     }),
     volumes: [`lab:${LAB_DIR}`], depends_on: ['door'],
   }
+  if (o.tools === 'reduced' && o.broken !== 'reduced-with-shell') cell.environment.SMLAB_TOOLS = 'reduced'
   cell.tmpfs = [TMP_MOUNT, scratchMount(whole(limits.workspaceMb, 1024))]
   const relay = service(RIG_IMAGE, 'lib/door/relay.ts', ['cell', 'egress'], {
     SMLAB_RELAY: `${BRAIN_PORT}=host.docker.internal:${port(o.brainPort)},${ROUTE_PORT}=host.docker.internal:${port(o.routePort)}`,
@@ -171,7 +187,7 @@ export function renderCell(o: CellOptions): LiveFile {
 }
 
 /** What is wrong with a rendered file as a sealed cell. `secrets` are strings that must appear nowhere in it. */
-export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
+export function sealProblems(file: LiveFile, secrets: string[] = [], role: CellRole = 'own'): string[] {
   const p: string[] = []
   const { cell, door } = file.services
   const text = JSON.stringify(file)
@@ -188,7 +204,10 @@ export function sealProblems(file: LiveFile, secrets: string[] = []): string[] {
   // Two places in memory and no more: /tmp with its size, and the scratch folder with a size written on it.
   if (cell.tmpfs.length !== 2 || !/^\/tmp\/smlab\/work:size=([1-9]\d{0,3})m,mode=0700,uid=1000,gid=1000$/.test(cell.tmpfs[1])) p.push('the cell\'s scratch folder is not a capped mount of its own')
   if (JSON.stringify(file.volumes?.lab) !== JSON.stringify(cellFolder())) p.push('the cell\'s own folder is not in memory with a size')
-  if (Object.keys(cell.environment).sort().join(',') !== CELL_ENV.join(',')) p.push('the cell is handed something that is not on its list')
+  if (Object.keys(cell.environment).sort().join(',') !== envFor(role).join(',')) p.push('the cell is handed something that is not on its list')
+  // The second cell holds the web, search and notes, and nothing that runs in it. Told so, or it would hold every tool.
+  if (role === 'reduced' && cell.environment.SMLAB_TOOLS !== 'reduced') p.push('the second cell is not told to hold only the web, search and notes, so it would hold the shell and the file tools')
+  if (role === 'own' && cell.environment.SMLAB_TOOLS !== undefined) p.push('the agent\'s own cell is told to hold fewer tools')
   try { assertNoCredentials(cell.environment, { nonce: cell.environment.SWARMLAB_NONCE }) } catch (err) { p.push((err as Error).message) }
   if (door.volumes !== undefined) p.push('the relay mounts something')
   if (Object.keys(door.environment).join(',') !== 'SMLAB_RELAY') p.push('the relay is handed something other than its two ports')
@@ -290,7 +309,7 @@ export function cellDown(project: string): string[] {
 }
 
 /** What Docker really gave the cell, read from outside it, against the networks that were written down for it. */
-export function runningCellProblems(project: string, written: Record<string, { internal: boolean; subnet: string }>): string[] {
+export function runningCellProblems(project: string, written: Record<string, { internal: boolean; subnet: string }>, role: CellRole = 'own'): string[] {
   const p: string[] = []
   const name = `${project}-cell-1`
   const r = docker(['inspect', name])
@@ -336,7 +355,8 @@ export function runningCellProblems(project: string, written: Record<string, { i
   p.push(...tmpProblems(inMemory['/tmp'], 'the cell as Docker made it', 'docker'))
   // Names only. What the image itself sets is not ours to list.
   const ours = c.Config.Env.map((e) => e.slice(0, e.indexOf('='))).filter((n) => /^(SMLAB_|SWARMLAB_)/.test(n) || /TOKEN|KEY|SECRET|PASS/i.test(n))
-  if (ours.sort().join(',') !== CELL_ENV.join(',')) p.push('the cell\'s environment is not the list it was given')
+  if (ours.sort().join(',') !== envFor(role).join(',')) p.push('the cell\'s environment is not the list it was given')
+  if (role === 'reduced' && !c.Config.Env.includes('SMLAB_TOOLS=reduced')) p.push('the second cell was not started to hold only the web, search and notes')
   return p
 }
 

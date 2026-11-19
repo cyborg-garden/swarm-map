@@ -273,6 +273,9 @@ function Overview({ view }: { view: DoorAgentView }) {
         <Row label="Door" value={status.state === 'running' ? `running since ${when(status.startedAt)}` : 'stopped'} />
         <Row label="Harness" value={`${harness.label} ${harness.version}, pinned`} />
         <Row label="Cell sealed" value={status.sealCheckedAt ? `${sealed} (checked ${when(status.sealCheckedAt)})` : sealed} />
+        <Row label="Cells" value={status.secondCell
+          ? `two: the agent's own, and a second with no shell or file tools for ${status.secondCell.channels === 1 ? 'the channel' : `the ${status.secondCell.channels} channels`} with fewer tools`
+          : 'one'} />
         {status.state === 'running' && (
           <Row label="Rules in force" value={status.rulesInForce ? 'the rules on record' : 'older rules than the ones on record. Save the rules, or stop and start, to apply them'} />
         )}

@@ -187,6 +187,12 @@ export interface DoorStatus {
    * before Swarm Map kept that note. Null when stopped.
    */
   startedBy: 'page' | 'supervisor' | 'elsewhere' | null
+  /**
+   * The second cell, for the channels with fewer tools than the agent's own: built with no shell or
+   * file tools. Running, it is there when the run has one; stopped, when the rules on record would
+   * start one. Left out, there is one cell.
+   */
+  secondCell?: { channels: number }
 }
 
 /**

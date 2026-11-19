@@ -23,14 +23,18 @@ import { createSanitizer } from '../../door/sanitizer.ts'
 import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts'
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
-import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE, keptScratchPlan, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
-import { approvalSecondsOf, channelIdsOf, harnessOf, turnSecondsOf, policyFor, statusOf, systemPromptFor, toolModes, type LabConfig } from './config.ts'
+import { cellDown, cellStopStart, cellUp, type CellRole, KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE, keptScratchPlan, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
+import { approvalSecondsOf, channelIdsOf, harnessOf, reducedRoomsOf, turnSecondsOf, policyFor, statusOf, systemPromptFor, toolModes, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
 
-export interface RunRecord { pid: number; project: string; agentId: string; policyHash: string; startedAt: string }
-export interface Running { project: string; door: Door; stop(): Promise<void> }
+/**
+ * What is running. `reducedProject` is the second cell, for the channels with fewer tools, and is written
+ * only when there is one: a record for one cell is as it always was.
+ */
+export interface RunRecord { pid: number; project: string; agentId: string; policyHash: string; startedAt: string; reducedProject?: string }
+export interface Running { project: string; reducedProject?: string; door: Door; stop(): Promise<void> }
 export interface Check { id: string; title: string; pass: boolean; detail: string }
 
 const inside = (child: string, parent: string): boolean => {
@@ -48,6 +52,8 @@ export function prepareStateDir(dir: string): string {
 }
 
 export const runFile = (stateDir: string): string => path.join(stateDir, 'run.json')
+/** The second cell's compose file, beside the first's. */
+const REDUCED_COMPOSE = 'compose-reduced.json'
 /** Where the door keeps its notes for each room (lib/door/memory.ts): in the state folder, outside every cell. */
 export const memoryDir = (stateDir: string): string => path.join(stateDir, 'memory')
 export function readRun(stateDir: string): RunRecord | undefined {
@@ -148,6 +154,11 @@ export async function start(o: StartOptions): Promise<Running> {
     if (left.length > 0) throw new Error(`the last run's containers could not be removed: ${left.join(', ')}`)
     o.log(`removed what the last run left behind (${previous.project})`)
   }
+  if (previous && typeof previous.reducedProject === 'string' && PROJECT_NAME.test(previous.reducedProject)) {
+    const left = cellDown(previous.reducedProject)
+    if (left.length > 0) throw new Error(`the last run's containers could not be removed: ${left.join(', ')}`)
+    o.log(`removed the second cell the last run left behind (${previous.reducedProject})`)
+  }
 
   const nonce = randomBytes(4).toString('hex')
   const project = `smlab-${nonce}`
@@ -168,6 +179,19 @@ export async function start(o: StartOptions): Promise<Running> {
   const cellOptions: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.config.model.id, systemPrompt: systemPromptFor(o.config), images, subnets: cellSubnets(pickSubnets(3, [])), limits: DEFAULT_TOOL_LIMITS, approvalMs }
   const problems = sealProblems(renderCell(cellOptions), secrets)
   if (problems.length > 0) throw new Error(`the cell is not sealed: ${problems.join('; ')}`)
+
+  // The second cell, when a channel has fewer tools than the agent's own: a cell of its own, built with the
+  // web, search and notes only, a token and a port of its own, and the same door, model route and budget.
+  // The channels with fewer tools are sent to it and to no other. With none, there is one cell, as always.
+  const reducedRooms = reducedRoomsOf(o.config)
+  const second = reducedRooms.length === 0 ? undefined : await (async () => {
+    const nonce2 = randomBytes(4).toString('hex')
+    const options: CellOptions = { ...cellOptions, nonce: nonce2, brainToken: `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`, brainPort: await freePort(), tools: 'reduced', approvalMs }
+    const unsealed = sealProblems(renderCell(options), secrets, 'reduced')
+    if (unsealed.length > 0) throw new Error(`the second cell is not sealed: ${unsealed.join('; ')}`)
+    return { project: `smlab-${nonce2}`, options }
+  })()
+  if (second) cellHeld.push(second.options.brainToken)
 
   // One check for everything the door posts, writes down or keeps as a note.
   const sanitizer = createSanitizer({ extraSecrets: [...secrets, ...cellHeld] })
@@ -221,15 +245,16 @@ export async function start(o: StartOptions): Promise<Running> {
     await door?.close().catch(() => {})
     await route?.close().catch(() => {})
     try { saveScratch() } catch { o.log('the scratch folder could not be kept') }
-    const left = cellDown(project)
+    const left = [...cellDown(project), ...(second ? cellDown(second.project) : [])]
     rmSync(runFile(stateDir), { force: true })
     rmSync(path.join(stateDir, 'compose.json'), { force: true })
-    o.log(left.length === 0 ? 'stopped: the door is closed and the cell is gone' : `stopped the door, but these containers are still there: ${left.join(', ')}`)
+    if (second) rmSync(path.join(stateDir, REDUCED_COMPOSE), { force: true })
+    o.log(left.length === 0 ? `stopped: the door is closed and the ${second ? 'two cells are' : 'cell is'} gone` : `stopped the door, but these containers are still there: ${left.join(', ')}`)
   }
 
   try {
     // Written first, so `stop` can clean up whatever happens next.
-    writeFileSync(runFile(stateDir), JSON.stringify({ pid: process.pid, project, agentId: policy.agentId, policyHash: policy.hash, startedAt: new Date().toISOString() } satisfies RunRecord) + '\n', { mode: 0o600 })
+    writeFileSync(runFile(stateDir), JSON.stringify({ pid: process.pid, project, agentId: policy.agentId, policyHash: policy.hash, startedAt: new Date().toISOString(), ...(second ? { reducedProject: second.project } : {}) } satisfies RunRecord) + '\n', { mode: 0o600 })
     route = await startModelRoute({
       upstream: o.config.model.baseUrl, upstreamKey: o.secrets.modelKey, placeholder: `PLACEHOLDER-${cellNonce}`, shape: OPENAI_CHAT,
       policy: () => door?.policy() ?? policy, receipts,
@@ -256,6 +281,21 @@ export async function start(o: StartOptions): Promise<Running> {
     if (running.length > 0) throw new Error(`the cell is not sealed: ${running.join('; ')}`)
     o.log(`cell up and sealed (${project})`)
     cellIsUp = true
+    // The second cell, started and looked at the same way, on blocks that are free now (the first cell's are taken).
+    const secondFile = second && onFreeSubnets({ count: 3, used: blocksInUse }, (picked) => {
+      const onThese = renderCell({ ...second.options, subnets: cellSubnets(picked) })
+      const unsealed = sealProblems(onThese, secrets, 'reduced')
+      if (unsealed.length > 0) throw new Error(`the second cell is not sealed: ${unsealed.join('; ')}`)
+      const at = path.join(stateDir, REDUCED_COMPOSE)
+      writeFileSync(at, JSON.stringify(onThese, null, 2), { mode: 0o600 })
+      cellUp(onThese, at)
+      return onThese
+    }, () => { cellDown(second.project) })
+    if (second && secondFile) {
+      const wrong = runningCellProblems(second.project, networksWritten(secondFile), 'reduced')
+      if (wrong.length > 0) throw new Error(`the second cell is not sealed: ${wrong.join('; ')}`)
+      o.log(`second cell up and sealed (${second.project}), with no shell or file tools, for ${reducedRooms.length} channel(s) with fewer tools`)
+    }
 
     const connector: SurfaceConnector = createDiscordConnector({
       ...(o.discord ?? {}),
@@ -270,6 +310,10 @@ export async function start(o: StartOptions): Promise<Running> {
       receipts, brainToken, brainPort, sanitizer, memory, keptScratch: keep, status: statusOf(o.config),
       ...(o.config.tools?.web?.search === true && o.secrets.searchKey ? { search: { key: o.secrets.searchKey } } : {}), turnDeadlineMs: turnSecondsOf(o.config) * 1000,
       approvalTimeoutMs: approvalMs, toolCallsPerHour: DEFAULT_TOOL_LIMITS.callsPerHour,
+      ...(second ? {
+        reducedCell: { brainToken: second.options.brainToken, brainPort: second.options.brainPort, rooms: reducedRooms },
+        onCellRefused: (cell: string, why: string) => { o.log(`the door turned away ${cell === 'reduced' ? 'the second cell' : 'the cell'}: ${why}`) },
+      } : {}),
     })
     await joinCell({
       ready: (ms) => withTimeout(door!.shimConnected().then(() => true), ms, '').catch(() => false),
@@ -278,11 +322,20 @@ export async function start(o: StartOptions): Promise<Running> {
       pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       now: Date.now, log: o.log,
     }, { redialMs: o.cellRedialMs ?? 3_000, readyMs: o.cellReadyMs ?? 60_000, force: o.redialCell === true })
+    if (second && secondFile) {
+      await joinCell({
+        ready: (ms) => withTimeout(door!.reducedConnected!().then(() => true), ms, '').catch(() => false),
+        stopStart: (what) => cellStopStart(second.project, what),
+        sealProblems: () => runningCellProblems(second.project, networksWritten(secondFile), 'reduced'),
+        pause: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+        now: Date.now, log: (line) => o.log(`second cell: ${line}`),
+      }, { redialMs: o.cellRedialMs ?? 3_000, readyMs: o.cellReadyMs ?? 60_000 })
+    }
     // Put back once the cell has joined the door and is the cell that stays: a cell that is started again
     // comes back with an empty folder (it is in memory), and one that has not joined yet may be about to be.
     restoreScratch()
-    o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, ${channelIdsOf(o.config).length === 1 ? 'one channel' : `${channelIdsOf(o.config).length} channels`}`)
-    return { project, door, stop }
+    o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, ${channelIdsOf(o.config).length === 1 ? 'one channel' : `${channelIdsOf(o.config).length} channels`}${second ? `, two cells (${reducedRooms.length} channel(s) in the second)` : ''}`)
+    return { project, ...(second ? { reducedProject: second.project } : {}), door, stop }
   } catch (err) {
     await stop()
     throw err
@@ -296,7 +349,8 @@ export async function start(o: StartOptions): Promise<Running> {
  * a sink and a listener on this machine say what they saw from outside.
  * Nothing is connected to Discord and no model is called.
  */
-export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken']; harness?: LauncherHarness }): Promise<Check[]> {
+export async function sealChecks(o: { model: string; workDir: string; log: (line: string) => void; broken?: CellOptions['broken']; harness?: LauncherHarness; role?: CellRole }): Promise<Check[]> {
+  const role = o.role ?? 'own'
   const harness = o.harness ?? DEFAULT_HARNESS
   const images = launcherImages(harness)
   const nonce = randomBytes(4).toString('hex')
@@ -304,7 +358,13 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
   const cellNonce = randomBytes(16).toString('hex')
   const brainToken = `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`
   const [brainPort, routePort] = [await freePort(), await freePort()]
-  const options: CellOptions = { harness, nonce, cellNonce, brainToken, brainPort, routePort, model: o.model, systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken, subnets: cellSubnets(pickSubnets(3, [])) }
+  // The second cell dials a door port of its own, with a token of its own. The door's first port is then left with no cell.
+  const reducedBrain = role === 'reduced' ? { token: `BRAIN-${cellNonce}-${randomBytes(8).toString('hex')}`, port: await freePort() } : undefined
+  const options: CellOptions = {
+    harness, nonce, cellNonce, brainToken: reducedBrain?.token ?? brainToken, brainPort: reducedBrain?.port ?? brainPort, routePort, model: o.model,
+    systemPrompt: systemPromptFor(DRY_POLICY_CONFIG(o.model)), images, withSink: true, broken: o.broken, subnets: cellSubnets(pickSubnets(3, [])),
+    ...(role === 'reduced' ? { tools: 'reduced' as const } : {}),
+  }
   const checks: Check[] = []
   const add = (id: string, title: string, problems: string[]): void => { checks.push({ id, title, pass: problems.length === 0, detail: problems.join('; ') || 'ok' }) }
 
@@ -312,7 +372,12 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
   const host = await startHostListener()
   const policy = policyFor(DRY_POLICY_CONFIG(o.model))
   const receipts = createReceiptLog()
-  const door = await createDoor({ policy, connectors: [], creds: {}, receipts, brainToken, brainPort })
+  const refused: string[] = []
+  const door = await createDoor({
+    policy, connectors: [], creds: {}, receipts, brainToken, brainPort,
+    ...(reducedBrain ? { reducedCell: { brainToken: reducedBrain.token, brainPort: reducedBrain.port, rooms: [] }, onCellRefused: (_cell: string, why: string) => { refused.push(why) } } : {}),
+  })
+  const connected = (): Promise<void> => (reducedBrain ? door.reducedConnected!() : door.shimConnected())
   const route = await startModelRoute({
     upstream: 'http://127.0.0.1:9/v1', upstreamKey: `UPSTREAM-${cellNonce}`, placeholder: `PLACEHOLDER-${cellNonce}`, shape: OPENAI_CHAT,
     policy: () => policy, receipts, prices: {}, ledger: createMemoryLedger(), host: '127.0.0.1', port: routePort,
@@ -330,11 +395,15 @@ export async function sealChecks(o: { model: string; workDir: string; log: (line
       // What the networks were meant to be. A cell broken on purpose may have been written otherwise.
       return { file, written: networksWritten(renderCell({ ...options, subnets, broken: undefined })), sinkIp }
     }, () => { cellDown(project) })
-    add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file))
+    add('S0', 'the cell as written is sealed: one network with no way out, read-only, no host folder, no secret', sealProblems(file, [], role))
     o.log(`cell up for the dry run (${project})`)
-    const reached = await withTimeout(door.shimConnected().then(() => true), 60_000, '').catch(() => false)
+    const reached = await withTimeout(connected().then(() => true), 60_000, '').catch(() => false)
     add('S0r', 'the cell reaches the door through the relay, with its own cell token', reached ? [] : ['the cell never reached the door, so nothing else was checked'])
-    add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project, written))
+    if (role === 'reduced') {
+      add('S0t', 'the second cell holds no shell or file tool: the door takes it only as holding the web, search and notes',
+        [...new Set(refused)].map((why) => `the door turned the cell away: ${why}`).concat(reached || refused.length > 0 ? [] : ['the cell never said what it holds']))
+    }
+    add('S0d', 'what Docker really gave the cell matches what was written', runningCellProblems(project, written, role))
     if (reached) {
       const seen = host.hits.length
       const probed = await probeCell(project, cellNonce, sinkIp, host.port, targets, harness)
@@ -378,10 +447,12 @@ export async function stopRun(stateDir: string, log: (line: string) => void): Pr
     for (let i = 0; i < 100 && ours(); i++) await new Promise((resolve) => setTimeout(resolve, 100))
     if (ours()) { process.kill(run.pid, 'SIGKILL'); log('the door did not stop when asked, so it was killed') }
   }
-  // Whether or not the door cleaned up after itself, the cell is removed by name.
-  const left = cellDown(run.project)
+  // Whether or not the door cleaned up after itself, the cell is removed by name, and the second cell if there is one.
+  const second = typeof run.reducedProject === 'string' && PROJECT_NAME.test(run.reducedProject) ? run.reducedProject : undefined
+  const left = [...cellDown(run.project), ...(second ? cellDown(second) : [])]
   if (existsSync(runFile(stateDir))) rmSync(runFile(stateDir), { force: true })
   rmSync(path.join(stateDir, 'compose.json'), { force: true })
-  log(left.length === 0 ? `stopped: the door (pid ${run.pid}) is gone and the cell (${run.project}) is removed` : `these containers are still there: ${left.join(', ')}`)
+  rmSync(path.join(stateDir, REDUCED_COMPOSE), { force: true })
+  log(left.length === 0 ? `stopped: the door (pid ${run.pid}) is gone and the cell (${run.project}${second ? ` and ${second}` : ''}) is removed` : `these containers are still there: ${left.join(', ')}`)
   return left.length === 0
 }

@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Suspense } from 'react'
-import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
+import { cleanup, render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import HarnessDetailPage from '@/app/(dashboard)/harnesses/[id]/page'
 import HarnessesPage from '@/app/(dashboard)/harnesses/page'
 import { usd } from './door-agent-page'
@@ -152,6 +152,15 @@ describe('the page of a door agent', () => {
     expect(screen.getByText('Cell sealed').parentElement).toHaveTextContent(/^Cell sealedyes \(checked/)
     expect(screen.getByText('Spent this month').parentElement).toHaveTextContent('$1.25')
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+  })
+
+  it('says how many cells hold the agent: one, or two with the second for the channels with fewer tools', async () => {
+    await openPage()
+    expect(screen.getByText('Cells').parentElement).toHaveTextContent(/^Cellsone$/)
+    cleanup()
+    current = view({ status: { ...RUNNING, secondCell: { channels: 2 } } })
+    await openPage()
+    expect(screen.getByText('Cells').parentElement).toHaveTextContent('two: the agent\'s own, and a second with no shell or file tools for the 2 channels with fewer tools')
   })
 
   it('writes money as a dash when unknown and as a figure when known, zero included', () => {

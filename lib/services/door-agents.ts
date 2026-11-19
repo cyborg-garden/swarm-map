@@ -26,7 +26,7 @@ import { createMemoryStore, MEMORY_FILES, MEMORY_HEADINGS, MEMORY_LIMITS, type M
 import type { Receipt } from '@/lib/door/receipts'
 import { createSanitizer } from '@/lib/door/sanitizer'
 import { monthOf } from '@/lib/door/spend-ledger'
-import { parseConfig, policyFor, systemPromptFor } from '@/lib/lab/pi-discord/config'
+import { parseConfig, policyFor, reducedRoomsOf, systemPromptFor } from '@/lib/lab/pi-discord/config'
 import { SEARCH_KEY_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
 import { harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
 import { doorAgentName, doorNameClash, doorNameTaken } from '@/lib/door-agent-name'
@@ -249,10 +249,13 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     const seal = dryRun && dryRun.result !== 'node-unusable'
       ? { cellSealed: dryRun.result !== 'not-ready', sealCheckedAt: dryRun.at }
       : { cellSealed: null }
-    let run: { pid?: unknown; startedAt?: unknown; policyHash?: unknown } | undefined
+    let run: { pid?: unknown; startedAt?: unknown; policyHash?: unknown; reducedProject?: unknown } | undefined
     try { run = JSON.parse(fs.readFileSync(path.join(p.stateDir, 'run.json'), 'utf8')) } catch { /* no run on record */ }
+    // The channels the rules on record send to a second cell. Rules that cannot be read send none.
+    let fewer = 0
+    try { fewer = record === undefined ? 0 : reducedRoomsOf(record.rules).length } catch { fewer = 0 }
     if (!run || typeof run.pid !== 'number' || !this.launcher.alive(run.pid)) {
-      return { state: 'stopped', ...seal, rulesInForce: null, startedBy: null }
+      return { state: 'stopped', ...seal, rulesInForce: null, startedBy: null, ...(fewer > 0 ? { secondCell: { channels: fewer } } : {}) }
     }
     let rulesInForce = false
     try { rulesInForce = record !== undefined && policyFor(record.rules).hash === run.policyHash } catch { /* rules that cannot be a policy are not in force */ }
@@ -260,6 +263,7 @@ export class DoorAgentService implements DoorRuntimeAdapter {
       state: 'running', pid: run.pid,
       ...(typeof run.startedAt === 'string' ? { startedAt: run.startedAt } : {}),
       ...seal, rulesInForce, startedBy: this.startedBy(id, run.pid),
+      ...(typeof run.reducedProject === 'string' ? { secondCell: { channels: fewer } } : {}),
     }
   }
 

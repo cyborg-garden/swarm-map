@@ -388,6 +388,16 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   return problems.length > 0 ? { errors: problems.map((p) => `policy: ${p}`) } : { config, errors: [] }
 }
 
+/**
+ * The channels that go to the second cell: each with fewer tools than the agent's own (`web-only` or
+ * `none`), when the agent's own channel has a shell or file tool. That cell is built with the web, search
+ * and notes only, so those tools are not in it at all. Empty, and there is one cell, as there always was.
+ */
+export function reducedRoomsOf(c: Pick<LabConfig, 'discord' | 'tools'>): string[] {
+  if (!Object.values(toolModes(c)).some((m) => m !== 'never')) return []
+  return channelIdsOf(c).slice(1).filter((id) => channelRulesOf(c, id).tools !== 'inherit')
+}
+
 /** The harness a config asks for: the one it names, or Pi. */
 export function harnessOf(c: Pick<LabConfig, 'harness'>): LauncherHarness {
   return c.harness ?? DEFAULT_HARNESS
