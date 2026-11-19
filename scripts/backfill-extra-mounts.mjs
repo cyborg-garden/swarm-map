@@ -16,8 +16,8 @@
  * (the settings PUT, and only when the VPN toggle or the resource limits
  * change). Any other path that regenerates a compose, any rename of a container
  * path, or any relaxation of that 409 drops the mount, and the container comes
- * back healthy with the capability gone. That is how the iris gate-intake
- * mounts were lost once already.
+ * back healthy with the capability gone. That is how an approval gate's
+ * intake mounts were lost once already.
  *
  * Recording the mount in `extraMounts` is the durable fix: `generateStandalone
  * Compose` re-renders every recorded mount on every regeneration.

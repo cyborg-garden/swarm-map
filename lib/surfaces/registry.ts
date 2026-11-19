@@ -35,9 +35,7 @@
 // privilege is the separate surfaceAdmins overlay, which merely BOOTSTRAPS from
 // the admission allowlist until an explicit admin list is set. Conflating the two
 // ("Admins" labeling the allowlist field) caused the silent-bot incident that
-// motivated this registry. See
-// memory/knowledge/decisions/2026-08-03-admission-vs-privilege-surface-permissions.md
-// in nimbleco-egregore.
+// motivated this registry.
 
 export type SurfaceSlug = 'signal' | 'telegram' | 'mattermost' | 'discord' | 'slack'
 
@@ -175,7 +173,7 @@ export const SURFACES: Record<SurfaceSlug, SurfaceSpec> = {
       observeUnmentioned: 'DISCORD_OBSERVE_UNMENTIONED',
       allowBots: 'DISCORD_ALLOW_BOTS',
       botsRequireInlineMention: 'DISCORD_BOTS_REQUIRE_INLINE_MENTION',
-      // Org default 2026-10-06 (#bounties-work incident): without it, once a
+      // Org default 2026-10-06: without it, once a
       // bot has "participated" in a thread it answers every message there,
       // mentioned or not. .env is the only place HSM writes it —
       // platforms.discord.extra.thread_require_mention would OUTRANK .env, so

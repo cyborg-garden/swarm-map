@@ -19,7 +19,7 @@ export async function POST(
 
   // The service creates the duplicate under the SLUGGED name (toHarnessSlug),
   // so the pre-existence check must use the slug too — checking the raw name
-  // would miss e.g. "Mare" colliding with existing "mare", and the collision
+  // would miss e.g. "Scout" colliding with existing "scout", and the collision
   // would then surface as a misleading 404 from the service instead of a 409.
   const slug = toHarnessSlug(newName)
   if (!slug) {

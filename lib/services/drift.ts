@@ -258,7 +258,7 @@ export function buildSourceHead(dir: string): BuildSourceHead {
 
 /**
  * True when the agent's own code inside the container differs from the image.
- * Only /opt/hermes paths count — bind mounts (/opt/data, /opt/iris, …) always
+ * Only /opt/hermes paths count — bind mounts (/opt/data, …) always
  * show up in `docker diff` and are not hot-patching.
  */
 export async function hotPatched(

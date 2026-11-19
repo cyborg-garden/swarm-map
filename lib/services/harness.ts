@@ -96,9 +96,9 @@ function parseEnvFilePairs(envPath: string): Record<string, string> {
 
 // Normalize a harness name to a lowercase slug. Docker image/service/network
 // references must be lowercase, and macOS's case-insensitive filesystem makes a
-// capitalized name (e.g. "Mare") collide with its lowercase compose/data dirs —
+// capitalized name (e.g. "Scout") collide with its lowercase compose/data dirs —
 // so a duplicate silently reuses the capitalized compose and `up` then fails
-// with "no such service: hermes-mare". Forcing lowercase at creation prevents
+// with "no such service: hermes-scout". Forcing lowercase at creation prevents
 // the whole class. This is the single naming convention — the wizard deploy
 // route and the duplicate route's pre-existence check import it too.
 export function toHarnessSlug(name: string): string {
@@ -867,7 +867,7 @@ function getComposeFilesForDir(hermesDir: string): string[] {
 // Map service name to the data directory where its SOUL.md lives
 export function guessDataDir(serviceName: string, containerName: string): string {
   // hermes-personal → ~/.hermes (the default/personal instance)
-  // hermes-osint → ~/.hermes-osint
+  // hermes-research → ~/.hermes-research
   // seraph-thinker → ~/.hermes-seraph-thinker
   const home = os.homedir()
   if (containerName === 'hermes-personal' || serviceName === 'hermes-personal') {
@@ -1217,7 +1217,7 @@ export class HarnessService {
         //
         //  - extraMounts/extraEnv: the settings route regenerates the compose
         //    from get(id). Missing here, it regenerates WITHOUT the agent's
-        //    hand-added host mounts — for iris, its approval-gate spool — and
+        //    hand-added host mounts — e.g. an approval gate's spool — and
         //    the container comes back healthy with the capability gone. That
         //    is the failure these fields exist to prevent (#222).
         //  - pinnedImageRef/lastKnownDigest: imageStatus() computes
@@ -1862,7 +1862,7 @@ export class HarnessService {
 
     // A duplicate must NOT inherit the source's host bind mounts, nor the env
     // vars naming them. Those paths point at the SOURCE agent's directories —
-    // for the iris gate, its approval spool — and the compose generated just
+    // e.g. an approval gate's spool — and the compose generated just
     // above deliberately carries none of them. Spreading them onto the new
     // overlay would leave overlay and compose silently divergent, and the next
     // unrelated settings PUT regenerates FROM the overlay, at which point the

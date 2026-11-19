@@ -6,9 +6,9 @@
  * "participated" in unless thread_require_mention is on, and its default is
  * off. Neither bot's .env set the var, and swarm-map had no knob for it.
  *
- * Fleet policy (Juniper, 2026-10-06): @mention is required everywhere,
+ * Fleet policy (2026-10-06): @mention is required everywhere,
  * threads included. The only sanctioned way to let an agent answer freely is
- * DISCORD_FREE_RESPONSE_CHANNELS (blackhouse's #theblackhouse), or an explicit
+ * DISCORD_FREE_RESPONSE_CHANNELS (an agent's own home channel), or an explicit
  * per-agent DISCORD_THREAD_REQUIRE_MENTION=false listed in the
  * `discordThreadMentionOptOuts` setting.
  *

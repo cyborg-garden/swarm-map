@@ -10,7 +10,7 @@
  *    list's own indentation
  *  - inline flow list (`enabled: []`, `enabled: [a, "b"]`) → rewritten in
  *    place as a block list with the same entries plus the missing names.
- *    Inline `[]` is why cyborg-public loaded 0 of its 4 plugins.
+ *    An inline `[]` once left an agent loading none of its plugins.
  *  - top key present, child absent → child inserted as the block's first child
  *  - top key absent → a fresh block appended at end of file
  * Anything else (a nested flow list, a scalar child, `topKey: {..}` inline)

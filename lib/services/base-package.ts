@@ -17,8 +17,7 @@
  * route for existing agents call applyBasePackageToDir, so they cannot drift.
  * It is ADD-ONLY and idempotent: it installs missing core items, adds missing
  * names to lists, replaces only its own marked SOUL block, and never removes
- * or overwrites an agent's customisation. Spec:
- * nimbleco-memory/plans/2026-10-07-opinionated-base-package.md
+ * or overwrites an agent's customisation.
  */
 import fs from 'fs'
 import path from 'path'

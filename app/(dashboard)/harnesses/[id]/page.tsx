@@ -1367,7 +1367,7 @@ function HermesHarnessDetailPage({ id }: { id: string }) {
                     type="text"
                     value={newKeyName}
                     onChange={(e) => setNewKeyName(e.target.value)}
-                    placeholder="e.g. hermes-cryptids"
+                    placeholder="e.g. hermes-research"
                     className="w-full mt-1 text-sm border border-[var(--border)] rounded-md px-2 py-1.5 bg-[var(--surface)]"
                   />
                 </div>
