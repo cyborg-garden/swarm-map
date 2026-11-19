@@ -22,6 +22,23 @@ export function renderDeployedCompose(): string {
   )
 }
 
+// Which agent dirs the daemon may read attachments from is per-deployment, so it
+// lives in an optional, gitignored infra/signal-cli/docker-compose.override.yml.
+// Copy it beside the deployed compose and pass it as a second -f. Without one,
+// only the base file is used; a stale copy from an earlier deploy is removed.
+export function composeFileArgs(infraDir: string, swarmDir: string, composePath: string): string[] {
+  const args = ['-f', composePath]
+  const src = path.join(infraDir, 'docker-compose.override.yml')
+  const dst = path.join(swarmDir, 'docker-compose.signal.override.yml')
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, dst)
+    args.push('-f', dst)
+  } else {
+    fs.rmSync(dst, { force: true })
+  }
+  return args
+}
+
 export async function POST() {
   try {
     // Check if already running
@@ -64,7 +81,8 @@ export async function POST() {
     } catch { /* nothing to remove */ }
 
     // Start (build the native image on first deploy; cached thereafter)
-    execFileSync('docker', ['compose', '-f', composePath, 'up', '-d', '--build'], { timeout: 180000, cwd: swarmDir })
+    const fileArgs = composeFileArgs(infraDir, swarmDir, composePath)
+    execFileSync('docker', ['compose', ...fileArgs, 'up', '-d', '--build'], { timeout: 180000, cwd: swarmDir })
 
     // Poll for health via JSON-RPC (up to 90 seconds — accounts take time to load)
     const signalUrl = getSignalDaemonUrl()

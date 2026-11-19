@@ -1,0 +1,9 @@
+# Copy to docker-compose.override.yml (gitignored) and list every agent that
+# sends Signal attachments. `docker compose up` in this directory merges the
+# override automatically. If you start the stack with an explicit -f, pass this
+# file too: -f docker-compose.yml -f docker-compose.override.yml
+services:
+  signal-cli-daemon:
+    volumes:
+      - ${HOME}/.hermes-agent-a:${HOME}/.hermes-agent-a:ro
+      - ${HOME}/.hermes-agent-b:${HOME}/.hermes-agent-b:ro

@@ -76,3 +76,6 @@ compose/
 
 # Lab conformance output
 conformance/out/
+
+# Per-deployment Compose overrides (see infra/signal-cli/docker-compose.override.example.yml)
+infra/signal-cli/docker-compose.override.yml

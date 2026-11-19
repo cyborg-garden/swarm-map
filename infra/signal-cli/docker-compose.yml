@@ -11,13 +11,11 @@ services:
     volumes:
       - ${HOME}/.hermes-swarm/signal-data:/home/.local/share/signal-cli
       # Agent data dirs mounted at host paths so signal-cli can read attachments
-      # (agents translate container paths to host paths before sending to signal-cli)
+      # (agents translate container paths to host paths before sending to signal-cli).
+      # Only the default profile is mounted here. Mount each other Signal agent's
+      # dir in a local docker-compose.override.yml (gitignored; Compose merges it
+      # automatically). See docker-compose.override.example.yml.
       - ${HOME}/.hermes:${HOME}/.hermes:ro
-      - ${HOME}/.hermes-cyborg:${HOME}/.hermes-cyborg:ro
-      - ${HOME}/.hermes-osint:${HOME}/.hermes-osint:ro
-      - ${HOME}/.hermes-cryptids:${HOME}/.hermes-cryptids:ro
-      - ${HOME}/.hermes-egregore:${HOME}/.hermes-egregore:ro
-      - ${HOME}/.hermes-evil-duck:${HOME}/.hermes-evil-duck:ro
     # Hardening: no privilege escalation, drop all capabilities EXCEPT
     # DAC_OVERRIDE, plus bounded resources. DAC_OVERRIDE is required because the
     # daemon runs as root and must traverse/read the agents' 0700-mode home dirs
