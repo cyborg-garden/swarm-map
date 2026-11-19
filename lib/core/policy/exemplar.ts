@@ -27,7 +27,7 @@ export const EXEMPLAR_POLICY: Exemplar = {
       account: 'fake-bot',
       users: [{ kind: 'user', id: 'u-alice' }],
       anyoneInAllowedRoom: false,
-      rooms: [{ match: { room: 'r-general' }, mode: 'mention' }],
+      rooms: [{ match: { room: 'r-general' }, mode: 'mention', anyone: false }],
       dm: { mode: 'closed', users: [] },
       bots: { mode: 'none', inlineMentionOnly: true, roles: [], ids: [], maxAlternatingTurns: 4 },
       invites: { mode: 'closed' },

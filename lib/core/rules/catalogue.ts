@@ -63,8 +63,8 @@ export const RULES: Rule[] = [
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`], surfaces: 'all', enforcer: 'door', tests: ['D:adm.rooms/category', 'D:adm.rooms/unlisted-room'], checks: [] },
   { id: 'adm.rooms.ignore', statement: 'An ignored room beats every allow.',
     klass: 'security', kind: 'wall', reads: [`${S}.rooms`], surfaces: 'all', enforcer: 'door', tests: ['D:adm.rooms.ignore/ignore-beats-allow'], checks: [] },
-  { id: 'adm.anyone-in-room', statement: 'Anyone in an approved room may speak, when that is switched on.',
-    klass: 'security', kind: 'wall', reads: [`${S}.anyoneInAllowedRoom`], surfaces: 'all', enforcer: 'door', tests: ['D:adm.anyone-in-room/stranger-welcome'], checks: [] },
+  { id: 'adm.anyone-in-room', statement: 'Anyone in an approved room may speak, when that is switched on for the agent or for that room. A room switched on alone always needs a mention.',
+    klass: 'security', kind: 'wall', reads: [`${S}.anyoneInAllowedRoom`, `${S}.rooms`], surfaces: 'all', enforcer: 'door', tests: ['D:adm.anyone-in-room/stranger-welcome', 'U:anyone-per-room'], checks: [] },
   { id: 'adm.empty-is-closed', statement: 'An empty list admits nobody.',
     klass: 'security', kind: 'wall', reads: [`${S}.users`, `${S}.rooms`, `${S}.dm.users`], surfaces: 'all', enforcer: 'door', tests: ['D:adm.empty-is-closed/no-dm-users', 'D:adm.empty-is-closed/no-rooms', 'D:adm.empty-is-closed/no-users'], checks: [] },
 
@@ -103,12 +103,12 @@ export const RULES: Rule[] = [
   { id: 'priv.no-forged-identity', statement: 'Message text and display names cannot raise privilege.',
     klass: 'security', kind: 'wall', reads: [`${S}.admins`], surfaces: 'all', enforcer: 'door', tests: ['D:priv.no-forged-identity/claims-admin'], checks: ['C13'] },
 
-  { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied.',
-    klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/deny-beats-ask', 'D:tools.lists/not-allowed'], checks: ['C4', 'C4a', 'C4+'] },
+  { id: 'tools.lists', statement: 'A tool runs only if its class is allowed and not denied, for the agent and for the room it was asked from.',
+    klass: 'security', kind: 'guardrail', reads: ['tools.allow', 'tools.deny', 'tools.perRoom'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.lists/deny-wins', 'D:tools.lists/deny-beats-ask', 'D:tools.lists/not-allowed', 'U:tools-per-room'], checks: ['C4', 'C4a', 'C4+'] },
   // C4p shows the guardrail: the gate says no to a public agent. The wall behind it is C10
   // (the gate removed, in a sealed cell), so the rule is claimed for no harness until C10 runs.
-  { id: 'tools.posture', statement: 'Public agents lose shell, file, code-exec and chat-admin tools.',
-    klass: 'security', kind: 'guardrail', reads: ['posture'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'D:tools.posture/public-never-asks', 'U:tools-posture'], checks: ['C4p', 'C10'] },
+  { id: 'tools.posture', statement: 'Public agents, and rooms that hear anyone, lose shell, file, code-exec and chat-admin tools.',
+    klass: 'security', kind: 'guardrail', reads: ['posture', `${S}.rooms`], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'D:tools.posture/public-never-asks', 'U:tools-posture'], checks: ['C4p', 'C10'] },
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'], checks: ['C7'] },
 

@@ -27,8 +27,6 @@ export const DEFERRED_FIELDS: DeferredField[] = [
   { path: 'surfaces.*.bots.roles', rule: 'bots.roles', atRest: empty },
   { path: 'surfaces.*.invites.mode', rule: 'invite.policy', atRest: is('closed') },
   { path: 'surfaces.*.approverRoles', rule: 'priv.approver-roles', atRest: empty },
-  { path: 'tools.perRoom', rule: 'tools.per-room',
-    atRest: (v) => v === undefined || (typeof v === 'object' && v !== null && Object.keys(v).length === 0) },
   { path: 'tools.browserGuard', rule: 'tools.browser-guard', atRest: is('off') },
   { path: 'keys', rule: 'keys.not-in-cell', atRest: empty },
   { path: 'egress.blockPrivateRanges', rule: 'sub.g1', atRest: is(true) },
@@ -44,7 +42,7 @@ export const DEFERRED_FIELDS: DeferredField[] = [
 ]
 
 /** Committed count. May only go down. */
-export const DEFERRED_COUNT_CEILING = 19
+export const DEFERRED_COUNT_CEILING = 18
 
 export class UnrenderedError extends Error {
   readonly path: string

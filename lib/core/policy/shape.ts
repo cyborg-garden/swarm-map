@@ -77,6 +77,7 @@ export function shapeErrors(policy: unknown): string[] {
           const ok = isObj(m) && keys.length === 1 && (keys[0] === 'room' || keys[0] === 'category') && isText(m[keys[0]])
           if (!ok) bad(`${rp}.match`, 'exactly one of { room } or { category }, with non-empty text')
           oneOf(`${rp}.mode`, r.mode, ROOM_MODES)
+          if (r.anyone !== undefined) bool(`${rp}.anyone`, r.anyone)
         }))
         obj(`${at}.dm`, s.dm, (dm) => {
           oneOf(`${at}.dm.mode`, dm.mode, DM_MODES)
