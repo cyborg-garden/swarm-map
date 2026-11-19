@@ -43,12 +43,13 @@ four verbs: start it, send text, read text, veto a tool.
 
 | Harness | Conformance suite | Dashboard | Notes |
 |---|---|---|---|
-| Pi | passes | yes, the default | |
-| Letta Code | passes | yes | One memory per agent, so one room or one person per agent |
-| Claude Agent SDK | passes | no | Test rig only; no launcher yet |
+| Pi | passes every check it runs | yes, the default | |
+| Letta Code | passes every check it runs | yes | One memory per agent, so one room or one person per agent |
+| Claude Agent SDK | passes every check it runs | no | Test rig only; no launcher yet |
 
 The suite is harness-neutral: the same checks run against each shim, first as processes on one
-machine, then in the sealed cell. Pinned versions and results are in `conformance/matrix/`.
+machine, then in the sealed cell. Not every check runs for every harness: a check needs a capability the
+harness has. Pinned versions, and which checks ran or did not, are in `conformance/matrix/`.
 
 ### What a door agent does today
 
@@ -57,7 +58,7 @@ machine, then in the sealed cell. Pinned versions and results are in `conformanc
   it loses the shell and file tools.
 - **Tools are off until the rules turn one on.** Read files, write files and a shell run inside
   the cell. Reading a web page and web search go through the door, also off by default.
-- **Approvals in the room.** A tool set to `ask` posts the request in the channel. An admin
+- **Approvals in the room (Pi only).** A tool set to `ask` posts the request in the channel. An admin
   replies approve or deny, or reacts. No answer in time means no.
 - **A monthly budget that refuses** model calls once it is spent.
 - **Receipts.** Every decision the door makes is logged and shown on the agent's page.

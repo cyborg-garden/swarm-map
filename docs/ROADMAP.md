@@ -40,10 +40,10 @@ V1 is complete. Items that were "should ship" moved to V2 on 2026-05-28.
 - [x] Policy defaults on wizard deploy: memory scope, Swarm Map URL, agent name
 - [x] Platform setup: admin fields, token validation, a SOUL template
 - [x] Stop and Start on the agent page, with loading feedback on every action
-- [x] **Full `config.yaml` on deploy.** Compression (threshold 0.50, target 0.20, protect the last 20), memory limits (2200 chars, 1375 user), session reset (both modes, 24h idle, 4am reset), speech-to-text (base model), `max_turns` 60. Template: `lib/templates/config-yaml.ts`.
+- [x] **Full `config.yaml` on deploy.** Compression (threshold 0.50, target 0.20, protect the last 20), memory limits (5000 chars, 2000 user), session reset (both modes, 24h idle, 4am reset), speech-to-text (base model), `max_turns` 60. Template: `lib/templates/config-yaml.ts`.
 - [x] **Compose fixes.** The volume mounts at `/opt/data`, and `command: gateway` is present.
 - [x] **Settings round-trip.** A wildcard `*` is kept. `parseCommaList()` and `buildSettingsEnvValue()` stop silent data loss.
-- [x] **Async restart.** `spawn()` in detached mode, with `restart-tracker.ts` (5-minute TTL, 409 on a second restart while one runs).
+- [x] **Async restart.** `spawn()` in detached mode, with `restart-tracker.ts` (TTL 90 seconds for quick and recreate, 5 minutes for rebuild and purge; 409 on a second restart while one runs).
 - [x] **Configurable default image.** `ghcr.io/cyborg-garden/hermes-agent-mt:latest` unless settings say otherwise.
 
 ### Moved to V2
@@ -147,6 +147,7 @@ Door agents already work this way: tools are off until the rules turn one on, th
 
 - [ ] **Hard budget enforcement for Hermes.** A `pre_message` hook in Hermes that blocks model calls when the budget is spent. This needs a new hook type in the gateway. Nothing calls the budget check today. (Door agents already refuse calls past their monthly cap.)
 - [ ] **Budget cascade.** At a set threshold (say 80%), reorder the cascade to prefer cheaper models. Restore it when the new period starts.
+- [ ] **Provider-reported spend.** Read spend from LiteLLM or the provider instead of estimating it from token counts.
 - [ ] **Budget per agent, not per key.** A key's budget becomes the total across its uses.
 - [ ] **Budget alerts** to an admin by Telegram or Slack.
 - [ ] **Budget view** with spend over time per agent, trends and projections.

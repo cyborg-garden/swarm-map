@@ -168,7 +168,7 @@ SLACK_APP_TOKEN=xapp-...
 | `SLACK_APP_TOKEN` | none | App-Level token (`xapp-`, `connections:write`), from Socket Mode |
 | `SLACK_ALLOWED_USERS` | *(empty = deny all)* | Comma-separated Slack member IDs (`U…`) for **DM** access and admin actions |
 | `SLACK_ALLOWED_CHANNELS` | *(empty)* | Comma-separated **channel IDs** (`C…`) the agent may answer in |
-| `SLACK_CHANNEL_POLICY` | `approved-only` | With `approved-only`, an empty channel list means **no channels**. List the channels you want |
+| `SLACK_CHANNEL_POLICY` | Swarm Map writes `approved-only`; unset means allow-all | With `approved-only`, an empty channel list means **no channels**. List the channels you want |
 | `SLACK_REQUIRE_MENTION` | `true` | Agent only responds when @mentioned in channels |
 
 **Access model:** in an approved channel, any member can @mention the agent and get an answer. **DMs and admin actions (approvals, adding to channels) stay limited to `SLACK_ALLOWED_USERS`.** A member ID is the `U…` string from a user's Slack profile → *Copy member ID*.
@@ -178,7 +178,7 @@ SLACK_APP_TOKEN=xapp-...
 - **The bot connects but never answers @mentions, and the logs show nothing.** The socket is up but events aren't arriving. Usually Event Subscriptions weren't enabled, or the app wasn't reinstalled after adding events (step 3). Reinstall, then recreate the agent so the socket reconnects with the new subscriptions.
 - **The bot is in a channel but stays silent there.** The channel isn't in `SLACK_ALLOWED_CHANNELS`. Under `approved-only`, an empty list approves nothing.
 - **`missing_scope` errors or stale behavior.** The token in Swarm Map predates a scope change. A running agent keeps the old token. Re-enter the current `xoxb-` token (Surfaces → Slack) and recreate the agent.
-- **Do not set `SLACK_ALLOWED_CHANNELS=*`.** The Slack adapter does not honor `*` for channels (hermes-agent-mt#69). It reads it as a channel literally named `*`, which matches nothing and drops every message. List explicit `C…` IDs.
+- **`SLACK_ALLOWED_CHANNELS=*` opens every channel the bot is in.** List explicit `C…` IDs to keep it to chosen channels.
 - **Private channels:** the bot needs `groups:read` and `groups:history`, and it must be invited to the private channel.
 
 ---

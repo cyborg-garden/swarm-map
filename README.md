@@ -24,9 +24,9 @@ It holds the chat token, the model key, the rules, the receipts and the budget.
 The agent runs in a sealed Docker cell with no token, no real key and no network route except the door.
 The agent is never asked to enforce a rule, so a harness that ignores one changes nothing.
 
-- **Harnesses.** Pi (the default), Letta Code and the Claude Agent SDK each pass the same harness-neutral conformance suite. The dashboard creates Pi and Letta Code agents. The Claude Agent SDK runs from the test rig only.
+- **Harnesses.** Pi (the default), Letta Code and the Claude Agent SDK run the same harness-neutral conformance suite and pass every check they run. Some checks do not run for every harness; see `conformance/matrix/`. The dashboard creates Pi and Letta Code agents. The Claude Agent SDK runs from the test rig only.
 - **Discord rooms.** One agent can sit in several channels. Each channel can have its own rules: who is heard, whether a mention is needed, which tools are allowed.
-- **Approvals in the room.** A tool set to `ask` posts the request in the channel. An admin replies approve or deny, or reacts. No answer in time means no.
+- **Approvals in the room (Pi only).** A tool set to `ask` posts the request in the channel. An admin replies approve or deny, or reacts. No answer in time means no.
 - **Budget that stops.** A monthly cap per agent. When it is spent, model calls are refused.
 - **What is not proven.** The cell's seal is tested on one machine and one Docker setup. Door agents run in Discord only. Swarm Map shows a `pm2` command to supervise a door; it does not supervise it itself yet.
 
@@ -96,7 +96,7 @@ Copy `.env.example` to `.env`.
 |---|---|---|
 | `HERMES_DIR` | none | Directory of existing Hermes docker-compose files |
 | `DATA_DIR` | `~/.hermes-swarm-map` | Settings, keys, audit log, generated compose files, door agents |
-| `PORT` | `3000` | Port for the dashboard. `pnpm dev` moves to the next free port if it is taken |
+| `PORT` | `3000` | Port for the dashboard. `pnpm dev` moves to the next free port if it is taken. `.env.example` sets `3002`, the production convention |
 | `HSM_OPERATOR_TOKEN` | generated into `.env.local` | The sign-in token. Server-side only |
 | `ALLOWED_DEV_ORIGINS` | none | Comma-separated hostnames allowed to reach the dev server |
 | `DISCORD_GUILD_IDS` | none | Your Discord server ids, so they are refused as bot role ids |
@@ -134,7 +134,7 @@ Calls need the `hsm_session` cookie from `POST /api/auth/login` with `{ "token":
 | `PUT` | `/api/harnesses/:id/door/rules` | Save a door agent's rules and apply them |
 | `GET` | `/api/harnesses/:id/door/receipts` | A door agent's decision log, newest first |
 | `POST` | `/api/setup/deploy` | Deploy a new Hermes agent (the full wizard payload) |
-| `POST` | `/api/setup/detect` | Look for Hermes compose directories |
+| `GET` | `/api/setup/detect` | Look for Hermes compose directories |
 | `GET` | `/api/keys` | Keys, masked |
 | `GET` | `/api/tools` | Tool registry |
 | `GET` | `/api/memory-scopes` | Memory scope per agent |
@@ -160,7 +160,7 @@ Next.js 16 (App Router) and TypeScript, Tailwind CSS v4 with shadcn/ui, the Dock
 - [Getting Started](docs/getting-started.md): deploy a first agent
 - [Runtimes](docs/runtimes.md): Hermes, door agents, and what was removed
 - [Migrating Existing Agents](docs/migrating.md): bring existing Hermes agents under Swarm Map
-- [Platform Setup](docs/platforms.md): Signal, Telegram, Mattermost, Discord, Google Workspace
+- [Platform Setup](docs/platforms.md): Signal, Telegram, Mattermost, Discord, Slack, Google Workspace
 - [Surface Permissions](docs/surface-permissions.md): who an agent hears on each platform
 - [Image vs Swarm Map boundary](docs/architecture/image-vs-hsm-boundary.md): what belongs in the Docker image and what Swarm Map installs
 - [Door agents in the lab](docs/lab/primitives.md): the design, and the [Pi](docs/lab/pi-slice.md), [Letta Code](docs/lab/letta-code.md) and [Claude Agent SDK](docs/lab/claude-sdk.md) results
