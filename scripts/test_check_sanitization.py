@@ -3,8 +3,7 @@
 These are the gate's own self-tests: the reusable workflow runs them before it
 runs the gate, so a scanner that cannot detect its own fixtures never gets to
 report a repo "clean". They are the union of every per-repo copy's tests
-(swarm-map, Matilde, osint-engine, agentic-startup-generalist, iris, the
-use-case template) from before the gate was made canonical.
+(swarm-map, Matilde, and other agent and use-case repos) from before the gate was made canonical.
 """
 import json
 import os

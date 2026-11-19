@@ -1,7 +1,7 @@
 /**
  * Discord thread mention gate — DISCORD_THREAD_REQUIRE_MENTION.
  *
- * 2026-10-06 (#bounties-work): two bots answered un-mentioned messages inside a
+ * 2026-10-06: two bots answered un-mentioned messages inside a
  * thread. The adapter skips the @mention check in any thread the bot has
  * "participated" in unless thread_require_mention is on, and its default is
  * off. Neither bot's .env set the var, and swarm-map had no knob for it.

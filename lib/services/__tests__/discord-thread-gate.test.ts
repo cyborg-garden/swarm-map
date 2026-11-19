@@ -1,4 +1,4 @@
-// Discord thread mention gate (2026-10-06 #bounties-work incident).
+// Discord thread mention gate (2026-10-06 incident).
 //
 // Two bots answered un-mentioned messages inside a thread because
 // DISCORD_THREAD_REQUIRE_MENTION was absent from their .env and the adapter
