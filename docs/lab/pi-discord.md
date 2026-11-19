@@ -1,6 +1,6 @@
-# One Pi agent in one Discord channel: runbook
+# A Pi agent in Discord: runbook
 
-This starts one real Pi agent in one Discord channel, under the lab's rules. It builds on the
+This starts one real Pi agent in one Discord channel, or a few, under the lab's rules. It builds on the
 [Pi slice](pi-slice.md). Read that first if "door", "cell" or `decide()` are new to you.
 
 Every id on this page is a placeholder. Keep your config, your token and your key outside the repo.
@@ -29,7 +29,7 @@ Every id on this page is a placeholder. Keep your config, your token and your ke
 
 ## What you need
 
-- Docker running on this machine, and Node 24.
+- Docker running on this machine, and Node 22.18 or newer.
 - The launcher's two images: `node lib/lab/pi-discord/cli.ts build`. Build them again after you
   pull or change the code. They are the lab's cell and rig images, named for the code they were
   built from (`smlabpd-cell:...`, `smlabpd-rig:...`). The dry run and `start` compare every file
@@ -67,9 +67,9 @@ Open this link, with your application's id in place of `<APPLICATION_ID>`, and p
 https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permissions=0
 ```
 
-`permissions=0` gives the bot nothing server-wide. It gets what it needs in one channel, next.
+`permissions=0` gives the bot nothing server-wide. It gets what it needs in its channels, next.
 
-## 3. Limit it to one channel
+## 3. Limit it to its channels
 
 In the channel (and in each other channel the config lists): **Edit Channel**, **Permissions**, add
 the bot, and allow exactly these five:
@@ -112,6 +112,8 @@ server, the channel or a person and choose **Copy ID**.
 | `harness` | `"pi"` | Which harness sits in the cell: `"pi"` or `"letta-code"`. A config without it is a Pi config, as it always was |
 | `persona.name` | the `agentId` | What the agent calls itself. One line, up to 40 characters |
 | `persona.description` | empty | One line about what it is for, up to 600 characters. It cannot give the agent an ability |
+| `persona.document` | none | Who the agent is and how it talks, in Markdown, up to 8 KB. See [`persona-memory.md`](persona-memory.md) |
+| `memory.notes` | `false` | Notes the door keeps for each room and gives back after a restart. See [`persona-memory.md`](persona-memory.md) |
 | `discord.guildId` | none | The one server |
 | `discord.channelId` | none | The agent's own channel. Its threads count as part of it, private ones included, and share its conversation |
 | `discord.channelIds` | `[channelId]` | Every channel the agent is in, its own first, up to 10. Each is a conversation of its own, with its own notes: nothing said in one is shown in another, and the agent posts in no channel that is not listed. `channelId` alone is a list of one. A harness that keeps one memory for the whole agent (Letta Code) gets one channel |
@@ -131,13 +133,16 @@ server, the channel or a person and choose **Copy ID**.
 | `tools.enabled` | `[]` | Classes of tool that are switched on: `file_read`, `file_write`, `shell`. All run inside the cell. See [the tools slice](tools-slice.md) |
 | `tools.mode` | shell asks, reading allowed, writing asks when the shell does | For a class that is switched on: `allow`, `ask` (an admin says yes in the channel first) or `never` |
 | `tools.approvalSeconds` | `120` | How long an admin has to answer, 10 to 600. No answer is a no |
+| `tools.keepScratch` | `false` | Keep the scratch folder across a stop. Needs writing files or the shell |
+| `tools.web` | none | Web pages and search, fetched by the door: listed sites or the public web, and whether each address waits for an admin. See [Web through the door](tools-slice.md#web-through-the-door) |
 | `model.baseUrl` | none | An OpenAI-compatible base URL ending in `/v1`, over https |
 | `model.id` | none | The model's name at that provider |
 | `model.usdPerMTokIn`, `model.usdPerMTokOut` | none | The model's prices per million tokens. The budget is counted with them |
 
 A setting the file does not know is refused. There is no setting for direct messages: they are
 off. Tools are off until a class is switched on, and a config that hears anyone in the channel
-and switches a tool on is refused. So is one where the shell asks and writing files does not.
+and switches on a shell or file tool is refused. So is one where the shell asks and writing files
+does not. The web is allowed for an agent that hears anyone, with the limits the tools slice lists.
 
 **What the agent is told about itself.** Pi's own introduction says it is a coding assistant that
 can run commands. Here that is not true, so the launcher replaces it. The agent is told its name
@@ -197,7 +202,7 @@ If the last run was killed before it could clean up, `start` removes the contain
 ## 8. Verify
 
 1. In the channel, mention the bot. It should answer in that channel.
-   When you type `@` and its name, pick the bot itself (marked APP), not the role of the same name. Picking the bot's own role works too now; any other role does not.
+   When you type `@` and its name, pick the bot itself (marked APP), not the role of the same name. Picking the bot's own role works too; any other role does not.
 2. Say something without a mention, and mention it from another channel. It should stay silent.
 3. Read why:
 
@@ -212,7 +217,7 @@ sentence. Receipts hold ids and sizes. They never hold message text.
 | You see | It means |
 |---|---|
 | `deliver addr.mention` | Heard: a listed person mentioned the bot in the channel |
-| `drop adm.rooms` | Not the allowed channel |
+| `drop adm.rooms` | Not one of the agent's channels |
 | `drop adm.users` | The sender is not on the list |
 | `drop addr.mention` | No mention. If the sentence says a role was mentioned, a role was pinged that is not the bot's own |
 | `drop dm.closed` | A direct message |

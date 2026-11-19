@@ -33,7 +33,8 @@ The rules record's `persona` gains one optional field:
 
 The launcher builds the system prompt in this order:
 
-1. `You are <name>, a chat assistant in one Discord channel. <description>`
+1. `You are <name>, a chat assistant in one Discord channel. <description>`. An agent in more than
+   one channel is told how many (`in 2 Discord channels`).
 2. The persona document, introduced as the operator's words about manner. It is told that where
    the persona says anything about abilities, the part after it is what is true.
 3. The statement the launcher writes from the rules: what the agent can do, which tools it has,
@@ -114,7 +115,7 @@ that anyone in the room may be told what the notes say.
 
 ### Notes and the web
 
-With the web on (docs/lab/tools-slice.md), a page or a search result is untrusted text, so:
+With the web on ([`tools-slice.md`](tools-slice.md#web-through-the-door)), a page or a search result is untrusted text, so:
 
 - **Fetched text never writes a note.** Once a conversation has been handed a page or search
   results, the door refuses its `memory_note` calls (`after-web`), in that turn and later ones,

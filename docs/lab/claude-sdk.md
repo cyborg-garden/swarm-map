@@ -237,7 +237,7 @@ never starts with one. And the SDK accepts a model name it has never heard of, w
 | Sessions | one process each | about 190 MB for one idle session on this machine, measured once |
 | Session isolation | none | every session's process shares one home and one work folder |
 | Chat of its own | none | the SDK has no chat connector |
-| Approval round trip | not yet | it can hold a call for as long as it takes; the door's ask flow is not built |
+| Approval round trip | not yet | it can hold a call for as long as it takes, but the shim does not tie a yes to one call, so the door's ask flow ([`tools-slice.md`](tools-slice.md)) is not offered to it |
 | MCP | off | started with no server and told to read none from disk |
 | Resume after the shim restarts | no | the shim keeps each session's id in memory only |
 | Usage | from the model route | the SDK reports its own figure too; the door does not read it |

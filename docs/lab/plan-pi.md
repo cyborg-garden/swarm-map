@@ -6,7 +6,8 @@ Anything marked **unverified** was to be replaced by a test result in Step 0.
 
 **Status: built, with departures.** [`pi-slice.md`](pi-slice.md) says what exists, what the spikes found,
 where the build departed from this plan, and what is still blocked. This page is kept as written,
-so the plan and the outcome can be compared.
+so the plan and the outcome can be compared. The commands that run today, in place of
+`npm run conformance -- --harness pi` below, are under "Run it" in that page.
 
 ## 0. The slice in ten lines
 

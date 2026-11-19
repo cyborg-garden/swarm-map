@@ -3,8 +3,9 @@
 Written 2026-11-13. A spec, not code. It was written before anything was run, from three
 competing designs (gateway-first, conformance-first, policy sidecar) and a read of each harness's
 docs and source. Anything marked **unverified** is from reading docs or source and must be replaced
-by a test result. What has since been built and run is in [`pi-slice.md`](pi-slice.md); where that
-page and this one disagree, that page is the evidence.
+by a test result. What has since been built and run is in [`pi-slice.md`](pi-slice.md), and for
+the other two harnesses in [`letta-code.md`](letta-code.md) and [`claude-sdk.md`](claude-sdk.md);
+where those pages and this one disagree, they are the evidence.
 
 ## 0. The decision in ten lines
 
