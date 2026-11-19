@@ -188,6 +188,38 @@ describe('the page of a door agent', () => {
     })
   })
 
+  it('adds a channel beside its own, open to anyone with the web only, and saves what the launcher takes', async () => {
+    await openPage()
+    await openTab('Rules')
+    await screen.findByRole('button', { name: 'Save' })
+    expect(screen.queryAllByTestId('other-channel')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Add a channel' }))
+    fireEvent.change(document.querySelector('input[name="discord.channelIds.1"]')!, { target: { value: '100000000000000009' } })
+    fireEvent.click(screen.getByRole('switch', { name: 'Anyone in this channel' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Tools in this channel' }), { target: { value: 'web-only' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT')).toBe(true))
+    const rules = (requests.find((r) => r.method === 'PUT')!.body as { rules: typeof RULES }).rules
+    expect(rules.discord).toEqual({
+      ...RULES.discord, channelIds: ['100000000000000001', '100000000000000009'],
+      perChannel: { '100000000000000009': { anyoneInChannel: true, tools: 'web-only' } },
+    })
+    expect(parseConfig({ ...rules, agentId: 'pi-one' }).errors).toEqual([])
+  })
+
+  it('removing the last other channel saves the record as it was, with one channel', async () => {
+    current = view()
+    current.record.rules = { ...RULES, discord: { ...RULES.discord, channelIds: ['100000000000000001', '100000000000000009'] } } as typeof RULES
+    await openPage()
+    await openTab('Rules')
+    await screen.findByRole('button', { name: 'Save' })
+    expect(screen.getAllByTestId('other-channel')).toHaveLength(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove channel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT')).toBe(true))
+    expect((requests.find((r) => r.method === 'PUT')!.body as { rules: unknown }).rules).toEqual(RULES)
+  })
+
   it('shows status reactions and typing on for a record that never named them, and saves one switched off', async () => {
     await openPage()
     await openTab('Rules')
@@ -487,6 +519,8 @@ describe('a Letta Code agent behind a door', () => {
     const channel = document.querySelector('input[name="discord.channelId"]')!
     const note = document.getElementById(channel.getAttribute('aria-describedby')!.split(' ').at(-1)!)!
     expect(note).toHaveTextContent(/One room only\. It keeps one memory for the whole agent/)
+    // And it is offered no other channel.
+    expect(screen.queryByRole('button', { name: 'Add a channel' })).toBeNull()
   })
 
   it('a Pi agent\'s Rules tab says no such thing', async () => {

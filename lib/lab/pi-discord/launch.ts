@@ -24,7 +24,7 @@ import { createFileLedger, createMemoryLedger } from '../../door/spend-ledger.ts
 import { onFreeSubnets, pickSubnets, usedSubnets } from '../../../conformance/docker/subnets.ts'
 import { DEFAULT_TOOL_LIMITS } from '../../core/tools/call.ts'
 import { cellDown, cellStopStart, cellUp, KEPT_SCRATCH_FILE, KEPT_SCRATCH_RULES_FILE, keptScratchPlan, readScratch, writeScratch, docker, dockerProblems, findTargets, launcherImages, networksWritten, probeCell, renderCell, runningCellProblems, scratchProblems, sealProblems, type CellOptions } from './cell.ts'
-import { approvalSecondsOf, harnessOf, turnSecondsOf, policyFor, statusOf, systemPromptFor, toolModes, type LabConfig } from './config.ts'
+import { approvalSecondsOf, channelIdsOf, harnessOf, turnSecondsOf, policyFor, statusOf, systemPromptFor, toolModes, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, harnessFacts, type LauncherHarness } from './harnesses.ts'
 
 export const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -259,7 +259,8 @@ export async function start(o: StartOptions): Promise<Running> {
 
     const connector: SurfaceConnector = createDiscordConnector({
       ...(o.discord ?? {}),
-      sendScope: [o.config.discord.channelId], guildId: o.config.discord.guildId,
+      // The connector posts in these channels and their threads, and refuses any other before a request is made.
+      sendScope: channelIdsOf(o.config), guildId: o.config.discord.guildId,
       messageContent: o.config.discord.readAllMessages, log: o.log, onFatal: o.onFatal,
       // An admin may answer a request with a reaction. Only asked of Discord when a class of tool asks.
       reactions: approvalMs !== undefined,
@@ -280,7 +281,7 @@ export async function start(o: StartOptions): Promise<Running> {
     // Put back once the cell has joined the door and is the cell that stays: a cell that is started again
     // comes back with an empty folder (it is in memory), and one that has not joined yet may be about to be.
     restoreScratch()
-    o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, one channel`)
+    o.log(`live: agent ${policy.agentId}${harness === DEFAULT_HARNESS ? '' : ` on ${harnessFacts(harness).label} ${harnessFacts(harness).version}`}, policy ${policy.hash.slice(0, 12)}, ${channelIdsOf(o.config).length === 1 ? 'one channel' : `${channelIdsOf(o.config).length} channels`}`)
     return { project, door, stop }
   } catch (err) {
     await stop()

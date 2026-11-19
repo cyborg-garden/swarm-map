@@ -4,7 +4,7 @@
 import type { Decision, Event, Facts, InboundEvent, Principal, RoomRef, Verdict } from './events.ts'
 import { assertRendered, UnrenderedError } from './policy/deferred.ts'
 import { shapeErrors } from './policy/shape.ts'
-import type { PolicyRecord, PrincipalRef, RoomRule, SurfacePolicy, ToolClass } from './policy/types.ts'
+import type { PolicyRecord, PrincipalRef, RoomRule, SurfaceId, SurfacePolicy, ToolClass } from './policy/types.ts'
 import { sessionKeyFor } from './session-key.ts'
 import { egressAllows } from './tools/web.ts'
 import { classifyCommand } from './tools/command-policy.ts'
@@ -27,10 +27,25 @@ function ruleMatchesRoom(rule: RoomRule, room: RoomRef): boolean {
 }
 
 /** 'ignore' beats everything; otherwise the first matching rule wins. */
-function roomMode(surface: SurfacePolicy, room: RoomRef): RoomRule['mode'] | undefined {
+function roomRule(surface: SurfacePolicy, room: RoomRef): RoomRule | undefined {
   const hits = surface.rooms.filter((rule) => ruleMatchesRoom(rule, room))
-  if (hits.some((rule) => rule.mode === 'ignore')) return 'ignore'
-  return hits[0]?.mode
+  return hits.find((rule) => rule.mode === 'ignore') ?? hits[0]
+}
+function roomMode(surface: SurfacePolicy, room: RoomRef): RoomRule['mode'] | undefined {
+  return roomRule(surface, room)?.mode
+}
+
+/**
+ * Does this room hear anyone who can post in it? On a public agent every room does. Otherwise
+ * only a room whose own rule says so (`anyone`). The door reads this too, for what a turn in the
+ * room may change.
+ */
+export function hearsAnyoneIn(policy: PolicyRecord, surfaceId: SurfaceId | undefined, room: RoomRef): boolean {
+  if (policy.posture === 'public') return true
+  const surface = surfaceId ? policy.surfaces[surfaceId] : undefined
+  if (!surface || room.kind === 'dm') return false
+  const rule = roomRule(surface, room)
+  return rule !== undefined && rule.mode !== 'ignore' && rule.anyone === true
 }
 
 function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omit<Decision, 'policyHash'> {
@@ -79,10 +94,13 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
 
   // Where
   if (surface.rooms.length === 0) return drop('adm.empty-is-closed', 'No rooms are listed, so no room is heard.')
-  const mode = roomMode(surface, e.room)
+  const rule = roomRule(surface, e.room)
+  const mode = rule?.mode
   if (mode === 'ignore') return drop('adm.rooms.ignore', 'This room is on the ignore list.')
   if (mode === undefined) return drop('adm.rooms', 'This room is not on the list.')
   pass('adm.rooms')
+  // A room of its own that hears anyone. It always needs a mention, in its threads too.
+  const openRoom = rule?.anyone === true
 
   // Who. A bot was already admitted by the bots rule above.
   let admitted: 'listed' | 'open'
@@ -91,7 +109,7 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
   } else if (matches(surface.users, e.sender, facts)) {
     admitted = 'listed'
     pass('adm.users')
-  } else if (surface.anyoneInAllowedRoom) {
+  } else if (surface.anyoneInAllowedRoom || openRoom) {
     admitted = 'open'
     pass('adm.anyone-in-room')
   } else if (surface.users.length === 0) {
@@ -125,20 +143,20 @@ function decideInbound(policy: PolicyRecord, e: InboundEvent, facts: Facts): Omi
 
   const privilege = privilegeFor(admitted)
   const isThread = e.room.kind === 'thread'
-  const needsMention = isThread ? surface.threadsRequireMention : mode === 'mention'
-  const rule = isThread ? 'addr.threads' : 'addr.mention'
+  const needsMention = openRoom || (isThread ? surface.threadsRequireMention : mode === 'mention')
+  const addrRule = isThread ? 'addr.threads' : 'addr.mention'
   if (!needsMention) {
     return heard('deliver', isThread ? 'addr.threads' : 'addr.free-rooms', 'This room needs no mention.', privilege)
   }
-  if (addressed) return heard('deliver', rule, 'The agent was addressed in an approved room.', privilege)
+  if (addressed) return heard('deliver', addrRule, 'The agent was addressed in an approved room.', privilege)
   if (surface.observeUnmentioned) {
     return heard('observe', 'addr.observe', 'Not addressed: kept as context, not answered.', privilege)
   }
-  trace.push({ rule, outcome: 'fail' })
+  trace.push({ rule: addrRule, outcome: 'fail' })
   const why = e.roleMention === 'other' ? 'This room needs a mention and there was none: a role was mentioned, not the agent.'
     : e.roleMention === 'unlearned' ? "This room needs a mention and there was none: a role was mentioned, and the agent's own role is not known yet."
       : 'This room needs a mention and there was none.'
-  return { verdict: 'drop', rule, why, privilege, trace }
+  return { verdict: 'drop', rule: addrRule, why, privilege, trace }
 }
 
 /** Tool classes a public agent never gets, whatever its allow list says. */
@@ -155,17 +173,28 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     trace.push({ rule, outcome: verdict === 'deny' ? 'fail' : 'pass' })
     return { verdict, rule, why, privilege, trace }
   }
-  if (policy.posture === 'public') {
-    if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', 'This tool is not classified, and this agent is public.')
-    if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', `Public agents do not get ${e.toolClass} tools.`)
+  // tools.lists, by room: the room's own entry, or its parent's for a thread. It only takes away.
+  const here = policy.tools.perRoom?.[e.room.id] ?? (e.room.parentId !== undefined ? policy.tools.perRoom?.[e.room.parentId] : undefined)
+  const asksHere = (k: ToolClass): boolean => policy.tools.ask.includes(k) || (here?.ask?.includes(k) ?? false)
+  // A public agent, or a room that hears anyone: whoever triggered the turn, an admin too.
+  if (hearsAnyoneIn(policy, e.surface, e.room)) {
+    const pub = policy.posture === 'public'
+    if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', `This tool is not classified, and ${pub ? 'this agent is public' : 'this room hears anyone'}.`)
+    if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', pub ? `Public agents do not get ${e.toolClass} tools.` : `There are no ${e.toolClass} tools in a room that hears anyone.`)
     // The public web with no yes would let anyone in the room steer the door to any address, and put
-    // what the agent knows into it. A public agent reads the public web only with an admin's yes.
-    if (e.toolClass === 'network' && policy.egress.default === 'public' && !policy.tools.ask.includes('network')) {
-      return end('deny', 'tools.posture', 'A public agent reads the public web only with an admin\'s yes for each address.')
+    // what the agent knows into it. Where anyone is heard, the public web is read only with an admin's yes.
+    if (e.toolClass === 'network' && policy.egress.default === 'public' && !asksHere('network')) {
+      return end('deny', 'tools.posture', pub ? 'A public agent reads the public web only with an admin\'s yes for each address.' : 'In a room that hears anyone, the public web is read only with an admin\'s yes for each address.')
     }
     trace.push({ rule: 'tools.posture', outcome: 'pass' })
   }
   if (policy.tools.deny.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are on the deny list.`)
+  if (here) {
+    const listed = here.allow !== undefined || here.ask !== undefined
+    if (here.deny?.includes(e.toolClass) || (listed && ![...(here.allow ?? []), ...(here.ask ?? [])].includes(e.toolClass))) {
+      return end('deny', 'tools.lists', `${e.toolClass} tools are not on this room's list.`)
+    }
+  }
   // tools.commands: a shell that is on, and a command the policy has read whole. The rule it names comes
   // from the policy's own lists or a fixed code, never from the command.
   const shellOn = policy.tools.ask.includes('shell') || policy.tools.allow.includes('shell')
@@ -176,7 +205,9 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     trace.push({ rule: 'tools.commands', outcome: 'n/a' })
   }
   // Ask comes before allow: a class on both lists waits for a yes.
-  if (policy.tools.ask.includes(e.toolClass)) return end('ask', 'priv.approval', `${e.toolClass} tools need an admin's yes in the room.`)
+  // A room's `ask` makes a class the agent has wait there. It never gives one the agent lacks.
+  const has = policy.tools.ask.includes(e.toolClass) || policy.tools.allow.includes(e.toolClass)
+  if (has && asksHere(e.toolClass)) return end('ask', 'priv.approval', `${e.toolClass} tools need an admin's yes in the room.`)
   if (!policy.tools.allow.includes(e.toolClass)) return end('deny', 'tools.lists', `${e.toolClass} tools are not on the allow list.`)
   return end('allow', 'tools.lists', `${e.toolClass} tools are allowed.`)
 }

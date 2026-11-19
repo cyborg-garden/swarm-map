@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { Harness } from '@/lib/types'
 import type { DoorAgentView } from '@/lib/services/door-agents'
 import type { DoorRulesRecord } from '@/lib/services/door-record'
+import { CHANNEL_TOOLS, channelIdsOf, channelRulesOf, MAX_CHANNELS, withChannels, type ChannelTools } from '@/lib/lab/pi-discord/channels'
 import type { Receipt } from '@/lib/door/receipts'
 import { DoorToolsCard, modeOf } from './door-tools-card'
 import { DoorMemoryCard, DoorPersonaCard } from './door-persona-card'
@@ -364,6 +365,52 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
 
 const ONE_ROOM_NOTE = 'door-one-room-note'
 
+const CHANNEL_TOOL_LABELS: Record<ChannelTools, string> = {
+  inherit: 'The same tools as its own channel',
+  'web-only': 'The web only (and notes, if on)',
+  none: 'No tools (notes, if on)',
+}
+
+/**
+ * The channels beside the agent's own, each a conversation of its own. One that hears anyone
+ * always needs a mention there, and never gets shell or file tools; the rules refuse a list
+ * that asks for them.
+ */
+function OtherChannels({ rules, onChange }: { rules: Rules; onChange: (discord: Rules['discord']) => void }) {
+  const d = rules.discord
+  const own = d.channelId
+  const others = channelIdsOf(rules).slice(1).map((id) => ({ id, ...channelRulesOf(rules, id) }))
+  const write = (next: typeof others) => onChange(withChannels(d, own, next))
+  const patch = (i: number, change: Partial<(typeof others)[number]>) => write(others.map((o, j) => (j === i ? { ...o, ...change } : o)))
+  return (
+    <div className="space-y-2">
+      <p className="text-sm">Other channels</p>
+      <p className="text-xs text-muted-foreground">
+        Each is a conversation of its own: nothing said in one is shown in another, notes included. Admins, the people above and the budget are shared.
+      </p>
+      {others.map((o, i) => (
+        <div key={i} className="space-y-2 rounded-md border border-[var(--border)] p-2" data-testid="other-channel">
+          <div className="flex items-center gap-2">
+            <Text name={`discord.channelIds.${i + 1}`} value={o.id} onChange={(id) => patch(i, { id })} placeholder="channel id, digits only" />
+            <Button size="sm" variant="outline" onClick={() => write(others.filter((_, j) => j !== i))}>Remove channel</Button>
+          </div>
+          <Toggle
+            label="Anyone in this channel"
+            hint={d.anyoneInChannel ? 'The agent already hears anyone, in every channel.' : 'Heard only when they mention the bot. No shell or file tools here.'}
+            checked={d.anyoneInChannel || o.anyoneInChannel} onChange={(anyoneInChannel) => patch(i, { anyoneInChannel })}
+          />
+          <select name={`discord.perChannel.${i + 1}.tools`} aria-label="Tools in this channel" value={o.tools} onChange={(e) => patch(i, { tools: e.target.value as ChannelTools })} className={inputClass}>
+            {CHANNEL_TOOLS.map((t) => <option key={t} value={t}>{CHANNEL_TOOL_LABELS[t]}</option>)}
+          </select>
+        </div>
+      ))}
+      <Button size="sm" variant="outline" disabled={others.length >= MAX_CHANNELS - 1} onClick={() => write([...others, { id: '', anyoneInChannel: false, tools: 'inherit' }])}>
+        Add a channel
+      </Button>
+    </div>
+  )
+}
+
 function RulesForm({ view, running, saving, onSave }: {
   view: DoorAgentView; running: boolean; saving: boolean; onSave: (draft: Draft) => Promise<boolean>
 }) {
@@ -383,9 +430,14 @@ function RulesForm({ view, running, saving, onSave }: {
         <DoorPersonaCard rules={r} savedPrompt={view.systemPrompt ?? null} onChange={(persona) => set({ ...r, persona })} />
         <Card title="Where">
           <Field label="Server id"><Text name="discord.guildId" value={d.guildId} onChange={(guildId) => discord({ guildId })} placeholder="digits only" /></Field>
-          <Field label="Channel id" hint="The one channel. Its threads count as part of it.">
-            <Text name="discord.channelId" value={d.channelId} onChange={(channelId) => discord({ channelId })} placeholder="digits only" describedBy={view.harness.oneRoomOnly ? ONE_ROOM_NOTE : undefined} />
+          {/* Wrapped, so that what is said beside the channel is only what is in this box. */}
+          <div>
+          <Field label="Channel id" hint="Its own channel. Its threads count as part of it.">
+            <Text name="discord.channelId" value={d.channelId} onChange={(channelId) => set({ ...r, discord: withChannels(d, channelId, channelIdsOf(r).slice(1).map((id) => ({ id, ...channelRulesOf(r, id) }))) })} placeholder="digits only" describedBy={view.harness.oneRoomOnly ? ONE_ROOM_NOTE : undefined} />
           </Field>
+          </div>
+          {/* A harness that keeps one memory for the whole agent is given one channel, so it is offered no more. */}
+          {!view.harness.oneRoomOnly && <OtherChannels rules={r} onChange={(next) => set({ ...r, discord: next })} />}
           {/* Said beside the field it is about, for a harness that has the limit. The rules enforce it either way. */}
           {view.harness.oneRoomOnly && (
             <p id={ONE_ROOM_NOTE} className="text-xs text-muted-foreground">

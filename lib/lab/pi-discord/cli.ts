@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { botsLine, harnessLines, harnessOf, parseConfig, policyFor, statusLine, toolsLine, type LabConfig } from './config.ts'
+import { botsLine, channelIdsOf, channelRulesOf, harnessLines, harnessOf, parseConfig, policyFor, statusLine, toolsLine, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
@@ -48,7 +48,13 @@ async function dryRun(): Promise<void> {
   const harness = harnessOf(config)
   say('config')
   for (const line of harnessLines(config)) say(line)
-  say(`  ok    agent ${config.agentId}: one server, one channel${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
+  const channels = channelIdsOf(config)
+  say(`  ok    agent ${config.agentId}: one server, ${channels.length === 1 ? 'one channel' : `${channels.length} channels, each a conversation of its own`}${d.mentionRequired ? ', answers only when mentioned' : ', answers without a mention'}`)
+  for (const id of channels.slice(1)) {
+    const r = channelRulesOf(config, id)
+    const tools = r.tools === 'inherit' ? 'the same tools' : r.tools === 'web-only' ? 'the web only' : 'no tools'
+    say(`  ok    also channel ${id}: ${d.anyoneInChannel ? 'hears anyone' : r.anyoneInChannel ? 'hears anyone, only when mentioned' : 'hears the same people'}, ${tools}`)
+  }
   const tools = toolsLine(config)
   say(`  ok    it introduces itself as "${config.persona.name}", and is told ${tools === 'tools: none' ? 'it has no tools' : 'which tools it has'}`)
   say(`  ok    persona: ${config.persona.document ? `a document of ${Buffer.byteLength(config.persona.document)} bytes, before what the rules say it can do` : 'its name and one line'}; notes for each room: ${config.memory?.notes ? 'on, kept by the door in the state folder' : 'off'}${config.tools?.keepScratch ? '; the scratch folder is kept across a stop' : ''}`)

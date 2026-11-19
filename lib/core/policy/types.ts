@@ -16,6 +16,12 @@ export type ToolClass =
 export interface RoomRule {
   match: { room: string } | { category: string }
   mode: 'mention' | 'free' | 'ignore'
+  /**
+   * Anyone who can post in this room is heard here, as a guest, as with `anyoneInAllowedRoom` for
+   * one room. Such a room always needs a mention, its threads too, and loses the tools a public
+   * agent loses (decide.ts). Left out, false.
+   */
+  anyone?: boolean
 }
 
 export interface SurfacePolicy {
@@ -54,6 +60,11 @@ export interface ToolPolicy {
   /** Needs an admin's yes in the room. */
   ask: ToolClass[]
   deny: ToolClass[]
+  /**
+   * Fewer tools in one room, by room id (a thread reads its parent's). Only ever narrows: with
+   * `allow` or `ask` given, a class on neither is refused in that room; `deny` refuses; `ask` makes
+   * a class the agent has wait for a yes there. A class the lists above do not give is never given.
+   */
   perRoom?: Record<string, { allow?: ToolClass[]; ask?: ToolClass[]; deny?: ToolClass[] }>
   /**
    * The command policy for the shell (core/tools/command-policy.ts). Left out, every shell call is
