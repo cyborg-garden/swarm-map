@@ -1,14 +1,14 @@
-# Adding an MCP Integration to HSM
+# Adding an MCP Integration to Swarm Map
 
-This documents the repeatable pattern for wiring a new MCP server into the HSM deploy pipeline. Follow these steps to add any MCP server so agents get tools automatically on deploy.
+The repeatable pattern for wiring a new MCP server into the Swarm Map deploy pipeline. Follow these steps and agents get the server's tools on deploy.
 
 ## Overview
 
-HSM auto-configures MCP servers by:
-1. **Setup wizard** — user enables the integration via checkbox
-2. **Deploy route** — injects env vars into Docker Compose + adds server to config.yaml
-3. **Config template** — `generateDefaultConfig()` emits the `mcp_servers:` YAML section
-4. **Agent startup** — Hermes reads config.yaml, launches MCP server subprocess with env vars
+Swarm Map configures MCP servers in four steps:
+1. **Setup wizard:** the user turns the integration on with a checkbox.
+2. **Deploy route:** writes the server's secrets to the agent `.env` and adds the server to `mcpServers`.
+3. **Config template:** `generateDefaultConfig()` in `lib/templates/config-yaml.ts` emits the `mcp_servers:` YAML section.
+4. **Agent startup:** Hermes reads `config.yaml` and launches the MCP server as a subprocess with its env vars.
 
 ## Step-by-Step
 
@@ -19,12 +19,14 @@ Add a boolean to `WizardState`:
   myMcpEnabled: boolean
 ```
 
+Existing flags to copy: `githubMcpEnabled`, `notionEnabled`, `googleEnabled`.
+
 Add to `INITIAL_STATE`:
 ```typescript
   myMcpEnabled: false,
 ```
 
-Add checkbox UI in the Platforms step (follow the Google/GitHub pattern):
+Add checkbox UI in the Platforms step (follow the Google and GitHub pattern):
 ```tsx
 <div className="rounded-lg border border-[var(--border)] p-4 space-y-3">
   <label className="flex items-center gap-3 cursor-pointer">
@@ -61,29 +63,33 @@ if (myMcpEnabled) {
 }
 ```
 
-If the MCP needs Docker volumes or port mappings (like google-mcp needs for OAuth), add them to `generateCompose()`.
+If the MCP needs Docker volumes or port mappings (google-mcp needs them for OAuth), add them in the compose generator (`lib/services/harness-compose.ts`).
 
-If the MCP just needs an env var (like GitHub), add it to the compose environment block.
+If the MCP only needs an env var (like GitHub), write it to the agent `.env` in `generateEnvContent()` (`lib/services/agent-deploy-templates.ts`).
 
 ### 3. Env var mapping
 
-MCP servers often expect env var names different from what HSM stores. Map them:
+MCP servers often expect env var names different from what Swarm Map stores. Map them:
 
-| HSM Key Store Name | MCP Expected Env Var | MCP Server |
+| Swarm Map name | MCP expected env var | MCP server |
 |---|---|---|
 | `GITHUB_TOKEN` | `GITHUB_PERSONAL_ACCESS_TOKEN` | server-github |
+| `NOTION_API_KEY` | `NOTION_TOKEN` | notion-mcp-server |
 | (Google OAuth tokens) | (volume-mounted) | google-mcp |
 
-The mapping happens in Docker Compose `environment:` section, not in config.yaml.
+Map in one of two places. GitHub writes `GITHUB_PERSONAL_ACCESS_TOKEN` as a literal line in the agent `.env`. Notion maps in the server's `env` block in `config.yaml` (`NOTION_TOKEN: '${NOTION_API_KEY}'`).
+
+Do **not** map in the compose `environment:` block. That block resolves `${VAR}` from the empty host process env and takes precedence over `env_file`, so it would blank the value.
 
 ### 4. Test
 
 Add test cases to `lib/templates/config-yaml.test.ts` verifying:
-- Config includes `mcp_servers.myMcp` when enabled
-- Config excludes it when disabled
-- Env var references use `${VAR}` syntax (never literal tokens)
+- Config includes `mcp_servers.myMcp` when enabled.
+- Config excludes it when disabled.
+- Env var references use `${VAR}` syntax, never literal tokens.
 
 ### Reference implementations
 
-- **GitHub** (env var only): simple — just command + args + env passthrough
-- **Google** (volumes + ports + OAuth): complex — needs Docker volume mounts, port mapping for OAuth callback, and host directory resolution
+- **GitHub** (env var only): command, args and one env passthrough.
+- **Notion** (env var only): same shape as GitHub.
+- **Google** (volumes, ports, OAuth): needs Docker volume mounts, a port mapping for the OAuth callback, and host directory resolution.

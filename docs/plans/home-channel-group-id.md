@@ -1,5 +1,10 @@
 # Plan: Signal Home Channel Group ID Resolution
 
+**Status:** Not implemented (checked 2026-11-20). Every file this plan changes lives
+in the Hermes runtime ([cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt)),
+not in this repo. The line references below are from mid-2026; Signal support has
+since moved under `plugins/platforms/signal/` there.
+
 ## Problem
 
 Signal home channels are stored as raw env var values (phone numbers or display names), but Signal groups require group UUIDs for message delivery. When `SIGNAL_HOME_CHANNEL` is set to a display name, messages cannot be delivered because `_send_signal()` needs a `group:<groupId>` format chat_id.
