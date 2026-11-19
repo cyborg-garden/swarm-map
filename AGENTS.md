@@ -32,7 +32,7 @@ Swarm Map (SM) — formerly Hermes Swarm Map — is an open-source admin GUI + R
 
 **Data at `~/.hermes-swarm-map/`** (configurable via `DATA_DIR`). Holds configs, encryption key, audit logs, and standalone compose files for new agents. Not in the repo.
 
-**Agents discovered from Docker.** Scans running containers and compose files for Hermes markers. Pre-existing compose files that Swarm Map did not create (e.g. a `docker-compose.yml` inside a Hermes source checkout) are read-only — never modified.
+**Agents discovered from Docker.** Running containers named `hermes-*` or `seraph-*` are agents (the gate lives in the runtime adapter, `lib/services/runtime-adapter.ts`), plus any harness recorded in `harnesses.json`. The keys, tools, memory and surfaces views also scan the agents named in `SWARM_MAP_DEFAULT_HARNESSES` (comma-separated; unset means only the stock profile, `~/.hermes`). Pre-existing compose files that Swarm Map did not create (e.g. a `docker-compose.yml` inside a Hermes source checkout) are read-only — never modified.
 
 **New agents get standalone compose.** Created via wizard or API, each gets `~/.hermes-swarm-map/compose/{name}/docker-compose.yml`. This is the only compose file Swarm Map writes.
 
@@ -42,7 +42,7 @@ Swarm Map (SM) — formerly Hermes Swarm Map — is an open-source admin GUI + R
 
 ### Hermes Detection
 
-A compose service is identified as a Hermes agent by matching **2+ markers**:
+The first-run scan (`app/api/setup/detect/route.ts`) identifies a compose file as Hermes by matching **2+ markers**:
 - `command: gateway` in service definition
 - Volume mount to `/opt/data`
 - `x-hermes` YAML anchors
@@ -65,9 +65,12 @@ Never hardcode agent ports. The deploy service queries Docker directly (`docker 
 
 `sharedVpn` (settings PUT: a group name such as `"private"` or `"public"`, or `null` for off) puts an agent inside its VPN group's gluetun container's network namespace (`gluetun-<group>`, project `swarm-vpn-<group>`, files under `<dataDir>/vpn/<group>/`). Groups split agents by TRUST: agents in one group share one localhost, so never mix trust levels in a group. Each group has its own WireGuard key at `<dataDir>/vpn/<group>/gluetun.env` (mode 600, written by the owner's key script; swarm-map only references it) and its own deny-all control-server lockdown. A group name is validated (`^[a-z][a-z0-9]{0,15}$`); a group with no key file is refused. Moving an agent between groups starts the target gluetun first, then rewrites and recreates the agent. The toggle is a surgical, exactly-reversible edit of the hermes service's networking lines, so deploy-born hardening is never re-rendered; both generators accept `sharedVpn` and emit the same bytes, so a regeneration keeps it. The compose file is the source of truth. Never recreate a group's gluetun without recreating every agent in that group afterwards: they keep a dead namespace. Details: `lib/services/shared-vpn.ts`.
 
-### Image Fallback
+### Image Choice
 
-New agents try `nousresearch/hermes-agent:latest` from Docker Hub first. If pull fails (auth, network), falls back to a locally-built `hermes*` image, preferring the base build over agent-specific ones (name heuristic in `app/api/setup/deploy/route.ts`).
+New agents (`app/api/setup/deploy/route.ts`), in order:
+1. With `useLocalBuild` and `hermesDir` set in settings, build from that checkout's `Dockerfile` (400 if it has none).
+2. Otherwise pull `settings.defaultImage`, or `ghcr.io/cyborg-garden/hermes-agent-mt:latest` when unset.
+3. If the pull fails, use a locally-built `hermes*` image, preferring one whose name contains `personal` (the base build); with none, the deploy fails.
 
 ### Key Encryption
 
@@ -98,7 +101,9 @@ Each agent gets `~/.hermes-{name}/` containing:
 
 ### Surfaces / Integrations
 
-Platform connections (Mattermost, Telegram, Signal) are managed per-harness in the Surfaces tab of the harness detail page. Each platform has a setup dialog. Connection state is discovered from agent `.env` files (presence of `MATTERMOST_TOKEN`, `TELEGRAM_BOT_TOKEN`, `SIGNAL_ACCOUNT`).
+Platform connections (Signal, Telegram, Mattermost, Discord, Slack) are managed per-harness in the Surfaces tab of the harness detail page; each platform has a setup dialog. The platforms, their env vars and their policy fields are defined once in `lib/surfaces/registry.ts`. Connection state is discovered from agent `.env` files.
+
+The shared Signal daemon is `infra/signal-cli/docker-compose.yml`. It mounts only `~/.hermes`; list every other agent that sends Signal attachments in a gitignored `infra/signal-cli/docker-compose.override.yml` (see the `.example`).
 
 ## Project Structure
 
@@ -108,6 +113,7 @@ swarm-map/
 │   ├── (dashboard)/          # Main app pages
 │   │   ├── harnesses/        # Fleet list + per-harness detail (tabbed)
 │   │   ├── keys/             # API key management (discovered + manual)
+│   │   ├── surfaces/         # Platform connections across the fleet
 │   │   ├── audit/            # Append-only audit log
 │   │   └── settings/         # App settings
 │   ├── (setup)/              # Onboarding / wizard
@@ -119,11 +125,14 @@ swarm-map/
 │   │   ├── keys/             # Key management
 │   │   ├── tools/            # Tool registry
 │   │   ├── setup/            # Deploy, detect, complete
-│   │   └── ...               # audit, settings, memory-scopes, models, people
+│   │   ├── surfaces/         # Signal, Discord, Mattermost, Slack connect/verify
+│   │   ├── auth/             # Operator login/logout
+│   │   └── ...               # audit, cascades, fleet, integrity, settings, ...
 │   └── layout.tsx            # Root layout (fonts, theme)
 ├── lib/
 │   ├── services/             # Core service layer (see below)
-│   │   └── __tests__/        # Vitest tests
+│   │   └── __tests__/        # Vitest tests (more sit beside the code they test)
+│   ├── surfaces/             # Surface registry: one definition per platform
 │   ├── hooks/                # React hooks (useApi)
 │   ├── types.ts              # Shared TypeScript types
 │   ├── constants.ts          # Tier colors, risk levels
@@ -134,9 +143,11 @@ swarm-map/
 │   ├── wizard/               # StepIndicator
 │   ├── surfaces/             # Platform setup dialogs
 │   └── ui/                   # shadcn primitives
-├── bin/
-│   └── dev.sh                # Smart dev launcher (port detection, zombie cleanup)
-└── handoff/                  # ARCHIVED — original design docs (see handoff/ARCHIVED.md)
+├── infra/                    # signal-cli stack, agent templates, artifact manifest
+├── scripts/                  # Maintenance scripts, sanitization gate, token broker
+├── proxy.ts                  # Auth gate for API routes
+└── bin/
+    └── dev.sh                # Smart dev launcher (port detection, zombie cleanup)
 ```
 
 ## Service Layer
@@ -152,6 +163,7 @@ All business logic in `lib/services/`. API routes are thin wrappers.
 | `MemoryService` | `memory.ts` | Read memory scope sizes from agent data dirs |
 | `AuditService` | `audit.ts` | Append-only JSONL log, filtered queries |
 | `ConfigService` | `config.ts` | App settings, model/people/surfaces config |
+| `SharedVpn` | `shared-vpn.ts` | Shared gluetun VPN groups (see above) |
 | `Encryption` | `encryption.ts` | AES-256-GCM encrypt/decrypt, key file management |
 | `Storage` | `storage.ts` | JSON/JSONL file I/O for `~/.hermes-swarm-map/` |
 
@@ -181,7 +193,7 @@ curl -X PUT http://host:3002/api/harnesses/h_example/models \
   -d '{"cascade":["claude-sonnet-4-6","claude-haiku-4-5","qwen3:8b"]}'
 ```
 
-No auth required (v1 is localhost-bound). Future versions will add API tokens for remote access.
+Requests need an operator session: sign in at `/login` (or `POST /api/auth/login`) with `HSM_OPERATOR_TOKEN` and send the `hsm_session` cookie. `proxy.ts` gates every mutating route and most reads, and fails closed (503) when the token is unset. Only a short allowlist of agent-readable GET paths is open.
 
 ## Running Locally
 
@@ -203,10 +215,13 @@ Access from any machine on the LAN at `http://<hostname>:3002`.
 ## Testing
 
 ```bash
-pnpm vitest run   # 176 tests across 21 files
+pnpm vitest run          # the whole unit suite (about 280 files, 6,000+ tests)
+npx tsc --noEmit         # typecheck
+pnpm lint                # eslint
+python3 scripts/check_sanitization.py --full-tree --deterministic-only   # sanitization gate (CI also runs a semantic pass)
 ```
 
-All 176 tests must pass before committing. Tests mock Docker and filesystem — no real containers needed.
+The whole suite must pass before committing. Tests mock Docker and the filesystem — no real containers needed. `pnpm conformance` runs the separate runtime conformance suite.
 
 ## What NOT To Do
 
