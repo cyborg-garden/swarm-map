@@ -226,7 +226,7 @@ describe('STATE_INIT_SCRIPT (real script under sh)', { timeout: 30_000 }, () => 
   })
 })
 
-describe('STATE_INIT_SCRIPT /state ownership (resolved like the image\'s stage2)', () => {
+describe('STATE_INIT_SCRIPT /state ownership (resolved like the image\'s stage2)', { timeout: 30_000 }, () => {
   it('chowns /state recursively to 10000:10000 when the image has no hermes user to ask', () => {
     const out = runInitScript()
     expect(chownCalls().map(([args]) => args)).toEqual([`-R 10000:10000 ${stateDir}`])
@@ -347,8 +347,22 @@ describe('compose generators emit the migration wiring', () => {
       extraEnv: { PUID: '1000', PGID: '100', FOO: 'bar' },
     })
     const init = c.slice(c.indexOf('  state-init-sci:'), c.indexOf('    entrypoint:'))
-    expect(init).toContain('    environment:\n      - PUID=1000\n      - PGID=100\n')
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 10000
+    const gid = typeof process.getgid === 'function' ? process.getgid() : 10000
+    expect(init).toContain(`    environment:\n      - HERMES_UID=${uid}\n      - HERMES_GID=${gid}\n      - PUID=1000\n      - PGID=100\n`)
     expect(init).not.toContain('FOO')
+  })
+
+  it.each([
+    ['plain', {}],
+    ['vpn', { vpnEnabled: true }],
+  ])('%s: the init service gets the same HERMES_UID/HERMES_GID as the hermes service', (_label, opts) => {
+    const c = generateStandaloneCompose('sci', 8642, '/d', opts)
+    const init = c.slice(c.indexOf('  state-init-sci:'), c.indexOf('    entrypoint:'))
+    const hermes = c.slice(c.indexOf('  hermes-sci:'))
+    const remap = (block: string) => block.match(/^ {6}- HERMES_[UG]ID=\d+$/gm)
+    expect(remap(init)).toHaveLength(2)
+    expect(remap(init)).toEqual(remap(hermes))
   })
 
   it('emits no environment block on the init service without remap vars', () => {
