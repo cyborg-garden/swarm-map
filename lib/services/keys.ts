@@ -11,6 +11,7 @@ import { SURFACES } from '@/lib/surfaces/registry'
 import { SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { readEnvValue } from './discord-thread-gate'
 import { isValidHarnessId } from './surface-admins'
+import { defaultHarnessNames } from './default-harness-names'
 
 const KEYS_FILE = 'keys.json'
 
@@ -315,16 +316,7 @@ export class KeysService {
   }
 
   private defaultHarnessNames(): string[] {
-    return [
-      'personal',
-      'cryptids',
-      'cyborg',
-      'egregore',
-      'osint',
-      'seraph-doer',
-      'seraph-generalist',
-      'seraph-thinker',
-    ]
+    return defaultHarnessNames()
   }
 
   // Every harness name key discovery should scan: the built-in defaults PLUS any

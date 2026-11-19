@@ -6,6 +6,7 @@ import crypto from 'crypto'
 import type { MemoryScope, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
 import { resolveStateDbPath } from './db-path'
+import { defaultHarnessNames } from './default-harness-names'
 
 const MEMORY_FILE = 'memory-scopes.json'
 
@@ -77,16 +78,7 @@ export class MemoryService {
   constructor(private storage: Storage) {}
 
   private defaultHarnessNames(): string[] {
-    return [
-      'personal',
-      'cryptids',
-      'cyborg',
-      'egregore',
-      'osint',
-      'seraph-doer',
-      'seraph-generalist',
-      'seraph-thinker',
-    ]
+    return defaultHarnessNames()
   }
 
   list(harnessNames?: string[]): MemoryScope[] {

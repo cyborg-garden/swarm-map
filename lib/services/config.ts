@@ -6,6 +6,7 @@ import type { Settings, Model, Person, Surface, ModelAutoUpdateSettings } from '
 import type { Storage } from './storage'
 import { assertNoNewline } from '@/lib/env-helpers'
 import { isCatalogRetired } from '@/lib/model-catalog'
+import { defaultHarnessNames } from './default-harness-names'
 
 /**
  * True when `value` is a bare IPv4 or IPv6 address (Node's net.isIP): the only
@@ -234,16 +235,6 @@ function parseEnvFile(envPath: string): Record<string, string> {
   return result
 }
 
-const DEFAULT_HARNESS_NAMES = [
-  'personal',
-  'cryptids',
-  'cyborg',
-  'egregore',
-  'osint',
-  'seraph-doer',
-  'seraph-generalist',
-  'seraph-thinker',
-]
 
 export class ConfigService {
   constructor(private storage: Storage) {}
@@ -295,7 +286,7 @@ export class ConfigService {
   }
 
   listSurfaces(harnessNames?: string[]): Surface[] {
-    const names = harnessNames ?? DEFAULT_HARNESS_NAMES
+    const names = harnessNames ?? defaultHarnessNames()
 
     // Per-harness surfaces — each harness owns its own surface instances.
     // No cross-harness leaking of phone numbers, tokens, or URLs.
