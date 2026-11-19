@@ -37,6 +37,7 @@ let tmp: string
 let dataDir: string
 let storage: Storage
 let calls: string[]
+let dryRunEnvs: Record<string, string | undefined>[]
 let dryRunResult: { code: number | null; output: string }
 let startFails: string | undefined
 let stopFails: boolean
@@ -67,7 +68,8 @@ function stubLauncher(): DoorLauncher {
     async dryRun(o) {
       calls.push(`dryRun ${path.basename(o.configPath)}`)
       // The stub proves what the real launcher would be handed: paths, never a secret.
-      expect(Object.keys(o.env).sort()).toEqual(['SMLAB_DISCORD_TOKEN_FILE', 'SMLAB_MODEL_KEY_FILE', 'SMLAB_STATE_DIR'])
+      dryRunEnvs.push(o.env)
+      expect(Object.keys(o.env).filter((k) => k !== 'SMLAB_SEARCH_KEY_FILE').sort()).toEqual(['SMLAB_DISCORD_TOKEN_FILE', 'SMLAB_MODEL_KEY_FILE', 'SMLAB_STATE_DIR'])
       return dryRunResult
     },
     async start(o) {
@@ -119,7 +121,7 @@ beforeEach(() => {
   fs.writeFileSync(secrets.discordTokenFile, 'FAKE-TOKEN-VALUE-1\n', { mode: 0o600 })
   fs.writeFileSync(secrets.modelKeyFile, 'FAKE-KEY-VALUE-22\n', { mode: 0o600 })
   storage = new Storage(dataDir)
-  calls = []
+  calls = []; dryRunEnvs = []
   dryRunResult = READY
   startFails = undefined
   stopFails = false
@@ -512,6 +514,25 @@ describe('saving the rules', () => {
     const err = await refusal(() => svc.saveRules('h_pi_one', { rules: edited, secrets, version: 1 }))
     expect(err.status).toBe(409)
     expect(svc.view('h_pi_one').record.rules.discord.botLoopLimit).toBe(4)
+  })
+
+  it('with search on, every dry run is handed the search key file, as the start script is: on start and on a save to a running door', async () => {
+    const searchKeyFile = path.join(tmp, 'keys', 'search')
+    fs.writeFileSync(searchKeyFile, 'FAKE-SEARCH-KEY-3\n', { mode: 0o600 })
+    const withSearch = { ...secrets, searchKeyFile }
+    const tools = { enabled: [], mode: {}, approvalSeconds: 120, web: { allow: ['en.wikipedia.org'], search: true } }
+    svc.create('pi-one')
+    await svc.saveRules('h_pi_one', { rules: { ...RULES, tools }, secrets: withSearch, version: 1 })
+    await svc.start('h_pi_one')
+    await svc.saveRules('h_pi_one', { rules: { ...RULES, tools, discord: { ...RULES.discord, botLoopLimit: 2 } }, secrets: withSearch, version: 2 })
+    expect(calls.filter((c) => c.startsWith('dryRun'))).toEqual(['dryRun config.json', 'dryRun config.next.json'])
+    for (const env of dryRunEnvs) expect(env.SMLAB_SEARCH_KEY_FILE).toBe(searchKeyFile)
+  })
+
+  it('with no search key file, the dry run is handed none', async () => {
+    await filled()
+    await svc.start('h_pi_one')
+    expect(dryRunEnvs.map((e) => 'SMLAB_SEARCH_KEY_FILE' in e)).toEqual([false])
   })
 
   it('on a running door: dry-runs the new rules, then stops and starts it on them', async () => {

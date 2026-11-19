@@ -27,6 +27,7 @@ import type { Receipt } from '@/lib/door/receipts'
 import { createSanitizer } from '@/lib/door/sanitizer'
 import { monthOf } from '@/lib/door/spend-ledger'
 import { parseConfig, policyFor, systemPromptFor } from '@/lib/lab/pi-discord/config'
+import { SEARCH_KEY_FILE_ENV } from '@/lib/lab/pi-discord/secrets'
 import { harnessFacts, isLauncherHarness, LAUNCHER_HARNESSES } from '@/lib/lab/pi-discord/harnesses'
 import { doorAgentName, doorNameClash, doorNameTaken } from '@/lib/door-agent-name'
 import type { Harness } from '@/lib/types'
@@ -590,7 +591,11 @@ export class DoorAgentService implements DoorRuntimeAdapter {
     }
     const { code, output } = await this.launcher.dryRun({
       configPath,
-      env: { SMLAB_DISCORD_TOKEN_FILE: record.secrets.discordTokenFile, SMLAB_MODEL_KEY_FILE: record.secrets.modelKeyFile, SMLAB_STATE_DIR: p.stateDir },
+      env: {
+        SMLAB_DISCORD_TOKEN_FILE: record.secrets.discordTokenFile, SMLAB_MODEL_KEY_FILE: record.secrets.modelKeyFile, SMLAB_STATE_DIR: p.stateDir,
+        // As the start script hands it over: with search on, the dry run checks the search key's file too.
+        ...(record.secrets.searchKeyFile ? { [SEARCH_KEY_FILE_ENV]: record.secrets.searchKeyFile } : {}),
+      },
     })
     const lines = output.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('FAIL') || l.startsWith('RESULT:') || l.startsWith('config: refused'))
     // Exit code 3 is the launcher's "sealed, but the secret files are not in place".
