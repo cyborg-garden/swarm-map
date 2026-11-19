@@ -10,9 +10,10 @@
 import { keepsOneMemory } from '../../core/policy/fit.ts'
 import type { Capabilities } from '../../door/protocol.ts'
 import { LETTA_CODE_CAPS } from '../../runtimes/letta-code/caps.ts'
+import { OPENCODE_CAPS } from '../../runtimes/opencode/caps.ts'
 import { PI_CAPS } from '../../runtimes/pi/caps.ts'
 
-export const LAUNCHER_HARNESSES = ['pi', 'letta-code'] as const
+export const LAUNCHER_HARNESSES = ['pi', 'letta-code', 'opencode'] as const
 export type LauncherHarness = (typeof LAUNCHER_HARNESSES)[number]
 /** The harness a config with no `harness` key asks for. */
 export const DEFAULT_HARNESS = 'pi' satisfies LauncherHarness
@@ -38,8 +39,8 @@ export interface HarnessFacts {
   limits: string[]
 }
 
-const LABELS: Record<LauncherHarness, string> = { pi: 'Pi', 'letta-code': 'Letta Code' }
-const CAPS: Record<LauncherHarness, Capabilities> = { pi: PI_CAPS, 'letta-code': LETTA_CODE_CAPS }
+const LABELS: Record<LauncherHarness, string> = { pi: 'Pi', 'letta-code': 'Letta Code', opencode: 'OpenCode' }
+const CAPS: Record<LauncherHarness, Capabilities> = { pi: PI_CAPS, 'letta-code': LETTA_CODE_CAPS, opencode: OPENCODE_CAPS }
 
 const ONE_ROOM = 'One room only. It keeps one memory for the whole agent, so it is given its one channel and no other for as long as its door runs. To move it to another channel, stop it, change the channel, and start it again: the cell and what it remembered are removed at the stop.'
 const NO_MEMORY = 'It keeps no memory of its own. It remembers a conversation only until it is restarted.'
@@ -47,6 +48,8 @@ const NO_MEMORY = 'It keeps no memory of its own. It remembers a conversation on
 const TOOLS: Record<LauncherHarness, string> = {
   pi: 'No tools unless its rules switch one on. A tool runs inside its sealed cell, and a shell command waits for an admin.',
   'letta-code': 'No tools: it reads the messages it is sent and answers in text.',
+  // Its shim can hold a call for an admin (docs/lab/acp.md), but the launcher switches tools on for Pi only.
+  opencode: 'No tools: it reads the messages it is sent and answers in text.',
 }
 const NO_DMS = 'No direct messages.'
 

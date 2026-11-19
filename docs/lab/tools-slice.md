@@ -319,6 +319,13 @@ tool call to the door and takes a plain yes or no, and does not say it can hold 
 matrices list the ten tool checks as not run, with that reason. It is not one of the launcher's
 harnesses, so no config can switch a tool on for it.
 
+## OpenCode, over ACP
+
+Built for the ask flow only. Its shim ([`acp.md`](acp.md)) holds each call while the door asks, and
+a yes is for one call, by its hash. OpenCode runs its own tools, so the scratch folder's link
+checks and the limits are not the shim's to hold, and those checks are listed as not run. The
+launcher does not switch tools on for it.
+
 ## Web through the door
 
 An agent can read web pages and search the web. The cell still has no route out: the agent's tool

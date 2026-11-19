@@ -67,7 +67,7 @@ export type FromShim =
   | { t: 'health'; ok: boolean }
 
 export interface Capabilities {
-  harness: 'pi' | 'letta-code' | 'claude-sdk' | 'hermes' | 'openclaw' | 'echo'
+  harness: 'pi' | 'letta-code' | 'claude-sdk' | 'opencode' | 'hermes' | 'openclaw' | 'echo'
   version: string
   /** Has native chat channels. Must be off in door mode. */
   ownsChat: boolean
@@ -102,7 +102,7 @@ export interface Capabilities {
   modelShape: 'openai-chat' | 'anthropic-messages' | 'none'
 }
 
-export const HARNESSES: Capabilities['harness'][] = ['pi', 'letta-code', 'claude-sdk', 'hermes', 'openclaw', 'echo']
+export const HARNESSES: Capabilities['harness'][] = ['pi', 'letta-code', 'claude-sdk', 'opencode', 'hermes', 'openclaw', 'echo']
 
 /**
  * The only classes of tool the second cell may hold: the web, search and the door's notes. Each is

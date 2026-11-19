@@ -4,6 +4,7 @@
 // starts the lab and waits, so the rig can probe the containers from outside.
 import { CLAUDE_SDK_CHECKS, claudeSdkHarness } from '../harnesses/claude-sdk.ts'
 import { LETTA_CODE_CHECKS, lettaCodeHarness } from '../harnesses/letta-code.ts'
+import { OPENCODE_TOOL_CHECKS, openCodeHarness } from '../harnesses/opencode.ts'
 import { piHarness } from '../harnesses/pi.ts'
 import { CHECKS, runChecks, type Check } from '../suites/checks.ts'
 import type { HarnessUnderTest } from '../suites/harness.ts'
@@ -29,6 +30,7 @@ const cells: Record<string, { local: HarnessUnderTest; own: Check[]; slow: boole
   'pi': { local: piHarness(['/usr/local/bin/pi'], 'real'), own: [...TOOL_CHECKS, ...MODEL_FAILURE_CHECKS, ...MEMORY_CHECKS], slow: false },
   'letta-code': { local: lettaCodeHarness(['/usr/local/bin/letta'], 'real'), own: LETTA_CODE_CHECKS, slow: true },
   'claude-sdk': { local: claudeSdkHarness(NOT_HERE, 'real'), own: CLAUDE_SDK_CHECKS, slow: true },
+  'opencode': { local: openCodeHarness(['/usr/local/bin/opencode'], 'real'), own: OPENCODE_TOOL_CHECKS, slow: true },
 }
 const { local, own: asWritten, slow } = cells[process.env.SMLAB_HARNESS ?? 'pi'] ?? cells.pi
 // A harness that takes seconds to start needs longer than the lab's default before a turn is given up on.

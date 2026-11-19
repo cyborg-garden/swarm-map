@@ -3,7 +3,8 @@
 #
 #   cell   the harness, its shim and its gate, and the lab's probe. One stage
 #          per harness: `cell` holds Pi, `cell-letta-code` holds Letta Code,
-#          `cell-claude-sdk` holds the Claude Agent SDK
+#          `cell-claude-sdk` holds the Claude Agent SDK, `cell-opencode` holds
+#          OpenCode
 #   rig    the sidecar's side (door, model route, scripted model), the sink
 #          and the control
 #
@@ -81,6 +82,31 @@ COPY conformance/broken/claude-sdk-wrapped.ts /opt/swarm/conformance/broken/
 COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
 COPY conformance/docker/claude-sdk/cell-main.ts conformance/docker/claude-sdk/version.ts /opt/swarm/conformance/docker/claude-sdk/
 RUN chmod -R a-w /opt/swarm /opt/claude-sdk
+USER node
+WORKDIR /tmp/smlab
+
+FROM base AS cell-opencode
+# The fourth harness, built the same way: pinned by version and by the
+# integrity hash of every package in its lock file, with no install script run.
+# The package is a launcher and one compiled OpenCode program per platform. The
+# lock file names every platform; npm installs those that fit this image, and
+# the plain glibc build for this machine's architecture is the one linked.
+COPY conformance/docker/opencode/package.json conformance/docker/opencode/package-lock.json /opt/opencode/
+RUN cd /opt/opencode && npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+ && bin="$(ls -d /opt/opencode/node_modules/opencode-linux-*/bin/opencode | grep -v -e musl -e baseline | head -n 1)" \
+ && test -n "$bin" && ln -s "$bin" /usr/local/bin/opencode \
+ && rm -rf /root/.npm
+COPY lib/core /opt/swarm/lib/core
+COPY lib/door/framing.ts lib/door/protocol.ts lib/door/shim-client.ts /opt/swarm/lib/door/
+COPY lib/runtimes/acp /opt/swarm/lib/runtimes/acp
+COPY lib/runtimes/opencode /opt/swarm/lib/runtimes/opencode
+# The two files of Pi's that this cell also reads: how a sender is framed in a prompt, and a version the rig file names.
+COPY lib/runtimes/pi/preamble.ts lib/runtimes/pi/caps.ts /opt/swarm/lib/runtimes/pi/
+COPY conformance/guards/preflight.ts /opt/swarm/conformance/guards/
+COPY conformance/broken/opencode-wrapped.ts /opt/swarm/conformance/broken/
+COPY conformance/docker/probe.ts conformance/docker/report.ts conformance/docker/compose.ts conformance/docker/subnets.ts /opt/swarm/conformance/docker/
+COPY conformance/docker/opencode/cell-main.ts /opt/swarm/conformance/docker/opencode/
+RUN chmod -R a-w /opt/swarm /opt/opencode
 USER node
 WORKDIR /tmp/smlab
 
