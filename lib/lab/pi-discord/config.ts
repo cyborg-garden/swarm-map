@@ -129,8 +129,15 @@ export interface ToolsConfig {
    * address or query first. `search` switches on web_search, made by the door with a key from the
    * file SMLAB_SEARCH_KEY_FILE points at; a result is read only if `mode` lets it be.
    * Unlike the other tools, the web is allowed for an agent that hears anyone: it only reads.
+   * `anyoneRooms` is for a public agent, or a channel that hears anyone, with `mode: 'public'`:
+   * `ask` (the default) refuses the config unless `approval` is `ask`, so each address there waits
+   * for an admin's yes. `open` lets the public web be read there as `approval` says, with no yes:
+   * an operator's choice, for an invite-only community where the agent holds no keys. Nothing else
+   * changes: such a room still gets no shell or file tools, only an admin answers a request, and
+   * the door's own checks (GET only, no credentials, no private address) hold. With an allowlist it
+   * changes nothing.
    */
-  web?: { mode?: 'allowlist' | 'public'; allow: string[]; approval?: 'allow' | 'ask'; search?: boolean }
+  web?: { mode?: 'allowlist' | 'public'; allow: string[]; approval?: 'allow' | 'ask'; search?: boolean; anyoneRooms?: 'ask' | 'open' }
   /**
    * The command policy for the shell: names that run without a yes when every part of a command is
    * on `allow`, and names that never run. Left out, the shipped lists (DEFAULT_COMMANDS). A shell,
@@ -290,7 +297,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   }
   if (!Number.isInteger(t.approvalSeconds) || (t.approvalSeconds as number) < 10 || (t.approvalSeconds as number) > 600) errors.push('tools.approvalSeconds: a whole number from 10 to 600')
   if (t.commands !== undefined) for (const problem of commandListsProblems(t.commands)) errors.push(`tools.commands.${problem}`)
-  const w: Record<string, unknown> = { allow: [], ...(t.web === undefined ? {} : obj(t.web, 'tools.web', ['mode', 'allow', 'approval', 'search'])) }
+  const w: Record<string, unknown> = { allow: [], ...(t.web === undefined ? {} : obj(t.web, 'tools.web', ['mode', 'allow', 'approval', 'search', 'anyoneRooms'])) }
   if (!Array.isArray(w.allow) || w.allow.length > MAX_WEB_ENTRIES) errors.push(`tools.web.allow: a list of up to ${MAX_WEB_ENTRIES} hosts, such as en.wikipedia.org or github.com/some-org`)
   else {
     w.allow.forEach((entry, i) => {
@@ -302,13 +309,18 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
   if (w.mode !== undefined && w.mode !== 'allowlist' && w.mode !== 'public') errors.push("tools.web.mode: must be 'allowlist' or 'public'")
   if (w.approval !== undefined && w.approval !== 'allow' && w.approval !== 'ask') errors.push("tools.web.approval: must be 'allow' or 'ask'")
   if (w.search !== undefined && typeof w.search !== 'boolean') errors.push('tools.web.search: must be true or false')
+  if (w.anyoneRooms !== undefined && w.anyoneRooms !== 'ask' && w.anyoneRooms !== 'open') errors.push("tools.web.anyoneRooms: must be 'ask' or 'open'")
+  // The operator's explicit choice: where anyone is heard, the public web is read with no admin's yes.
+  const openToAnyone = w.mode === 'public' && w.anyoneRooms === 'open'
   const webOn = (Array.isArray(w.allow) && w.allow.length > 0) || w.mode === 'public' || w.search === true
-  if (w.mode === 'public' && d.anyoneInChannel === true && w.approval !== 'ask') {
+  if (w.mode === 'public' && d.anyoneInChannel === true && w.approval !== 'ask' && !openToAnyone) {
     errors.push("tools.web.approval: an agent that hears anyone reads the public web only with an admin's yes. Set approval to 'ask', use an allowlist, or name who it hears")
   }
   const web = webOn ? {
     ...(w.mode === undefined ? {} : { mode: w.mode as 'allowlist' | 'public' }), allow: w.allow as string[],
     ...(w.approval === undefined ? {} : { approval: w.approval as 'allow' | 'ask' }), ...(w.search === true ? { search: true } : {}),
+    // Kept only when it is open: 'ask' is the default, and a config without it is written as it always was.
+    ...(w.anyoneRooms === 'open' ? { anyoneRooms: 'open' as const } : {}),
   } : undefined
   amount(m.usdPerMTokIn, 'model.usdPerMTokIn', 0)
   amount(m.usdPerMTokOut, 'model.usdPerMTokOut', 0)
@@ -354,7 +366,7 @@ export function parseConfig(raw: unknown, opts: { allowLoopbackModel?: boolean }
     if (rules.tools === 'inherit' && anyTool) {
       return { errors: [`discord.perChannel.${cid}.tools: a channel that hears anyone gets no shell or file tools. Set its tools to web-only or none, or name who it hears there`] }
     }
-    if (rules.tools !== 'none' && w.mode === 'public' && webMode(config) !== 'never' && w.approval !== 'ask') {
+    if (rules.tools !== 'none' && w.mode === 'public' && webMode(config) !== 'never' && w.approval !== 'ask' && !openToAnyone) {
       return { errors: [`discord.perChannel.${cid}.tools: a channel that hears anyone reads the public web only with an admin's yes. Set tools.web.approval to 'ask', use an allowlist, or set its tools to none`] }
     }
   }
@@ -554,6 +566,7 @@ export function policyFor(c: LabConfig): PolicyRecord {
   const user = (id: string): PrincipalRef => ({ kind: 'user', id })
   const admins = c.discord.adminUserIds.map(user)
   const modes = toolModes(c)
+  const publicWeb = c.tools?.web?.mode === 'public' && webMode(c) !== 'never'
   // Naming bots is asking for them to be heard: by mention where the channel needs one, without where it does not.
   const named = c.discord.allowedBotIds
   const botMode = named.length === 0 ? c.discord.bots : c.discord.mentionRequired ? 'mentions' : 'all'
@@ -596,7 +609,11 @@ export function policyFor(c: LabConfig): PolicyRecord {
     },
     keys: [],
     // The public web is `default: 'public'`. On the list or not, a private address is never fetched: that is the door's.
-    egress: { default: c.tools?.web?.mode === 'public' && webMode(c) !== 'never' ? 'public' : 'deny', hosts: webMode(c) === 'never' ? [] : egressHostsFor(webEntries(c)), blockPrivateRanges: true },
+    egress: {
+      default: publicWeb ? 'public' : 'deny', hosts: webMode(c) === 'never' ? [] : egressHostsFor(webEntries(c)), blockPrivateRanges: true,
+      // Written only when the operator opened the public web to rooms that hear anyone: otherwise the record, and its hash, are as they always were.
+      ...(publicWeb && c.tools?.web?.anyoneRooms === 'open' ? { openToAnyone: true as const } : {}),
+    },
     memory: { threadsPoolIntoParent: true, dmIsolated: true, team: { dm: 'none', group: 'none', public: 'none' }, store: { kind: 'git-markdown', repo: '' } },
     session: { groupShared: true, timezone: 'UTC' },
     budget: { monthlyUsd: c.budget.monthlyUsd, onExceed: 'refuse' },

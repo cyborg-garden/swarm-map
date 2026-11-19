@@ -483,6 +483,9 @@ describe('pi-discord cell, as written', () => {
   })
 })
 
+/** The policy hash of the public-web config below, as made before tools.web.anyoneRooms existed. */
+const PUBLIC_WEB_HASH = 'fb02a690b1538c2de92cfef6c0f7deb1495c1cad8bfa2014c337f10629cc4379'
+
 describe('pi-discord config: web through the door', () => {
   const web = (allow: unknown, approval?: unknown, extra: Record<string, unknown> = {}): unknown =>
     ({ ...good(), tools: { enabled: [], mode: {}, approvalSeconds: 120, web: { allow, ...(approval === undefined ? {} : { approval }), ...extra } } })
@@ -548,6 +551,44 @@ describe('pi-discord config: web through the door', () => {
     expect(decide(policy, { kind: 'tool', surface: 'discord', room, actor, toolClass: 'network', toolName: 'web_fetch', argsDigest: '' }, {})).toMatchObject({ verdict: 'deny', rule: 'tools.posture' })
     const asking = { ...policy, tools: { ...policy.tools, allow: [], ask: ['network' as const] } }
     expect(decide(asking, { kind: 'tool', surface: 'discord', room, actor, toolClass: 'network', toolName: 'web_fetch', argsDigest: '' }, {}).verdict).toBe('ask')
+  })
+
+  it("anyoneRooms 'open' lets an agent that hears anyone read the public web with no yes: an explicit choice, nothing else changes", () => {
+    const hearsAnyone = (extra: Record<string, unknown>, approval?: string) => parseConfig({ ...(web([], approval, { mode: 'public', ...extra }) as object), discord: { ...good().discord, anyoneInChannel: true } })
+    // The default, and 'ask' written out, are as before.
+    expect(hearsAnyone({ anyoneRooms: 'ask' }).errors.join(' ')).toContain('tools.web.approval')
+    const { config, errors } = hearsAnyone({ anyoneRooms: 'open' })
+    expect(errors).toEqual([])
+    expect(config!.tools!.web).toMatchObject({ mode: 'public', anyoneRooms: 'open' })
+    const policy = policyFor(config!)
+    expect(validatePolicy(policy)).toEqual([])
+    expect([policy.posture, policy.egress.default, policy.egress.openToAnyone]).toEqual(['public', 'public', true])
+    const room = { id: '710000000000000001', kind: 'channel' as const }
+    const actor = { id: '900000000000000009', display: 'x', isBot: false, isSelf: false, roles: [] }
+    const call = (toolClass: 'network' | 'shell' | 'file_read') => decide(policy, { kind: 'tool', surface: 'discord', room, actor, toolClass, toolName: toolClass, argsDigest: '' }, {})
+    expect(call('network')).toMatchObject({ verdict: 'allow', rule: 'tools.lists' })
+    expect(call('shell')).toMatchObject({ verdict: 'deny', rule: 'tools.posture' })
+    expect(call('file_read')).toMatchObject({ verdict: 'deny', rule: 'tools.posture' })
+    // Still GET only, and never a private address.
+    expect(decide(policy, { kind: 'egress', host: 'example.org', path: '/', method: 'POST' }, {}).verdict).toBe('deny')
+    // Shell and file tools are still refused for an agent that hears anyone.
+    const tools = parseConfig({ ...good(), tools: { enabled: ['file_read'], mode: {}, approvalSeconds: 120, web: { mode: 'public', allow: [], anyoneRooms: 'open' } }, discord: { ...good().discord, anyoneInChannel: true } })
+    expect(tools.errors.join(' ')).toContain('gets no tools')
+  })
+
+  it("anyoneRooms is 'ask' or 'open'; with an allowlist, or left out, the record and its hash are as they always were", () => {
+    for (const v of ['yes', true, 'allow']) expect(parseConfig(web([], undefined, { mode: 'public', anyoneRooms: v })).errors).toContain("tools.web.anyoneRooms: must be 'ask' or 'open'")
+    const hash = (extra: Record<string, unknown>) => policyFor(parseConfig(web(['en.wikipedia.org'], undefined, extra)).config!).hash
+    // An allowlist is not the public web: 'open' changes nothing there.
+    expect(hash({ anyoneRooms: 'open' })).toBe(hash({}))
+    const allowlisted = policyFor(parseConfig(web(['en.wikipedia.org'], undefined, { anyoneRooms: 'open' })).config!)
+    expect('openToAnyone' in allowlisted.egress).toBe(false)
+    // The public web with the default: no new field, and the same hash as a record made before the setting existed.
+    const pub = (extra: Record<string, unknown>) => policyFor(parseConfig(web([], undefined, { mode: 'public', ...extra })).config!)
+    expect('openToAnyone' in pub({}).egress).toBe(false)
+    expect(pub({ anyoneRooms: 'ask' }).hash).toBe(pub({}).hash)
+    expect(pub({}).hash).toBe(PUBLIC_WEB_HASH)
+    expect(pub({ anyoneRooms: 'open' }).hash).not.toBe(pub({}).hash)
   })
 
   it('the public web reads any public address: the record says public, and the list is not needed', () => {

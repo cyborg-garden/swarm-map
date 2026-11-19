@@ -39,7 +39,7 @@ export const EXEMPLAR_POLICY: Exemplar = {
   },
   tools: { allow: [], ask: [], deny: [], perRoom: {}, commands: { allow: [], block: [] }, browserGuard: 'off' },
   keys: [],
-  egress: { default: 'deny', hosts: [], blockPrivateRanges: true },
+  egress: { default: 'deny', hosts: [], blockPrivateRanges: true, openToAnyone: true },
   memory: {
     threadsPoolIntoParent: true,
     dmIsolated: true,

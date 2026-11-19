@@ -182,8 +182,9 @@ function decideTool(policy: PolicyRecord, e: Extract<Event, { kind: 'tool' }>, f
     if (e.toolClass === 'unknown') return end('deny', 'tools.unknown', `This tool is not classified, and ${pub ? 'this agent is public' : 'this room hears anyone'}.`)
     if (PUBLIC_LOSES.includes(e.toolClass)) return end('deny', 'tools.posture', pub ? `Public agents do not get ${e.toolClass} tools.` : `There are no ${e.toolClass} tools in a room that hears anyone.`)
     // The public web with no yes would let anyone in the room steer the door to any address, and put
-    // what the agent knows into it. Where anyone is heard, the public web is read only with an admin's yes.
-    if (e.toolClass === 'network' && policy.egress.default === 'public' && !asksHere('network')) {
+    // what the agent knows into it. Where anyone is heard, the public web is read only with an admin's yes,
+    // unless the operator has chosen to open it there (egress.openToAnyone). The lists below still decide.
+    if (e.toolClass === 'network' && policy.egress.default === 'public' && policy.egress.openToAnyone !== true && !asksHere('network')) {
       return end('deny', 'tools.posture', pub ? 'A public agent reads the public web only with an admin\'s yes for each address.' : 'In a room that hears anyone, the public web is read only with an admin\'s yes for each address.')
     }
     trace.push({ rule: 'tools.posture', outcome: 'pass' })

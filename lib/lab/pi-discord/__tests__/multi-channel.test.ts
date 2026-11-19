@@ -15,6 +15,7 @@ import { createSanitizer } from '../../../door/sanitizer.ts'
 import { connectShim } from '../../../door/shim-client.ts'
 import { IDS, startDiscordRig, type DiscordRig } from '../../../door/testing/discord-rig.ts'
 import { ECHO_CAPS } from '../../../door/testing/echo-shim.ts'
+import { decide } from '../../../core/decide.ts'
 import { channelIdsOf, parseConfig, policyFor, systemPromptFor, withChannels, type LabConfig } from '../config.ts'
 
 armTripwire()
@@ -149,6 +150,21 @@ describe('channel list: the config', () => {
     // Positive controls: web only, or the public web with a yes for each address.
     parsed(base({ channelIds: [IDS.home, IDS.other], perChannel: { [IDS.other]: { anyoneInChannel: true, tools: 'web-only' } } }, { tools: LAB_TOOLS }))
     parsed(base({ channelIds: [IDS.home, IDS.other], perChannel: { [IDS.other]: { anyoneInChannel: true, tools: 'web-only' } } }, { tools: { enabled: [], web: { mode: 'public', allow: [], approval: 'ask' } } }))
+  })
+
+  it("with tools.web.anyoneRooms 'open', a channel that hears anyone reads the public web with no yes, and still gets no shell or file tools", () => {
+    const open = (tools: Record<string, unknown>, ch: Record<string, unknown> = { tools: 'web-only' }) => base({ channelIds: [IDS.home, IDS.other], perChannel: { [IDS.other]: { anyoneInChannel: true, ...ch } } }, { tools })
+    const config = parsed(open({ enabled: [], web: { mode: 'public', allow: [], anyoneRooms: 'open' } }))
+    const policy = policyFor(config)
+    expect(policy.egress).toMatchObject({ default: 'public', openToAnyone: true })
+    const stranger = { id: '900000000000000099', display: 'x', isBot: false, isSelf: false, roles: [] }
+    const call = (toolClass: 'network' | 'shell') => decide(policy, { kind: 'tool', surface: 'discord', room: { id: IDS.other, kind: 'channel' }, actor: stranger, toolClass, toolName: toolClass, argsDigest: '' }, {})
+    expect(call('network')).toMatchObject({ verdict: 'allow', rule: 'tools.lists' })
+    expect(call('shell').verdict).toBe('deny')
+    // The shell and file tools are still refused there.
+    expect(refused(open({ ...LAB_TOOLS, web: { mode: 'public', allow: [], anyoneRooms: 'open' } }, {}))).toMatch(/a channel that hears anyone gets no shell or file tools/)
+    // 'ask', written out, is the default: still refused.
+    expect(refused(open({ enabled: [], web: { mode: 'public', allow: [], anyoneRooms: 'ask' } }))).toMatch(/reads the public web only with an admin's yes/)
   })
 
   it('refuses more than one channel for a harness that keeps one memory for the whole agent', () => {

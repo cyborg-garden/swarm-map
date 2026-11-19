@@ -94,6 +94,14 @@ export interface EgressPolicy {
    */
   hosts: { host: string; methods?: string[]; paths?: string[] }[]
   blockPrivateRanges: true
+  /**
+   * With `default: 'public'`, a room that hears anyone (or a public agent) reads the public web as
+   * the tool lists say, with no admin's yes for each address. Every other check of the door's is
+   * unchanged, and such a room still gets no shell, file, code-exec or chat-admin tools. An
+   * operator's explicit choice; left out, the public web there needs a yes. Only `true` or absent,
+   * so a record without it keeps its canonical form and hash.
+   */
+  openToAnyone?: true
 }
 
 export interface MemoryPolicy {
