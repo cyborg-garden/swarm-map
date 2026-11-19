@@ -2,7 +2,7 @@
 // ships weekly, and a new version means a new matrix, not an edit here.
 // Each field says only what has been run, not what the docs promise.
 import type { ToolClass } from '../../core/policy/types.ts'
-import type { Capabilities } from '../../door/protocol.ts'
+import { REDUCED_CELL_CLASSES, type Capabilities } from '../../door/protocol.ts'
 
 export const PI_VERSION = '1.5.2'
 
@@ -21,6 +21,14 @@ export const PI_TOOL_MAP: Record<string, ToolClass> = {
   web_fetch: 'network',
   web_search: 'search',
 }
+
+/**
+ * The tools of the second cell, for the rooms with fewer tools: the web, search and the door's notes.
+ * Each is carried out by the door. Pi in that cell is never started with a shell or a file tool.
+ */
+export const PI_REDUCED_TOOL_MAP: Record<string, ToolClass> = Object.fromEntries(
+  Object.entries(PI_TOOL_MAP).filter(([, k]) => REDUCED_CELL_CLASSES.includes(k)),
+)
 
 export const PI_CAPS: Capabilities = {
   harness: 'pi',

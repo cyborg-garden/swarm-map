@@ -9,6 +9,7 @@
 // the token only proves "this is that cell" to its own door.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { PI_REDUCED_TOOL_MAP } from '../../lib/runtimes/pi/caps.ts'
 import { startPiShim, systemPromptProblem, type PiShimOptions } from '../../lib/runtimes/pi/shim.ts'
 import { assertNoCredentials } from '../guards/preflight.ts'
 import { BRAIN_PORT, BROKEN_GATES, LAB_DIR, ROUTE_PORT, SWARM_ROOT } from './compose.ts'
@@ -49,11 +50,16 @@ const limit = (name: string): number | undefined => {
   const n = Number(process.env[name])
   return Number.isInteger(n) && n > 0 ? n : undefined
 }
+// The second cell, for the rooms with fewer tools (SMLAB_TOOLS=reduced): it holds the web, search and the
+// door's notes, and no shell or file tool. Any other value is refused; left out, the cell holds every tool.
+const toolSet = process.env.SMLAB_TOOLS
+if (toolSet !== undefined && toolSet !== 'reduced') { console.error('cell: SMLAB_TOOLS is not a tool set'); process.exit(2) }
 const toolLimits = { callSeconds: limit('SMLAB_TOOL_SECONDS'), outputBytes: limit('SMLAB_TOOL_OUTPUT_BYTES') }
 const options: PiShimOptions = {
   host: 'door', port: BRAIN_PORT, token: process.env.SWARMLAB_BRAIN ?? '',
   piCommand: ['/usr/local/bin/pi'], agentDir: dirs.agent, sessionsDir: dirs.sessions, workDir: dirs.work, homeDir: dirs.home,
   gate: { path: gate }, gateReadyMs: 20_000, model, systemPrompt, toolLimits,
+  ...(toolSet === 'reduced' ? { toolMap: PI_REDUCED_TOOL_MAP } : {}),
   verdictTimeoutMs: Number(process.env.SMLAB_VERDICT_MS) || 400,
   gateTimeoutMs: Number(process.env.SMLAB_VETO_MS) || 2000,
 }

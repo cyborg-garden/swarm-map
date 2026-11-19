@@ -20,7 +20,7 @@ import { ASKED_TO_REMEMBER, MEMORY_TOOL, type MemoryStore } from './memory.ts'
 import { createBrainServer, type BrainServer, type ShimLink } from './brain-server.ts'
 import type { ConnectorInbound, NoticeEvent, SurfaceConnector, SurfaceCreds } from './connector.ts'
 import { createObserveBuffer } from './observe-buffer.ts'
-import type { Capabilities, Envelope, FromShim, Usage } from './protocol.ts'
+import { REDUCED_CELL_CLASSES, reducedCapsProblem, type Capabilities, type Envelope, type FromShim, type Usage } from './protocol.ts'
 import type { Receipt, ReceiptLog } from './receipts.ts'
 import { createSanitizer, type Sanitizer } from './sanitizer.ts'
 import { startTurnStatus, statusCode, type StatusEnd, type StatusOptions, type TurnStatus } from './turn-status.ts'
@@ -28,6 +28,19 @@ import { createWebFetcher, untrustedText, type WebFetchOptions } from './web-fet
 import { DEFAULT_SEARCH, MAX_QUERY_CHARS, searchBrave, untrustedResults, type SearchOptions } from './web-search.ts'
 
 export interface Heartbeat { agentId: string; policyHash: string; caps?: Capabilities; ts: string }
+
+/**
+ * Which cell a turn is sent to. `own`: the agent's own, with every tool it has. `reduced`: the second
+ * cell, for the rooms with fewer tools than the agent's own, built with only the web, search and notes.
+ */
+export type CellName = 'own' | 'reduced'
+
+/**
+ * The second cell. The rooms listed here (a thread goes with its parent) are sent to it and to no
+ * other cell, and it is sent nothing else. It is taken at hello only if every tool it declares is of a
+ * class in REDUCED_CELL_CLASSES, and it may ask for nothing else. It has its own token and its own port.
+ */
+export interface ReducedCellOptions { brainToken: string; brainPort?: number; rooms: string[] }
 
 export interface DoorOptions {
   policy: PolicyRecord
@@ -82,11 +95,19 @@ export interface DoorOptions {
    * indicator (turn-status.ts). Left out, neither. Only on a surface whose connector has them.
    */
   status?: StatusOptions
+  /** The second cell, for the rooms with fewer tools. Left out, there is one cell, and every room goes to it. */
+  reducedCell?: ReducedCellOptions
+  /** Told when a cell that dialled is turned away at hello, and why. */
+  onCellRefused?: (cell: CellName, why: string) => void
 }
 
 export interface Door {
   brainPort: number
   shimConnected(): Promise<void>
+  /** Where the second cell dials, when there is one. */
+  reducedPort?: number
+  /** Resolves once the second cell has said hello and been taken. Only when there is one. */
+  reducedConnected?(): Promise<void>
   policy(): PolicyRecord
   /** Swap the live policy. Takes effect on the next decision, with no restart. */
   setPolicy(policy: PolicyRecord): void
@@ -115,6 +136,8 @@ interface Turn {
   startedAt: number
   /** The reaction and typing shown for it, if any. */
   status?: TurnStatus
+  /** The cell it was sent to. Only that cell may answer it, or ask for a tool under it. */
+  cell: CellName
 }
 
 /**
@@ -175,9 +198,20 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     if (errors.length > 0) throw new Error(`policy refused: ${errors.join('; ')}`)
   }
   check(opts.policy)
+  const reduced = opts.reducedCell
+  if (reduced && (typeof reduced.brainToken !== 'string' || reduced.brainToken === opts.brainToken)) {
+    throw new Error('the second cell needs a token of its own')
+  }
+  // A thread goes with its parent: a room is this channel or a thread in it.
+  const reducedRooms = new Set(reduced?.rooms ?? [])
+  const cellOf = (e: ConnectorInbound): CellName =>
+    reduced && reducedRooms.has(e.room.kind === 'thread' ? (e.room.parentId ?? e.room.id) : e.room.id) ? 'reduced' : 'own'
 
   let policy = opts.policy
-  let shim: { link: ShimLink; caps: Capabilities } | undefined
+  // The shim connected in each cell now. With one cell, only `own`.
+  const shims: Partial<Record<CellName, { link: ShimLink; caps: Capabilities }>> = {}
+  // Which cell each conversation is in. A room goes to one cell, so a conversation is only ever in one.
+  const sessionCell = new Map<string, CellName>()
   // The one conversation a harness with one memory for the whole agent has been given. It is
   // kept for as long as this door runs, whichever shim is connected: the door cannot tell
   // whether a shim that connects again still holds the memory of the one before it.
@@ -383,8 +417,10 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       observed.add(sessionKey, { sender: e.sender.display, text, ts: new Date().toISOString() })
       return
     }
+    const cell = cellOf(e)
+    const shim = shims[cell]
     if (!shim) {
-      receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'turn.no-harness', why: 'No harness is connected, so the message was not delivered.' })
+      receipt(about(e, 'inbound'), { verdict: 'drop', rule: 'turn.no-harness', why: cell === 'own' ? 'No harness is connected, so the message was not delivered.' : 'No harness is connected in the cell for rooms with fewer tools, so the message was not delivered.' })
       return
     }
     // A harness that keeps one memory for the whole agent is given one conversation. A policy
@@ -445,7 +481,8 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       text, attachments: e.attachments, context: { observed: observed.drain(sessionKey), ...(memory === undefined ? {} : { memory }) },
       tools, whenBusy: 'queue', deadlineMs,
     }
-    const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never, startedAt: Date.now() }
+    const turn: Turn = { turnId, event: e, connector, botRun, sessionKey, timer: undefined as never, startedAt: Date.now(), cell }
+    sessionCell.set(sessionKey, cell)
     turns.set(turnId, turn)
     startClock(turn)
     // Delivered, so the room may see the agent is on it. Nothing else the door is sent is ever marked.
@@ -510,20 +547,29 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     for (const turn of [...turns.values()]) {
       if (turn.event.surface !== n.surface || turn.event.messageId !== n.messageId) continue
       receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'in.once', why: 'The message was deleted before it was answered, so nothing is posted.' })
-      shim?.link.send({ t: 'cancel', turnId: turn.turnId })
+      shims[turn.cell]?.link.send({ t: 'cancel', turnId: turn.turnId })
       closeTurn(turn)
     }
   }
 
-  function fromShim(link: ShimLink, caps: Capabilities, msg: FromShim): void {
+  function fromShim(cell: CellName, link: ShimLink, caps: Capabilities, msg: FromShim): void {
     // A turn id the door did not issue is harness-supplied text. It is never written down.
     const unknown = (what: string): void => {
       receipt({ kind: 'outbound' },
         { verdict: 'drop', rule: 'turn.known', why: `The harness sent ${what} for a turn that is not live.` })
     }
+    // A live turn that was sent to the other cell. This cell was never given it, so nothing it says
+    // about it counts: not a reply, not an end, not an error, and no tool is decided under it.
+    const elsewhere = (turn: Turn | undefined, what: string): boolean => {
+      if (turn === undefined || turn.cell === cell) return false
+      receipt(about(turn.event, what === 'a tool request' ? 'tool' : 'outbound', turn.turnId),
+        { verdict: what === 'a tool request' ? 'deny' : 'drop', rule: 'turn.cell', why: `A cell sent ${what} for a turn that was sent to the other cell.` })
+      return true
+    }
     switch (msg.t) {
       case 'reply': {
         const turn = turns.get(msg.turnId)
+        if (elsewhere(turn, 'a reply')) return
         if (!turn) return unknown('a reply')
         if (turn.reply !== undefined) {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'turn.one-reply', why: 'The harness sent a second reply for one turn.' })
@@ -534,6 +580,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       }
       case 'settled': {
         const turn = turns.get(msg.turnId)
+        if (elsewhere(turn, 'settled')) return
         if (!turn) return unknown('settled')
         if (msg.usage) opts.onUsage?.(turn.turnId, msg.usage)
         clearTimeout(turn.timer)
@@ -554,6 +601,10 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       }
       case 'tool_request': {
         const turn = turns.get(msg.turnId)
+        if (elsewhere(turn, 'a tool request')) {
+          if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow: false, reason: 'not a turn of this cell' })
+          return
+        }
         if (!turn) {
           receipt({ kind: 'tool' }, { verdict: 'deny', rule: 'turn.known', why: 'A tool was requested for a turn that is not live.' })
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow: false, reason: 'unknown turn' })
@@ -579,6 +630,11 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
           if (!opts.silentVerdicts) link.send({ t: 'tool_verdict', callId: msg.callId, allow, ...(allow ? { hash } : { reason }) })
         }
         const refuse = (rule: string, why: string): void => { receipt(tag, { verdict: 'deny', rule, why }, note); verdict(false, why) }
+        // tools.cell: the second cell asks for the web, search and notes, and nothing else, whatever the rules say.
+        // It was taken at hello only with those, so this is the same no for a cell that says otherwise later.
+        if (cell === 'reduced' && !REDUCED_CELL_CLASSES.includes(toolClass)) {
+          return refuse('tools.cell', `This cell is for the rooms with fewer tools, and is given no ${toolClass} tools.`)
+        }
         // Whether this call stopped its turn's clock. Only a call that did may start it again: no other request moves a turn's deadline.
         let stopped = false
         void factsFor(turn.connector, e).then(async (facts) => {
@@ -709,6 +765,7 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
       }
       case 'error': {
         const turn = msg.turnId ? turns.get(msg.turnId) : undefined
+        if (elsewhere(turn, 'an error')) return
         if (turn) {
           receipt(about(turn.event, 'outbound', turn.turnId), { verdict: 'drop', rule: 'out.still-allowed', why: 'The harness reported an error for this turn.' })
           closeTurn(turn, 'error')
@@ -816,16 +873,26 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
     return /^[A-Za-z0-9._~/-]{0,160}$/.test(p) && !secretShaped ? p : `(${p.length} characters, not shown)`
   }
 
+  /** A cell's shim is taken. What the conversations in that cell were given is known no longer: a shim that connects again may remember nothing. */
+  const onShim = (cell: CellName) => (link: ShimLink, caps: Capabilities): void => {
+    shims[cell] = { link, caps }
+    for (const key of [...notesGiven.keys()]) if ((sessionCell.get(key) ?? 'own') === cell) notesGiven.delete(key)
+    for (const key of [...readTheWeb]) if ((sessionCell.get(key) ?? 'own') === cell) readTheWeb.delete(key)
+    link.onMessage((msg) => fromShim(cell, link, caps, msg))
+    link.onClose(() => { if (shims[cell]?.link === link) delete shims[cell] })
+  }
   const brain: BrainServer = await createBrainServer({
-    token: opts.brainToken, host: opts.brainHost, port: opts.brainPort,
-    onShim: (link, caps) => {
-      shim = { link, caps }
-      notesGiven.clear()
-      readTheWeb.clear()
-      link.onMessage((msg) => fromShim(link, caps, msg))
-      link.onClose(() => { if (shim?.link === link) shim = undefined })
-    },
+    token: opts.brainToken, host: opts.brainHost, port: opts.brainPort, onShim: onShim('own'),
+    ...(opts.onCellRefused ? { onRefused: (why: string) => opts.onCellRefused?.('own', why) } : {}),
   })
+  // The second cell dials a server of its own, with a token of its own, and is taken only if it holds nothing but the web, search and notes.
+  let reducedBrain: BrainServer | undefined
+  if (reduced) {
+    reducedBrain = await createBrainServer({
+      token: reduced.brainToken, host: opts.brainHost, port: reduced.brainPort, onShim: onShim('reduced'), accept: reducedCapsProblem,
+      onRefused: (why) => opts.onCellRefused?.('reduced', why),
+    }).catch(async (err) => { await brain.close(); throw err })
+  }
 
   for (const connector of opts.connectors) {
     const creds = opts.creds[connector.id]
@@ -846,22 +913,24 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
   return {
     brainPort: brain.port,
     shimConnected: () => brain.connected(),
+    ...(reducedBrain ? { reducedPort: reducedBrain.port, reducedConnected: () => reducedBrain.connected() } : {}),
     policy: () => policy,
     setPolicy(next) {
       check(next)
       if (next.agentId !== policy.agentId) throw new Error('policy refused: agentId: belongs to another agent')
-      const misfit = shim ? fitProblems(next, shim.caps) : []
+      const misfit = Object.values(shims).flatMap((s) => fitProblems(next, s.caps))
       if (misfit.length > 0) throw new Error(`policy refused: ${misfit.join('; ')}`)
       policy = next
     },
     modelFailed(failure) {
       lastFailure = { rule: failure.rule, why: failure.why, at: Date.now() }
     },
-    heartbeat: () => ({ agentId: policy.agentId, policyHash: policy.hash, caps: shim?.caps, ts: new Date().toISOString() }),
+    heartbeat: () => ({ agentId: policy.agentId, policyHash: policy.hash, caps: shims.own?.caps, ts: new Date().toISOString() }),
     idle: () => (busy === 0 ? Promise.resolve() : new Promise<void>((resolve) => { waiters.push(resolve) })),
     async close() {
       for (const turn of [...turns.values()]) closeTurn(turn)
       await brain.close()
+      await reducedBrain?.close()
       for (const connector of opts.connectors) await connector.close()
     },
   }
