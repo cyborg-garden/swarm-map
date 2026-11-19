@@ -1,0 +1,24 @@
+{
+  "org": "example-org",
+  "installation_id": "000000",
+  "contracts_repo": "contractors",
+  "work_dir": "work",
+  "people": {},
+  "boards": {
+    "work": {
+      "project": 1,
+      "repo": "contractors"
+    },
+    "ops": {
+      "project": 1,
+      "repo": "ops",
+      "restricted": true,
+      "channels": [
+        "000000000000000000"
+      ],
+      "channel_label": "#ops",
+      "org": "example-org-private",
+      "token_env": "GH_TOKEN_PRIVATE"
+    }
+  }
+}
