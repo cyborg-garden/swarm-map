@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { SESSION_COOKIE, verifySession } from '@/lib/auth/session'
+import { ACCESS_JWT_HEADER, accessConfigFromEnv, isCloudflareEdgeRequest, verifyAccessJwt } from '@/lib/auth/cf-access'
 
 /**
  * Auth gate for mutating API routes.
@@ -28,6 +29,12 @@ import { SESSION_COOKIE, verifySession } from '@/lib/auth/session'
  * with 503 rather than served open — a missing operator secret must never
  * degrade to no-auth. The agent-read allowlist still passes (booleans, no
  * secrets) so the fleet keeps working while auth is (mis)configured.
+ *
+ * CLOUDFLARE ACCESS (layer 0, every path, not only /api): when
+ * CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set, any request that came through
+ * Cloudflare's edge must carry a valid Access JWT — including the agent paths,
+ * since agents never come through the tunnel. Direct on-host requests skip
+ * this layer and fall through to the session gate. See lib/auth/cf-access.ts.
  */
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
@@ -83,9 +90,36 @@ function requiresAuth(method: string, pathname: string): boolean {
   return false // OPTIONS and other non-mutating verbs
 }
 
+function deny(pathname: string, status: number, error: string): NextResponse {
+  if (pathname.startsWith('/api/')) return NextResponse.json({ error }, { status })
+  return new NextResponse(error, { status, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+}
+
 export async function proxy(request: NextRequest): Promise<NextResponse> {
   const method = request.method.toUpperCase()
   const pathname = request.nextUrl.pathname
+
+  // Layer 0: Cloudflare Access at the origin, for requests from the edge.
+  if (isCloudflareEdgeRequest(request.headers)) {
+    const access = accessConfigFromEnv()
+    if (access.state === 'misconfigured') {
+      console.error(`[proxy] Cloudflare Access misconfigured: ${access.reason}`)
+      return deny(pathname, 503, 'access not configured')
+    }
+    if (access.state === 'on') {
+      const verdict = await verifyAccessJwt(request.headers.get(ACCESS_JWT_HEADER), access.config)
+      if (!verdict.ok) {
+        console.warn(`[proxy] Cloudflare Access JWT rejected: ${verdict.reason} (${method} ${pathname})`)
+        return deny(pathname, 403, 'access denied')
+      }
+    }
+  }
+
+  // The session gate below covers the API only; pages are shells whose data
+  // comes from gated API calls.
+  if (pathname !== '/api' && !pathname.startsWith('/api/')) {
+    return NextResponse.next()
+  }
 
   // Auth endpoints establish/clear the session; never gate them.
   if (EXCLUDED_PATHS.has(pathname)) {
@@ -112,5 +146,7 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  // Everything except Next's static build output, so the Access check covers
+  // pages as well as the API. Static chunks carry no data.
+  matcher: '/((?!_next/static|favicon.ico).*)',
 }
