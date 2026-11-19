@@ -19,6 +19,8 @@ import { NOTICES } from '../../lib/door/door.ts'
 import { IDS } from '../../lib/door/testing/discord-rig.ts'
 import { assertFakeDiscord, startFakeDiscord, type FakeDiscord } from '../../lib/door/testing/fake-discord.ts'
 import { docker, dockerProblems, networksWritten, runningCellProblems, type LiveFile } from '../../lib/lab/pi-discord/cell.ts'
+import { connectShim } from '../../lib/door/shim-client.ts'
+import { PI_CAPS, PI_REDUCED_TOOL_MAP } from '../../lib/runtimes/pi/caps.ts'
 import { parseConfig, type LabConfig } from '../../lib/lab/pi-discord/config.ts'
 import { readRun, REPO_ROOT, runFile, sealChecks, start, stopRun, type Running } from '../../lib/lab/pi-discord/launch.ts'
 import { MODEL_KEY_FILE_ENV, readSecretFile, TOKEN_FILE_ENV } from '../../lib/lab/pi-discord/secrets.ts'
@@ -90,6 +92,22 @@ describe('pi-discord dry run: the containment checks', () => {
     expect(checks.find((c) => c.id === 'S0d')?.detail).toMatch(/the cell as Docker made it: \/tmp has no size/)
     expect(checks.find((c) => c.id === 'S3')?.detail).toMatch(/inside the container: \/tmp is \d+ MB, more than its 32 MB|inside the container: \/tmp has no size/)
     expect(checks.find((c) => c.id === 'S4')?.detail).toMatch(/the cell's \/tmp took \d+ bytes, which is more than its 32 MB/)
+  }, 180_000)
+})
+
+describe('pi-discord dry run: the second cell, for the channels with fewer tools', () => {
+  it('the second cell a real run would start is sealed, and the door takes it as holding the web, search and notes only', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, role: 'reduced' })
+    expect(checks.map((c) => c.id)).toEqual(['S0', 'S0r', 'S0t', 'S0d', 'S1', 'S2', 'S3', 'S4', 'S9'])
+    expect(checks.filter((c) => !c.pass)).toEqual([])
+  }, 180_000)
+
+  it('must-fail: a second cell started with the shell and the file tools is caught as written, by the door at hello, and as Docker made it', async () => {
+    const checks = await sealChecks({ model: 'lab/model', workDir: tmp, log: () => {}, role: 'reduced', broken: 'reduced-with-shell' })
+    expect(failed(checks)).toEqual(['S0', 'S0r', 'S0t', 'S0d'])
+    expect(checks.find((c) => c.id === 'S0')?.detail).toMatch(/would hold the shell and the file tools/)
+    expect(checks.find((c) => c.id === 'S0t')?.detail).toMatch(/the second cell holds file_read, file_write, shell tools/)
+    expect(checks.find((c) => c.id === 'S0d')?.detail).toMatch(/not started to hold only the web, search and notes/)
   }, 180_000)
 })
 
@@ -455,4 +473,127 @@ describe('pi-discord: one message, end to end, through real Pi in the sealed cel
     running = undefined
     await first.stop()
   }, 240_000)
+})
+
+describe('pi-discord: two cells, end to end: the agent\'s own, and a second for a channel with fewer tools', () => {
+  let fake: FakeDiscord
+  let model: ScriptedModel
+  let running: Running | undefined
+  const stateDir = path.join(tmp, 'state-two-cells')
+  const nonce = randomBytes(4).toString('hex')
+  const script: ScriptEntry[] = []
+
+  beforeAll(async () => {
+    fake = await startFakeDiscord()
+    assertFakeDiscord({ apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl, token: fake.token, nonce: fake.nonce })
+    fake.addChannel({ id: IDS.home })
+    fake.addChannel({ id: IDS.other })
+    model = await startScriptedModel({ nonce, script })
+    const tokenFile = path.join(tmp, 'two-discord-token')
+    const keyFile = path.join(tmp, 'two-model-key')
+    writeFileSync(tokenFile, `${fake.token}\n`, { mode: 0o600 })
+    writeFileSync(keyFile, `UPSTREAM-${nonce}\n`, { mode: 0o600 })
+    const env = { [TOKEN_FILE_ENV]: tokenFile, [MODEL_KEY_FILE_ENV]: keyFile }
+    const parsed = parseConfig({
+      agentId: 'pi-lab-two',
+      discord: {
+        guildId: IDS.guild, channelIds: [IDS.home, IDS.other], adminUserIds: [IDS.admin], allowedUserIds: [IDS.member],
+        perChannel: { [IDS.other]: { anyoneInChannel: true, tools: 'web-only' } },
+      },
+      budget: { monthlyUsd: 5 },
+      tools: { enabled: ['shell', 'file_read'], approvalSeconds: 60 },
+      model: { baseUrl: model.baseUrl, id: 'scripted', usdPerMTokIn: 1, usdPerMTokOut: 2 },
+    }, { allowLoopbackModel: true })
+    expect(parsed.errors).toEqual([])
+    const secrets = { discordToken: readSecretFile(TOKEN_FILE_ENV, env, REPO_ROOT), modelKey: readSecretFile(MODEL_KEY_FILE_ENV, env, REPO_ROOT) }
+    running = await start({ config: parsed.config!, secrets, stateDir, log: () => {}, discord: { apiBase: fake.apiBase, gatewayUrl: fake.gatewayUrl } })
+  }, 240_000)
+
+  afterAll(async () => {
+    const run = readRun(stateDir)
+    await running?.stop()
+    // Both cells are gone, whatever was done to the second below.
+    if (run) expect([...containersOf(run.project), ...containersOf(run.reducedProject ?? 'smlab-00000000')]).toEqual([])
+    await model?.close()
+    await fake?.close()
+  }, 60_000)
+
+  const say = (channel: string, author: string, text: string): string =>
+    fake.post({ channel, guild: IDS.guild, author: { id: author }, content: `<@${fake.selfId}> ${text}`, mentions: [fake.selfId] })
+  const until = async (what: () => boolean, ms = 90_000): Promise<void> => {
+    const end = Date.now() + ms
+    while (!what() && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(what()).toBe(true)
+  }
+  const receipts = (): { verdict: string; rule: string; event: { kind: string; turnId?: string; room?: string } }[] =>
+    readFileSync(path.join(stateDir, 'receipts.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  const inCell = (project: string, command: string): string => docker(['exec', `${project}-cell-1`, 'sh', '-c', command]).out
+
+  it('two cells are up and sealed, each as written: the second is on its own networks and told to hold fewer tools', () => {
+    const run = readRun(stateDir)!
+    expect(run.reducedProject).toMatch(/^smlab-[0-9a-f]{8}$/)
+    expect(run.reducedProject).not.toBe(run.project)
+    expect(running!.reducedProject).toBe(run.reducedProject)
+    const own = JSON.parse(readFileSync(path.join(stateDir, 'compose.json'), 'utf8')) as LiveFile
+    const second = JSON.parse(readFileSync(path.join(stateDir, 'compose-reduced.json'), 'utf8')) as LiveFile
+    expect(runningCellProblems(run.project, networksWritten(own))).toEqual([])
+    expect(runningCellProblems(run.reducedProject!, networksWritten(second), 'reduced')).toEqual([])
+    // The two cells share no network and no folder.
+    expect(Object.values(second.networks).map((n) => n.ipam.config[0].subnet)).not.toContain(own.networks.cell.ipam.config[0].subnet)
+  })
+
+  it('a turn from the channel with fewer tools runs in the second cell, offered no shell or file tool; one from the agent\'s own runs in its own', async () => {
+    const run = readRun(stateDir)!
+    script.push({ match: 'CANARY-public', text: 'hello from the second cell' })
+    script.push({ match: 'CANARY-own', text: 'hello from the own cell' })
+    say(IDS.other, IDS.stranger, 'CANARY-public')
+    await until(() => fake.posted.length === 1)
+    expect(fake.posted[0]).toMatchObject({ channel: IDS.other })
+    const asked = JSON.parse(model.requests.at(-1)!.body) as { tools?: { function?: { name?: string } }[] }
+    expect((asked.tools ?? []).map((t) => t.function?.name)).not.toEqual(expect.arrayContaining(['bash']))
+    expect((asked.tools ?? []).map((t) => t.function?.name).filter((n) => ['bash', 'read', 'edit', 'write', 'grep', 'find', 'ls'].includes(n ?? ''))).toEqual([])
+    // Pi kept its session in the second cell, and the own cell has none yet.
+    expect(inCell(run.reducedProject!, 'ls /tmp/smlab/sessions; echo LISTED').replace('LISTED', '').trim()).not.toBe('')
+    expect(inCell(run.project, 'ls /tmp/smlab/sessions; echo LISTED').replace('LISTED', '').trim()).toBe('')
+    say(IDS.home, IDS.member, 'CANARY-own')
+    await until(() => fake.posted.length === 2)
+    expect(fake.posted[1]).toMatchObject({ channel: IDS.home })
+    expect(inCell(run.project, 'ls /tmp/smlab/sessions; echo LISTED').replace('LISTED', '').trim()).not.toBe('')
+  }, 180_000)
+
+  it('must-fail: a call filed by the second cell under a live turn of the agent\'s own cell is refused, and the turn goes on', async () => {
+    const run = readRun(stateDir)!
+    // The second cell is stopped, and a client with its token, on the door's port for it, plays a second cell that knows an own turn's id.
+    expect(docker(['stop', '-t', '1', `${run.reducedProject}-cell-1`]).ok).toBe(true)
+    const second = JSON.parse(readFileSync(path.join(stateDir, 'compose-reduced.json'), 'utf8')) as LiveFile
+    const token = second.services.cell.environment.SWARMLAB_BRAIN
+    let forger: Awaited<ReturnType<typeof connectShim>> | undefined
+    const end = Date.now() + 15_000
+    // The door lets the stopped cell's link go first; until then a second hello is turned away.
+    while (!forger && Date.now() < end) {
+      const c = await connectShim({ host: '127.0.0.1', port: running!.door.reducedPort!, token, caps: { ...PI_CAPS, toolMap: PI_REDUCED_TOOL_MAP }, verdictTimeoutMs: 5000 }).catch(() => undefined)
+      if (c && await Promise.race([running!.door.reducedConnected!().then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1000))])) forger = c
+      else { c?.close(); await new Promise((resolve) => setTimeout(resolve, 300)) }
+    }
+    expect(forger).toBeDefined()
+    try {
+      // The own cell's turn waits for an admin on a shell call, so it is live.
+      script.unshift({ match: 'CANARY-held', tools: [{ name: 'bash', args: { command: 'ls' } }], text: 'listed' })
+      const posts = fake.posted.length
+      say(IDS.home, IDS.member, 'CANARY-held')
+      await until(() => fake.posted.length === posts + 1)
+      const turnId = receipts().filter((r) => r.event.kind === 'tool' && r.rule === 'priv.approval' && r.event.room === IDS.home).at(-1)?.event.turnId
+      expect(turnId).toMatch(/^[0-9a-f-]{36}$/)
+      const answer = await forger!.requestTool(turnId!, 'web_fetch', { url: 'https://example.org/' })
+      expect(answer).toMatchObject({ allow: false, reason: 'not a turn of this cell' })
+      forger!.send({ t: 'reply', turnId: turnId!, text: 'forged', attachments: [] })
+      forger!.send({ t: 'settled', turnId: turnId! })
+      await until(() => receipts().filter((r) => r.rule === 'turn.cell').length === 3, 10_000)
+      expect(fake.posted.map((p) => p.content)).not.toContain('forged')
+      // Positive control: the admin's tick still runs the call in the own cell, and its reply is posted.
+      fake.react({ channel: IDS.home, guild: IDS.guild, messageId: fake.posted[posts].id, author: { id: IDS.admin }, emoji: '✅' })
+      await until(() => fake.posted.length === posts + 2)
+      expect(fake.posted.at(-1)?.content).toContain('listed')
+    } finally { forger?.close() }
+  }, 180_000)
 })
