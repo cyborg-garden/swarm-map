@@ -54,6 +54,8 @@ A board with `restricted: true` in config only works in its listed chat channels
 
 Content from a restricted board never leaves its channel. Do not quote it, summarise it or mention its items anywhere else, including in memory, handoffs or other chats.
 
+A board may live in a separate private org (`org` in its config) with its own token (`token_env`, the name of an env var). That board only uses that token, never the fleet App, so agents without it simply can't reach it. Keep truly private work in that org.
+
 ## If it fails
 
 The script prints one line on stderr. Pass on the cause in plain words. A permission error usually means the GitHub App lacks access to that repo or project. Say so, and stop.

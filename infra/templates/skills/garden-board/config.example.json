@@ -5,13 +5,20 @@
   "work_dir": "work",
   "people": {},
   "boards": {
-    "work": { "project": 1, "repo": "contractors" },
+    "work": {
+      "project": 1,
+      "repo": "contractors"
+    },
     "ops": {
-      "project": 2,
+      "project": 1,
       "repo": "ops",
       "restricted": true,
-      "channels": ["000000000000000000"],
-      "channel_label": "#ops"
+      "channels": [
+        "000000000000000000"
+      ],
+      "channel_label": "#ops",
+      "org": "example-org-private",
+      "token_env": "GH_TOKEN_PRIVATE"
     }
   }
 }

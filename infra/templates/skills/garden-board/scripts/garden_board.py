@@ -102,7 +102,15 @@ def _mint_own(installation_id: str) -> str | None:
         return json.load(r)["token"]
 
 
-def get_token(cfg: dict) -> str:
+def get_token(cfg: dict, board: dict | None = None) -> str:
+    # A board in another org (e.g. the private vault) names its own token env var.
+    # It never falls back to the fleet App or GH_TOKEN, which can't see that org.
+    env = (board or {}).get("token_env")
+    if env:
+        tok = os.environ.get(env) or read_dotenv(env)
+        if tok:
+            return tok
+        raise Fail(f"this board needs {env}, which isn't set for this agent")
     try:
         sys.path.insert(0, "/opt/hermes")
         from hermes_cli.github_app_token import get_installation_token  # type: ignore
@@ -693,7 +701,10 @@ def main(argv=None):
             gate(admin, cfg["boards"][admin])
         else:
             gate(args.board, cfg["boards"][args.board])
-        gh = GH(get_token(cfg))
+        board = cfg["boards"][args.board]
+        if board.get("org") and args.cmd != "link":
+            cfg = {**cfg, "org": board["org"]}  # board lives in another org; never saved
+        gh = GH(get_token(cfg, board))
         if args.cmd == "auth-check":
             print("GitHub token minted OK (value not shown)")
             return 0
