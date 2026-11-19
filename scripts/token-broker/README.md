@@ -40,9 +40,12 @@ In each agent's home: `github-broker.json` (URL and secret) and an empty
 
 ## Commands
 
-`ghkey` runs on your own machine and reaches the host over SSH. Set `GHKEY_SSH_HOST` to
-the host's SSH name, and `GHKEY_DOWNLOADS` if your browser saves somewhere other than
-`~/Downloads`. `ghkey install` puts it at `~/bin/ghkey`.
+`ghkey` runs on your own machine and reaches the host over SSH. It has no built-in
+host or App: set `GHKEY_SSH_HOST` (the host's SSH name), `GHKEY_GITHUB_ORG` and
+`GHKEY_APP_SLUG` in the environment or in `~/.config/token-broker/ghkey.env` (copy
+`ghkey.env.example`). Unset, it stops and names what is missing. Set `GHKEY_DOWNLOADS`
+if your browser saves somewhere other than `~/Downloads`. `ghkey install` puts it at
+`~/bin/ghkey`.
 
 | Command | What it does |
 | --- | --- |

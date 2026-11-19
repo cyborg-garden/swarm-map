@@ -6,12 +6,43 @@
 # variable, printed, or passed as an argument.
 set -euo pipefail
 
-host="${GHKEY_SSH_HOST:-garden-lan}"
+# Deployment settings come from the environment or, for any left unset, from
+# ~/.config/token-broker/ghkey.env (KEY=value lines; see ghkey.env.example).
+# There are no defaults: a wrong host or App would send the key to the wrong place.
+config="${GHKEY_CONFIG:-$HOME/.config/token-broker/ghkey.env}"
+if [ -f "$config" ]; then
+  while IFS='=' read -r k v; do
+    case "$k" in
+      GHKEY_SSH_HOST|GHKEY_GITHUB_ORG|GHKEY_APP_SLUG)
+        if [ -z "${!k:-}" ]; then v="${v%\"}"; v="${v#\"}"; printf -v "$k" '%s' "$v"; fi ;;
+    esac
+  done < <(cat "$config"; echo)
+fi
+
+host="${GHKEY_SSH_HOST:-}"
+org="${GHKEY_GITHUB_ORG:-}"
+app="${GHKEY_APP_SLUG:-}"
 downloads="${GHKEY_DOWNLOADS:-$HOME/Downloads}"
-# A browser names a second download "...private-key (1).pem" or "...private-key-1.pem".
-glob="hermes-fleet-git.*.private-key*.pem"
-settings="https://github.com/organizations/cyborg-garden/settings/apps/hermes-fleet-git"
 remote='$HOME/bin/github-broker'
+
+need() {
+  local missing=''
+  for k in "$@"; do
+    if [ -z "${!k:-}" ]; then missing="$missing $k"; fi
+  done
+  if [ -n "$missing" ]; then
+    echo "Not configured:$missing. Set them in the environment or in $config (see ghkey.env.example)." >&2
+    exit 2
+  fi
+}
+need_host() { need GHKEY_SSH_HOST; }
+need_app() {
+  need GHKEY_SSH_HOST GHKEY_GITHUB_ORG GHKEY_APP_SLUG
+  case "$org$app" in *[!A-Za-z0-9-]*) echo "GHKEY_GITHUB_ORG and GHKEY_APP_SLUG may hold only letters, digits and dashes." >&2; exit 2 ;; esac
+  # A browser names a second download "...private-key (1).pem" or "...private-key-1.pem".
+  glob="$app.*.private-key*.pem"
+  settings="https://github.com/organizations/$org/settings/apps/$app"
+}
 
 self="$0"
 if [ -L "$self" ]; then self="$(readlink "$self")"; fi
@@ -19,11 +50,12 @@ here="$(cd "$(dirname "$self")" && pwd)"
 
 agent_arg() {
   case "${1:-}" in
-    ''|*[!a-z0-9-]*) echo "Need an agent name, like: ghkey roll mare" >&2; exit 2 ;;
+    ''|*[!a-z0-9-]*) echo "Need an agent name, like: ghkey roll my-agent" >&2; exit 2 ;;
   esac
 }
 
 change_key() {
+  need_app
   local newest
   # shellcheck disable=SC2086
   newest="$(ls -t "$downloads"/$glob 2>/dev/null | head -1 || true)"
@@ -70,12 +102,13 @@ case "${1:-}" in
   '') change_key ;;
   install)
     mkdir -p "$HOME/.local/share/token-broker" "$HOME/bin"
-    cp "$here"/broker.mjs "$here"/lib.mjs "$here"/rollout.mjs "$here"/setup-mini.sh "$here"/ghkey "$HOME/.local/share/token-broker/"
+    cp "$here"/broker.mjs "$here"/lib.mjs "$here"/rollout.mjs "$here"/setup-mini.sh "$here"/ghkey "$here"/ghkey.env.example "$HOME/.local/share/token-broker/"
     chmod 755 "$HOME/.local/share/token-broker/ghkey"
     ln -sf "$HOME/.local/share/token-broker/ghkey" "$HOME/bin/ghkey"
     echo "Installed: ~/bin/ghkey"
     ;;
   setup)
+    need_host
     case "${2:-}${3:-}" in
       ''|*[!0-9]*) echo "usage: ghkey setup <app_id> <installation_id>" >&2; exit 2 ;;
     esac
@@ -83,6 +116,7 @@ case "${1:-}" in
       ssh "$host" "mkdir -p \$HOME/.config/hermes/github-app/bin && tar -xf - -C \$HOME/.config/hermes/github-app/bin && bash \$HOME/.config/hermes/github-app/bin/setup-mini.sh $2 $3"
     ;;
   roll)
+    need_host
     agent_arg "${2:-}"
     for flag in "${@:3}"; do
       case "$flag" in --apply|--accept-loss) ;; *) echo "Unknown option: $flag" >&2; exit 2 ;; esac
@@ -90,13 +124,16 @@ case "${1:-}" in
     ssh "$host" "$remote rollout ${*:2}"
     ;;
   undo)
+    need_host
     agent_arg "${2:-}"
     ssh "$host" "$remote undo $2"
     ;;
   purge)
+    need_host
     ssh "$host" "$remote purge-backups"
     ;;
   check)
+    need_host
     ssh "$host" '$HOME/bin/hsm-api GET /api/integrity' |
       python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("githubCredentials"), indent=2))'
     ;;
