@@ -1,12 +1,18 @@
 # The Pi slice: what exists, how to run it, what it proves
 
 This is the first slice of the harness-agnostic lab described in [`primitives.md`](primitives.md),
-built by following [`plan-pi.md`](plan-pi.md). Nothing here is wired into the Swarm Map app, the UI
-or any running agent. It is a library, a test rig and one command.
+built by following [`plan-pi.md`](plan-pi.md). This slice on its own is a library, a test rig and
+one command, wired into nothing in the Swarm Map app.
 
-Two things have been added since. A Discord connector and a launcher for one Pi agent in one
-channel: [`pi-discord.md`](pi-discord.md). And the agent's first tools, with an approval step in
-the room: [`tools-slice.md`](tools-slice.md), which has its own checks and its own results.
+Later pages build on it:
+
+- a Discord connector and a launcher: [`pi-discord.md`](pi-discord.md);
+- the agent's first tools, with an approval step in the room: [`tools-slice.md`](tools-slice.md);
+- door agents as rows in the dashboard: [`dashboard-slice.md`](dashboard-slice.md);
+- a persona and notes kept across restarts: [`persona-memory.md`](persona-memory.md);
+- two more harnesses through the same checks: [`letta-code.md`](letta-code.md) and
+  [`claude-sdk.md`](claude-sdk.md).
+
 Everything below about fakes still holds for every test: the connector is only ever tested
 against a fake Discord on loopback.
 
@@ -26,7 +32,8 @@ against a fake Discord on loopback.
   cells broken on purpose each turned the right checks red. It is shown for that machine, that
   Docker version and the ways out the probe tries, and for nothing wider. See "The Docker cell".
 - **Three limits to know before reading on.** The key swap and the budget cap only exist for
-  harnesses that speak the OpenAI chat format. Pi is given no direct messages, because its sessions
+  harnesses that speak the OpenAI chat format or, since [`claude-sdk.md`](claude-sdk.md), Anthropic
+  Messages. Pi is given no direct messages, because its sessions
   share one folder on disk. A changed tool list restarts that session's Pi process.
 
 ## Run it
@@ -37,19 +44,20 @@ npm run conformance:smoke      # one message through the door under plain Node
 
 # The same shim checks against a real Pi install (not in CI):
 npm install --prefix /tmp/pi-1.5.2 --ignore-scripts @earendil-works/pi-coding-agent@1.5.2
-SWARMLAB_PI_BIN=/tmp/pi-1.5.2/node_modules/.bin/pi npm run conformance
+SWARMLAB_PI_BIN=/tmp/pi-1.5.2/node_modules/.bin/pi npm run conformance -- pi.real
 
 # The same, with nothing inherited from your shell. This is how to check the env isolation claim:
 env -i PATH="$PATH" HOME="$HOME" npx vitest run conformance/suites
 ```
 
-`npm run conformance` refuses to run without `SWARMLAB_PI_BIN`, and refuses a Pi that is not the
-pinned version. It never skips. A complete run rewrites `conformance/matrix/pi-1.5.2.process.json`.
+Pi's real run refuses to run without `SWARMLAB_PI_BIN`, and refuses a Pi that is not the
+pinned version. With no name after `--`, `npm run conformance` runs every harness's real suite,
+and each refuses without its own install. It never skips. A complete run rewrites `conformance/matrix/pi-1.5.2.process.json`.
 
 ```bash
 # The same checks with Pi in a sealed Docker cell, plus the ones that need a cell (not in CI):
 npm run conformance:docker:build   # once for each state of the code. The only step that uses the network
-npm run conformance:docker         # about two minutes. Rewrites conformance/matrix/pi-1.5.2.docker.json
+npm run conformance:docker -- pi.docker   # about two minutes. Rewrites conformance/matrix/pi-1.5.2.docker.json
 npm run conformance:docker:clean   # only if a run was killed: removes what this worktree's runs left, and nothing else
 npm run conformance:docker:clean -- --images   # the same, and the images this worktree built
 ```
@@ -109,16 +117,16 @@ evidence.
 | Part | Where | Tested by |
 |---|---|---|
 | Policy record, hash, validation of every closed set | `lib/core/policy/` (`shape.ts` lists the sets) | `validate.test.ts`, `schema-coverage.test.ts` |
-| Rule catalogue (41 shared rules) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
+| Rule catalogue (41 shared rules in this slice, 52 now) | `lib/core/rules/catalogue.ts` | `catalogue.test.ts`: every rule is proven by shared tests that exist; a test of one harness is refused |
 | Pi's own rules (4) | `lib/runtimes/pi/rules.ts` | `rules.test.ts` |
 | `decide()` | `lib/core/decide.ts` | 41 scenario pairs, 5 seeded properties and a table of deferred fields, `decide.failclosed.test.ts` |
 | Brain protocol, framing, shim client | `lib/door/protocol.ts`, `framing.ts`, `brain-server.ts`, `shim-client.ts` | `framing.test.ts`, `brain-server.test.ts` |
 | The door, fake connector, sanitizer, receipts, observe buffer | `lib/door/` | `door.test.ts` |
 | Discord connector, and the fake Discord it is tested against | `lib/door/connectors/discord.ts`, `lib/door/testing/fake-discord.ts` | `discord-connector.test.ts` |
-| Launcher for one Pi agent in one Discord channel | `lib/lab/pi-discord/` | `shared-channel.test.ts`, `launcher.test.ts` in CI; `pi-discord.docker.test.ts` on a machine with Docker |
+| Launcher for one agent in Discord | `lib/lab/pi-discord/` | `shared-channel.test.ts`, `launcher.test.ts` in CI; `pi-discord.docker.test.ts` on a machine with Docker |
 | Model route: key swap, token meter, budget | `lib/door/model-route.ts` | `model-route.test.ts` |
 | Spend ledger, by calendar month | `lib/door/spend-ledger.ts` | `spend-ledger.test.ts`, `model-route.test.ts` `[U:budget-ledger]` |
-| Model wire formats (one: OpenAI chat) | `lib/door/model-shapes.ts` | `model-route.test.ts` `[U:model-shape]` |
+| Model wire formats (OpenAI chat; Anthropic Messages came later) | `lib/door/model-shapes.ts` | `model-route.test.ts` `[U:model-shape]` |
 | Pi shim, RPC pump, preamble, tool gate | `lib/runtimes/pi/` | `rpc.test.ts`, `preamble.test.ts`, `gate.test.ts`, shim checks |
 | Scripted model, fake Pi | `conformance/rig/` | `scripted-model.test.ts` |
 | Fake-proof guards | `conformance/guards/` | `tripwire.test.ts`, `preflight.test.ts`, `lab-preflight.test.ts`, `fake-pi.test.ts` |
@@ -356,7 +364,8 @@ build a matrix from it.
 - **C13 was dropped to not-run**, and C5v and C15t were added. See the table above.
 - **The fake Pi loads the real gate file.** It used to carry its own copy of the gate's logic, so
   the gate itself was never run in CI.
-- **The model route takes its wire format as a part** (`ModelShape`). Only one exists.
+- **The model route takes its wire format as a part** (`ModelShape`). Only one existed then. The
+  second came with [`claude-sdk.md`](claude-sdk.md).
 - **The budget cap had five ways round it. Each is closed; what is left is under "What this does not show".** A reply with no usage was counted as
   free; it is now charged at one token per byte, with a receipt marked `unmetered`. So is a reply
   whose usage cannot be true: a zero either way, a missing count, a negative count, anything that
@@ -446,12 +455,11 @@ build a matrix from it.
    The key travels in a header the model never sees. That nothing else in the harness can reach
    it is the cell's job: shown for Pi in the lab's Docker cell (C8), within the limits in item 1.
 5. **The tool map can be wrong, not just incomplete.**
-6. **The key swap and the budget cap exist for one wire format.** `lib/door/model-route.ts` is
-   shared code and enforces two wall rules (`budget.cap`, `keys.model-route`), but the only
-   `ModelShape` written is OpenAI chat-completions, which is what Pi speaks. The Claude Agent SDK
-   and Letta Code's Anthropic path use the Anthropic Messages API (`/v1/messages`, `x-api-key`,
-   `input_tokens`/`output_tokens`). Until that shape is written and tested, those harnesses have
-   no key swap and no cap. The route refuses such a call; it does not forward it unmetered.
+6. **The key swap and the budget cap exist for two wire formats.** `lib/door/model-route.ts` is
+   shared code and enforces two wall rules (`budget.cap`, `keys.model-route`). Its `ModelShape`s
+   are OpenAI chat-completions, which is what Pi speaks, and Anthropic Messages, added for the
+   Claude Agent SDK ([`claude-sdk.md`](claude-sdk.md)). Letta Code's Anthropic path was not tried.
+   A call in any other format is refused; it is not forwarded unmetered.
    Three limits of the cap itself. The one-token-per-byte charge is a deliberate overcount, so
    an agent on a provider that reports no usage reaches its cap early. Under a refusing cap an
    agent's model calls wait for each other, so two busy rooms share one queue; a call the provider
@@ -521,5 +529,5 @@ build a matrix from it.
 | C17 (a probe per declared capability), `why` command | Nothing; not started |
 | Memory (C11), real connectors, Hermes native mode | Out of this slice by design |
 | `ask` approvals (C6) | Built since: [`tools-slice.md`](tools-slice.md) |
-| A `ModelShape` for the Anthropic Messages API | Needed before the Claude Agent SDK or Letta Code's Anthropic path can have a key swap or a budget cap |
+| A `ModelShape` for the Anthropic Messages API | Built since: [`claude-sdk.md`](claude-sdk.md) |
 | A folder and home per session that other sessions cannot reach, then `sessionIsolation: 'sealed'` for Pi | A cell per session, or mounts per session inside one |

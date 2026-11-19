@@ -22,7 +22,8 @@ is a placeholder.
 - **The door decides, not the harness.** Every tool call is put to `decide()`. The harness only
   carries the question and the answer.
 - **An agent anyone can talk to gets none of these.** A public agent loses shell and file tools
-  whatever its rules say, and an agent that hears anyone in its channel is a public one.
+  whatever its rules say, and an agent that hears anyone in its channel is a public one. A channel
+  that hears anyone gets no shell or file tools either, whatever the agent has elsewhere.
 
 ## What an agent can do
 
@@ -34,8 +35,8 @@ is a placeholder.
 
 **The scratch folder** is one path in the cell, and it is where the harness is started. Under the
 launcher it is a mount that lives in memory, of a fixed size (64 MB), on a disk that is otherwise
-read-only. It is gone when the agent stops. Keeping it across stops is not built: see "What was
-left out".
+read-only. It is gone when the agent stops, unless `tools.keepScratch` is on: see
+[`persona-memory.md`](persona-memory.md).
 
 **What a tool gets back goes to the model and nowhere else.** The door never posts tool output.
 If the model repeats it in a reply, that reply goes through the same outbound checks as any other:
@@ -63,8 +64,8 @@ shell asking, a script written in the same turn ran on the admin's yes to its na
 and the dashboard's Tools card refuse that pairing, and the card does not offer it.
 
 **Hearing anyone makes an agent public.** The launcher writes `posture: public` into the record
-for a config with `anyoneInChannel`, and refuses such a config outright if it also switches a tool
-on, so nobody is left thinking a tool is on. `decide()` is the wall behind that refusal.
+for a config with `anyoneInChannel`, and refuses such a config outright if it also switches on a
+shell or file tool, so nobody is left thinking one is on. `decide()` is the wall behind that refusal.
 
 `decide()` answers a tool call in this order. The first line that applies wins.
 
@@ -360,6 +361,8 @@ Tools card write it from a plainer shape:
   the web, still read-only and still on the list. It reads the public web only with `approval:
   ask`: with no yes, anyone in the room could send the door to any address, and put what the agent
   knows into it. The launcher refuses that config, and `decide()` says no to a record that has it.
+  The one exception is `anyoneRooms: "open"`, which an operator sets on purpose: there the public
+  web is read as `approval` says, with no yes. Such a room still gets no shell or file tools.
 
 The Tools card offers suggestions as one-click chips. None is on until someone clicks it: the
 project's own GitHub (`github.com`, `api.github.com/repos/…`, `api.github.com/orgs/…` and
@@ -476,7 +479,9 @@ the hand-back, where every page and every result already passes.
 - **Keeping the scratch folder.** Built since, as `tools.keepScratch`, off by default: see
   [`persona-memory.md`](persona-memory.md).
 - **Role-holders as approvers** (`approverRoles`). Still refused by `decide()`.
-- **Per-room tool lists**, code-exec, browser, MCP and memory tools.
+- **Code-exec, browser and MCP tools.** Per-room tool lists were built since, as
+  `discord.perChannel.<id>.tools` ([`pi-discord.md`](pi-discord.md)), and so was a memory tool,
+  `memory_note` ([`persona-memory.md`](persona-memory.md)).
 - **Scanning pages for prompt injection** (see "Scanning what comes back"), a GitHub token, and web
   for Letta Code or the Claude Agent SDK: like the other tools, the web tools are Pi's only.
 - **Limits in the rules record.** They are fixed numbers handed to the door and the cell at start.
@@ -493,7 +498,7 @@ room throughout. No real model, no real chat platform, no real credential.
 | Real Pi 1.5.2 in the sealed Docker cell | 30 checks pass: 4 on the seal, 13 shared, C8, C9, C10 and the 10 tool checks. 16 rigs broken on purpose each turned its named checks red, 5 of them cells with a broken gate |
 | The launcher's own cell, with a fake Discord | All 19 tests of the Pi launcher's Docker suite pass in one run, and all 15 of the Letta Code launcher's. In them a shell command waited in the channel, did not run on a tick from the person who asked or from a stranger, and ran on the admin's tick. A file write waited for the admin's tick too. File tools worked in the scratch folder and were refused outside it four ways. Stopping removed the cell and its volume |
 | The scratch folder's size | 72 MB written to a 64 MB folder: no more than 64 MB landed. With the mount left out on purpose, all of it landed and three checks went red |
-| The cell's own folder | Before the audit, 200 MB written there from a shell landed on Docker's disk. Now 264 MB written to it lands no more than 256 MB, and 300 MB from a shell stopped at 256 MB. With it left a plain volume on purpose, three checks went red |
+| The cell's own folder | 264 MB written to it lands no more than 256 MB, and 300 MB from a shell stopped at 256 MB. As a plain volume, which it was before an audit, 200 MB from a shell landed on Docker's disk. With it left a plain volume on purpose, three checks went red |
 | Hand mutations | 77 lines broken one at a time in `decide()`, the door, the gate, the shim, the connector, the launcher and the page. 76 turned a named test red. One changes nothing the code does |
 | Letta Code 0.34.60, process and Docker | The shared checks pass as before. The 10 tool checks are listed as not run, with the reason |
 | Claude Agent SDK 0.3.325, process and Docker | 20 checks pass as a process and 26 in the cell, as before. The 10 tool checks are listed as not run, with the reason |
@@ -507,7 +512,8 @@ room throughout. No real model, no real chat platform, no real credential.
 | Web hand mutations | 67 lines broken one at a time in the allowlist, `decide()`, the fetcher, the search, the door's tickets, the launcher's config, the record, the gate, the shim and the Tools card. 63 turned a named test red. 4 change nothing alone, because a second line holds the same thing; each pair broken together turns a test red, but for the request's own host and port, which only matter if Node ever passed over the checked connection |
 
 The fake-Pi run of the same checks is part of `npx vitest run`. The real runs are the ones under
-"Run it" in [`pi-slice.md`](pi-slice.md), and they rewrite the four matrix files.
+"Run it" in [`pi-slice.md`](pi-slice.md), [`letta-code.md`](letta-code.md) and
+[`claude-sdk.md`](claude-sdk.md), and each rewrites its own matrix file.
 
 What this does not show:
 

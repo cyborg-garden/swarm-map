@@ -1,80 +1,78 @@
-# Swarm Map — Roadmap
+# Swarm Map roadmap
 
-Swarm Map is the management plane for multi-tenant agent swarms. It configures, deploys, monitors, and controls agents. It began as a Hermes-only tool ("HSM" in older text below) and is becoming harness-agnostic. This roadmap works backward from what V1 shipped, forward to V2, then to the harness-agnostic work in V3.
+Swarm Map configures, deploys, watches and controls a fleet of agents for a team.
+It began as a Hermes-only tool (older text calls it "HSM") and is becoming harness-agnostic.
+
+- **V1** shipped: secure multi-tenant Hermes agents from a wizard.
+- **V2** is operational insight: cost, health and alerts.
+- **V3** is the harness-agnostic work: door agents, one agent record, sealed cells.
 
 ---
 
-## V1: Secure Multi-Tenant Agent Management
+## V1: Secure multi-tenant agent management
 
-**Ship when:** Any team member can create an agent through the wizard and it comes up secure-by-default. Settings persist through restarts. Admin identity is unified.
+**Done when:** any team member can create an agent through the wizard, and it comes up secure by default. Settings persist through restarts. Admin identity is unified.
+
+V1 is complete. Items that were "should ship" moved to V2 on 2026-05-28.
 
 ### Done
 
-- [x] Per-harness settings tab (DM policy, group invite, mention-gating, command approval)
-- [x] Per-surface admin management (Surfaces tab, unified identity: approved = admin)
-- [x] Memory scope toggle (channel/global per harness, `HERMES_MEMORY_SCOPE` env var)
-- [x] Settings API (GET/PUT `/api/harnesses/[id]/settings`)
-- [x] Auto-restart with rebuild on settings save (both Settings tab and Surfaces)
-- [x] Signal/Telegram/Mattermost surface connect/disconnect flows
+- [x] Per-agent settings tab: DM policy, group invites, mention gating, command approval
+- [x] Per-surface admins (Surfaces tab; an approved user is an admin)
+- [x] Memory scope toggle, per channel or global (`HERMES_MEMORY_SCOPE`)
+- [x] Settings API (`GET`/`PUT /api/harnesses/[id]/settings`)
+- [x] Restart with rebuild when settings are saved, from both the Settings and Surfaces tabs
+- [x] Connect and disconnect flows for Signal, Telegram and Mattermost
 - [x] Discover existing groups (Signal, Mattermost)
-- [x] Pairing store visibility + revocation
-- [x] Model cascade with fallback providers (`config.yaml` fallback_providers)
-- [x] Standalone compose per harness (generated, managed by HSM)
-- [x] 5-step create wizard (Identity → Model → Surfaces → Keys → Deploy)
-- [x] Container monitoring (CPU, memory, health, last seen)
-- [x] Policy enforcement via swarm_map_policy plugin
-- [x] UUID resolution in admin UI (Signal/Telegram/Mattermost resolvers + sidecar store)
-- [x] Cascade derives from connected providers (model catalog + suggest endpoint + UI)
-- [x] Model name discovery (integrated into cascade suggest)
-- [x] Keys management UI (add/edit/delete/reassign from main keys page + per-harness)
-- [x] Live cost/invocations on harnesses list (queries state.db per poll)
-- [x] Budget tracking — monthly budget per key, and a policy endpoint that reports spend against it. Agents are not throttled yet (see Hard budget enforcement in V2).
-- [x] Signal-cli health check (JSON-RPC POST to `/api/v1/rpc`, works in both daemon modes)
-- [x] Container hardening defaults, first pass: dropped capabilities and resource limits on every generated agent, read-only root filesystem on wizard-created agents. The rest is tracked under [V3 → Sealed by default](#sealed-by-default).
-- [x] Sane policy defaults on wizard deploy (memory scope, HSM URL, agent name)
-- [x] Platform setup improvements (admin fields, token validation, SOUL template)
-- [x] Stop/Start button on harness detail page + loading feedback on all actions
+- [x] Pairing store: see and revoke pairings
+- [x] Model cascade with fallback providers (`fallback_providers` in `config.yaml`)
+- [x] A generated compose file per agent, managed by Swarm Map
+- [x] Five-step create wizard: identity, model, surfaces, keys, deploy
+- [x] Container monitoring: CPU, memory, health, last seen
+- [x] Policy enforcement through the `swarm_map_policy` plugin
+- [x] User id resolution in the admin UI (Signal, Telegram and Mattermost resolvers)
+- [x] Cascade suggestions from connected providers (model catalog and suggest endpoint)
+- [x] Keys page: add, edit, delete and reassign keys, globally and per agent
+- [x] Live cost and invocation counts on the agent list (read from each agent's `state.db`)
+- [x] Budget tracking: a monthly budget per key, and a policy endpoint that reports spend against it. Agents are not throttled; see hard budget enforcement in V2.
+- [x] signal-cli health check (JSON-RPC `POST /api/v1/rpc`, works in both daemon modes)
+- [x] Container hardening, first pass: dropped capabilities and resource limits on every generated agent, and a read-only root filesystem on wizard-created agents. The rest is under [V3, sealed by default](#sealed-by-default).
+- [x] Policy defaults on wizard deploy: memory scope, Swarm Map URL, agent name
+- [x] Platform setup: admin fields, token validation, a SOUL template
+- [x] Stop and Start on the agent page, with loading feedback on every action
+- [x] **Full `config.yaml` on deploy.** Compression (threshold 0.50, target 0.20, protect the last 20), memory limits (5000 chars, 2000 user), session reset (both modes, 24h idle, 4am reset), speech-to-text (base model), `max_turns` 60. Template: `lib/templates/config-yaml.ts`.
+- [x] **Compose fixes.** The volume mounts at `/opt/data`, and `command: gateway` is present.
+- [x] **Settings round-trip.** A wildcard `*` is kept. `parseCommaList()` and `buildSettingsEnvValue()` stop silent data loss.
+- [x] **Async restart.** `spawn()` in detached mode, with `restart-tracker.ts` (TTL 90 seconds for quick and recreate, 5 minutes for rebuild and purge; 409 on a second restart while one runs).
+- [x] **Configurable default image.** `ghcr.io/cyborg-garden/hermes-agent-mt:latest` unless settings say otherwise.
 
-### Must Ship
+### Moved to V2
 
-- [x] **Wizard sane-config enforcement** — deploy generates full config.yaml: compression (threshold 0.50, target 0.20, protect last 20), memory limits (2200 char, 1375 user), session_reset (both mode, 24h idle, 4am reset), STT (base model), max_turns (60). Template in `lib/templates/config-yaml.ts`.
-- [x] **Compose bugs** — volume mount is `/opt/data`, `command: gateway` present in generateStandaloneCompose().
-- [x] **Settings round-trip integrity** — wildcard `*` explicitly tracked and preserved. `parseCommaList()` + `buildSettingsEnvValue()` prevent silent data loss.
-- [x] **Async restart** — `spawn()` with detached mode + `restart-tracker.ts` (5-min TTL, 409 on concurrent restarts). No spawnSync.
-- [x] **Configurable default image** — defaults to `ghcr.io/cyborg-garden/hermes-agent-mt:latest`, configurable via settings.
-
-### Shipped to V2
-
-All "Should Ship" items deferred to V2 (2026-05-28). V1 scope is complete.
-
-- Cross-scope memory control already shipped via Settings UI (per-channel/global toggle, admin `scope="global"`)
-- Admin search hook (read-path enforcement) deferred — single-admin reality means write-side scoping is sufficient
-- Tier-based defaults, capability gating, per-context people memory, audit logs, bulk user management, auto-approve on invite → all tracked in V2 below
+- Cross-scope memory control already shipped in the Settings UI (per-channel or global, and admin `scope="global"` writes).
+- The admin search hook (read-path enforcement) was deferred. With one admin per deployment, scoping writes was enough.
+- Tier defaults, capability gating, per-person memory, audit logs, bulk user management and auto-approve on invite are tracked in V2.
 
 ---
 
-### Capability Gating
+### Capability gating
 
-This is the big one — controls what each agent can do and who can trigger what. It's a "should ship V1, could slip to V2" item because the concept is right but the implementation touches multiple systems.
+Controls what each agent can do, and who can make it do what.
+It touches several systems, so it moved to V2.
 
-**Core idea:** Every capability (tool, skill, plugin, env key) has a risk level. Habitat tiers set defaults. Admins customize per-harness. Non-admins get a restricted subset.
+**Idea:** every capability (tool, skill, plugin, env key) has a risk level. Habitat tiers set defaults. Admins adjust per agent. Non-admins get a smaller set.
 
-#### 1. Risk Classification
-
-Every capability gets a risk level:
+#### 1. Risk levels
 
 | Risk | Examples | Default |
 |------|----------|---------|
 | **safe** | web search, calculator, memory read | Everyone |
-| **moderate** | file read, code execution (sandboxed), API calls | Admin in public tiers, everyone in team/individual |
-| **dangerous** | shell access, file write, credential access, self-improvement | Admin only, all tiers |
-| **critical** | propose_improvement, raw system commands, env modification | Admin + explicit approval |
+| **moderate** | file read, sandboxed code execution, API calls | Admins in public tiers, everyone in team or individual tiers |
+| **dangerous** | shell, file write, credential access, self-improvement | Admins only, every tier |
+| **critical** | `propose_improvement`, raw system commands, env changes | Admin plus explicit approval |
 
-Risk levels are properties of the capabilities themselves, not per-harness config. HSM maintains a registry.
+A risk level belongs to the capability, not to an agent's config. Swarm Map keeps the registry.
 
-#### 2. Tier Defaults
-
-Each habitat tier gets a default capability profile:
+#### 2. Tier defaults
 
 | Tier | safe | moderate | dangerous | critical |
 |------|------|----------|-----------|----------|
@@ -84,206 +82,211 @@ Each habitat tier gets a default capability profile:
 | `orgpublic` | all | restricted | disabled | disabled |
 | `public` | curated | disabled | disabled | disabled |
 
-These are **defaults** — the starting point when an agent is created at a given tier. Not enforced ceilings.
+These are starting points for a new agent at that tier. They are not enforced ceilings.
 
-#### 3. Per-Harness Override
+#### 3. Per-agent overrides
 
-Settings tab gets a "Capabilities" section where admins can:
-- See current capability profile (inherited from tier)
-- Toggle individual capabilities on/off
-- See diff from tier baseline ("3 capabilities added, 1 removed vs team defaults")
-- Set admin-only vs everyone for each capability
+A "Capabilities" section on the Settings tab, where an admin can:
+- see the agent's profile, as inherited from its tier
+- turn single capabilities on or off
+- see the difference from the tier ("3 added, 1 removed compared with team defaults")
+- set each capability to admin-only or everyone
 
-#### 4. Admin vs Non-Admin Gating
+#### 4. Admin and non-admin
 
-Two-level access per capability:
-- **Available to everyone** — any user in an approved group can trigger it
-- **Admin only** — only admins can trigger it
+Each capability is either:
+- **available to everyone** in an approved group, or
+- **admin only.**
 
-Non-admins trying to use an admin-gated tool get a clear rejection ("This tool requires admin access").
+A non-admin who calls an admin-only tool gets a plain refusal ("This tool requires admin access").
 
-#### 5. Capability Binding (Import/Share)
+#### 5. Binding capabilities from elsewhere
 
-Capabilities aren't just built-in — they can be bound to harnesses from external sources:
+Capabilities can come from outside the agent:
 
-- **Tools** — from Hermes upstream, custom plugins, MCP servers
-- **Skills** — from skill directories, shared across harnesses
-- **Plugins** — installed per-harness or shared
-- **Env keys** — API keys, service credentials bound to specific harnesses
-- **MCP servers** — external tool providers connected per-harness
+- **Tools** from Hermes upstream, custom plugins and MCP servers
+- **Skills** from skill directories, shared across agents
+- **Plugins**, per agent or shared
+- **Env keys**: API keys and service credentials bound to particular agents
+- **MCP servers**, connected per agent
 
-HSM needs a "capability library" where capabilities are registered once, then bound to harnesses. When someone adds a new MCP server or API key, they import it to HSM, then assign it to the harnesses that should have it. This prevents credential sprawl and makes it clear which agents have access to what.
+Swarm Map needs a capability library. A capability is registered once and then bound to the agents that should have it. That stops credentials spreading and shows which agent can reach what.
 
-#### 6. Hermes Enforcement
+#### 6. Enforcement in Hermes
 
-HSM writes the allowed capability list to the agent's config. Hermes reads it and enforces:
-- Tool calls checked against the allowed list before execution
-- Admin-only tools check `source.is_admin` before proceeding
-- Unrecognized tools rejected (whitelist, not blacklist)
+Swarm Map writes the allowed list into the agent's config. Hermes enforces it:
+- each tool call is checked against the list before it runs
+- admin-only tools check `source.is_admin` first
+- a tool not on the list is refused
 
-**Hermes dependency:** Needs a `HERMES_ALLOWED_TOOLS` or `tools.allowed` config that the gateway reads and enforces. Currently Hermes has `enabled_toolsets` but it's coarser-grained than per-tool control.
+**Hermes dependency:** a `HERMES_ALLOWED_TOOLS` or `tools.allowed` setting the gateway enforces. Hermes has `enabled_toolsets`, which is coarser than per-tool control.
+
+Door agents already work this way: tools are off until the rules turn one on, the door decides each call, and a tool set to `ask` needs an admin's yes in the room. See [the tools slice](lab/tools-slice.md).
 
 ---
 
-## V2: Operational Intelligence
+## V2: Operational insight
 
-**Ship when:** HSM is not just config management but gives operators insight into what agents are doing, how they're performing, and where they need attention.
+**Done when:** an operator can see what agents are doing, how they perform, and where they need attention.
 
-### Promoted from V1
+### Moved from V1
 
-- [ ] **Tier-based defaults** — when tier is `public`/`orgpublic`, default DM policy to allow-all; when `individual`, default to approved-only. Suggested, not enforced.
-- [ ] **Capability gating & binding** — per-tool risk classification + admin-only enforcement. See [Capability Gating](#capability-gating) below.
-- [ ] **Per-context people memory** — agent remembers things about each person, scoped to the right context. Includes clear prompting so the agent knows who it's talking to and who's being referenced.
-- [ ] **Admin search hook** — memory reads default to channel scope, require explicit `--global` for cross-channel. Backend done (context_id scoping), needs gateway read-path enforcement.
-- [ ] **Audit log for permission changes** — track who changed what, when. HSM already has audit service scaffolding.
-- [ ] **Bulk user management** — import/export admin lists (CSV, JSON).
-- [ ] **Auto-approve on admin invite** — when admin adds bot to group, auto-add to allowed groups. Telegram/Mattermost only (Signal lacks group-join events).
+- [ ] **Tier defaults.** A `public` or `orgpublic` agent defaults to allowing all DMs; an `individual` one to approved users only. Suggested, not enforced.
+- [ ] **Capability gating and binding.** See [Capability gating](#capability-gating).
+- [ ] **Per-person memory.** The agent remembers each person within the right context, and is prompted so it knows who it is talking to and who is being mentioned.
+- [ ] **Admin search hook.** Memory reads default to channel scope and need an explicit `--global` to cross channels. The backend (`context_id` scoping) is done; the gateway read path is not.
+- [ ] **Audit log for every permission change.** Surface admin, cascade and tuning changes are logged today. Other settings changes are not.
+- [ ] **Bulk user management.** Import and export admin lists as CSV or JSON.
+- [ ] **Auto-approve on admin invite.** When an admin adds the bot to a group, allow the group. Telegram and Mattermost only; Signal sends no group-join event.
+
+### Done
+
+- [x] **Cost tracking.** Daily cost, tokens, sessions and tool calls per agent and per model, and fleet-wide, read from each agent's `state.db` (`/api/harnesses/:id/analytics`, `/api/fleet/analytics`).
 
 ### Planned
 
-- [ ] **Hard budget enforcement** — pre_message hook in Hermes to block LLM calls entirely when budget exceeded (requires new hook type in gateway). Nothing calls the budget check today.
-- [ ] **Budget cascade** — when budget hits configurable threshold (e.g., 80%), auto-reorder model cascade to prefer cheaper models. Restore original cascade when new budget period starts.
-- [ ] **Per-harness budget (not per-key)** — move budget ownership from keys to harnesses for cleaner enforcement. Key-level budget becomes "total across all uses."
-- [ ] **Budget alerts via notification** — Telegram/Slack notification to admin when budget thresholds hit.
-- [ ] **Budget dashboard** — visual spend tracking over time per harness, with trend lines and projections.
-- [ ] **Cost tracking** — per-harness, per-model token usage and cost. LiteLLM integration or direct provider API parsing. Daily/weekly/monthly views.
-- [ ] **Conversation analytics** — message volume, response times, tool usage patterns per harness.
-- [ ] **Agent health dashboard** — beyond container metrics. Track: cascade fallback frequency, error rates, memory usage growth, skill invocation patterns.
-- [ ] **Multi-harness operations** — bulk restart, bulk settings update, fleet-wide model rotation.
-- [ ] **Alerting** — configurable alerts for: cascade fully exhausted, memory approaching limits, unusual error spikes, container restarts.
-- [ ] **Session key isolation** — per-user session keys in multi-tenant groups. Core fork patch for multi-tenancy (alongside memory scoping).
-- [ ] **Session model override visibility** — HSM can see which model each harness is currently using (including per-session `/model` overrides).
-- [ ] **Context-scoped skills** — skills scoped per chat surface (mirrors memory scoping). Admin can promote to global. Prevents content leakage at org tier.
-- [ ] **Admin-only global skill writes** — non-admins can only create context-local skills.
-- [ ] **Habitat tiers as editable/enforced system** — tiers become configurable from HSM UI with per-tier tool defaults.
-- [ ] **Tool sharing between harnesses** — capability library where tools/skills/plugins are registered once and bound to multiple harnesses.
-- [ ] **Plugin marketplace** — browse/install plugins from HSM UI. Currently manual (`$HERMES_HOME/plugins/`).
-- [ ] **Upstream RFC: memory:scope hook** — propose to NousResearch so plugins can control memory scoping without patching core. If accepted, fork carries zero core patches.
+- [ ] **Hard budget enforcement for Hermes.** A `pre_message` hook in Hermes that blocks model calls when the budget is spent. This needs a new hook type in the gateway. Nothing calls the budget check today. (Door agents already refuse calls past their monthly cap.)
+- [ ] **Budget cascade.** At a set threshold (say 80%), reorder the cascade to prefer cheaper models. Restore it when the new period starts.
+- [ ] **Provider-reported spend.** Read spend from LiteLLM or the provider instead of estimating it from token counts.
+- [ ] **Budget per agent, not per key.** A key's budget becomes the total across its uses.
+- [ ] **Budget alerts** to an admin by Telegram or Slack.
+- [ ] **Budget view** with spend over time per agent, trends and projections.
+- [ ] **Conversation analytics.** Message volume, response times and tool use per agent.
+- [ ] **Agent health beyond container metrics.** How often the cascade falls back, error rates, memory growth, skill use.
+- [ ] **Fleet operations.** Bulk settings updates and fleet-wide model rotation. (Bulk restart exists: `POST /api/harnesses/restart-running`.)
+- [ ] **Alerts** when a cascade is exhausted, memory nears its limit, errors spike or a container restarts.
+- [ ] **Per-user session keys** in multi-tenant groups. A patch to the fork, alongside memory scoping.
+- [ ] **Which model is live.** Show the model each agent is using, including per-session `/model` overrides.
+- [ ] **Context-scoped skills.** Skills scoped per chat surface, like memory. An admin can promote one to global, so content does not leak at org tier.
+- [ ] **Admin-only global skill writes.** Non-admins create context-local skills only.
+- [ ] **Editable, enforced habitat tiers**, with per-tier tool defaults set from the UI.
+- [ ] **Tool sharing between agents** through the capability library.
+- [ ] **Plugin browser.** Install plugins from the UI. Today they are added by hand under `$HERMES_HOME/plugins/`.
+- [ ] **Upstream RFC: a `memory:scope` hook.** Proposed to NousResearch so plugins can scope memory without patching core. If accepted, the fork needs no core patches.
 
 ---
 
-## V3: Harness-Agnostic Swarm Map
+## V3: Harness-agnostic Swarm Map
 
-**Ship when:** An agent on a second harness is created, configured, and watched from the same dashboard as a Hermes agent, and every rule shown in the UI is one something actually enforces.
+**Done when:** an agent on a second harness is created, configured and watched from the same dashboard as a Hermes agent, and every rule the UI shows is enforced by something.
 
-The design is written up in [`docs/lab/primitives.md`](lab/primitives.md). The lab slices ([Pi](lab/pi-slice.md), [Pi in Discord](lab/pi-discord.md), [Letta Code](lab/letta-code.md), [the Claude Agent SDK](lab/claude-sdk.md)) prove it outside the dashboard. V3 brings it into the product, starting with [one door agent in the dashboard](lab/dashboard-slice.md).
+The design is in [`lab/primitives.md`](lab/primitives.md).
+Results per harness: [Pi](lab/pi-slice.md), [Pi in Discord](lab/pi-discord.md), [Letta Code](lab/letta-code.md), [Claude Agent SDK](lab/claude-sdk.md).
+In the product: [the first door agent in the dashboard](lab/dashboard-slice.md).
 
 ### The door
 
-A small guard process sits beside each agent and owns chat in, chat out, model traffic, tool approvals and keys. The harness runs in a sealed cell and is never asked to enforce a rule.
+A small guard process runs beside each agent. It owns chat in, chat out, model traffic, tool approvals and keys. The harness runs in a sealed cell and is never asked to enforce a rule.
 
-- [x] Rule catalogue and conformance tests that every harness must pass
-- [x] Pi behind the door (lab)
-- [x] Letta Code behind the door (lab)
-- [ ] Door runs supervised next to the fleet, started and stopped by Swarm Map
-- [ ] Rules pushed from Swarm Map to each door, authenticated per agent
-- [ ] First door agent managed end to end from the dashboard
-- [ ] Claude Agent SDK as a harness
+- [x] Rule catalogue, and one conformance suite every harness must pass
+- [x] Pi behind the door
+- [x] Letta Code behind the door
+- [x] Claude Agent SDK behind the door (test rig only)
+- [x] Door agents created, started, stopped and edited from the dashboard (Pi and Letta Code)
+- [x] Tools in the cell, off by default, with an admin's yes in the room for `ask`
+- [x] Web reading and search through the door, by allowlist or the open web
+- [x] Persona, and per-room notes that survive a restart
+- [x] One agent in several Discord channels, with per-channel rules
+- [ ] Claude Agent SDK in the dashboard
+- [ ] Swarm Map runs the door's supervisor itself (today it shows a `pm2` command)
+- [ ] Rules sent to each door over an authenticated per-agent channel (today they are written to files on the same host)
+- [ ] Chat platforms other than Discord for door agents
 - [ ] Hermes stays in native mode, with its rules rendered from the same record and each claim backed by a conformance test
 
 ### One agent record
 
-Swarm Map owns a neutral record per agent: who it hears, who it answers, per-surface permissions, admins, keys, memory scope, resources. Each harness adapter renders that record into its own config and declares what it can honour.
+Swarm Map owns a neutral record per agent: who it hears, who it answers, per-surface permissions, admins, keys, memory scope, resources. Each harness adapter renders the record into its own config and declares what it can honour.
 
-- [ ] Typed agent record as the source of truth (generated files are rendered from it, never patched)
+- [ ] A typed agent record as the source of truth. Generated files are rendered from it, never patched. (Door agents already work this way.)
 - [ ] One compose generator for every create path
-- [ ] Harness adapter owns lifecycle, logs, health, usage and key injection
+- [ ] The harness adapter owns lifecycle, logs, health, usage and key injection
 - [ ] Surface and key settings written through the adapter, not as harness-specific variables
-- [ ] Per-rule status in three states: enforced by the harness, enforced by the door, not enforced
+- [ ] Each rule shown in one of three states: enforced by the harness, enforced by the door, or not enforced
 
 ### Sealed by default
 
 - [ ] Every new agent gets the lab cell's defaults: non-root, read-only filesystem, no added privileges, process and memory limits
-- [ ] Outbound network closed by default, opened per agent
+- [ ] Outbound network closed by default and opened per agent
 - [ ] Keys held outside the agent; the agent sees short-lived or placeholder credentials
 - [ ] Each agent has its own identity when it calls the Swarm Map API
-- [ ] Dashboard listens on loopback by default, with a documented path for remote access
+- [ ] The dashboard listens on loopback by default, with a documented path to remote access
 - [ ] Named operators instead of one shared token, so the audit log records who
 
 ### Substrate
 
-Agents ship as OCI images and that stays. What runs the image becomes a choice.
+Agents ship as OCI images, and that stays. What runs the image becomes a choice.
 
-- [ ] Substrate interface under the Docker service (create, start, stop, exec, logs, stats)
-- [ ] VM-per-agent option on macOS
-- [ ] WebAssembly is not planned for whole agents (they need a shell and subprocesses). It may suit small shared plugins later.
+- [ ] A substrate interface under the Docker service: create, start, stop, exec, logs, stats
+- [ ] A VM per agent on macOS
+- [ ] WebAssembly is not planned for whole agents, which need a shell and subprocesses. It may suit small shared plugins later.
 
 ### Dashboard
 
-- [ ] "Needs you" view: broken agents, stale builds, pending updates and budget alerts in one place, worst first
-- [ ] Harness shown on every agent; tabs and controls appear only when that harness supports them
+- [ ] A "Needs you" view: broken agents, stale builds, pending updates and budget alerts in one place, worst first
+- [ ] The harness shown on every agent, with only the tabs and controls that harness supports (door agents already get their own tab set)
 - [ ] One place to set who an agent hears and answers
 - [ ] Restarts report whether the agent came back, not only that the request was accepted
-- [ ] Shorter agent page, with advanced settings out of the way
+- [ ] A shorter agent page, with advanced settings out of the way
 - [ ] Harness-neutral wording throughout
 
 ---
 
-## Dependencies on Hermes Fork (hermes-agent-mt)
+## What Swarm Map needs from the Hermes fork
 
-HSM configures; Hermes enforces. These items need fork/upstream changes before HSM can expose them:
+Swarm Map configures; Hermes enforces. These items need changes in [hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt) first.
 
-| HSM Feature | Hermes Dependency | Status |
+| Swarm Map feature | Hermes dependency | Status |
 |-------------|-------------------|--------|
-| Memory scope toggle | `HERMES_MEMORY_SCOPE` env var in gateway | Done |
-| Admin identity | `is_platform_admin()` via swarm_map_policy | Done |
-| Admin search hook | Read-path channel scoping in memory tool | Todo |
-| Cross-scope memory | `MEMORY_CROSS_SCOPE_ADMIN` env var | Todo |
-| Session key isolation | Per-user session keys in gateway | Todo |
-| Context-scoped skills | `context_id` threading in skills_tool.py + skill_manager_tool.py | Todo |
-| Capability gating | Per-tool allow/deny + admin-only enforcement in gateway | Todo |
-| Capability binding | Config format for bound tools/skills/plugins/env keys | Todo |
+| Memory scope toggle | `HERMES_MEMORY_SCOPE` in the gateway | Done |
+| Admin identity | `is_platform_admin()` via `swarm_map_policy` | Done |
+| Admin search hook | Channel scoping on the memory tool's read path | To do |
+| Cross-scope memory | `MEMORY_CROSS_SCOPE_ADMIN` | To do |
+| Per-user session keys | Per-user session keys in the gateway | To do |
+| Context-scoped skills | `context_id` passed through `skills_tool.py` and `skill_manager_tool.py` | To do |
+| Capability gating | Per-tool allow and deny, and admin-only enforcement, in the gateway | To do |
+| Capability binding | A config format for bound tools, skills, plugins and env keys | To do |
 
 ---
 
-## V1 Trust Model & Known Boundaries
+## Hermes trust model and known limits
 
-**What is isolated per chat surface (context):**
-- Memory entries — stored in `memories/contexts/{context_id}/`, not visible to other groups
-- System prompt snapshot merges global + context-specific memory (admin-controlled global, user-controlled context)
+**Kept apart per chat surface (context):**
+- Memory entries, stored in `memories/contexts/{context_id}/` and not visible to other groups
+- The system prompt snapshot, which merges global memory (admin-controlled) and the context's own memory (user-controlled)
 
-**What is shared across all chat surfaces for an agent:**
-- Skills — created in any context, visible and usable from all contexts. Skills are a *commons* at team tier.
-- File system access — agent reads/writes from a single home directory regardless of which group triggered it
-- Tool definitions — platform-wide, not scoped per context
-- Model cascade and configuration — single config.yaml per agent
+**Shared across every chat surface of one agent:**
+- Skills. One made in any context can be used from all of them. At team tier, skills are a commons.
+- Files. The agent reads and writes one home directory, whichever group triggered it.
+- Tool definitions.
+- The model cascade and the rest of `config.yaml`.
 
-**Implications for operators:**
-- An agent deployed to multiple groups will share learned skills between them. Content created as a skill in Group A is accessible from Group B.
-- Memory isolation prevents conversational context from leaking, but skills (which are explicit, named artifacts) are intentionally shared.
-- For team-tier deployments this is a feature: skills accumulate across all interactions. For org/public tiers requiring strict separation, context-scoped skills (v2) are needed.
-- File artifacts created by the agent (downloads, outputs) are not context-scoped in v1.
+**What this means for operators:**
+- An agent in several groups shares its skills between them. A skill made in group A can be used in group B.
+- Memory isolation stops conversation context leaking. Skills are named, explicit artifacts, and are shared on purpose.
+- At team tier that is useful: skills build up across every conversation. At org or public tier, strict separation needs context-scoped skills (V2).
+- Files the agent creates (downloads, outputs) are not scoped per context.
 
-**Admin controls available:**
-- `scope="global"` memory writes require admin — non-admins can only write to their own context
-- No admin gating on skill creation in v1 — any approved user can create skills
+**Admin controls:**
+- `scope="global"` memory writes need an admin. Non-admins write only to their own context.
+- Skill creation is not gated. Any approved user can create a skill.
 
----
-
-## Architecture Principles
-
-1. **Native mode: Swarm Map configures, the harness enforces.** This is how Hermes agents work today: Swarm Map writes env vars and config, Hermes reads them. **Door mode: the door enforces.** New harnesses run behind a guard that Swarm Map configures, so a rule never depends on the harness honouring it (see V3).
-2. **No permission matrix.** Flat per-surface admin lists managed via env vars. No groups × tiers × tools cross-product.
-3. **Tiers are labels.** They inform defaults but don't bind permissions programmatically.
-4. **Wizard produces secure agents.** Every agent created through HSM gets baseline security without manual config.
-5. **Settings survive restarts.** Every toggle must round-trip through GET→UI→PUT→rebuild without data loss.
-6. **Two sources of approved users.** Static (`.env`) and dynamic (pairing store). Admin UI shows both.
+Door agents keep notes per room, and one room's notes never reach another. See [persona and memory](lab/persona-memory.md).
 
 ---
 
-## Implementation Plans (Reference)
+## Principles
 
-Detailed plans for specific features live in `docs/plans/`:
-
-| Plan | Status | Covers |
-|------|--------|--------|
-| `opinionated-config.md` | RFC — core template not yet implemented | Full config.yaml template, .env generation, compose bugs |
-| `cost-tracker-litellm.md` | Plan — deferred to v1.1+ | Cost tracking from state.db, per-model breakdown |
-| `home-channel-group-id.md` | Plan — needs hermes-agent-mt work | Signal group display name → group ID resolution |
-
+1. **Native mode: Swarm Map configures, the harness enforces.** This is how Hermes agents work: Swarm Map writes env vars and config, and Hermes reads them. **Door mode: the door enforces.** A rule never depends on the harness honouring it (see V3).
+2. **No permission matrix.** Flat per-surface admin lists, set through env vars. No cross-product of groups, tiers and tools.
+3. **Tiers are labels.** They suggest defaults. They do not bind permissions.
+4. **The wizard makes secure agents.** Every agent it creates gets baseline security with no manual config.
+5. **Settings survive restarts.** Every toggle must round-trip through `GET`, the UI, `PUT` and a rebuild without losing data.
+6. **Two sources of approved users.** Static (`.env`) and dynamic (the pairing store). The admin UI shows both.
 
 ---
 
-## Archived
+## Plans
 
-- `ROADMAP-surfaces.md` — surfaces/permissions roadmap, folded into this doc (all P0 items done, remaining items tracked above)
+Plans for single features are in `docs/plans/`.
+
+- [`home-channel-group-id.md`](plans/home-channel-group-id.md): resolve a Signal group's display name to its group id. Not built. The change is in hermes-agent-mt, not here.

@@ -221,7 +221,8 @@ names the conversation alone when it picks a session back up.
    keeps from the shim's hello, and the shim is in the cell. A shim that says "none" is given
    every room, which is what the `hides-memory` shim shows. So `mem.one-scope` is listed as a
    guardrail. Whoever deploys a harness knows which one it is and can hold the policy to it
-   before a save (`fitProblems`); nothing calls that yet, because nothing deploys one.
+   before a save. The launcher does: its config parser refuses a second channel for Letta Code
+   (`lib/lab/pi-discord/config.ts`), from the same declaration the shim makes.
 3. **The veto is the shim.** Pi's veto is a file loaded into Pi. Letta Code's is the shim's own
    answer on a pipe. If the shim stops, Letta Code's stdin closes and it treats that as a no.
    That was read in its source, not driven by a test.

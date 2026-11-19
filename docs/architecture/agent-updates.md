@@ -6,26 +6,33 @@ one a change lives in tells you how to ship it.
 ## 1. Runtime image (baked, immutable)
 
 The Hermes runtime code at `/opt/hermes` is baked into the Docker image. It
-changes only when the image is rebuilt.
+changes only when the image is rebuilt or a newer image is pulled.
 
-- **What lives here:** core Hermes code, platform/gateway adapters, system
-  tools, security fixes — anything in the `hermes-agent` image.
-- **How it updates:** rebuild the image and recreate the container. There is no
-  automatic pull — a running agent stays on its built image until you rebuild.
-- **Scope:** the rebuild picks up whatever the image source (local build or
-  pinned tag) is at that moment.
+- **What lives here:** core Hermes code, platform and gateway adapters, system
+  tools, security fixes. That is anything in the `hermes-agent-mt` image
+  (default `ghcr.io/cyborg-garden/hermes-agent-mt:latest`).
+- **How it updates:** rebuild the image and recreate the container. Nothing on
+  the host pulls or rebuilds on its own. A running agent stays on its built
+  image until someone rebuilds it.
+- **Scope:** for a local build, `rebuild` and `purge` first fetch the build
+  source and fast-forward it to its upstream branch. They refuse to build over
+  uncommitted changes, a detached HEAD, or diverged history. The resolved
+  commit is stamped into the image as `HERMES_GIT_SHA`.
 
 Restart modes (`POST /api/harnesses/:id/restart` with `{ mode }`):
 
 | mode | what it does | use when |
 |---|---|---|
-| `quick` | `docker compose restart` — bounce the process | config/env reload, no image change |
-| `recreate` | `up -d --force-recreate` — new container, **same image**, reloads env + hot-mounted `/opt/data` | picked up new artifacts/config without an image change |
-| `rebuild` | `up -d --build --force-recreate` — rebuild image, then recreate | shipped new runtime code |
-| `purge` | `build --no-cache` then recreate | a clean from-scratch image build |
+| `quick` | `docker compose restart`: bounces the process. Does **not** reload `.env`. | a `config.yaml` change, no env or image change |
+| `recreate` | stop, then `up -d --force-recreate`: new container, **same image**. Reloads `.env` and the hot-mounted `/opt/data`. | rotated keys, new artifacts or config, no image change |
+| `rebuild` | `compose build` (cached), then stop and recreate | shipped new runtime code |
+| `purge` | `compose build --no-cache`, then stop and recreate | a clean from-scratch image build |
 
-> A `rebuild` updates **code**, not artifacts — it does **not** re-run artifact
-> installation. New plugins/skills do not arrive via rebuild; use sync (below).
+Every recreating mode stops the container before `up`, so the one-shot
+state-init service never copies SQLite files under a live writer.
+
+> A `rebuild` updates **code**, not artifacts. It does **not** re-run artifact
+> installation. New plugins and skills do not arrive via rebuild; use sync (below).
 
 ## 2. Artifacts (hot-mounted, mutable)
 
@@ -36,7 +43,7 @@ the host. They are installed at **create/duplicate** from the manifest
 - **What lives here:** plugins, skills, hooks, config overrides.
 - **How it updates:** `POST /api/harnesses/:id/artifacts/sync`
   (`lib/services/artifacts-sync.ts`).
-  - Installs artifacts that are **missing** (additive floor — never clobbers).
+  - Installs artifacts that are **missing** (additive floor: it never clobbers).
   - Updates an existing artifact **only if a content-hash lock
     (`.artifacts-lock.json`) proves it's unmodified** since install; a
     user-edited or untracked artifact is skipped. `force` overrides.
@@ -89,7 +96,10 @@ the SOUL orientation block in `infra/base-package/soul-orientation.md`. Code:
 
 ## Known gap: no CD for the runtime image
 
-Artifact rollout is a single API call per agent, but the **runtime-image** half
-is still manual (build/pull + rebuild, no version pinning or staged rollout).
-Closing that — pinned images + an approval-gated, canary-then-fleet rollout — is
-tracked as future work.
+Artifact rollout is a single API call per agent.
+The **runtime-image** half is still manual: build or pull, then rebuild each agent.
+There is no version pinning or staged rollout yet.
+
+`GET /api/fleet/drift` reports which agents run older code than their build
+source (`lib/services/drift.ts`). It is read-only and never rebuilds.
+Pinned images and an approval-gated, canary-then-fleet rollout are future work.

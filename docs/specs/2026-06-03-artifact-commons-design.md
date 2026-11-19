@@ -2,9 +2,14 @@
 
 **Date:** 2026-06-03
 **Author:** maintainers (with Claude)
-**Status:** Phase 1 merged (manifest loader). Phase 2 `git:` fetch + install-time
-trust gate implemented 2026-06-09 (artifact git-source trust-gate branch);
-see the implementation-status note under Phase 2.
+**Status (checked 2026-11-20):** implemented through Phase 2.
+- Phase 1 manifest loader: `lib/services/artifacts-manifest.ts` reading `infra/artifacts.json`.
+- Phase 2 `git:` fetch and install-time trust gate: built. Git-sourced artifacts ship
+  today through use-case templates (`infra/usecase-templates.json`).
+- Still open: `captcha_cascade` is still `local:`, and `declared_capabilities` is not
+  mandatory for git-sourced artifacts. Phases 3 and 4 remain roadmap.
+
+HSM (Hermes Swarm Map) is the old name of Swarm Map. This record keeps the names used at the time.
 
 ## Problem & Driver
 
@@ -13,7 +18,7 @@ them by copying from a hardcoded list in `lib/services/templates.ts`. This coupl
 every artifact to the HSM repo and makes them un-shareable.
 
 The goal: **artifacts (plugins, MCP servers, skills, tools) that work for anyone
-running Hermes — not only inside HSM — so NimbleCo can publish general-commons
+running Hermes, not only inside HSM, so NimbleCo can publish general-commons
 goods that funnel people into the ecosystem, while HSM remains a first-class
 installer of both commons and multiplayer-specific artifacts.**
 
@@ -23,11 +28,11 @@ installer of both commons and multiplayer-specific artifacts.**
 refactoring HSM's installer from hardcoded arrays to a manifest-driven loader.
 
 **Explicitly out of scope (separate projects):**
-- The `swarm-map` product rename — **deferred until OpenClaw support is added**;
-  not happening in this effort (separate spec; do not conflate with artifact names).
-- Actual PyPI/pip publishing (roadmap flag — see Phase 4).
+- The `swarm-map` product rename. **Deferred until OpenClaw support is added**;
+  not part of this effort (separate spec; do not conflate with artifact names). The rename has since happened.
+- Actual PyPI/pip publishing (roadmap flag, see Phase 4).
 - Cross-repo dedup of `swarm_map_policy` copies that live in *other* deployment
-  repos (`hermes-agent`, `hermes-agent-swarm`, `hermes-swarm`). Per-repo hygiene, later.
+  repos. Per-repo hygiene, later.
 
 ## Core Model
 
@@ -35,8 +40,8 @@ Two orthogonal axes per artifact:
 
 - **Type:** plugin · MCP server · skill · (tool = provided by a plugin)
 - **Coupling:**
-  - `vanilla` — works on plain/upstream Hermes; a commons candidate.
-  - `multiplayer` / `hsm-specific` — depends on HSM/MT context (e.g. the `/policy`
+  - `vanilla`: works on plain/upstream Hermes; a commons candidate.
+  - `multiplayer` / `hsm-specific`: depends on HSM/MT context (e.g. the `/policy`
     endpoint, HSM home channel, multiplayer OAuth); stays internal.
 
 **Artifact = self-contained unit.** Contract-conformant: a directory plugin needs
@@ -52,26 +57,26 @@ moving directories between two monorepos (loses git history, breaks manifest pin
 
 **Visibility = per-repo, starts private.** A repo flips to public only when it
 passes **both gates**:
-1. **Mature** — proven in production (not just unit-tested).
-2. **Clean** — generic + secret-free (no NimbleCo OAuth IDs, tokens, internal URLs).
+1. **Mature:** proven in production (not just unit-tested).
+2. **Clean:** generic and secret-free (no NimbleCo OAuth IDs, tokens, internal URLs).
 
-Going public never means maintaining a parallel public copy of the whole system —
-that reintroduces the duplication-drift problem at macro scale.
+Going public never means maintaining a parallel public copy of the whole system.
+That would reintroduce the duplication-drift problem at macro scale.
 
-## HSM Installer — the Manifest Loader
+## HSM Installer: the Manifest Loader
 
 Replace `TEMPLATE_PLUGINS/SKILLS/HOOKS` + `installBaselineTemplates`'s
 `process.cwd()/infra/templates` copy with a manifest (`infra/artifacts.json`) the
 loader resolves by `source`:
 
-- `local:<path>` — current in-repo copy (HSM-specific artifacts).
-- `upstream` — no-op; artifact already baked into the agent image.
-- `git:<org>/<repo>#<tag>[:<subdir>]` — shallow clone at a **pinned tag**, copy the
+- `local:<path>`: current in-repo copy (HSM-specific artifacts).
+- `upstream`: no-op; artifact already baked into the agent image.
+- `git:<org>/<repo>#<tag>[:<subdir>]`: shallow clone at a **pinned tag**, copy the
   subdir into the agent dir. Pin tags (not branches) for reproducible installs.
 
 MCP servers are modeled as **references** in the same manifest (a `mcp_servers`
-config entry + optional mounted source / npx command), *not* copied — folding the
-today-separate MCP wiring (`app/api/setup/deploy/route.ts`) into one declaration point.
+config entry + optional mounted source / npx command), *not* copied. This folds the
+then-separate MCP wiring (`app/api/setup/deploy/route.ts`) into one declaration point.
 
 **The loader must report what was actually installed and fail loudly.** This fixes
 two current defects:
@@ -85,7 +90,7 @@ two current defects:
 
 | Artifact | Type | Coupling | Home |
 |---|---|---|---|
-| `captcha_cascade` + `captcha-escalation` | plugin+skill | vanilla | own repo — top commons pilot, *after* it is proven |
+| `captcha_cascade` + `captcha-escalation` | plugin+skill | vanilla | own repo; top commons pilot, *after* it is proven |
 | `ocr-and-documents` | skill | vanilla | commons |
 | `boot_md` | plugin | vanilla | upstream owns it; HSM copy is stale (see Phase 0) |
 | `swarm_map_policy` | plugin | hsm-specific | stays `local:`, unchanged |
@@ -97,17 +102,19 @@ two current defects:
 
 Each phase is its own implementation plan + PR. **Phase 0 is a hard gate.**
 
-### Phase 0 — Resolve the blocking unknown (verify on a live agent)
+### Phase 0: Resolve the blocking unknown (verify on a live agent)
 Research surfaced a contradiction: HSM assumes "copy == enabled" (it writes no
 `plugins.enabled` block), but the runtime gates `standalone` plugins behind
 `plugins.enabled` + `HERMES_ENABLE_PROJECT_PLUGINS`. **Determine, on a real
-deployed agent, which is true** — i.e. do the currently-installed standalone
+deployed agent, which is true**: do the currently-installed standalone
 plugins actually load? This decides whether the manifest loader must *also* write
 enable-flags. Nothing downstream starts until this is settled. (Also verify
-whether the HSM `boot_md` copy loads at all — research indicates it lacks
+whether the HSM `boot_md` copy loads at all; research indicates it lacks
 `register()` and is therefore inert on the current runtime.)
 
-### Phase 1 — Pure refactor (behavior-identical, safe by construction)
+*Outcome:* the loader now writes `plugins.enabled` itself, and `boot_md` is installed with `enabled: false`.
+
+### Phase 1: Pure refactor (behavior-identical, safe by construction)
 Introduce `infra/artifacts.json` listing **every current artifact as `local:`**.
 Swap `installBaselineTemplates` to resolve the manifest. Fix install-reporting to
 reflect reality. Update behavior-pinning tests.
@@ -115,15 +122,15 @@ reflect reality. Update behavior-pinning tests.
   code and the new code must be **byte-identical**. If not, the refactor is wrong
   and does not ship.
 - No artifact moves. Nothing is deleted. No runtime behavior changes.
-- **Drive-by fix:** unify the `hsmPort` default — both `deploy/route.ts` and
-  `harness.ts` default to `3000` via one shared helper (see Risk #3).
+- **Drive-by fix:** unify the `hsmPort` default. Both `deploy/route.ts` and
+  `harness.ts` default to `3000` via one shared helper (see Risk #3). Done: `lib/services/hsm-url.ts`.
 
-### Phase 2 — Extract (HSM-only, one artifact at a time, prove-before-remove)
+### Phase 2: Extract (HSM-only, one artifact at a time, prove-before-remove)
 - De-scoped to HSM. **One artifact at a time, with real-agent verification between
   each.** Never big-bang.
 - `boot_md`: only after Phase 0 confirms the HSM copy is inert, **stop installing
-  the dead copy** (changes nothing observable) — not "delete and hope."
-- `swarm_map_policy`: **unchanged** — stays `local:`. (Cross-repo copies are out of
+  the dead copy** (changes nothing observable). Never "delete and hope."
+- `swarm_map_policy`: **unchanged**, stays `local:`. (Cross-repo copies are out of
   scope.)
 - `captcha`: extract the plugin+skill to its own **private** repo; switch its
   manifest entry to `git:#tag`. This requires building the `git:` fetch:
@@ -131,22 +138,22 @@ reflect reality. Update behavior-pinning tests.
   `GITHUB_TOKEN`), a resolved-artifact cache, and loud failure on fetch error.
 - Every step is a revertable PR.
 
-**Implementation status — 2026-06-09 (artifact git-source trust-gate branch):**
+**Implementation status, 2026-06-09 (artifact git-source trust-gate branch):**
 the `git:` fetch is **built**, and Phase 2 gained a **trust gate** that was not in
-the original design — the security boundary that makes third-party sourcing safe:
+the original design. The gate is the security boundary that makes third-party sourcing safe:
 
-- **`git:<org>/<repo>#<tag>[:<subdir>]` fetch** — `parseGitSource` (pinning
+- **`git:<org>/<repo>#<tag>[:<subdir>]` fetch:** `parseGitSource` (pinning
   **mandatory**; charset + path-traversal guards because the ref feeds a git
   command) → `fetchGitArtifact` (shallow clone at the pinned tag, `--` arg guard,
   subdir-escape check) → wired into `installArtifacts`. The build-time token is
   read by `installBaselineTemplates` from the **HSM-server** env
-  (`ARTIFACT_GIT_TOKEN`, fallback `GITHUB_TOKEN`) — deliberately distinct from the
+  (`ARTIFACT_GIT_TOKEN`, fallback `GITHUB_TOKEN`). It is deliberately distinct from the
   per-agent runtime `GITHUB_TOKEN`; the agent never sees it.
 - **Install-time trust gate (NEW vs the original design).** A fetched artifact is
   scanned for prompt-injection / promptware **before** it is copied into the agent
   (`gateArtifactDir` + `threat-patterns.ts`, a faithful TS port of the image-side
   `tools/threat_patterns.py`, context scope). On any finding the install is
-  **refused** (throws) — a poisoned artifact never lands on disk. The image-side
+  **refused** (throws), so a poisoned artifact never lands on disk. The image-side
   enforcement (per-plugin `declared_capabilities` dispatch gate + fail-closed
   plugin-skill scan, shipped in `hermes-agent`) is the **runtime backstop**
   (defense in depth). This HSM-early / image-authoritative split follows
@@ -154,16 +161,19 @@ the original design — the security boundary that makes third-party sourcing sa
   the early pre-install screen).
 - **Still open:** switch a real artifact (e.g. `captcha`) to `git:#tag` and verify
   on a live agent; provision `ARTIFACT_GIT_TOKEN`; make `declared_capabilities`
-  **mandatory** for git-sourced artifacts (needs a YAML parser in HSM — it only
-  *generates* YAML today — or runtime-layer enforcement); optional strict
+  **mandatory** for git-sourced artifacts (needs a YAML parser in HSM, which only
+  *generated* YAML then, or runtime-layer enforcement); optional strict
   tag-vs-branch check (`git ls-remote --tags`).
+  *Since done:* git-sourced use-case templates are live, and a `git ls-remote --heads`
+  check now rejects branch names (`lib/services/git-fetch.ts`). `captcha` is still
+  `local:`, and `declared_capabilities` is still optional.
 
-### Phase 3 — Roadmap (out of build scope)
+### Phase 3: Roadmap (out of build scope)
 HSM installer/marketplace UX surfacing the registry; longer term, agents
 discovering/installing their own capabilities from the registry via chat. North
 star, not designed here.
 
-### Phase 4 — Roadmap (out of build scope)
+### Phase 4: Roadmap (out of build scope)
 Per-artifact public visibility flips + pip/PyPI packaging, gated by maturity +
 cleanliness, timed to the MT launch.
 
@@ -175,12 +185,12 @@ cleanliness, timed to the MT launch.
 - **Phase 0 hard gate** before any extraction.
 
 ## Top Risks (carried into the plan)
-1. `copy == enable` contradiction — **Phase 0 gate**.
+1. `copy == enable` contradiction: **Phase 0 gate**.
 2. Silent partial-fetch failure booting capability-less agents → loader verifies + reports.
 3. `swarm_map_policy ↔ /api/harnesses/:id/policy` is a runtime contract → keep the
    plugin internal; do not turn it into a cross-repo API boundary.
    - **Latent bug (Phase 1 drive-by fix):** `hsmPort` is HSM's *own* callback port
-     used to build `HSM_URL`/`SWARM_MAP_POLICY_URL` — distinct from the per-agent
+     used to build `HSM_URL`/`SWARM_MAP_POLICY_URL`. It is distinct from the per-agent
      `API_SERVER_PORT`, which is correctly dynamic via `nextAvailablePort()`. The
      two paths disagree on the *default* when `process.env.PORT` is unset:
      `'3002'` in `deploy/route.ts:127` vs `'3000'` in `harness.ts:1035`. HSM runs on
@@ -204,11 +214,11 @@ cleanliness, timed to the MT launch.
 - Phase 0 and Phase 2 each include real-deployed-agent verification, not only units.
 
 ## Key Files (current touchpoints)
-- `lib/services/templates.ts` — hardcoded arrays + `installBaselineTemplates` (the loader to replace).
-- `lib/services/harness.ts` — install call sites (~235, ~1077) + `pluginsInstalled` reporting.
-- `app/api/setup/deploy/route.ts` — deploy-flow install + MCP wiring + `GITHUB_TOKEN`.
-- `lib/templates/config-yaml.ts` — `mcp_servers` block generation.
-- `lib/services/tools.ts` — skill-dir-derived tool discovery.
-- `app/api/harnesses/[id]/policy/route.ts` — the `swarm_map_policy` runtime contract.
+- `lib/services/templates.ts`: hardcoded arrays + `installBaselineTemplates` (the loader to replace).
+- `lib/services/harness.ts`: install call sites + `pluginsInstalled` reporting.
+- `app/api/setup/deploy/route.ts`: deploy-flow install + MCP wiring + `GITHUB_TOKEN`.
+- `lib/templates/config-yaml.ts`: `mcp_servers` block generation.
+- `lib/services/tools.ts`: skill-dir-derived tool discovery.
+- `app/api/harnesses/[id]/policy/route.ts`: the `swarm_map_policy` runtime contract.
 - Reference: `osint-engine/hermes-plugin/` + `hermes-skill/` (contract-conformant co-location).
 - Runtime loader: `hermes-agent-mt/hermes_cli/plugins.py`.

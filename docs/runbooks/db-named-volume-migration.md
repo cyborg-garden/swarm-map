@@ -1,9 +1,9 @@
 # DB named-volume migration (#204 PR2)
 
 Moves a harness's SQLite files (`state.db`, `response_store.db`, `kanban.db`, with
-`-wal`/`-shm` siblings) off the VirtioFS bind mount — a proven torn-write corruption
-vector — onto a named Docker volume (`hermes-state-<name>`, native ext4 inside the
-VM), leaving symlinks at the old `/opt/data` paths so the agent needs no changes.
+`-wal`/`-shm` siblings) off the VirtioFS bind mount, which can tear SQLite writes.
+They move onto a named Docker volume (`hermes-state-<name>`, native ext4 inside the
+VM). Symlinks stay at the old `/opt/data` paths, so the agent needs no changes.
 
 ## When a new compose file gets this layout
 
@@ -50,14 +50,18 @@ migrated by `state-init` at its next start, the same way the route below does it
 POST /api/harnesses/<id>/migrate-db        # operator-authed; one at a time by design
 ```
 
-The route: surgically transforms the existing compose (never regenerates — see
-Guards), validates it with `docker compose config`, stops the agent, recreates —
-compose runs the one-shot `state-init-<name>` service to completion **before** the
-agent starts, so files move while no writer exists — then poll-verifies: init exit 0,
-host `state.db` is now a symlink, agent running. The response lists every step.
+The route:
 
-**Canary discipline:** migrate one low-stakes harness, watch it for a few days (the
-`/api/integrity` sweep + write-failure badge from #205 are the watchers), then roll
+1. Edits the existing compose file in place. It never regenerates it (see Guards).
+2. Validates it with `docker compose config`.
+3. Stops the agent and recreates it. Compose runs the one-shot `state-init-<name>`
+   service to completion **before** the agent starts, so files move while no writer exists.
+4. Polls to verify: init exited 0, host `state.db` is now a symlink, agent running.
+
+The response lists every step.
+
+**Canary discipline:** migrate one low-stakes harness and watch it for a few days.
+The `/api/integrity` sweep and the write-failure badge from #205 are the watchers. Then roll
 the next. There is deliberately no fleet-wide endpoint.
 
 ## What changes for host-side readers
@@ -66,46 +70,47 @@ The host path `~/.hermes-<name>/state.db` becomes a **dangling symlink** (its ta
 exists only in-container). Cost/usage/memory reads and the integrity sweep detect
 this (`lstat`) and switch:
 
-- **usage/cost/memory** read `state.db.snapshot` — exported every ~5 min
-  (`DB_SNAPSHOT_INTERVAL_MS`) via `docker exec` + Python's `sqlite3` backup API,
-  atomic tmp+rename. Until the first export lands, they report **unknown, not 0**.
+- **usage/cost/memory** read `state.db.snapshot`. It is exported every ~5 min
+  (`DB_SNAPSHOT_INTERVAL_MS`) via `docker exec` and Python's `sqlite3` backup API,
+  with an atomic tmp+rename. Until the first export lands, they report **unknown, not 0**.
   Numbers are up to one interval stale; do not treat them as live.
 - **integrity checks** run `quick_check` via `docker exec python3` inside the
-  container — where SQLite's locking actually holds — instead of the host path.
+  container, where SQLite's locking actually holds, instead of on the host path.
   (Side benefit: big-DB checks no longer block the dashboard's event loop.)
 - **logs** stay on the bind mount; nothing about log reading changes.
 
 ## Guards you may hit
 
-- **409 "cannot transform compose"** — the compose file's shape defeated the
-  surgical transformer (hand-edited structure, missing anchors). By design it
+- **409 "cannot transform compose":** the compose file's shape defeated the
+  in-place transformer (hand-edited structure, missing anchors). By design it
   refuses rather than regenerating: regeneration from the standalone template
   silently strips deploy-born hardening (`read_only`, tmpfs, google-MCP), VPN
   sidecars, and hand edits. Fix the file by hand or migrate that harness manually.
-- **409 on settings PUT (deploy-born)** — VPN/resource changes regenerate the
+- **409 on settings PUT (deploy-born):** VPN and resource changes regenerate the
   compose from the standalone template, which would strip deploy-born extras; the
   settings route now refuses those on deploy-born composes before writing anything.
 
 ## `hermes import` un-migrates (self-healing)
 
-An in-container `hermes import` restore replaces the symlink with a regular file —
-the harness silently runs on the bind mount again until its next recreate. This is
+An in-container `hermes import` restore replaces the symlink with a regular file.
+The harness then silently runs on the bind mount again until its next recreate. This is
 survivable by design: the init service treats a **regular file as authoritative**
 (it is the newer data) and re-migrates it to the volume on every recreate. If you
 know an import happened, `POST /api/harnesses/<id>/migrate-db` again (idempotent,
-stops the writer first) or recreate through HSM.
+stops the writer first) or recreate through Swarm Map.
 
-**Writer quiescing:** every HSM recreate/rebuild/purge runs `compose stop
+**Writer quiescing:** every Swarm Map recreate, rebuild or purge runs `compose stop
 <service>` before `up -d --force-recreate`. Do NOT remove that stop, and never
 recreate a wired compose by hand without stopping the agent first: `up` runs the
-state-init copy while the OLD container is still writing — a torn copy of a live
-WAL database becomes the only copy (the #204 corruption class this whole
-migration exists to eliminate).
+state-init copy while the OLD container is still writing. A torn copy of a live
+WAL database then becomes the only copy. That is the #204 corruption class this
+migration exists to eliminate.
 
-**Implicit first migration:** both compose generators now emit the migration
-wiring, so ANY recreate of an unmigrated harness (settings save that changes
-VPN/resources, image pin, plugin sync) performs its first migration — safely,
-because of the stop above, but outside the canary endpoint. Prefer migrating
+**Implicit first migration:** when the layout is on for an agent (see "When a new
+compose file gets this layout"), both compose generators emit the migration wiring.
+So ANY recreate of an unmigrated harness after a regeneration (a settings save that
+changes VPN or resources, an image pin, a plugin sync) performs its first migration.
+The stop above makes that safe, but it happens outside the canary endpoint. Prefer migrating
 deliberately via `POST /migrate-db` before touching settings on a harness you're
 staging.
 
@@ -115,15 +120,15 @@ relies on in-image SQLite deriving `-wal`/`-shm` from the RESOLVED path
 `docker exec hermes-<name> python3 -c "import sqlite3; print(sqlite3.sqlite_version)"`.
 If a non-empty `-wal` ever appears next to a symlinked db, state-init now
 refuses to delete it and exits 1 (agent stays down) instead of silently
-discarding committed transactions — that's your signal this assumption broke.
+discarding committed transactions. That is your signal this assumption broke.
 
 ## Rollback (de-migrate one harness)
 
 > **Bind path warning:** `/opt/data` below must be the harness's ACTUAL data
-> dir — the same one its compose mounts (authoritative mapping:
+> dir, the same one its compose mounts (authoritative mapping:
 > `agentDataDirForName`). For every named agent that is `~/.hermes-<name>`,
 > but for the **personal** harness it is **`~/.hermes`** (NOT
-> `~/.hermes-personal` — Docker would silently auto-create that empty dir, the
+> `~/.hermes-personal`. Docker would silently auto-create that empty dir, the
 > copy-back would land nowhere useful, and step 4's `volume rm` would then
 > delete the only real copy). Verify with
 > `docker inspect hermes-<name> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'`
@@ -149,14 +154,14 @@ discarding committed transactions — that's your signal this assumption broke.
 4. `docker compose up -d --force-recreate`, then delete the volume once satisfied:
    `docker volume rm hermes-state-<name>`.
 
-**Never `docker compose down -v`** on a migrated harness — it deletes the named
-volume, i.e. the live databases.
+**Never `docker compose down -v`** on a migrated harness. It deletes the named
+volume, which holds the live databases.
 
 ## Volume lifecycle on delete
 
 Harness delete with "delete files" also removes `hermes-state-<name>` (after
 `compose down` releases it), so a deleted agent's DBs cannot resurrect into a
-future same-name agent — the pinned `name:` would otherwise reattach the old
+future same-name agent. The pinned `name:` would otherwise reattach the old
 volume. The personal harness's volume is exempt (same guard as `~/.hermes`).
 Deletes performed before this behavior existed may have left orphans: audit with
 `docker volume ls --format '{{.Name}}' | grep '^hermes-state-'` and remove any

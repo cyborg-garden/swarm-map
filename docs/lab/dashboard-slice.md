@@ -51,7 +51,7 @@ changed. This slice reuses that guard and adds the door paths beside it.
 ## What is in
 
 1. **The rules record** (`lib/services/door-record.ts`). It holds the launcher's own config type
-   (who is heard, the channel, mention required, named bots, loop limit, budget, persona, model)
+   (who is heard, the channels, mention required, named bots, loop limit, budget, persona, model)
    and is checked by the launcher's own parser and policy validator. No second set of rules.
 2. **The lifecycle adapter** (`lib/services/door-agents.ts`, interface in `runtime-adapter.ts`):
    create, start, stop, status, logs, receipts, usage, remove. It talks to the launcher through a
@@ -114,7 +114,8 @@ exactly as before. An edit of the rules cannot change the harness.
 What a harness cannot do is read from what its shim declares (`lib/lab/pi-discord/harnesses.ts`)
 and shown in three places: the create form, the Overview, and for Letta Code beside the channel
 field on the Rules tab. Letta Code keeps one memory for the whole agent, so it has one room
-only. The rules enforce that at the door (`mem.one-scope`); the pages only say so.
+only. The launcher's parser refuses a second channel for it, so a save that names one is refused,
+and the door holds the same rule (`mem.one-scope`).
 
 ## Who started the door
 
@@ -219,7 +220,10 @@ Added with [the tools slice](tools-slice.md).
 - **Rules** has a **Tools** card. Three classes (read files, write files, shell), each Off, Ask an
   admin, or Allow. All Off by default. It edits the `tools` part of the same rules record, so the
   launcher's parser decides whether a choice is sound. For an agent that hears anyone in the
-  channel the card is switched off, and says why.
+  channel the three classes are switched off, and the card says why.
+- The same card has the **Web** settings: listed sites, the public web, search, and whether each
+  address waits for an admin. They stay open for an agent that hears anyone. See
+  [Web through the door](tools-slice.md#web-through-the-door).
 - **Receipts** has an **Approvals only** box. It shows each tool call that waited for an admin:
   that it was asked, every answer and who gave it, and whether it ran. A receipt holds the tool's
   name and the call's short hash, never the command.

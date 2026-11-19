@@ -2,230 +2,172 @@
 
 **English** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md)
 
-> **Swarm Map (SM)** — formerly Hermes Swarm Map / HSM.
+Swarm Map is a self-hosted dashboard for running a fleet of chat agents for a team.
+You deploy agents, give them keys and models, connect them to chat rooms, and decide who each one listens to.
+It is for people who run more than one agent for more than one person, and want the rules in one place.
 
-A commons, public goods project of [Cyborg Garden](https://www.cyborg.garden/). 
+It was called Hermes Swarm Map (HSM). Some file names and environment variables still use the old name.
+It is a commons project of [Cyborg Garden](https://www.cyborg.garden/), licensed AGPL v3.
 
-**Multiplayer admin and orchestrator platform for heterogeneous agent runtimes.** One dashboard for a fleet of [Hermes](https://github.com/cyborg-garden/hermes-agent-mt) agents, each in its own container. Multi-tenant security, model cascades, and platform connections come from one control plane.
+<img width="1352" height="763" alt="The Swarm Map dashboard showing agents and their settings" src="https://github.com/user-attachments/assets/4b94f0d1-d9b8-4a81-8b47-b2dae1940741" />
 
-*First of its kind, a point and click GUI for not just managing agent runtimes, but also who can do what and where. Solves the multi-tenant agent problem. View the godhead of complexity without derealizing. Share compute.*
+## Two kinds of agent
 
-**One runtime ships today.** Hermes is the supported path. The earlier Letta integration was removed: it targeted Letta's self-hosted server, which Letta has retired. See [Runtimes](docs/runtimes.md) for what ships, what was removed, and what is planned. We would rather you read a boring page than discover the gap after deploying.
+**Hermes containers.** The main path, in daily use.
+Each agent is a Docker container running [hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt), a multi-tenant fork of [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+Swarm Map writes its config and Hermes enforces it.
+Surfaces: Signal, Telegram, Mattermost, Discord and Slack.
 
-<img width="1352" height="763" alt="Screenshot 2026-05-26 at 5 01 19 pm" src="https://github.com/user-attachments/assets/4b94f0d1-d9b8-4a81-8b47-b2dae1940741" />
-*Calm UX showing a variety of config settings across agent harness runtimes*
+**Door agents.** Newer, and lab-grade.
+A guard process (the "door") runs outside the agent.
+It holds the chat token, the model key, the rules, the receipts and the budget.
+The agent runs in a sealed Docker cell with no token, no real key and no network route except the door.
+The agent is never asked to enforce a rule, so a harness that ignores one changes nothing.
 
----
+- **Harnesses.** Pi (the default), Letta Code and the Claude Agent SDK run the same harness-neutral conformance suite and pass every check they run. Some checks do not run for every harness; see `conformance/matrix/`. The dashboard creates Pi and Letta Code agents. The Claude Agent SDK runs from the test rig only.
+- **Discord rooms.** One agent can sit in several channels. Each channel can have its own rules: who is heard, whether a mention is needed, which tools are allowed.
+- **Approvals in the room (Pi only).** A tool set to `ask` posts the request in the channel. An admin replies approve or deny, or reacts. No answer in time means no.
+- **Budget that stops.** A monthly cap per agent. When it is spent, model calls are refused.
+- **What is not proven.** The cell's seal is tested on one machine and one Docker setup. Door agents run in Discord only. Swarm Map shows a `pm2` command to supervise a door; it does not supervise it itself yet.
 
-## Why Swarm Map?
+Details: [Runtimes](docs/runtimes.md) and [the first door agent in the dashboard](docs/lab/dashboard-slice.md).
 
-AI agents are most useful when they're always on — running on a server, reachable from your phone, remembering context across conversations. But running *multiple* agents across *multiple* platforms for *multiple* users? That's where it gets hard.
+## Quick start
 
-Swarm Map is the control plane. One UI to deploy, configure, and manage a fleet of agents — each with its own personality, memory, platform connections, and budget. Everything a single agent can do, but multiplied and multiplayer.
-
-It also gets harder when your agents don't all run on the same harness, because every harness handles chat access, keys and memory in its own way. Today Swarm Map drives Hermes through one runtime seam (`ContainerRuntimeAdapter`). An agent row stored under a runtime Swarm Map does not know is never treated as Hermes.
-
-## What People Build With It
-
-**The indie hacker** runs 3 agents: a customer support bot on Telegram, a research assistant on Signal, and a coding helper via API. Each has its own model cascade (Claude for complex tasks, Gemini Flash for quick ones), its own budget, and its own personality. SM manages all three from one dashboard.
-
-**The small team** gives each team member their own AI assistant on Mattermost. Memory is scoped per-channel — what the engineering channel discusses stays there. The team lead manages API keys, monitors costs, and approves new group connections from SM.
-
-**The AI researcher** runs 8 specialized agents across Signal and Telegram for different research domains. SM handles group approval policies, model fallback chains, and cost tracking across the fleet. New agents deploy in minutes via the wizard.
-
-## What You Get
-
-🧙 **Setup Wizard** — Deploy a new agent in 5 clicks. Opinionated defaults for compression, memory, security, and voice transcription so it works out of the box.
-
-🔀 **Model Cascade** — Ordered fallback chains across providers. Start with Claude, fall back to Gemini, fall back to local Ollama. Per-agent.
-
-🔐 **Multi-Tenant Security** — Per-context memory isolation, group approval policies, admin-only commands, encrypted API keys. Each conversation thread is a walled garden.
-
-📊 **Fleet Dashboard** — See all your agents at a glance. Health, costs, session counts, model usage. Stop, restart, or rebuild any container from the UI.
-
-🔌 **Platform Connections** — Connect agents to Signal, Telegram, Mattermost, or expose them via API. Manage surfaces from the UI.
-
-💰 **Budget Tracking** — Set a monthly budget per API key and see spend against it. Budgets are not enforced yet; a hard cap is on the [roadmap](docs/ROADMAP.md).
-
-🧩 **One Runtime Seam** — Hermes (container-per-agent) is the supported runtime. More harnesses are planned behind the same rules; [Runtimes](docs/runtimes.md) has the current state.
-
----
-
-## Runtimes
-
-Swarm Map drives one agent runtime today.
-
-| | **Hermes** |
-|---|---|
-| Agent is | a container |
-| Deploy from the wizard | yes |
-| Start / stop / restart / rebuild | yes |
-| Messaging surfaces (Signal / Telegram / Mattermost / Discord) | yes, direct |
-| Group approval + audit | yes |
-| Budget tracking (not enforced yet) | yes |
-
-The old Letta integration (a client for Letta's retired self-hosted server, and a Hermes front that proxied to it) was removed. A stored row tagged with a retired or unknown runtime is listed separately, is never treated as Hermes, and can only be forgotten.
-
-What ships, what was removed, and what is planned: [docs/runtimes.md](docs/runtimes.md).
-
----
-
-## Quick Start
+You need Node.js 20.9 or newer (22.18 or newer for door agents), pnpm, and Docker (Docker Desktop or OrbStack). Swarm Map uses whichever `docker` CLI is on your `PATH`.
 
 ```bash
 git clone https://github.com/cyborg-garden/swarm-map.git
 cd swarm-map
 pnpm install
-pnpm seed         # first run: writes settings + tier config
-pnpm dev          # http://localhost:3000
+pnpm seed         # first run: writes settings and tier config
+pnpm dev          # http://localhost:3000, or the next free port
 ```
 
-On first launch, the setup wizard detects your Hermes compose directories automatically. Point it at your agent directory and go.
+On first start Swarm Map generates an operator token and writes it to `.env.local`.
+Sign in at `/login` with that token.
+The setup wizard then finds your Hermes compose directories, or deploys a new agent in five steps.
 
-**New here?** Read the [Getting Started guide](docs/getting-started.md) for a full walkthrough.
+The [Getting Started guide](docs/getting-started.md) walks through a first agent.
 
-### Requirements
+## What it does
 
-- **Node.js 18+**
-- **Docker** running locally — Docker Desktop or OrbStack, used for container management (Swarm Map drives whichever `docker` CLI is on your PATH)
-- **Hermes Agent** instances — Swarm Map deploys the multi-tenant fork [cyborg-garden/hermes-agent-mt](https://github.com/cyborg-garden/hermes-agent-mt), a fork of [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent)
+- **Setup wizard.** Five steps: identity, model, platforms, keys, deploy. New agents get default settings for compression, memory, session reset and voice transcription.
+- **Model cascade.** An ordered list of models per agent. If one provider fails, the next is tried. Cascades can be saved and applied to other agents.
+- **Who an agent hears.** Group approval, DM allowlists, per-surface admins, mention gating.
+- **Memory scope.** Per-channel or global, per agent.
+- **Fleet view.** Health, CPU, memory, cost and session counts. Start, stop, restart, rebuild or purge a container.
+- **Keys.** Stored encrypted at rest (AES-256-GCM) with a key kept on the machine.
+- **Budgets.** A monthly budget per key, shown against spend. Hermes agents are not throttled when it runs out. Door agents are.
+- **Audit log.** Who changed what, and when.
+- **Base package.** Plugins, skills and hooks installed into each agent, with a drift report and an add-only sync.
 
----
-
-## Features
-
-- **Discovery** — auto-detect Hermes agent containers and compose files
-- **Per-agent configuration** — edit env vars, SOUL.md personas, surface connections
-- **Model cascade** — ordered fallback chains across providers (Anthropic, OpenAI, Bedrock, etc.)
-- **Surface management** — connect agents to Telegram, Signal, Mattermost
-- **Restart / rebuild / purge** — container lifecycle via UI or API
-- **Policy enforcement** — group access control, DM approval gating, admin resolution
-- **Agent creation wizard** — scaffold and deploy new agents from the UI
-- **API key management** — AES-256-GCM encrypted at rest
-- **Audit log** — track who changed what and when
-
-<img width="911" height="742" alt="Screenshot 2026-05-27 at 3 27 31 pm" src="https://github.com/user-attachments/assets/68a7f594-4e17-419a-8cb6-180b94cac40a" />
+<img width="911" height="742" alt="An agent's detail page" src="https://github.com/user-attachments/assets/68a7f594-4e17-419a-8cb6-180b94cac40a" />
 
 <img width="680" height="686" alt="Agent creation wizard" src="https://github.com/user-attachments/assets/62ff24dc-d266-4c18-9542-038ac1b09eaa" />
 
----
+## Security model
 
-## Running on a Remote Server
+Swarm Map assumes a small team that trusts each other.
 
-Build once, run in production mode:
+- **One operator token.** Every write, and most reads, need a session from that token. If the token is unset, those requests are refused. There are no per-user roles: anyone signed in can manage every agent and key.
+- **Agents reach a few routes without signing in.** They ask yes/no questions (is this person an admin, is this group allowed) and ask for approval when added to a group. Those answers carry no secrets.
+- **Keys are encrypted at rest.** The audit log records changes.
+- **Hermes agents enforce their own rules.** Like any LLM agent, they can be steered by text in messages or documents they read.
+- **Door agents do not hold their secrets.** A prompt injection can still change what the agent says. It cannot make the agent post where the door does not allow, or use a tool the rules turn off.
+
+Run Swarm Map on a private network, or behind a VPN or reverse proxy with HTTPS.
+
+## Running on a server
 
 ```bash
 pnpm build
 npx next start --port 3000 --hostname 0.0.0.0
 ```
 
-Access from any machine on the network at `http://<hostname>:3000`. Run behind nginx or Tailscale for HTTPS or external access.
-
-Set `ALLOWED_DEV_ORIGINS` in `.env` for dev mode on remote machines (see Configuration).
-
----
-
-## Architecture
-
-<img width="1023" height="724" alt="Screenshot 2026-05-27 at 2 50 56 pm" src="https://github.com/user-attachments/assets/a2ad3118-81a2-433a-ae02-289546e7e02d" />
-
-- **Next.js 16** (App Router) + **TypeScript**
-- **Tailwind CSS v4** + **shadcn/ui** + **Lucide Icons**
-- **Docker CLI** (via shell) for container management
-- **Vitest** for testing
-- **AES-256-GCM** key encryption at rest
-- File-based agent config at `~/.hermes-swarm-map/`
-
----
-
-
-## Security Model
-
-SM assumes a **reasonably trusted team** — all users with access to the dashboard can manage all agents, keys, and configuration. There is no per-user role separation or access scoping within a deployment.
-
-**What's protected:**
-- API keys are encrypted at rest (AES-256-GCM) with a machine-local key
-- Audit log tracks who changed what
-- Per-agent memory scoping isolates conversation contexts
-- Group approval policies gate which platforms agents can join
-
-**What's not scoped:**
-- Dashboard access is all-or-nothing — anyone who can reach the UI can manage the fleet
-- Skills, tools, and agent configurations are shared across all operators
-- The underlying Hermes agent harnesses remain vulnerable to prompt injection from malicious external content (messages, ingested documents), the same as any LLM-based system
-
-**In practice:** run SM on a private network or behind authentication (Tailscale, nginx basic auth, etc.) and limit access to people you trust with your API keys and agent configurations.
----
-
-## API Reference
-
-Any AI agent (Claude Code, Hermes, etc.) can orchestrate your fleet via the REST API — no GUI needed.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/harnesses` | List all harnesses with live Docker state |
-| `GET` | `/api/harnesses/:id` | Single harness detail |
-| `GET` | `/api/harnesses/retired` | Stored rows under a retired or unknown runtime (not managed; `DELETE /api/harnesses/:id` forgets one) |
-| `POST` | `/api/harnesses/:id/restart` | Restart (`{ mode: 'quick'\|'rebuild'\|'purge' }`) |
-| `POST` | `/api/harnesses/:id/stop` | Stop |
-| `POST` | `/api/harnesses/:id/start` | Start |
-| `POST` | `/api/harnesses/restart-running` | Bulk quick-restart all running |
-| `GET` | `/api/harnesses/:id/logs` | Container logs (`?lines=100`) |
-| `GET` | `/api/harnesses/:id/models` | Model cascade: `chain` (primary from `model:` first, then the `fallback_providers` rows), `primaryEntry`, `primaryDuplicatedAsRow0`, raw `fallbackProviders` |
-| `PUT` | `/api/harnesses/:id/models` | Update the cascade (`{ chain: [...], expected_chain?: [...] }`, `chain[0]` = primary; `{ cascade: [...] }` still accepted; `{ fallback_providers: [...] }` rewrites the fallback rows only and never touches the primary — 409 on a file with no primary) |
-| `POST` | `/api/harnesses/:id/duplicate` | Clone harness config (`{ name }`) |
-| `POST` | `/api/harnesses/:id/cascade/save-as` | Snapshot the harness's current chain (primary + fallbacks) into the cascade library (`{ name, overwrite? }`) |
-| `GET` | `/api/cascades` | Named cascade library (saved, portable chains: `chain[0]` is the primary) |
-| `POST` | `/api/cascades` | Save a cascade (`{ name, chain, sourceHarness?, overwrite? }`; `entries` accepted as an alias; existing name → 409 unless `overwrite`) |
-| `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read / rename+edit (`{ name?, chain? }`) / delete a cascade |
-| `POST` | `/api/cascades/:name/apply` | Port a cascade onto a harness (`{ harnessId, restart? }`); refuses (400, no write, no restart) if the harness lacks a provider's key |
-| `POST` | `/api/harnesses/:id/artifacts/sync` | Adopt/update the base package on an existing agent, add-only (`{ dryRun?, force?, surface?, packs?, assignKeys?, includeVision? }`) |
-| `GET` | `/api/harnesses/:id/base-package/drift` | Report-only drift against the base package (fixes nothing) |
-| `POST` | `/api/setup/deploy` | Deploy new agent (full wizard payload) |
-| `POST` | `/api/setup/detect` | Scan for Hermes compose directories |
-| `GET` | `/api/keys` | List keys (masked, from agent .env files) |
-| `GET` | `/api/tools` | Tool registry (from agent configs) |
-| `GET` | `/api/memory-scopes` | Memory scopes per agent |
-| `GET` | `/api/audit` | Audit log (`?who=&what=&since=`) |
-| `GET/PUT` | `/api/settings` | App settings |
-
-```bash
-# Examples
-curl http://localhost:3000/api/harnesses
-curl -X POST http://localhost:3000/api/harnesses/h_myagent/restart \
-  -H "Content-Type: application/json" -d '{"mode":"quick"}'
-curl http://localhost:3000/api/harnesses/h_myagent/logs?lines=50
-```
-
----
+Then open `http://<host>:3000`.
+For dev mode on a remote machine, list its hostname in `ALLOWED_DEV_ORIGINS`.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and set:
+Copy `.env.example` to `.env`.
 
-| Variable | Default | Description |
+| Variable | Default | What it sets |
 |---|---|---|
-| `HERMES_DIR` | — | Path to your existing Hermes docker-compose files |
-| `DATA_DIR` | `~/.hermes-swarm-map` | Config, keys, audit logs, standalone compose files |
-| `PORT` | `3000` | Port for the Swarm Map UI |
-| `ALLOWED_DEV_ORIGINS` | — | Comma-separated hostnames for remote dev access |
+| `HERMES_DIR` | none | Directory of existing Hermes docker-compose files |
+| `DATA_DIR` | `~/.hermes-swarm-map` | Settings, keys, audit log, generated compose files, door agents |
+| `PORT` | `3000` | Port for the dashboard. `pnpm dev` moves to the next free port if it is taken. `.env.example` sets `3002`, the production convention |
+| `HSM_OPERATOR_TOKEN` | generated into `.env.local` | The sign-in token. Server-side only |
+| `ALLOWED_DEV_ORIGINS` | none | Comma-separated hostnames allowed to reach the dev server |
+| `DISCORD_GUILD_IDS` | none | Your Discord server ids, so they are refused as bot role ids |
+| `SWARM_MAP_NODE` | the Node Swarm Map runs on | Full path of the Node binary a door agent's start script uses |
 
-Settings are stored at `~/.hermes-swarm-map/settings.json`. API keys are encrypted at rest with a machine-local key at `~/.hermes-swarm-map/.key`.
+The encryption key for stored API keys is at `<DATA_DIR>/.key`.
 
----
+## API reference
+
+Everything in the dashboard is also a REST call, so another agent can drive the fleet.
+Calls need the `hsm_session` cookie from `POST /api/auth/login` with `{ "token": "..." }`.
+
+| Method | Path | Does |
+|--------|------|------|
+| `GET` | `/api/harnesses` | List agents with live Docker or door state |
+| `GET` | `/api/harnesses/:id` | One agent |
+| `GET` | `/api/harnesses/retired` | Stored rows under a retired or unknown runtime. `DELETE /api/harnesses/:id` forgets one |
+| `POST` | `/api/harnesses/:id/restart` | Restart (`{ mode: 'quick'\|'recreate'\|'rebuild'\|'purge' }`) |
+| `POST` | `/api/harnesses/:id/stop` | Stop |
+| `POST` | `/api/harnesses/:id/start` | Start |
+| `POST` | `/api/harnesses/restart-running` | Quick-restart every running agent |
+| `GET` | `/api/harnesses/:id/logs` | Logs (`?lines=100`) |
+| `GET` | `/api/harnesses/:id/models` | Model cascade: `chain` (primary first, then the `fallback_providers` rows), `primaryEntry`, `primaryDuplicatedAsRow0`, raw `fallbackProviders` |
+| `PUT` | `/api/harnesses/:id/models` | Update the cascade (`{ chain: [...], expected_chain?: [...] }`, `chain[0]` is the primary). `{ cascade: [...] }` is still accepted. `{ fallback_providers: [...] }` rewrites the fallback rows only and answers 409 on a file with no primary |
+| `POST` | `/api/harnesses/:id/duplicate` | Copy an agent's config (`{ name }`) |
+| `POST` | `/api/harnesses/:id/cascade/save-as` | Save the agent's chain to the cascade library (`{ name, overwrite? }`) |
+| `GET` | `/api/cascades` | The cascade library |
+| `POST` | `/api/cascades` | Save a cascade (`{ name, chain, sourceHarness?, overwrite? }`). An existing name answers 409 unless `overwrite` |
+| `GET`/`PUT`/`DELETE` | `/api/cascades/:name` | Read, rename or edit (`{ name?, chain? }`), delete |
+| `POST` | `/api/cascades/:name/apply` | Apply a cascade to an agent (`{ harnessId, restart? }`). Refuses with 400, and writes nothing, if the agent lacks a provider's key |
+| `POST` | `/api/harnesses/:id/artifacts/sync` | Install or update the base package, add-only (`{ dryRun?, force?, surface?, packs?, assignKeys?, includeVision? }`) |
+| `GET` | `/api/harnesses/:id/base-package/drift` | Report drift from the base package. Changes nothing |
+| `POST` | `/api/harnesses/door` | Create a draft door agent (`{ name, runtime?, description? }`, `runtime` is `pi` or `letta-code`, default `pi`) |
+| `GET` | `/api/harnesses/:id/door` | A door agent's rules, status, usage and supervisor command |
+| `PUT` | `/api/harnesses/:id/door/rules` | Save a door agent's rules and apply them |
+| `GET` | `/api/harnesses/:id/door/receipts` | A door agent's decision log, newest first |
+| `POST` | `/api/setup/deploy` | Deploy a new Hermes agent (the full wizard payload) |
+| `GET` | `/api/setup/detect` | Look for Hermes compose directories |
+| `GET` | `/api/keys` | Keys, masked |
+| `GET` | `/api/tools` | Tool registry |
+| `GET` | `/api/memory-scopes` | Memory scope per agent |
+| `GET` | `/api/audit` | Audit log (`?who=&what=&since=`) |
+| `GET`/`PUT` | `/api/settings` | App settings |
+
+```bash
+curl -c jar -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" -d '{"token":"<operator token>"}'
+curl -b jar http://localhost:3000/api/harnesses
+curl -b jar -X POST http://localhost:3000/api/harnesses/h_myagent/restart \
+  -H "Content-Type: application/json" -d '{"mode":"quick"}'
+```
+
+## Built with
+
+Next.js 16 (App Router) and TypeScript, Tailwind CSS v4 with shadcn/ui, the Docker CLI, and Vitest.
+
+<img width="1023" height="724" alt="Architecture diagram" src="https://github.com/user-attachments/assets/a2ad3118-81a2-433a-ae02-289546e7e02d" />
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) — deploy your first agent in 5 minutes
-- [Runtimes](docs/runtimes.md) — what ships today, what was removed, and what is planned
-- [Migrating Existing Agents](docs/migrating.md) — upgrade path for existing Hermes users
-- [Platform Setup](docs/platforms.md) — Signal, Telegram, Mattermost, Google Workspace guides
-- [Image vs HSM Boundary](docs/architecture/image-vs-hsm-boundary.md) — what belongs in the Docker image vs HSM scaffolding
-- [Roadmap](docs/ROADMAP.md) — what's shipped and what's next
-- [Contributing](CONTRIBUTING.md) — development setup and PR process
-- [Architecture](AGENTS.md) — service layer, patterns, and agentic development guide
-
----
+- [Getting Started](docs/getting-started.md): deploy a first agent
+- [Runtimes](docs/runtimes.md): Hermes, door agents, and what was removed
+- [Migrating Existing Agents](docs/migrating.md): bring existing Hermes agents under Swarm Map
+- [Platform Setup](docs/platforms.md): Signal, Telegram, Mattermost, Discord, Slack, Google Workspace
+- [Surface Permissions](docs/surface-permissions.md): who an agent hears on each platform
+- [Image vs Swarm Map boundary](docs/architecture/image-vs-hsm-boundary.md): what belongs in the Docker image and what Swarm Map installs
+- [Door agents in the lab](docs/lab/primitives.md): the design, and the [Pi](docs/lab/pi-slice.md), [Letta Code](docs/lab/letta-code.md) and [Claude Agent SDK](docs/lab/claude-sdk.md) results
+- [Sanitization gate](docs/sanitization-gate.md): the check that keeps deployment details out of this repo
+- [Roadmap](docs/ROADMAP.md)
+- [Contributing](CONTRIBUTING.md)
+- [Agent guide](AGENTS.md): the service layer and conventions, for coding agents and people
 
 ## License
 

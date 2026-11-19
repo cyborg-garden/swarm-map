@@ -1,4 +1,4 @@
-# Session Handoff — <YYYY-MM-DD> — <one-line summary>
+# Session Handoff: <YYYY-MM-DD>: <one-line summary>
 
 > Agent: <agent name or role>
 > Project / context: <topic>
@@ -17,7 +17,7 @@
 <!-- Repeat this block for each non-trivial decision made this session. -->
 
 **Decision:** <!-- what was decided -->
-**Rationale:** <!-- why — the reasoning is what transfers, not just the outcome -->
+**Rationale:** <!-- why; the reasoning is what transfers, more than the outcome -->
 **Alternatives considered:** <!-- what was ruled out and why -->
 
 ---
@@ -41,7 +41,7 @@
 
 **Context:** <!-- what this thread is about -->
 **Tried / ruled out:** <!-- approaches already attempted or eliminated -->
-**Next step:** <!-- specific action: command, file, API call, or decision — not "continue working on X" -->
+**Next step:** <!-- specific action: command, file, API call, or decision. Never "continue working on X" -->
 **Relevant paths / branches:** <!-- file paths, branch names, tool state -->
 
 ---
@@ -50,7 +50,7 @@
 
 <!-- Prevents future sessions from re-opening dead ends. -->
 
-- `<topic>` — closed because: `<reason>`. Do not revisit unless `<condition>`.
+- `<topic>`: closed because `<reason>`. Do not revisit unless `<condition>`.
 
 ---
 
