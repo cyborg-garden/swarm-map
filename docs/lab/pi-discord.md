@@ -10,7 +10,8 @@ Every id on this page is a placeholder. Keep your config, your token and your ke
 - **The door runs on your machine.** It holds the bot token and the model key, talks to Discord and
   to the model, and asks `decide()` about every message before Pi sees it.
 - **Pi runs in the sealed cell.** It has no token, no key and no way out except the door.
-- **One channel.** The bot is heard in one channel and its threads, and can post nowhere else.
+- **Its channels only.** The bot is heard in its channel and its threads, or in the few channels
+  `discord.channelIds` lists, and can post nowhere else. Each channel is a conversation of its own.
 - **Closed by default.** Mention needed, listed people only, other bots ignored, direct messages
   refused, no tools, a monthly budget that refuses when spent.
 - **A dry run comes first.** It checks the config, proves the cell is sealed and connects nothing.
@@ -70,7 +71,8 @@ https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot&permis
 
 ## 3. Limit it to one channel
 
-In the channel: **Edit Channel**, **Permissions**, add the bot, and allow exactly these five:
+In the channel (and in each other channel the config lists): **Edit Channel**, **Permissions**, add
+the bot, and allow exactly these five:
 
 | Permission | Why |
 |---|---|
@@ -82,7 +84,7 @@ In the channel: **Edit Channel**, **Permissions**, add the bot, and allow exactl
 
 Allow nothing else. If the server's other channels are open to everyone, the bot can see them too.
 To close them at Discord, deny **View Channel** to the bot's role on each category. The door
-does not rely on that: a message anywhere but the one channel is dropped, with a receipt.
+does not rely on that: a message anywhere but the listed channels is dropped, with a receipt.
 
 ## 4. Put the two secrets in files
 
@@ -111,7 +113,9 @@ server, the channel or a person and choose **Copy ID**.
 | `persona.name` | the `agentId` | What the agent calls itself. One line, up to 40 characters |
 | `persona.description` | empty | One line about what it is for, up to 600 characters. It cannot give the agent an ability |
 | `discord.guildId` | none | The one server |
-| `discord.channelId` | none | The one channel. Its threads count as part of it, private ones included, and share its conversation |
+| `discord.channelId` | none | The agent's own channel. Its threads count as part of it, private ones included, and share its conversation |
+| `discord.channelIds` | `[channelId]` | Every channel the agent is in, its own first, up to 10. Each is a conversation of its own, with its own notes: nothing said in one is shown in another, and the agent posts in no channel that is not listed. `channelId` alone is a list of one. A harness that keeps one memory for the whole agent (Letta Code) gets one channel |
+| `discord.perChannel` | `{}` | What is different in a channel after the first, by channel id: `anyoneInChannel` (`false`) hears anyone there, always by mention, threads included; `tools` (`"inherit"`) is `"inherit"`, `"web-only"` (web pages and search, and notes if they are on) or `"none"` (notes only, if they are on). A channel that hears anyone never gets shell or file tools: `"inherit"` there is refused while any is on. Admins, the people heard, the budget and the model are the agent's, the same in every channel |
 | `discord.adminUserIds` | none | Admins of this agent. At least one. They are also heard |
 | `discord.allowedUserIds` | `[]` | Other people who are heard |
 | `discord.allowedRoleIds` | `[]` | Holders of these roles are heard |

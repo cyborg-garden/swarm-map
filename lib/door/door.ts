@@ -7,7 +7,7 @@
 // Outbound order: is the turn still live and still allowed, redact, post,
 //                 receipt.
 import { createHash, randomUUID } from 'node:crypto'
-import { decide } from '../core/decide.ts'
+import { decide, hearsAnyoneIn } from '../core/decide.ts'
 import type { Decision, Event, Facts, Principal } from '../core/events.ts'
 import { fitProblems, keepsOneMemory, scopeProblems } from '../core/policy/fit.ts'
 import { validatePolicy } from '../core/policy/validate.ts'
@@ -638,8 +638,9 @@ export async function createDoor(opts: DoorOptions): Promise<Door> {
             }
             const done = opts.memory.apply(roomKey(e), msg.input, {
               speaker: { id: e.sender.id, display: e.sender.display }, asked: ASKED_TO_REMEMBER.test(e.text),
-              // On an agent anyone can talk to, only an admin's turn changes what the whole room is given.
-              shared: policy.posture !== 'public' || d.privilege === 'admin',
+              // Where anyone can talk to the agent, only an admin's turn changes what the whole room is given.
+              // A room that hears anyone counts the same, on an agent that does not.
+              shared: !hearsAnyoneIn(policy, e.surface, e.room) || d.privilege === 'admin',
             })
             receipt(tag, { verdict: done.ok ? 'allow' : 'deny', rule: 'mem.notes', why: done.ok ? 'A note for this room was written.' : 'A note for this room was refused.' }, `${note} result=${done.code}`)
             // This conversation now holds the notes as they are after its change, its own included. If one of them

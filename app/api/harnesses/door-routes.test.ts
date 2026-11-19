@@ -225,6 +225,23 @@ describe('the rules', () => {
     expect((await call('./[id]/door/route.ts', 'GET', 'h_pi_one')).json.record.version).toBe(1)
   })
 
+  it('may list more than one channel, and give rules only to channels on the list', async () => {
+    await create()
+    const discord = {
+      ...RULES.discord, channelIds: ['100000000000000001', '100000000000000009'],
+      perChannel: { '100000000000000009': { anyoneInChannel: true, tools: 'web-only' } },
+    }
+    expect((await save(1, { ...RULES, discord })).status).toBe(200)
+    const view = (await call('./[id]/door/route.ts', 'GET', 'h_pi_one')).json
+    expect(view.record.rules.discord).toMatchObject({ channelId: '100000000000000001', channelIds: discord.channelIds, perChannel: discord.perChannel })
+    expect(view.problems.rules).toEqual([])
+    // A channel that is not on the list cannot be given rules, and the record is not changed.
+    const stray = await save(2, { ...RULES, discord: { ...discord, perChannel: { '100000000000000007': { tools: 'none' } } } })
+    expect(stray.status).toBe(422)
+    expect(stray.json.details.join('\n')).toMatch(/discord\.perChannel\.100000000000000007/)
+    expect((await call('./[id]/door/route.ts', 'GET', 'h_pi_one')).json.record.version).toBe(2)
+  })
+
   it('are refused when the page edited an older version', async () => {
     await filled()
     expect((await save(1)).status).toBe(409)
