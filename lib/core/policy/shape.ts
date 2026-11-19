@@ -135,6 +135,7 @@ export function shapeErrors(policy: unknown): string[] {
       if (host.paths !== undefined) list(`${hp}.paths`, host.paths, (pp, v) => { if (typeof v !== 'string' || !/^\/[^\s?#]*[^/\s?#]$/.test(v)) bad(pp, 'a path that starts with / and does not end with one') })
     }))
     if (egress.blockPrivateRanges !== true) bad('egress.blockPrivateRanges', 'true')
+    if (egress.openToAnyone !== undefined && egress.openToAnyone !== true) bad('egress.openToAnyone', 'true, or left out')
   })
 
   obj('memory', p.memory, (memory) => {

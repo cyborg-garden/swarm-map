@@ -92,6 +92,39 @@ describe('a room that hears anyone', () => {
     expect(verdict(asks, tool(room('r-public'), STRANGER, 'network'))).toBe('ask/priv.approval')
   })
 
+  it('[U:tools-posture] with the public web opened to anyone (egress.openToAnyone), it is read there with no yes, and nothing else changes', () => {
+    const open = twoRooms({ 'egress.default': 'public', 'egress.openToAnyone': true })
+    expect(validatePolicy(open, { testing: true })).toEqual([])
+    for (const actor of [STRANGER, ALICE, ROOT]) {
+      expect(verdict(open, tool(room('r-public'), actor, 'network')), actor.id).toBe('allow/tools.lists')
+      expect(verdict(open, tool(thread('t-1', 'r-public'), actor, 'network')), `${actor.id} in a thread`).toBe('allow/tools.lists')
+      // Still no shell, file, code-exec or chat-admin tools there, for anyone.
+      for (const k of ['shell', 'file_read', 'file_write', 'code_exec', 'chat_admin'] as ToolClass[]) {
+        expect(verdict(open, tool(room('r-public'), actor, k)), `${actor.id} ${k}`).toBe('deny/tools.posture')
+      }
+    }
+    // The room's list still decides: a room without network on its list does not get it.
+    const listed = twoRooms({ 'egress.default': 'public', 'egress.openToAnyone': true, 'tools.perRoom': { 'r-public': { allow: ['search', 'memory'] } } })
+    expect(verdict(listed, tool(room('r-public'), STRANGER, 'network'))).toBe('deny/tools.lists')
+    // An agent-wide ask still asks, and only an admin answers it.
+    const asks = twoRooms({ 'egress.default': 'public', 'egress.openToAnyone': true, 'tools.allow': ['file_read', 'search', 'memory'], 'tools.ask': ['shell', 'file_write', 'network'] })
+    expect(verdict(asks, tool(room('r-public'), STRANGER, 'network'))).toBe('ask/priv.approval')
+    for (const approver of [STRANGER, ALICE]) expect(verdict(open, { kind: 'approval', surface: 'fake', room: room('r-public'), approver })).toBe('deny/priv.approval')
+    expect(verdict(open, { kind: 'approval', surface: 'fake', room: room('r-public'), approver: ROOT })).toBe('allow/priv.approval')
+    // A public agent too.
+    const pub = twoRooms({ posture: 'public', 'egress.default': 'public', 'egress.openToAnyone': true })
+    expect(verdict(pub, tool(room('r-general'), STRANGER, 'network'))).toBe('allow/tools.lists')
+    expect(verdict({ ...pub, egress: { ...pub.egress, openToAnyone: undefined } }, tool(room('r-general'), STRANGER, 'network'))).toBe('deny/tools.posture')
+  })
+
+  it('[U:tools-posture] egress.openToAnyone is true or left out: any other value is refused, and decide() denies on a bad record', () => {
+    for (const v of [false, 'true', 1]) {
+      const bad = twoRooms({ 'egress.default': 'public', 'egress.openToAnyone': v })
+      expect(validatePolicy(bad, { testing: true }).join(' ')).toContain('egress.openToAnyone')
+      expect(decide(bad, tool(room('r-public'), STRANGER, 'network'), {}).verdict).toBe('deny')
+    }
+  })
+
   it('[U:anyone-per-room] only an admin answers a request there: not the person who asked, not anyone else', () => {
     const p = twoRooms()
     const answer = (approver: Principal): string => verdict(p, { kind: 'approval', surface: 'fake', room: room('r-public'), approver })

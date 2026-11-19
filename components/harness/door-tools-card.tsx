@@ -72,6 +72,8 @@ export function withWeb(tools: ToolsConfig | undefined, patch: Partial<WebConfig
   const next: WebConfig = { ...(old ?? { allow: [] }), ...patch }
   next.allow = [...new Set(next.allow)]
   if (next.search !== true) delete next.search
+  // 'ask' is the default: only 'open' is written.
+  if (next.anyoneRooms !== 'open') delete next.anyoneRooms
   const on = next.allow.length > 0 || next.mode === 'public' || next.search === true
   return on || keep ? { ...rest, web: next } : rest
 }
@@ -180,6 +182,27 @@ export function DoorToolsCard({ rules, builtFor, onChange, searchKeyFile, onSear
         )}
         {webOn && web?.mode === 'public' && (
           <p role="note" className="text-xs text-amber-600">The public web is on: the agent can read any public page, and what it puts in an address reaches that site.</p>
+        )}
+        {webOn && web?.mode === 'public' && (
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm">Public rooms</p>
+              <p className="text-xs text-muted-foreground">
+                Where anyone is heard (this agent, if it hears anyone, or a channel that does). &quot;Ask for each address&quot; holds every address there for an admin&apos;s yes.
+                &quot;Open web&quot; reads it there with no yes: for an invite-only community where the agent holds no keys. Shell and file tools stay off there either way.
+              </p>
+            </div>
+            <select
+              name="tools.web.anyoneRooms" aria-label="Public rooms" className={inputClass} disabled={builtFor !== undefined}
+              value={web?.anyoneRooms ?? 'ask'} onChange={(e) => onChange(withWeb(tools, { anyoneRooms: e.target.value as 'ask' | 'open' }))}
+            >
+              <option value="ask">Ask for each address</option>
+              <option value="open">Open web</option>
+            </select>
+          </div>
+        )}
+        {webOn && web?.mode === 'public' && web?.anyoneRooms === 'open' && (
+          <p role="note" className="text-xs text-amber-600">Anyone the agent hears can send it to any public address, with no admin asked.</p>
         )}
         {web?.mode !== 'public' && webAllow.length > 0 && (
           <ul className="flex flex-wrap gap-1.5" aria-label="Allowed sites">

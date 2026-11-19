@@ -108,7 +108,7 @@ export const RULES: Rule[] = [
   // C4p shows the guardrail: the gate says no to a public agent. The wall behind it is C10
   // (the gate removed, in a sealed cell), so the rule is claimed for no harness until C10 runs.
   { id: 'tools.posture', statement: 'Public agents, and rooms that hear anyone, lose shell, file, code-exec and chat-admin tools.',
-    klass: 'security', kind: 'guardrail', reads: ['posture', `${S}.rooms`], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'D:tools.posture/public-never-asks', 'U:tools-posture'], checks: ['C4p', 'C10'] },
+    klass: 'security', kind: 'guardrail', reads: ['posture', `${S}.rooms`, 'egress.default', 'egress.openToAnyone'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.posture/public-loses-chat-admin', 'D:tools.posture/public-loses-code-exec', 'D:tools.posture/public-loses-file-read', 'D:tools.posture/public-loses-file-write', 'D:tools.posture/public-loses-shell', 'D:tools.posture/public-never-asks', 'U:tools-posture'], checks: ['C4p', 'C10'] },
   { id: 'tools.unknown', statement: 'An unclassified tool is denied on a public agent.',
     klass: 'security', kind: 'guardrail', reads: ['posture', 'tools.allow'], surfaces: 'all', enforcer: 'gate', tests: ['D:tools.unknown/unmapped-on-public'], checks: ['C7'] },
 

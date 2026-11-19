@@ -81,6 +81,25 @@ describe('Tools card: web pages', () => {
     expect(policyFor(parseConfig({ ...RULES, tools }).config!).egress.default).toBe('public')
   })
 
+  it('public rooms ask for each address by default; "Open web" writes anyoneRooms and the launcher opens the web there', () => {
+    const anyone = { ...RULES, discord: { ...RULES.discord, anyoneInChannel: true } }
+    // Listed sites: there is nothing to choose.
+    renderCard({ ...anyone, tools: withWeb(undefined, { allow: ['en.wikipedia.org'] }) })
+    expect(document.querySelector('select[name="tools.web.anyoneRooms"]')).toBeNull()
+    document.body.innerHTML = ''
+    const { onChange } = renderCard({ ...anyone, tools: withWeb(undefined, { mode: 'public', approval: 'ask' }) })
+    const select = document.querySelector('select[name="tools.web.anyoneRooms"]') as HTMLSelectElement
+    expect(select.value).toBe('ask')
+    fireEvent.change(select, { target: { value: 'open' } })
+    const tools = { ...onChange.mock.calls[0][0], web: { ...onChange.mock.calls[0][0].web!, approval: 'allow' as const } }
+    expect(tools.web.anyoneRooms).toBe('open')
+    const { config, errors } = parseConfig({ ...anyone, tools })
+    expect(errors).toEqual([])
+    expect(policyFor(config!).egress.openToAnyone).toBe(true)
+    // Back to ask: the field is left out, as it always was.
+    expect(withWeb(tools, { anyoneRooms: 'ask' }).web).not.toHaveProperty('anyoneRooms')
+  })
+
   it('search asks for its key file, which goes to the record\'s secrets, not the rules', () => {
     const onSearchKeyFile = vi.fn()
     const onChange = vi.fn<(tools: ToolsConfig) => void>()
