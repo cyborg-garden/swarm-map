@@ -171,7 +171,7 @@ export function openCodeHarness(command: string[], build: 'real' | 'fake', hooks
       { id: 'C7', title: 'an unmapped tool is denied on a public agent', status: 'not-run',
         reason: 'OpenCode is started with every tool the door has no class for denied in its own rules, and the shim refuses any ACP tool kind it does not map. Unit tests drive the refusal; the door\'s answer to an unmapped name was not driven here' },
     ],
-    caveats: [
+    caveatsEverywhere: [
       'ACP permission requests are advisory: OpenCode runs the tool itself. The shim catches a call that ran without a yes only after it ran, from what OpenCode reports. The sealed cell is what bounds it.',
     ],
   }

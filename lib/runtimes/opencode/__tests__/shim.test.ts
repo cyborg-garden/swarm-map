@@ -86,6 +86,10 @@ describe('OpenCode launch folder', () => {
     // ~/.config is not where it reads from.
     expect(second.env.XDG_CONFIG_HOME).not.toBe(path.join(home, '.config'))
     expect(existsSync(second.env.OPENCODE_CONFIG)).toBe(true)
+    // When its process ends, its folder goes, and what was planted in it with it.
+    first.dispose?.()
+    expect(existsSync(first.dir)).toBe(false)
+    expect(existsSync(second.dir)).toBe(true)
   })
 })
 
@@ -94,7 +98,8 @@ describe('the OpenCode shim runs under plain Node', () => {
     const root = path.resolve(import.meta.dirname, '..', '..', '..', '..')
     const files = ['lib/runtimes/opencode/shim.ts', 'lib/runtimes/acp/shim.ts', 'conformance/harnesses/opencode.ts']
     const code = `${files.map((f) => `await import(${JSON.stringify(path.join(root, f))})`).join('; ')}; console.log('LOADED')`
-    const out = execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: { PATH: process.env.PATH ?? '' } as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] }).toString()
+    const env: Record<string, string> = { PATH: process.env.PATH ?? '' }
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: env as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] }).toString()
     expect(out.trim()).toBe('LOADED')
   })
 })

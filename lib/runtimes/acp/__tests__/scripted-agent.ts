@@ -15,7 +15,7 @@
 import { appendFileSync, readFileSync } from 'node:fs'
 
 interface Step { late?: Record<string, unknown>; update?: Record<string, unknown>; ask?: { toolCall: Record<string, unknown>; options?: unknown[] }; call?: { method: string; params: unknown }; say?: string }
-const script = JSON.parse(readFileSync(process.argv[2], 'utf8')) as { agentInfo?: { name: string; version: string }; steps: Step[]; log: string; loadSession?: boolean }
+const script = JSON.parse(readFileSync(process.argv[2], 'utf8')) as { turns?: Step[][]; agentInfo?: { name: string; version: string }; steps: Step[]; log: string; loadSession?: boolean }
 
 const ONCE_ALWAYS_REJECT = [
   { optionId: 'once', kind: 'allow_once', name: 'Allow once' },
@@ -35,8 +35,10 @@ const request = (method: string, params: unknown): Promise<{ result?: unknown; e
 })
 
 let sessionId = ''
+let turnNo = 0
 async function play(): Promise<void> {
-  for (const step of script.steps) {
+  // With `turns`, each prompt plays the next list; otherwise every prompt plays `steps`.
+  for (const step of script.turns?.[turnNo++] ?? script.steps) {
     if (step.update) send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: step.update } })
     if (step.say !== undefined) send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: step.say } } } })
     if (step.ask) log({ ask: step.ask.toolCall.toolCallId, got: await request('session/request_permission', { sessionId, toolCall: step.ask.toolCall, options: step.ask.options ?? ONCE_ALWAYS_REJECT }) })

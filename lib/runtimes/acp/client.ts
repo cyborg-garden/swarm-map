@@ -110,11 +110,13 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
     if (!c.ok) {
       turn.refused.add(id)
       turn.allowed.delete(id)
+      everAllowed.delete(id)
       decided.set(id, 'refused')
       return no()
     }
     // Every request is asked afresh, an earlier yes for the same id included: a call that changed is a new call.
     turn.allowed.delete(id)
+    everAllowed.delete(id)
     const yes = await ask({ toolCallId: id, tool: c.tool, input: c.input })
     if (live !== turn || turn.breach) return no()
     const outcome = pickOutcome(p.options, yes)
@@ -167,7 +169,9 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
       // The same command, moved to run somewhere outside the scratch folder after the yes.
       if (namesPathOutside(u as AcpToolCall, opts.workDir)) return breach('the agent ran a call other than the one the door said yes to')
     }
-    if (u.status === 'completed' && !ok) {
+    // A call given a yes in an earlier turn may report late, during this one. That is not a breach,
+    // unless it was asked about again since: asking again takes the earlier yes away.
+    if (u.status === 'completed' && !ok && (turn.refused.has(id) || !everAllowed.has(id))) {
       return breach(turn.refused.has(id)
         ? 'the agent ran a call the door said no to'
         : 'the agent ran a call it never asked the door about')

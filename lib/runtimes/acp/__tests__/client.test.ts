@@ -17,12 +17,12 @@ afterEach(() => { for (const c of open.splice(0)) c.close() })
 
 interface Run { client: AcpClient; asked: GateCall[]; breaches: string[]; work: string; log(): Record<string, unknown>[] }
 
-function start(steps: unknown[], o: { allow?: (call: GateCall) => boolean | Promise<boolean>; agentInfo?: unknown; expect?: { name: string; version: string }; vetoTimeoutMs?: number } = {}): Run {
+function start(steps: unknown[], o: { turns?: unknown[][]; allow?: (call: GateCall) => boolean | Promise<boolean>; agentInfo?: unknown; expect?: { name: string; version: string }; vetoTimeoutMs?: number } = {}): Run {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'acp-client-'))
   const work = path.join(dir, 'work')
   const log = path.join(dir, 'agent.log')
   const scriptFile = path.join(dir, 'script.json')
-  writeFileSync(scriptFile, JSON.stringify({ steps, log, ...(o.agentInfo ? { agentInfo: o.agentInfo } : {}) }))
+  writeFileSync(scriptFile, JSON.stringify({ steps, log, ...(o.turns ? { turns: o.turns } : {}), ...(o.agentInfo ? { agentInfo: o.agentInfo } : {}) }))
   const child = spawn(process.execPath, [AGENT, scriptFile], { stdio: ['pipe', 'pipe', 'inherit'] })
   const asked: GateCall[] = []
   const breaches: string[] = []
@@ -185,6 +185,21 @@ describe('ACP client: an agent that acts without a yes is caught', () => {
     for (let i = 0; i < 100 && r.breaches.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10))
     expect(r.breaches).toEqual(['the agent ran a call after its turn was over'])
     await expect(r.client.prompt('again')).rejects.toThrow('the agent process ended')
+  })
+
+  it('[U:acp-breach] a call said yes to in one turn that reports finished during the next is not a breach; asked again and refused, it is', async () => {
+    const turns = [
+      [{ ask: { toolCall: shell('a', 'ls') } }, { say: 'one' }],
+      [done('a'), { say: 'two' }],
+      [{ ask: { toolCall: shell('a', 'ls') } }, done('a'), { say: 'three' }],
+    ]
+    let n = 0
+    const r = start([], { turns, allow: () => n++ === 0 })
+    await r.client.open()
+    expect((await r.client.prompt('1')).text).toBe('one')
+    expect((await r.client.prompt('2')).text).toBe('two')
+    expect(r.breaches).toEqual([])
+    await expect(r.client.prompt('3')).rejects.toThrow('the agent ran a call the door said no to')
   })
 
   it('[U:acp-breach] positive control: a late report of a call that was said yes to is not a breach', async () => {

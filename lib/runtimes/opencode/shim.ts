@@ -17,7 +17,7 @@
 //   downloads and the package install it does at start are switched off, and
 //   nothing is inherited from the shim's env.
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Capabilities } from '../../door/protocol.ts'
 import { startAcpShim, type AcpLaunch, type AcpShim } from '../acp/shim.ts'
@@ -101,10 +101,13 @@ export function openCodeConfig(o: { baseUrl: string; placeholder: string; model:
  * and the folder OpenCode reads its global config, instructions and plugins from
  * (XDG_CONFIG_HOME and OPENCODE_CONFIG_DIR). A shell call can write into a folder OpenCode will
  * read when it next starts, such as ~/.config/opencode. Each process gets a new, empty one, so
- * nothing written there by an earlier one is read by a later one.
+ * nothing written there by an earlier one is read by a later one. A process's folder is removed
+ * when it ends, and every one left behind is removed when the shim starts.
  */
+export const openCodeLaunchRoot = (homeDir: string): string => path.join(homeDir, '.swarm-door')
+
 export function openCodeLaunchDir(homeDir: string): string {
-  return path.join(homeDir, '.swarm-door', `launch-${randomBytes(8).toString('hex')}`)
+  return path.join(openCodeLaunchRoot(homeDir), `launch-${randomBytes(8).toString('hex')}`)
 }
 
 /**
@@ -160,6 +163,7 @@ export function prepareOpenCodeLaunch(opts: OpenCodeShimOptions, tools: string[]
   writeFileSync(configFile, JSON.stringify(config, null, 2))
   return {
     dir,
+    dispose: () => rmSync(dir, { recursive: true, force: true }),
     command: [...opts.command, ...openCodeArgs(opts.workDir)],
     env: openCodeEnv(opts, { configFile, permission: JSON.stringify(config.permission), configDir }),
   }
@@ -168,6 +172,8 @@ export function prepareOpenCodeLaunch(opts: OpenCodeShimOptions, tools: string[]
 export async function startOpenCodeShim(opts: OpenCodeShimOptions): Promise<AcpShim> {
   const promptProblem = opts.systemPrompt === undefined ? undefined : openCodeSystemPromptProblem(opts.systemPrompt)
   if (promptProblem) throw new Error(promptProblem)
+  // No process of this shim is running yet, so every launch folder there is one left behind.
+  rmSync(openCodeLaunchRoot(opts.homeDir), { recursive: true, force: true })
   return startAcpShim({
     host: opts.host, port: opts.port, token: opts.token,
     caps: { ...OPENCODE_CAPS, ...opts.rigCaps },

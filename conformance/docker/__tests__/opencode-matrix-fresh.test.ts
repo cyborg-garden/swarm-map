@@ -24,6 +24,8 @@ describe('the committed Docker matrix for the pinned OpenCode', () => {
     expect(committed.runner).toMatchObject({ kind: 'docker' })
     expect(committed.runner?.server).toMatch(/^\d+\./)
     expect(committed.caveats.join(' ')).toContain('Another Docker host, or another version, is not shown')
+    // What no cell changes: the agent runs its own tools, and a no is only caught after the fact.
+    expect(committed.caveats.join(' ')).toContain('ACP permission requests are advisory')
   })
 
   it('[U:opencode-docker-matrix] every check the Docker run makes today passed, under today\'s title', () => {

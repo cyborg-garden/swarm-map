@@ -26,7 +26,12 @@ import { renderPrompt } from '../pi/preamble.ts'
 import { createAcpClient, type AcpClient } from './client.ts'
 import type { AcpToolKind } from './permission.ts'
 
-export interface AcpLaunch { command: string[]; env: Record<string, string> }
+export interface AcpLaunch {
+  command: string[]
+  env: Record<string, string>
+  /** Called once the process has ended: remove what was made for it alone. */
+  dispose?: () => void
+}
 
 export interface AcpShimOptions {
   host: string
@@ -64,7 +69,7 @@ export async function startAcpShim(opts: AcpShimOptions): Promise<AcpShim> {
   const open = async (slot: Slot, turn: Envelope): Promise<Live> => {
     const tools = toolsKey(turn.tools)
     const offered = new Set(tools === '' ? [] : tools.split(','))
-    const { command, env } = opts.launch([...offered])
+    const { command, env, dispose } = opts.launch([...offered])
     const [bin, ...args] = command
     const child = spawn(bin, args, { cwd: opts.workDir, env: env as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'ignore'] })
     const live: Live = { tools, offered } as Live
@@ -93,7 +98,10 @@ export async function startAcpShim(opts: AcpShimOptions): Promise<AcpShim> {
         }
       },
     })
-    child.on('exit', () => { if (slot.live === live) slot.live = undefined })
+    child.on('exit', () => {
+      if (slot.live === live) slot.live = undefined
+      try { dispose?.() } catch { /* nothing depends on it */ }
+    })
     try {
       slot.sessionId = await live.client.open(slot.sessionId)
     } catch (err) {

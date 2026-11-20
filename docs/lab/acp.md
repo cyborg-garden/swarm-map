@@ -78,7 +78,8 @@ name or version at `initialize`. It starts `opencode acp`, one process per conve
 - `OPENCODE_DISABLE_PROJECT_CONFIG`, so nothing the agent writes into the scratch folder can
   change its rules or be read into a later prompt;
 - a new, empty global config folder for every process (`XDG_CONFIG_HOME`, `OPENCODE_CONFIG_DIR`),
-  so instructions, plugins or rules a shell call wrote into one are never read by the next;
+  removed when the process ends, so instructions, plugins or rules a shell call wrote into one are
+  never read by the next;
 - its update check, model list fetch, default plugins, LSP downloads and its start-up package
   install switched off, and nothing inherited from the shim's environment.
 
@@ -93,7 +94,7 @@ session. The launcher does not offer it yet: that waits for a run of the launche
 | `lib/runtimes/acp/__tests__/` | The client and the shim against a scripted ACP agent (a small program speaking JSON-RPC over stdio): once only, the hash, unknown kinds, paths, client methods, the version pin, and each kind of breach | CI, no Docker |
 | `conformance/suites/opencode.fake.test.ts` | The shared suite and the ask flow (C6, C6n, C6d, C6t, C6x, C6r) against a fake OpenCode, and nine broken shims and agents | CI, no Docker |
 | `conformance/suites/opencode.real.test.ts` | The same against a real OpenCode, as a process | by hand |
-| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker: 38 of 38 pass |
+| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker: all 38 tests pass, and its matrix lists 26 checks passed |
 
 Broken on purpose, each of which must turn its named checks red:
 

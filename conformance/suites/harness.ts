@@ -110,6 +110,8 @@ export interface HarnessUnderTest {
   rows: MatrixRowInput[]
   /** What a reader of this harness's matrix must know that the shared caveats do not say. */
   caveats?: string[]
+  /** The same, for what is true of the harness wherever it runs: carried into its cell matrix too. */
+  caveatsEverywhere?: string[]
 }
 
 /** The must-fail shim every harness shares: it has no harness behind it at all. */
