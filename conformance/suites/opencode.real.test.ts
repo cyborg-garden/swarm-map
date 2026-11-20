@@ -57,7 +57,7 @@ describe(`real OpenCode ${OPENCODE_VERSION}`, () => {
 
   it('is the pinned version', () => {
     const scratch = mkdtempSync(path.join(os.tmpdir(), 'swarmlab-version-'))
-    const env = openCodeEnv({ homeDir: scratch }, { configFile: path.join(scratch, 'none.json'), permission: '{}' })
+    const env = openCodeEnv({ homeDir: scratch }, { configFile: path.join(scratch, 'none.json'), permission: '{}', configDir: path.join(scratch, 'config') })
     expect(execFileSync(BIN!, ['--version'], { env: env as NodeJS.ProcessEnv, cwd: scratch }).toString().trim()).toBe(OPENCODE_VERSION)
     versionOk = true
   })

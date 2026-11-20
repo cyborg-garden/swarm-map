@@ -1,9 +1,12 @@
 // @vitest-environment node
 //
 // What the OpenCode shim hands OpenCode: its config, its permission rules and its environment.
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { OPENCODE_KINDS, OPENCODE_TOOL_MAP } from '../caps.ts'
-import { openCodeArgs, openCodeConfig, openCodeEnv, openCodePermission, openCodeSystemPromptProblem } from '../shim.ts'
+import { openCodeArgs, openCodeConfig, openCodeEnv, openCodePermission, openCodeSystemPromptProblem, prepareOpenCodeLaunch, type OpenCodeShimOptions } from '../shim.ts'
 
 /** The parts of the config these tests read. */
 interface Config {
@@ -46,14 +49,15 @@ describe('OpenCode config', () => {
   })
 
   it('[U:opencode-env] is a hand-listed environment, and the offline lines win over anything the rig adds', () => {
-    const env = openCodeEnv({ homeDir: '/h', rigEnv: { OPENCODE_DISABLE_PROJECT_CONFIG: '0', OPENCODE_PERMISSION: '"allow"', EXTRA: '1' } }, { configFile: '/h/c.json', permission: '{"*":"deny"}' })
+    const env = openCodeEnv({ homeDir: '/h', rigEnv: { OPENCODE_DISABLE_PROJECT_CONFIG: '0', OPENCODE_PERMISSION: '"allow"', EXTRA: '1' } }, { configFile: '/h/c.json', permission: '{"*":"deny"}', configDir: '/h/l/config' })
     expect(env).toMatchObject({
       HOME: '/h', OPENCODE_CONFIG: '/h/c.json', OPENCODE_PERMISSION: '{"*":"deny"}', EXTRA: '1',
+      XDG_CONFIG_HOME: '/h/l/config', OPENCODE_CONFIG_DIR: '/h/l/config/opencode',
       OPENCODE_DISABLE_PROJECT_CONFIG: '1', OPENCODE_DISABLE_CLAUDE_CODE: '1', OPENCODE_DISABLE_AUTOUPDATE: '1',
       OPENCODE_DISABLE_MODELS_FETCH: '1', OPENCODE_DISABLE_DEFAULT_PLUGINS: '1', OPENCODE_DISABLE_LSP_DOWNLOAD: '1', OPENCODE_PURE: '1',
     })
-    const bare = openCodeEnv({ homeDir: '/h' }, { configFile: '/c', permission: '{}' })
-    for (const name of Object.keys(process.env)) if (!['PATH', 'HOME'].includes(name) && !name.startsWith('OPENCODE_') && name !== 'DO_NOT_TRACK') expect(bare, name).not.toHaveProperty(name)
+    const bare = openCodeEnv({ homeDir: '/h' }, { configFile: '/c', permission: '{}', configDir: '/cfg' })
+    for (const name of Object.keys(process.env)) if (!['PATH', 'HOME', 'XDG_CONFIG_HOME'].includes(name) && !name.startsWith('OPENCODE_') && name !== 'DO_NOT_TRACK') expect(bare, name).not.toHaveProperty(name)
     expect(openCodeArgs('/w')).toEqual(['acp', '--cwd', '/w'])
   })
 
@@ -61,5 +65,25 @@ describe('OpenCode config', () => {
     expect(openCodeSystemPromptProblem('You are an agent.')).toBeUndefined()
     expect(openCodeSystemPromptProblem('')).toBeDefined()
     expect(openCodeSystemPromptProblem('a\u0000b')).toBeDefined()
+  })
+})
+
+describe('OpenCode launch folder', () => {
+  it('[U:opencode-env] every process reads its global config from a new, empty folder, so what an earlier one wrote there is not read', () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), 'oc-launch-'))
+    const opts = { host: '', port: 0, token: '', command: ['opencode'], homeDir: home, workDir: path.join(home, 'work'), modelBaseUrl: 'http://door/v1', placeholder: 'p' } satisfies OpenCodeShimOptions
+    const first = prepareOpenCodeLaunch(opts, ['bash'])
+    // What a shell call could plant: instructions and a config in the folders OpenCode reads from.
+    const planted = [path.join(first.env.OPENCODE_CONFIG_DIR, 'AGENTS.md'), path.join(first.env.XDG_CONFIG_HOME, 'opencode', 'opencode.json'), path.join(home, '.config', 'opencode', 'AGENTS.md')]
+    for (const f of planted) { mkdirSync(path.dirname(f), { recursive: true }); writeFileSync(f, 'planted') }
+    const second = prepareOpenCodeLaunch(opts, ['bash'])
+    expect(second.dir).not.toBe(first.dir)
+    expect(second.env.XDG_CONFIG_HOME.startsWith(second.dir)).toBe(true)
+    expect(second.env.OPENCODE_CONFIG_DIR).toBe(path.join(second.env.XDG_CONFIG_HOME, 'opencode'))
+    expect(second.env.OPENCODE_CONFIG.startsWith(second.dir)).toBe(true)
+    expect(readdirSync(second.env.OPENCODE_CONFIG_DIR)).toEqual([])
+    // ~/.config is not where it reads from.
+    expect(second.env.XDG_CONFIG_HOME).not.toBe(path.join(home, '.config'))
+    expect(existsSync(second.env.OPENCODE_CONFIG)).toBe(true)
   })
 })

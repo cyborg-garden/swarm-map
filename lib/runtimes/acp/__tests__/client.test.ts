@@ -168,6 +168,33 @@ describe('ACP client: an agent that acts without a yes is caught', () => {
     await expect(r.client.prompt('go')).rejects.toThrow('the agent ran a call other than the one the door said yes to')
   })
 
+  it('[U:acp-breach] a call said yes to and then reported running outside the scratch folder is a breach', async () => {
+    const r = start([
+      { ask: { toolCall: shell('a', 'ls') } },
+      { update: { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'in_progress', kind: 'execute', rawInput: { command: 'ls', cwd: '/' } } },
+      done('a'),
+    ], { allow: () => true })
+    await r.client.open()
+    await expect(r.client.prompt('go')).rejects.toThrow('the agent ran a call other than the one the door said yes to')
+  })
+
+  it('[U:acp-breach] a call reported finished after the turn is over, never said yes to, stops the process', async () => {
+    const r = start([{ say: 'done' }, { late: { sessionUpdate: 'tool_call_update', toolCallId: 'sneak', status: 'completed' } }])
+    await r.client.open()
+    expect((await r.client.prompt('go')).text).toBe('done')
+    for (let i = 0; i < 100 && r.breaches.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(r.breaches).toEqual(['the agent ran a call after its turn was over'])
+    await expect(r.client.prompt('again')).rejects.toThrow('the agent process ended')
+  })
+
+  it('[U:acp-breach] positive control: a late report of a call that was said yes to is not a breach', async () => {
+    const r = start([{ ask: { toolCall: shell('a', 'ls') } }, { say: 'ok' }, { late: { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'completed' } }], { allow: () => true })
+    await r.client.open()
+    await r.client.prompt('go')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(r.breaches).toEqual([])
+  })
+
   it('[U:acp-breach] positive control: a call said yes to, reported with the same command and finished, is not a breach', async () => {
     const r = start([
       { update: { sessionUpdate: 'tool_call_update', toolCallId: 'a', status: 'in_progress', kind: 'execute', rawInput: { command: 'ls', cwd: '.' } } },

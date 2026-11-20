@@ -6,7 +6,7 @@ session, sends prompts, and reads what the agent does as `session/update` notifi
 the agent runs a tool it can ask the client with `session/request_permission`.
 
 The door now has one shim for any agent that speaks ACP (`lib/runtimes/acp/`), and OpenCode is
-the first agent behind it (`lib/runtimes/opencode/`, `--harness opencode`). The contracts are in
+the first agent behind it (`lib/runtimes/opencode/`). The contracts are in
 [`primitives.md`](primitives.md), the ask flow in [`tools-slice.md`](tools-slice.md).
 
 ## In short
@@ -36,16 +36,20 @@ ACP's permission request is **advisory**. The agent runs the tool, not the clien
 ignores a no, or never asks, still runs the tool. Nothing in the protocol can stop it.
 
 So the shim watches what the agent reports. A call reported `completed` that the door did not say
-yes to, or one whose command or file is not the one the yes was for, is a breach. The shim then:
+yes to, or one whose command, file or folder is not the one the yes was for, is a breach. The shim then:
 
 1. reports the turn to the door as an error, so its reply is never posted and the door writes a
    receipt;
 2. stops the agent's process, and starts the next turn on a new session.
 
+A call reported `completed` after its turn is over, that was never said yes to, also stops the
+process and drops its session; there is no turn left to fail.
+
 That is caught **after** the tool ran. What bounds it **before** is the cell: no network but the
-door, no secret, a read-only disk but for its own folders. That is why every ACP agent runs in
-the same sealed cell as the other harnesses, and why the cell checks (S0-S3, C8, C9, C10) are run
-for it.
+door, no secret, a read-only disk but for its own folders. That is why an ACP agent is meant to run
+in the same sealed cell as the other harnesses. The cell checks (S0-S3, C8, C9, C10) are written
+for OpenCode but **not yet run in the cell**; until its Docker matrix is committed, OpenCode is
+not one of the launcher's harnesses.
 
 What the shim does not hold, because the agent runs its own tools:
 
@@ -55,6 +59,10 @@ What the shim does not hold, because the agent runs its own tools:
 - **The command policy's allow list without a request.** Every call is put to the door, so an
   allowed command still runs at once, but the shim cannot see what the command did.
 - **A breach the agent does not report.** The watch reads the agent's own updates.
+- **A call that ran anyway and then reported `failed`.** To the shim it looks the same as a call
+  that was refused.
+- **An edit is shown as its diff.** OpenCode 1.19.5 asks about every edit and write with the file
+  and the diff. An edit that asks without a diff is refused.
 
 ## OpenCode
 
@@ -67,13 +75,14 @@ name or version at `initialize`. It starts `opencode acp`, one process per conve
 - the same permission rules in `OPENCODE_PERMISSION`;
 - `OPENCODE_DISABLE_PROJECT_CONFIG`, so nothing the agent writes into the scratch folder can
   change its rules or be read into a later prompt;
+- a new, empty global config folder for every process (`XDG_CONFIG_HOME`, `OPENCODE_CONFIG_DIR`),
+  so instructions, plugins or rules a shell call wrote into one are never read by the next;
 - its update check, model list fetch, default plugins, LSP downloads and its start-up package
   install switched off, and nothing inherited from the shim's environment.
 
 Its tools, by the names its rules use: `bash` (shell), `read` (file_read), `edit` (file_write,
 which covers its write and patch tools too). A changed tool list restarts its process on the same
-session. The launcher can start it (`node lib/lab/pi-discord/cli.ts build --harness opencode`),
-with no tools switched on: the launcher switches tools on for Pi only.
+session. The launcher does not offer it yet: that waits for the Docker matrix.
 
 ## The checks
 
@@ -82,7 +91,7 @@ with no tools switched on: the launcher switches tools on for Pi only.
 | `lib/runtimes/acp/__tests__/` | The client and the shim against a scripted ACP agent (a small program speaking JSON-RPC over stdio): once only, the hash, unknown kinds, paths, client methods, the version pin, and each kind of breach | CI, no Docker |
 | `conformance/suites/opencode.fake.test.ts` | The shared suite and the ask flow (C6, C6n, C6d, C6t, C6x, C6r) against a fake OpenCode, and nine broken shims and agents | CI, no Docker |
 | `conformance/suites/opencode.real.test.ts` | The same against a real OpenCode, as a process | by hand |
-| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker |
+| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker; not yet run |
 
 Broken on purpose, each of which must turn its named checks red:
 

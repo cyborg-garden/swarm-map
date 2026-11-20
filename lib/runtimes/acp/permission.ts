@@ -85,6 +85,11 @@ function pathsNamed(call: AcpToolCall, input: Record<string, unknown>): string[]
   return out
 }
 
+/** Whether any path the call names (in its input, or in its locations) is outside the scratch folder. */
+export function namesPathOutside(call: AcpToolCall, workDir: string): boolean {
+  return pathsNamed(call, obj(call.rawInput)).some((p) => !insideFolder(workDir, p))
+}
+
 /**
  * Work out the door's view of one call: its tool name and the input the door is shown and hashes.
  * `kinds` is the adapter's map from ACP kind to its own tool name. `seen` is the same call as the
@@ -115,8 +120,10 @@ export function classifyCall(call: AcpToolCall, kinds: Partial<Record<AcpToolKin
   if (kind === 'edit') {
     const p = pathOf(asked) ?? pathOf(before)
     if (!p) return { ok: false, why: 'an edit that names no file' }
+    // What is shown has to say what changes. An edit that asks with no diff would be a yes to a file, not to a change.
     const diff = str(asked.diff)
-    return { ok: true, tool, kind, input: { path: p, ...(diff !== undefined ? { diff } : {}) } }
+    if (diff === undefined) return { ok: false, why: 'an edit that does not show its change' }
+    return { ok: true, tool, kind, input: { path: p, diff } }
   }
   // A kind the adapter maps but this file has no reading for: refused rather than shown half.
   return { ok: false, why: `a tool of kind ${kind} has no reading here` }

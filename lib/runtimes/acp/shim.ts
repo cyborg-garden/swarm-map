@@ -85,6 +85,12 @@ export async function startAcpShim(opts: AcpShimOptions): Promise<AcpShim> {
       onBreach: (why) => {
         live.breach = why
         opts.onBreach?.(why)
+        // Caught between turns: there is no turn to fail, so the process and its session are dropped here.
+        if (!live.turnId) {
+          live.client.close()
+          if (slot.live === live) slot.live = undefined
+          slot.sessionId = undefined
+        }
       },
     })
     child.on('exit', () => { if (slot.live === live) slot.live = undefined })

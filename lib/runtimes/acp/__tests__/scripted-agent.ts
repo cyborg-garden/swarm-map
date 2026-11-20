@@ -11,9 +11,10 @@
 //   { "ask": { toolCall, options? } }           sends session/request_permission, waits, logs the answer
 //   { "call": { method, params } }              sends any other request to the client, waits, logs the answer
 //   { "say": "text" }                           sends an agent_message_chunk
+//   { "late": {...} }                           sends a session/update after the turn has ended
 import { appendFileSync, readFileSync } from 'node:fs'
 
-interface Step { update?: Record<string, unknown>; ask?: { toolCall: Record<string, unknown>; options?: unknown[] }; call?: { method: string; params: unknown }; say?: string }
+interface Step { late?: Record<string, unknown>; update?: Record<string, unknown>; ask?: { toolCall: Record<string, unknown>; options?: unknown[] }; call?: { method: string; params: unknown }; say?: string }
 const script = JSON.parse(readFileSync(process.argv[2], 'utf8')) as { agentInfo?: { name: string; version: string }; steps: Step[]; log: string; loadSession?: boolean }
 
 const ONCE_ALWAYS_REJECT = [
@@ -55,7 +56,13 @@ process.stdin.on('data', (chunk: Buffer) => {
     if (m.method === 'initialize') { log({ initialize: m.params }); send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: script.loadSession === true }, agentInfo: script.agentInfo ?? { name: 'Scripted', version: '1' } } }) }
     if (m.method === 'session/new') { sessionId = 'ses-1'; send({ jsonrpc: '2.0', id: m.id, result: { sessionId } }) }
     if (m.method === 'session/load') { sessionId = String(m.params?.sessionId); log({ load: sessionId }); send({ jsonrpc: '2.0', id: m.id, result: {} }) }
-    if (m.method === 'session/prompt') { const id = m.id; void play().then(() => send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } })) }
+    if (m.method === 'session/prompt') {
+      const id = m.id
+      void play().then(() => {
+        send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } })
+        for (const step of script.steps) if (step.late) setTimeout(() => send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId, update: step.late } }), 50)
+      })
+    }
   }
 })
 process.stdin.on('end', () => process.exit(0))

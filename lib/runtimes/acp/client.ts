@@ -13,11 +13,15 @@
 //   No live prompt, an error, or no answer in `vetoTimeoutMs` is a no.
 // - It watches what the agent says it ran. A call reported finished that was
 //   never said yes to, or one whose command or file is not the one that was
-//   said yes to, is a breach: `onBreach` is told, and the prompt fails. ACP
+//   said yes to, is a breach: `onBreach` is told, and the prompt fails. A call
+//   reported finished after the turn is over, that was never said yes to, is a
+//   breach too: `onBreach` is told and the process is stopped. A call that ran
+//   anyway and then reported `failed` looks the same as one that was refused,
+//   and is not caught. ACP
 //   cannot stop an agent from acting on a no; this is how acting anyway is
 //   caught, after the fact. The sealed cell is what bounds it before.
 import path from 'node:path'
-import { classifyCall, identityOf, outcomeAllows, pickOutcome, type AcpToolCall, type AcpToolKind, type Classified } from './permission.ts'
+import { classifyCall, identityOf, namesPathOutside, outcomeAllows, pickOutcome, type AcpToolCall, type AcpToolKind, type Classified } from './permission.ts'
 import { createRpcPeer, METHOD_NOT_FOUND, RpcFailure, type AcpProcess, type RpcPeer } from './rpc.ts'
 
 export const ACP_PROTOCOL_VERSION = 1
@@ -74,6 +78,8 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
   let live: Live | undefined
   const decided = new Map<string, 'allowed' | 'refused'>()
   let failBreach: ((why: string) => void) | undefined
+  /** Every call this process was given a yes for, in any turn: a late report of one of them is not a breach. */
+  const everAllowed = new Set<string>()
 
   const norm = (kind: AcpToolKind, identity: string | undefined): string | undefined =>
     identity === undefined ? undefined : kind === 'execute' ? identity : path.resolve(opts.workDir, identity)
@@ -116,6 +122,7 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
       turn.refused.delete(id)
       // The yes is for this command, or this file. The agent's later reports of the call must say the same.
       turn.allowed.set(id, { kind: c.kind, identity: norm(c.kind, String(c.kind === 'execute' ? c.input.command : c.input.path)) })
+      everAllowed.add(id)
       decided.set(id, 'allowed')
       return { outcome }
     }
@@ -128,9 +135,19 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
     if (method !== 'session/update') return
     const p = obj(params)
     const turn = live
-    // Updates outside a prompt (a session read back after a restart) are history, not something running now.
-    if (!turn || p.sessionId !== sessionId) return
+    // Updates for another session, or sent while a session is being read back (before its id is set), are history.
+    if (sessionId === undefined || p.sessionId !== sessionId) return
     const u = obj(p.update)
+    if (!turn) {
+      // No prompt is running, and the agent says a call finished. Unless it was given a yes in an
+      // earlier turn, it ran something nobody was asked about: the process is stopped.
+      const id = typeof u.toolCallId === 'string' ? u.toolCallId : ''
+      if ((u.sessionUpdate === 'tool_call' || u.sessionUpdate === 'tool_call_update') && u.status === 'completed' && !everAllowed.has(id)) {
+        opts.onBreach?.('the agent ran a call after its turn was over')
+        rpc.close()
+      }
+      return
+    }
     const kindOfUpdate = u.sessionUpdate
     if (kindOfUpdate === 'agent_message_chunk') {
       const content = obj(u.content)
@@ -147,6 +164,8 @@ export function createAcpClient(proc: AcpProcess, opts: AcpClientOptions): AcpCl
     if (ok && u.rawInput !== undefined) {
       const now = norm(ok.kind, identityOf(ok.kind, u.rawInput))
       if (now !== undefined && ok.identity !== undefined && now !== ok.identity) return breach('the agent ran a call other than the one the door said yes to')
+      // The same command, moved to run somewhere outside the scratch folder after the yes.
+      if (namesPathOutside(u as AcpToolCall, opts.workDir)) return breach('the agent ran a call other than the one the door said yes to')
     }
     if (u.status === 'completed' && !ok) {
       return breach(turn.refused.has(id)

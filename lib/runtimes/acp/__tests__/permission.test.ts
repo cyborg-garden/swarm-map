@@ -71,6 +71,12 @@ describe('classifyCall', () => {
     expect(classifyCall({ kind: 'execute', rawInput: {} }, kinds, work).ok).toBe(false)
   })
 
+  it('[U:acp-edit-diff] an edit is shown with its change; one that asks with no diff is refused', () => {
+    expect(classifyCall({ kind: 'edit', rawInput: { filepath: 'a.txt', diff: '+x' } }, kinds, work))
+      .toEqual({ ok: true, tool: 'edit', kind: 'edit', input: { path: 'a.txt', diff: '+x' } })
+    expect(classifyCall({ kind: 'edit', rawInput: { filepath: 'a.txt' } }, kinds, work).ok).toBe(false)
+  })
+
   it('[U:acp-scratch-folder] a path outside the folder anywhere in the call refuses it', () => {
     expect(classifyCall({ kind: 'edit', rawInput: { filepath: 'a.txt', files: [{ filePath: 'b', movePath: '/etc/x' }] } }, kinds, work).ok).toBe(false)
     expect(classifyCall({ kind: 'execute', rawInput: { command: 'ls', workdir: '/' } }, kinds, work).ok).toBe(false)

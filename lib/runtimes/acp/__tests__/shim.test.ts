@@ -107,4 +107,16 @@ describe('the ACP shim', () => {
     // What it did is in that session, so the new process is given a new one, not the old one back.
     expect(agentLog().filter((e) => 'load' in e)).toEqual([])
   })
+
+  it('[U:acp-breach] a call reported finished between turns drops the process and its session', async () => {
+    await start([{ say: 'done' }, { late: { sessionUpdate: 'tool_call_update', toolCallId: 'sneak', status: 'completed' } }], { loadSession: true })
+    link.send({ t: 'turn', env: envelope() })
+    await until(() => got.some((m) => m.t === 'settled'))
+    // The late report lands after the turn; the next turn gets a new process and a new session, not the old one back.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    link.send({ t: 'turn', env: envelope({ turnId: 'turn-2' }) })
+    await until(() => got.filter((m) => m.t === 'settled').length === 2)
+    expect(agentLog().filter((e) => 'initialize' in e)).toHaveLength(2)
+    expect(agentLog().filter((e) => 'load' in e)).toEqual([])
+  })
 })

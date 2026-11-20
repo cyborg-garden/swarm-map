@@ -10,15 +10,17 @@
 //   every other one, which removes those from what it is started with. The
 //   same rules are also passed in OPENCODE_PERMISSION.
 // - Config and instruction files in the scratch folder are not read
-//   (OPENCODE_DISABLE_PROJECT_CONFIG), so nothing the agent writes there can
-//   change its own rules or be read into a later prompt.
+//   (OPENCODE_DISABLE_PROJECT_CONFIG), and its global config folder is a new,
+//   empty one for every process it starts, so nothing the agent writes on disk
+//   can change a later process's rules or be read into a later prompt.
 // - Its update check, its model list fetch, its default plugins, its LSP
 //   downloads and the package install it does at start are switched off, and
 //   nothing is inherited from the shim's env.
+import { randomBytes } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Capabilities } from '../../door/protocol.ts'
-import { startAcpShim, type AcpShim } from '../acp/shim.ts'
+import { startAcpShim, type AcpLaunch, type AcpShim } from '../acp/shim.ts'
 import { OPENCODE_AGENT_INFO, OPENCODE_CAPS, OPENCODE_KINDS, OPENCODE_TOOL_MAP } from './caps.ts'
 
 export interface OpenCodeShimOptions {
@@ -94,21 +96,31 @@ export function openCodeConfig(o: { baseUrl: string; placeholder: string; model:
   }
 }
 
-/** Where the shim writes OpenCode's config, under its home. */
-export const openCodeConfigFile = (homeDir: string, key: string): string =>
-  path.join(homeDir, '.config', 'swarm-door', `opencode-${key || 'none'}.json`)
+/**
+ * A folder of its own for each process the shim starts, under OpenCode's home: its config file,
+ * and the folder OpenCode reads its global config, instructions and plugins from
+ * (XDG_CONFIG_HOME and OPENCODE_CONFIG_DIR). A shell call can write into a folder OpenCode will
+ * read when it next starts, such as ~/.config/opencode. Each process gets a new, empty one, so
+ * nothing written there by an earlier one is read by a later one.
+ */
+export function openCodeLaunchDir(homeDir: string): string {
+  return path.join(homeDir, '.swarm-door', `launch-${randomBytes(8).toString('hex')}`)
+}
 
 /**
  * OpenCode's whole environment, listed by hand. Nothing is inherited from the shim's own env.
  * The lines after the rig's come last and win.
  */
-export function openCodeEnv(o: Pick<OpenCodeShimOptions, 'homeDir' | 'rigEnv'>, extra: { configFile: string; permission: string }): Record<string, string> {
+export function openCodeEnv(o: Pick<OpenCodeShimOptions, 'homeDir' | 'rigEnv'>, extra: { configFile: string; permission: string; configDir: string }): Record<string, string> {
   return {
     PATH: [path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin'].join(':'),
     HOME: o.homeDir,
     ...o.rigEnv,
     OPENCODE_CONFIG: extra.configFile,
     OPENCODE_PERMISSION: extra.permission,
+    // Its global config, instructions (AGENTS.md) and plugins are read from here, not from ~/.config.
+    XDG_CONFIG_HOME: extra.configDir,
+    OPENCODE_CONFIG_DIR: path.join(extra.configDir, 'opencode'),
     OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     OPENCODE_DISABLE_CLAUDE_CODE: '1',
     OPENCODE_DISABLE_AUTOUPDATE: '1',
@@ -135,6 +147,24 @@ export function openCodeArgs(workDir: string): string[] {
   return ['acp', '--cwd', workDir]
 }
 
+/** The command and environment for one OpenCode process, with its config written into a new launch folder. */
+export function prepareOpenCodeLaunch(opts: OpenCodeShimOptions, tools: string[]): AcpLaunch & { dir: string } {
+  const offered = tools.filter((t) => MAPPED.includes(t)).sort()
+  const config = openCodeConfig({
+    baseUrl: opts.modelBaseUrl, placeholder: opts.placeholder, model: opts.model ?? 'scripted', tools: offered, systemPrompt: opts.systemPrompt,
+  })
+  const dir = openCodeLaunchDir(opts.homeDir)
+  const configDir = path.join(dir, 'config')
+  mkdirSync(path.join(configDir, 'opencode'), { recursive: true })
+  const configFile = path.join(dir, 'opencode.json')
+  writeFileSync(configFile, JSON.stringify(config, null, 2))
+  return {
+    dir,
+    command: [...opts.command, ...openCodeArgs(opts.workDir)],
+    env: openCodeEnv(opts, { configFile, permission: JSON.stringify(config.permission), configDir }),
+  }
+}
+
 export async function startOpenCodeShim(opts: OpenCodeShimOptions): Promise<AcpShim> {
   const promptProblem = opts.systemPrompt === undefined ? undefined : openCodeSystemPromptProblem(opts.systemPrompt)
   if (promptProblem) throw new Error(promptProblem)
@@ -146,18 +176,6 @@ export async function startOpenCodeShim(opts: OpenCodeShimOptions): Promise<AcpS
     expect: OPENCODE_AGENT_INFO,
     verdictTimeoutMs: opts.verdictTimeoutMs, vetoTimeoutMs: opts.vetoTimeoutMs, startMs: opts.startMs,
     onBreach: opts.onBreach,
-    launch(tools) {
-      const offered = tools.filter((t) => MAPPED.includes(t)).sort()
-      const config = openCodeConfig({
-        baseUrl: opts.modelBaseUrl, placeholder: opts.placeholder, model: opts.model ?? 'scripted', tools: offered, systemPrompt: opts.systemPrompt,
-      })
-      const configFile = openCodeConfigFile(opts.homeDir, offered.join('-'))
-      mkdirSync(path.dirname(configFile), { recursive: true })
-      writeFileSync(configFile, JSON.stringify(config, null, 2))
-      return {
-        command: [...opts.command, ...openCodeArgs(opts.workDir)],
-        env: openCodeEnv(opts, { configFile, permission: JSON.stringify(config.permission) }),
-      }
-    },
+    launch: (tools) => prepareOpenCodeLaunch(opts, tools),
   })
 }

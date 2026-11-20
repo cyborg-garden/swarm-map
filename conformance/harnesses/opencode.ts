@@ -78,7 +78,7 @@ export function openCodeHarness(command: string[], build: 'real' | 'fake', hooks
       case 'allows-all': case 'other-version': case 'dials-out': case 'ignores-reject': case 'picks-always':
         return { ...base, command: wrapped(variant, command) }
       case 'leaks-env': return { ...base, rigEnv: { ...watched, SWARMLAB_LEAK: cell.upstreamKey } }
-      case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(openCodeEnv(base, { configFile: '', permission: '' })), ...watched } }
+      case 'inherits-env': return { ...base, rigEnv: { ...hostEnvSafeToHandOver(openCodeEnv(base, { configFile: '', permission: '', configDir: '' })), ...watched } }
       case 'unwatched': return { ...base, rigEnv: {} }
       default: throw new Error(`the OpenCode harness has no shim variant '${variant}'`)
     }
@@ -109,7 +109,7 @@ export function openCodeHarness(command: string[], build: 'real' | 'fake', hooks
       },
     },
     workFile: (cell, name) => path.join(dirs(cell).work, name),
-    cellEnv: (cell, variant) => openCodeEnv(options(cell, variant), { configFile: path.join(dirs(cell).home, 'config.json'), permission: '{}' }),
+    cellEnv: (cell, variant) => openCodeEnv(options(cell, variant), { configFile: path.join(dirs(cell).home, 'config.json'), permission: '{}', configDir: path.join(dirs(cell).home, 'config') }),
     tripwire: (cell) => {
       const inside = readChildTripwire(tripwireLog(cell))
       const mark = marks.get(cell.nonce)

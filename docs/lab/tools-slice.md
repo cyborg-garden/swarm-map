@@ -323,8 +323,8 @@ harnesses, so no config can switch a tool on for it.
 
 Built for the ask flow only. Its shim ([`acp.md`](acp.md)) holds each call while the door asks, and
 a yes is for one call, by its hash. OpenCode runs its own tools, so the scratch folder's link
-checks and the limits are not the shim's to hold, and those checks are listed as not run. The
-launcher does not switch tools on for it.
+checks and the limits are not the shim's to hold, and those checks are listed as not run. It is
+not one of the launcher's harnesses yet.
 
 ## Web through the door
 
