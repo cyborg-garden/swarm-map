@@ -11,9 +11,8 @@ private keys, tokens, bearer/basic auth, credential-bearing connection strings,
 hardcoded credential assignments, emails, phones, SSNs, Luhn-valid card numbers,
 and IPs. NO external dependencies, no API key. FAILS CLOSED. Always runs, even
 offline. Run it alone with ``--deterministic-only``. A file list and a PR diff
-scan every file for every shape. A ``--full-tree`` audit scans a file that is
-binary by content for the credential shapes and email only, and prints how many
-files that covered.
+use the full shape set on every file. A ``--full-tree`` audit, which also reads
+a repo's media and data files, adds the audit profile below on top.
 
 Layer 2 (semantic): sends content-bearing files (skills, souls, docs, prose) to
 an LLM that flags operator/engagement *particulars* — names, case IDs, hostnames,
@@ -104,16 +103,6 @@ _CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|
               r"(?-i:(?:_(?:PROD|PRODUCTION|DEV|STAGING|STAGE|TEST|LIVE|PRIMARY|SECONDARY"
               r"|BASE|V\d+|\d+))*)")
 
-# One domain label: letters, digits and inner hyphens.
-_DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?"
-# One separator inside a phone number: a hyphen or dash, alone or with a space
-# either side, or one or two whitespace characters. Never a line break; a
-# no-break space counts.
-_PHONE_SEP = r"(?:[^\S\r\n]?[-\u2010-\u2013][^\S\r\n]?|[^\S\r\n]{1,2})"
-# The end of a PII value: no letter or digit follows. An underscore may (the
-# closing mark of emphasis in prose).
-_VALUE_END = r"(?![^\W_])"
-
 # (label, regex, gate). The gate says how to derive the "body" that placeholder /
 # entropy checks look at, so a documentation stub (sk-ant-xxxxxxxx) does not read
 # as a live credential while a real key still does:
@@ -127,14 +116,9 @@ _VALUE_END = r"(?![^\W_])"
 #                     body is normal here — a NANP number built from one repeated
 #                     digit, or a dotted quad of repeated octets — so the
 #                     placeholder heuristic would silently drop real hits.
-#   "luhn"          → the match is a run of digit groups; the card number in
-#                     it (see ``_card_in_run``) must be Luhn-valid with a real
-#                     issuer prefix. Also not placeholder-gated: the canonical
-#                     Visa test number is Luhn-valid and built from only two
-#                     distinct digits.
-#   "email"         → PII, plus the letter-case check in ``_is_typed_tld``.
-#   "intl-phone"    → PII, plus an E.164 digit count (7 to 15).
-#   "ipv4"          → PII: four octets in range, optionally public only.
+#   "luhn"          → the digits must be Luhn-valid (card numbers). Also not
+#                     placeholder-gated: the canonical Visa test number is
+#                     Luhn-valid and built from only two distinct digits.
 #
 # NOTE: this module is itself scanned by the gate, so it must not contain a
 # literal sample of anything it detects. Describe the shape; never write it out.
@@ -185,30 +169,17 @@ _DETERMINISTIC_PATTERNS = [
     ("hardcoded-credential-unquoted", re.compile(
         r"(?i)" + _CRED_NAME +
         r"[\"']?\s*(?::=|[=:])\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
-    # Each domain label starts and ends with a letter or digit, so "@-x.io" and
-    # "@x..io" are not domains.
-    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@(?:" + _DOMAIN_LABEL + r"\.)+[A-Za-z]{2,}"
-                         + _VALUE_END), "email"),
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "pii"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),
     # E.164 international (e.g. a contact wired into config/SOUL): "+" + 7–15 digits,
     # no separators. The us-phone pattern only covers North-American formatting.
-    ("intl-phone", re.compile(r"(?<!\d)\+\d{7,15}(?!\d)"), "intl-phone"),
-    # International number written with separators: plus, country code, then
-    # digit groups, 7 to 15 digits in all. The separator-free form above misses
-    # every human-formatted number. The first separator is a hyphen or one or
-    # two spaces (never a line break); later ones may also be a dot.
-    ("intl-phone", re.compile(
-        r"(?<![\w.])\+(?=\d{1,15}" + _PHONE_SEP + r"\d)\d(?:(?:" + _PHONE_SEP + r"|\.)?\d){6,14}"
-        + _VALUE_END + r"(?!\.\d)"), "intl-phone"),
-    # The dotted style groups with dots throughout. One dot is a signed decimal,
-    # so at least two are required.
-    ("intl-phone", re.compile(r"(?<![\w.])\+\d{1,3}(?:\.\d+){2,}" + _VALUE_END + r"(?!\.\d)"),
-     "intl-phone"),
+    ("intl-phone", re.compile(r"(?<!\d)\+\d{7,15}(?!\d)"), "pii"),
+    # International number written with separators (plus, country code, then
+    # space/dot/dash-grouped digits). The
+    # separator-free form above misses every human-formatted number.
+    ("intl-phone", re.compile(r"(?<![\w.])\+\d{1,3}[\s.\-]?\d[\d\s.\-]{6,}\d(?![\w.])"), "pii"),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "pii"),
-    # A run of digit groups joined by single spaces or hyphens, taken whole: it
-    # never starts or ends inside a word, a longer digit run or a decimal (a
-    # coordinate, a float in a results file). ``_card_in_run`` finds the card.
-    ("credit-card", re.compile(r"(?<!\w)(?<!\d\.)\d+(?:[ \-]\d+)*(?!\w)(?!\.\d)"), "luhn"),
+    ("credit-card", re.compile(r"\b(?:\d[ \-]?){12,18}\d\b"), "luhn"),
     ("ipv4", re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"), "ipv4"),
 ]
 
@@ -322,43 +293,6 @@ def _is_fiction_phone(text):
     return len(nanp) == 10 and (nanp[0:3] == "555" or nanp[3:6] == "555")
 
 
-def _is_typed_tld(domain):
-    """The ending of a domain in a letter case someone would type: lower case,
-    capitals, or capitalised. An ending mixed inside itself is what chance
-    produces, not an address."""
-    tld = domain.rsplit(".", 1)[-1]
-    return tld.islower() or tld.isupper() or tld.istitle()
-
-
-_CARD_SEP = re.compile(r"([ \-])")
-
-
-def _card_in_run(run):
-    """The card number in a run of digit groups, or None.
-
-    The run is the card itself, or the card with up to two short groups (one to
-    four digits, set off by a space) on either side: a row or quantity before
-    it, an expiry or security code after it. Anything longer is a row of
-    numbers.
-    """
-    parts = _CARD_SEP.split(run)          # groups at even indexes, separators at odd
-
-    def short(indexes, sep_offset):
-        return all(parts[i + sep_offset] == " " and len(parts[i]) <= 4 for i in indexes)
-
-    for lead in (0, 2, 4):
-        for trail in (0, 2, 4):
-            core = parts[lead:len(parts) - trail]
-            if not core or not short(range(0, lead, 2), 1):
-                continue
-            if not short(range(len(parts) - trail + 1, len(parts), 2), -1):
-                continue
-            digits = "".join(core[::2])
-            if 13 <= len(digits) <= 19 and _card_brand_ok(digits) and _luhn_ok(digits):
-                return "".join(core)
-    return None
-
-
 IPV4_SCOPES = ("all", "public")
 
 
@@ -380,16 +314,13 @@ def _is_finding(match, gate, det_cfg=None):
         if det_cfg.get("ipv4_scope", "all") == "public":
             return _is_public_ipv4(octets)
         return True  # PII: never placeholder-gated (see the gate legend above)
-    if gate == "email":
-        return _is_typed_tld(match.group(0))
-    if gate == "intl-phone" and not 7 <= sum(c.isdigit() for c in match.group(0)) <= 15:
-        return False  # E.164 allows 15 digits; more is a number row
-    if gate in ("pii", "intl-phone"):
+    if gate == "pii":
         if det_cfg.get("allow_fiction_phones") and _is_fiction_phone(match.group(0)):
             return False
         return True  # never placeholder-gated: see the gate legend above
     if gate == "luhn":
-        return _card_in_run(match.group(0)) is not None
+        digits = re.sub(r"\D", "", match.group(0))
+        return _card_brand_ok(digits) and _luhn_ok(digits)
     if gate == "group1":
         body = match.group(1)
         if _is_credential_placeholder(body):
@@ -411,6 +342,93 @@ def _is_finding(match, gate, det_cfg=None):
     else:
         body = match.group(0)
     return not _is_placeholder(body)
+
+
+# ---------------------------------------------------------------- audit profile
+#
+# A --full-tree audit reads a repo's images, audio and data files, where the PII
+# shapes match numeric data and compressed bytes by chance. The audit profile is
+# a filter over the findings of the shape table above: it can only drop a
+# finding the table made, by one of the rules here, and it adds the card search
+# in ``_audit_cards``. The table itself, and every other mode, is unaffected.
+
+_DECIMAL_BEFORE = re.compile(r"\d\.$")
+_DECIMAL_AFTER = re.compile(r"\.\d")
+_PADDING = re.compile(r"\s{3,}|[\r\n\f\v]")
+_CASE_CHANGE = re.compile(r"[a-z][A-Z]|[A-Z][a-z]")
+# A run of digit groups joined by single spaces or hyphens, never starting or
+# ending inside a word, a longer digit run or a decimal.
+_DIGIT_GROUPS = re.compile(r"(?<!\w)(?<!\d\.)\d+(?:[ \-]\d+)*(?!\w)(?!\.\d)")
+_GROUP_SEP = re.compile(r"([ \-])")
+
+
+def _typed_label(label):
+    """A domain label in a letter case someone would type: lower case, capitals
+    or capitalised. A mixed label is read up to where the next word starts (an
+    address run into the text after it) and needs two letters."""
+    if label.islower() or label.isupper() or label.istitle():
+        return True
+    change = _CASE_CHANGE.search(label, 1 if label[:1].isupper() and label[1:2].islower() else 0)
+    if not change:
+        return False
+    # "comAnd" keeps "com"; "COMAnd" keeps "COM": the capital starts the next word.
+    return change.start() + (1 if label[change.start()].islower() else 0) >= 2
+
+
+def _typed_ending(address):
+    """Whether an address ends in a typed label, reading past trailing labels
+    that belong to the text after it."""
+    labels = address.rsplit("@", 1)[-1].split(".")
+    while len(labels) >= 2:
+        if _typed_label(labels[-1]):
+            return True
+        labels.pop()
+    return False
+
+
+def _audit_value(label, pat, match, original):
+    """The value the audit profile reports for a finding of the shape table, or
+    None when it drops the finding.
+
+    ``original`` is the text as read; the match may come from a copy of it with
+    non-ASCII characters blanked, which has the same offsets.
+      credit-card  dropped when it is the fraction or the integer part of a
+                   decimal: a coordinate, a float in a results file
+      intl-phone   cut where its digits are padded with three or more spaces
+                   or cross a line break (columns of a table), and dropped
+                   unless what is left is still a number
+      email        dropped when its ending is not in a typed letter case
+    """
+    value = match.group(0)
+    if label == "credit-card":
+        text = match.string
+        if (_DECIMAL_BEFORE.search(text[max(0, match.start() - 2):match.start()])
+                or _DECIMAL_AFTER.match(text, match.end())):
+            return None
+    elif label == "intl-phone":
+        padding = _PADDING.search(original[match.start():match.end()])
+        if padding:
+            value = value[:padding.start()].rstrip()
+            return value if pat.fullmatch(value) else None
+    elif label == "email" and not _typed_ending(value):
+        return None
+    return value
+
+
+def _audit_cards(text):
+    """Card numbers in runs of digit groups: every window of whole groups that
+    holds 13 to 19 digits, a real issuer prefix and a valid Luhn checksum. This
+    finds a card written beside a postcode, an id, a date or another card."""
+    for run in _DIGIT_GROUPS.finditer(text):
+        parts = _GROUP_SEP.split(run.group(0))    # groups at even indexes
+        for first in range(0, len(parts), 2):
+            digits = ""
+            for last in range(first, len(parts), 2):
+                digits += parts[last]
+                if len(digits) > 19:
+                    break
+                if len(digits) >= 13 and _card_brand_ok(digits) and _luhn_ok(digits):
+                    yield "".join(parts[first:last + 1])
 
 
 _IPV4_NET = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.$")
@@ -463,12 +481,11 @@ HIGH_CONFIDENCE_LABELS = frozenset({
     "huggingface-token", "npm-token", "gitlab-token", "jwt",
 })
 
-# The PII shapes; everything else is a credential shape. A full-tree audit scans
-# a file that is binary by content for the credential shapes and email only: the
-# phone, national-ID, card and IP shapes are short runs of digits and a few
-# symbols, which compressed image and audio bytes satisfy by chance.
-PII_LABELS = frozenset(label for label, _, gate in _DETERMINISTIC_PATTERNS
-                       if gate in ("pii", "email", "intl-phone", "luhn", "ipv4"))
+# What the audit profile scans in a file that is binary by content: every
+# credential shape, and email. The phone, national-ID, card and IP shapes are
+# short runs of digits and a few symbols, which compressed bytes satisfy by
+# chance.
+PII_LABELS = frozenset({"email", "us-phone", "intl-phone", "ssn", "credit-card", "ipv4"})
 CREDENTIAL_LABELS = frozenset(label for label, _, _ in _DETERMINISTIC_PATTERNS) - PII_LABELS
 BINARY_LABELS = CREDENTIAL_LABELS | {"email"}
 
@@ -489,7 +506,7 @@ def _is_skipped(rel, skip_paths):
 _NON_ASCII = re.compile(r"[^\x00-\x7f]")
 
 
-def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
+def scan_deterministic(content, allow_substrings, det_cfg=None, only=None, audit=False):
     """Return a list of (label, matched_text) for credential/PII hits, minus any
     match that is itself allowlisted.
 
@@ -500,6 +517,9 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
     value it excuses (a reserved documentation domain, a loopback address)
     behaves identically under both readings; only the accidental blast radius
     changes.
+
+    ``audit`` applies the audit profile (see ``_audit_value``); only a
+    --full-tree run sets it.
     """
     hits = []
     # Every shape here is ASCII, but Unicode \b and \w treat a CJK or Cyrillic
@@ -517,11 +537,18 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
         for m in (m for text in texts for m in pat.finditer(text)):
             if not _is_finding(m, gate, det_cfg):
                 continue
-            value = _card_in_run(m.group(0)) if gate == "luhn" else m.group(0)
+            value = _audit_value(label, pat, m, content) if audit else m.group(0)
+            if value is None:
+                continue
             if _is_allowed(label, value, allow_substrings):
                 continue
             hit = (label, value)
             if hit not in hits:  # one line per distinct value, however often it repeats
+                hits.append(hit)
+    if audit and (only is None or "credit-card" in only):
+        for value in (v for text in texts for v in _audit_cards(text)):
+            hit = ("credit-card", value)
+            if hit not in hits and not _is_allowed("credit-card", value, allow_substrings):
                 hits.append(hit)
     return hits
 
@@ -958,7 +985,7 @@ def is_binary(data):
     the NUL pattern of wide text), and the two shares above, measured over the
     whole file. A text file with a binary head, a stray NUL or a little padding
     stays text, and so does latin-1 text: a failed UTF-8 decode alone never
-    makes a file binary.
+    makes a file binary. Only the audit profile asks.
     """
     if b"\0" not in data or any(data.startswith(bom) for bom, _ in _BOMS):
         return False
@@ -1020,10 +1047,10 @@ def layer1_texts(path):
 def read_for_layer1(path):
     """Text for the secrets/PII layer, which must scan EVERY file.
 
-    A file is never dropped for containing a NUL: a key behind a NUL prefix, or
-    in UTF-16 text, has to be found. A BOM or the NUL pattern of UTF-16/32
-    selects that decoding; any other file containing NULs is read byte-for-byte
-    as latin-1, where ASCII-shaped secrets still match.
+    A NUL in the first 8 KiB used to make both layers skip the file, so a key
+    behind a NUL prefix, or in UTF-16 text, passed. Now: a BOM or the NUL
+    pattern of UTF-16/32 selects that decoding; any other file containing NULs
+    is read byte-for-byte as latin-1, where ASCII-shaped secrets still match.
     A symlink is scanned as its target string (what git stores), and never
     followed, dangling or not.
     """
@@ -1236,9 +1263,9 @@ def main(argv, root=".", client_factory=_make_client):
 
     # ---- Layer 1: deterministic, over EVERY candidate file (fails closed). No
     # config can switch it off or narrow it (config_problems rejects that); only
-    # test-fixture paths in skip_paths are excluded. Binaries are scanned too:
-    # for every shape in a file list or a PR diff, for BINARY_LABELS in a
-    # full-tree audit, which reads a repo's images and audio.
+    # test-fixture paths in skip_paths are excluded. Binaries are scanned too.
+    # A full-tree audit adds the audit profile: its filter over the findings,
+    # and BINARY_LABELS for a file that is binary by content.
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
     scanned = binaries = 0
@@ -1246,20 +1273,17 @@ def main(argv, root=".", client_factory=_make_client):
         path = os.path.join(root, rel)
         if not os.path.islink(path) and not os.path.isfile(path):
             continue  # submodule or directory: its files are scanned in their own repo
-        scanned += 1
-        binary = full_tree and is_binary_file(path)
-        binaries += binary
         # Inside a fixture skip path only the PII-style and heuristic shapes are
         # skipped; provider tokens and private keys are always reported.
-        if _is_skipped(rel, skip_paths):
-            only = HIGH_CONFIDENCE_LABELS
-        elif binary:
-            only = BINARY_LABELS
-        else:
-            only = None
+        only = HIGH_CONFIDENCE_LABELS if _is_skipped(rel, skip_paths) else None
+        if full_tree:
+            scanned += 1
+            if is_binary_file(path):
+                binaries += 1
+                only = BINARY_LABELS if only is None else only
         hits = []
         for text in layer1_texts(path):
-            for hit in scan_deterministic(text, allow, det_cfg, only=only):
+            for hit in scan_deterministic(text, allow, det_cfg, only=only, audit=full_tree):
                 if hit not in hits:
                     hits.append(hit)
         if hits:
@@ -1267,9 +1291,9 @@ def main(argv, root=".", client_factory=_make_client):
     if full_tree:
         # Said on every audit, zero included: a file class some shapes did not
         # see must be visible in the log, not inferred from a quiet result.
-        print(f"binary: {binaries} of {scanned} file(s) are binary by content — phone, SSN, "
-              f"card and IP shapes were skipped there; credential shapes and email were "
-              f"still scanned.")
+        print(f"audit profile: {binaries} of {scanned} file(s) are binary by content — phone, "
+              f"SSN, card and IP shapes were skipped there; credential shapes and email "
+              f"were still scanned.")
 
     # ---- Layer 2: semantic, over content-bearing files only
     sem_flagged = {}

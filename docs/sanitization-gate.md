@@ -77,26 +77,25 @@ offline and on fork PRs. A hit is a **hard fail**: remove the value before mergi
 It scans **every** changed file, not just prose. A key committed to engine or
 collector code is still a key.
 
-A file list and a PR diff scan every file for every shape. A full-tree audit
-also reads a repo's images and audio, so there a file that is binary by content
-is scanned for the credential shapes and for email addresses, and every audit
-prints how many files that covered, zero included:
+Pull-request scans (`mode: pr`, `--diff`, or a file list) use the full shape set
+on every file. Whole-tree scans (`mode: full-tree`, `--full-tree`) also read a
+repo's media and data files, so they add a noise filter, the audit profile:
+
+- A file that is binary by content is scanned for the credential shapes and for
+  email addresses. Binary is decided by content, never by name: the file has a
+  NUL byte, is not UTF-16/32 text, and at least 5% of all its bytes are control
+  bytes and at least 30% are control bytes or invalid UTF-8.
+- In numeric data, a card number is a whole number, a phone number is not spread
+  across padded columns or lines, and an email address ends in a letter case
+  someone would type.
+- A card number is also found in a row of other numbers.
+
+Credential shapes are the same in both. Every whole-tree scan prints how many
+files it treated as binary, zero included:
 
 ```
-binary: 3 of 120 file(s) are binary by content — phone, SSN, card and IP shapes were skipped there; credential shapes and email were still scanned.
+audit profile: 3 of 120 file(s) are binary by content — phone, SSN, card and IP shapes were skipped there; credential shapes and email were still scanned.
 ```
-
-Binary is decided by content, never by name: the file has a NUL byte, is not
-UTF-16/32 text, and at least 5% of all its bytes are control bytes and at least
-30% are control bytes or invalid UTF-8.
-
-What the PII shapes match:
-
-| Shape | Matches |
-|---|---|
-| card | a Luhn-valid number with a real issuer prefix and length, plain or grouped with spaces or hyphens, alone or beside an expiry or security code |
-| email | `local@domain` whose domain labels start and end with a letter or digit, and whose ending is in lower case, capitals, or capitalised |
-| international phone | `+` and 7 to 15 digits: plain, grouped with hyphens, dashes or one or two spaces, or with dots |
 
 ## Layer 2: particulars (semantic)
 
@@ -138,7 +137,7 @@ the change by itself. The judgement still has to happen.
 
 Every relaxation defaults off. Layer 1 cannot be disabled or narrowed by config
 (`deterministic.enabled: false` and `scope` are rejected), and every gate run
-validates the config before scanning. Layer 1 reads every file, binaries
+validates the config before scanning. Layer 1 scans every file, binaries
 included: UTF-16/32 is decoded, other NUL-bearing files are read byte-for-byte,
 and a symlink is scanned as its target string. Every file is scanned twice, as
 decoded and as raw latin-1 bytes, so a stray byte-order mark cannot hide an ASCII
@@ -178,8 +177,8 @@ The summary line always names the layers that actually ran:
 - `clean — DETERMINISTIC ONLY; semantic layer did not run`: layer 2 was supposed
   to run and could not. Not a full pass. Read the warning above it.
 - `ok <file>` appears only for files layer 2 actually reviewed and cleared.
-- `binary: N of M file(s) are binary by content` (full-tree audits): N files
-  were scanned for the credential shapes and email only.
+- `audit profile: N of M file(s) are binary by content` (whole-tree scans): N
+  files were scanned for the credential shapes and email only.
 
 CI runs the layers as two separate steps so a red check names its own cause: a red
 step 1 is a leak in the diff. A red step 2 is particulars found, or the semantic
@@ -209,7 +208,8 @@ point. Take it to a maintainer and record the outcome.
 
 New detectors go in `_DETERMINISTIC_PATTERNS` in `scripts/check_sanitization.py`,
 with a test in `scripts/test_check_sanitization.py` that fails without them, then a
-new tag (see above). Two house rules:
+new tag (see above). The shape table is pinned by a digest in the tests; update it
+in the same commit. Two house rules:
 
 - The scanner module is itself scanned. Never write a literal sample of anything
   it detects into that file. Describe the shape instead. A self-test enforces this. Real
