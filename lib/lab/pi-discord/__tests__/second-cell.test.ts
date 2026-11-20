@@ -4,6 +4,7 @@
 // their own, built with the web, search and the door's notes only. Here without Docker: which
 // channels go there, the cell as written, and the door end to end with two echo shims against a
 // fake Discord on loopback. The tripwire is armed and must record nothing.
+import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { armTripwire, tripwireAttempts } from '../../../../conformance/guards/tripwire.ts'
 import { labSubnetBase, pickSubnets } from '../../../../conformance/docker/subnets.ts'
@@ -18,6 +19,9 @@ import { CELL_ENV, REDUCED_CELL_ENV, renderCell, sealProblems, type CellOptions 
 import { channelIdsOf, parseConfig, policyFor, reducedRoomsOf, type LabConfig } from '../config.ts'
 
 armTripwire()
+
+/** A cell's token for one run of these tests, made the way the rigs make theirs. */
+const cellToken = (): string => `cell-${randomBytes(8).toString('hex')}`
 
 const base = (discord: Record<string, unknown> = {}, rest: Record<string, unknown> = {}): Record<string, unknown> => ({
   agentId: 'pi-lab',
@@ -101,7 +105,7 @@ describe('what the second cell may declare', () => {
 
   it('the Pi shim told the second cell\'s tools declares those at hello, and refuses a map that is not Pi\'s own', async () => {
     const seen: Capabilities[] = []
-    const token = 'pi-shim-token-0001'
+    const token = cellToken()
     const brain = await createBrainServer({ token, onShim: (_link, caps) => { seen.push(caps) }, accept: reducedCapsProblem })
     const dirs = { agentDir: '/nonexistent/a', sessionsDir: '/nonexistent/s', workDir: '/nonexistent/w', homeDir: '/nonexistent/h' }
     const shim = await startPiShim({ host: '127.0.0.1', port: brain.port, token, piCommand: ['/nonexistent/pi'], gate: { path: '/nonexistent/gate.ts' }, ...dirs, toolMap: PI_REDUCED_TOOL_MAP })
@@ -121,7 +125,7 @@ describe('what the second cell may declare', () => {
 // --- the door, with two cells --------------------------------------------------
 
 const REDUCED_CAPS: Partial<Capabilities> = { approvalRoundTrip: true, toolMap: { fetch: 'network', search: 'search' } }
-const REDUCED_TOKEN = 'reduced-cell-token-0001'
+const REDUCED_TOKEN = cellToken()
 
 let rig: DiscordRig | undefined
 const closers: Array<() => void> = []
@@ -248,6 +252,7 @@ describe('the door, with a second cell', () => {
 
   it('refuses a second cell with the first cell\'s token', async () => {
     const config = twoChannels('web-only')
-    await expect(startDiscordRig(policyFor(config), { door: { brainToken: 'same-token-0001', reducedCell: { brainToken: 'same-token-0001', rooms: [IDS.other] } } })).rejects.toThrow(/token of its own/)
+    const same = cellToken()
+    await expect(startDiscordRig(policyFor(config), { door: { brainToken: same, reducedCell: { brainToken: same, rooms: [IDS.other] } } })).rejects.toThrow(/token of its own/)
   })
 })
