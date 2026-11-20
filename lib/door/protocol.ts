@@ -104,6 +104,19 @@ export interface Capabilities {
 
 export const HARNESSES: Capabilities['harness'][] = ['pi', 'letta-code', 'claude-sdk', 'hermes', 'openclaw', 'echo']
 
+/**
+ * The only classes of tool the second cell may hold: the web, search and the door's notes. Each is
+ * carried out by the door itself, never in the cell. The second cell takes the turns from the rooms
+ * that have fewer tools than the agent's own, so it is built with nothing that runs in it.
+ */
+export const REDUCED_CELL_CLASSES: readonly ToolClass[] = ['network', 'search', 'memory']
+
+/** Why a hello's capabilities do not fit the second cell, or undefined if they do. */
+export function reducedCapsProblem(caps: Capabilities): string | undefined {
+  const extra = [...new Set(Object.values(caps.toolMap).filter((k) => !REDUCED_CELL_CLASSES.includes(k)))]
+  return extra.length > 0 ? `the second cell holds ${extra.sort().join(', ')} tools, and may hold only ${REDUCED_CELL_CLASSES.join(', ')}` : undefined
+}
+
 /** A tool name the door is willing to write down: short, and no free text. */
 export const SAFE_NAME = /^[A-Za-z0-9_.:-]{1,64}$/
 

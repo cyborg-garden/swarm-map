@@ -15,7 +15,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { botsLine, channelIdsOf, channelRulesOf, harnessLines, harnessOf, parseConfig, policyFor, statusLine, toolsLine, type LabConfig } from './config.ts'
+import { botsLine, channelIdsOf, channelRulesOf, harnessLines, harnessOf, parseConfig, policyFor, reducedRoomsOf, statusLine, toolsLine, type LabConfig } from './config.ts'
 import { DEFAULT_HARNESS, isLauncherHarness, LAUNCHER_HARNESSES } from './harnesses.ts'
 import { alive, prepareStateDir, readRun, REPO_ROOT, sealChecks, start, stopRun, type Check } from './launch.ts'
 import { buildImages, dockerProblems, docker, launcherImages } from './cell.ts'
@@ -55,6 +55,10 @@ async function dryRun(): Promise<void> {
     const tools = r.tools === 'inherit' ? 'the same tools' : r.tools === 'web-only' ? 'the web only' : 'no tools'
     say(`  ok    also channel ${id}: ${d.anyoneInChannel ? 'hears anyone' : r.anyoneInChannel ? 'hears anyone, only when mentioned' : 'hears the same people'}, ${tools}`)
   }
+  const reducedRooms = reducedRoomsOf(config)
+  if (reducedRooms.length > 0) {
+    say(`  ok    two cells: the agent's own, and a second with no shell or file tools for ${reducedRooms.length === 1 ? 'the channel' : `the ${reducedRooms.length} channels`} with fewer tools (${reducedRooms.join(', ')}). Each is sent only its own channels' messages`)
+  }
   const tools = toolsLine(config)
   say(`  ok    it introduces itself as "${config.persona.name}", and is told ${tools === 'tools: none' ? 'it has no tools' : 'which tools it has'}`)
   say(`  ok    persona: ${config.persona.document ? `a document of ${Buffer.byteLength(config.persona.document)} bytes, before what the rules say it can do` : 'its name and one line'}; notes for each room: ${config.memory?.notes ? 'on, kept by the door in the state folder' : 'off'}${config.tools?.keepScratch ? '; the scratch folder is kept across a stop' : ''}`)
@@ -82,14 +86,24 @@ async function dryRun(): Promise<void> {
   const dockerIssues = dockerProblems(launcherImages(harness), harness)
   for (const p of dockerIssues) say(`  FAIL  ${p}`)
   let checks: Check[] = []
+  let secondChecks: Check[] = []
   if (dockerIssues.length === 0) {
     say('  ok    this machine\'s Docker, both lab images built')
     say('containment (the real cell is started, probed from inside and watched from outside, then removed)')
     const workDir = mkdtempSync(path.join(os.tmpdir(), 'smlab-dry-'))
-    try { checks = await sealChecks({ model: config.model.id, workDir, log: () => {}, harness }) } finally { rmSync(workDir, { recursive: true, force: true }) }
-    for (const c of checks) say(mark(c))
+    try {
+      checks = await sealChecks({ model: config.model.id, workDir, log: () => {}, harness })
+      for (const c of checks) say(mark(c))
+      // The second cell is checked the same way, as it would be started: with the web, search and notes only.
+      if (reducedRooms.length > 0) {
+        say('containment, second cell (for the channels with fewer tools: no shell or file tools)')
+        secondChecks = await sealChecks({ model: config.model.id, workDir, log: () => {}, harness, role: 'reduced' })
+        for (const c of secondChecks) say(mark(c))
+      }
+    } finally { rmSync(workDir, { recursive: true, force: true }) }
   }
   const sealed = dockerIssues.length === 0 && checks.length > 0 && checks.every((c) => c.pass)
+    && (reducedRooms.length === 0 || (secondChecks.length > 0 && secondChecks.every((c) => c.pass)))
   say('')
   say('Nothing was connected: no Discord connection was opened and no model was called.')
   if (!sealed) fail('RESULT: not ready. The cell is not shown to be sealed.')
@@ -137,8 +151,10 @@ async function status(): Promise<void> {
   const r = readRun(stateDir)
   if (!r) { say('not running: no run is recorded'); return }
   say(`door: pid ${r.pid} ${alive(r.pid) ? 'running' : 'NOT running'}, started ${r.startedAt}, policy ${r.policyHash.slice(0, 12)}`)
-  const containers = docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${r.project}`, '--format', '{{.Names}} {{.State}}']).out.trim()
-  say(`cell: ${containers.split('\n').join(', ') || 'no containers'}`)
+  const containersOf = (project: string): string => docker(['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '--format', '{{.Names}} {{.State}}']).out.trim().split('\n').join(', ') || 'no containers'
+  say(`cell: ${containersOf(r.project)}`)
+  // The second cell, for the channels with fewer tools, when the run has one.
+  if (typeof r.reducedProject === 'string') say(`second cell (no shell or file tools): ${containersOf(r.reducedProject)}`)
   try {
     const ledger = JSON.parse(readFileSync(path.join(stateDir, 'spend.json'), 'utf8')) as { months: Record<string, number> }
     say(`spent this month: $${(ledger.months[monthOf(new Date())] ?? 0).toFixed(4)} of $${config.budget.monthlyUsd}`)

@@ -14,9 +14,10 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
+import type { ToolClass } from '../../core/policy/types.ts'
 import type { Envelope } from '../../door/protocol.ts'
 import { connectShim, type ShimClient } from '../../door/shim-client.ts'
-import { PI_CAPS } from './caps.ts'
+import { PI_CAPS, PI_TOOL_MAP } from './caps.ts'
 import { MEMORY_TOOL } from './cell/gate.ts'
 import { renderPrompt } from './preamble.ts'
 import { createPiRpc, type GateCall, type PiProcess, type PiRpc } from './rpc.ts'
@@ -44,6 +45,11 @@ export interface PiShimOptions {
   gateReadyMs?: number
   /** The time one shell call may run and the size of output that reaches the model. Left out, the gate's own defaults. */
   toolLimits?: { callSeconds?: number; outputBytes?: number }
+  /**
+   * The tools this cell holds, declared to the door at hello: some of Pi's own, each with its own class.
+   * Left out, all of them. Pi is never started with a tool that is not here, whatever a turn lists.
+   */
+  toolMap?: Record<string, ToolClass>
   /**
    * Rig-only: extra env for Pi. The lab uses it to arm a tripwire inside Pi, and the
    * broken-shim suite to plant a leak. It cannot change the offline flags below.
@@ -135,15 +141,19 @@ const toolsKey = (tools: string[]): string => [...new Set(tools)].sort().join(',
 export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
   const promptProblem = opts.systemPrompt === undefined ? undefined : systemPromptProblem(opts.systemPrompt, opts.workDir)
   if (promptProblem) throw new Error(`pi shim: ${promptProblem}`)
+  const toolMap = opts.toolMap ?? PI_TOOL_MAP
+  for (const [name, k] of Object.entries(toolMap)) if (PI_TOOL_MAP[name] !== k) throw new Error(`pi shim: ${name} is not one of Pi's tools as ${k}`)
   const client: ShimClient = await connectShim({
-    host: opts.host, port: opts.port, token: opts.token, caps: PI_CAPS, verdictTimeoutMs: opts.verdictTimeoutMs,
+    host: opts.host, port: opts.port, token: opts.token, caps: { ...PI_CAPS, toolMap }, verdictTimeoutMs: opts.verdictTimeoutMs,
   })
+  // Only a tool this cell holds. The door offers no other, and a list that names one anyway does not start Pi with it.
+  const held = (tools: string[]): string[] => tools.filter((t) => Object.hasOwn(toolMap, t))
   const slots = new Map<string, Slot>()
 
   const open = (slot: Slot, env: Envelope, resume: boolean): Live => {
     const sessionDir = sessionDirFor(opts.sessionsDir, env.sessionKey)
     mkdirSync(sessionDir, { recursive: true })
-    const tools = toolsKey(env.tools)
+    const tools = toolsKey(held(env.tools))
     const args = piArgs({ sessionDir, tools: tools === '' ? [] : tools.split(','), gate: opts.gate, model: opts.model ?? 'scripted', resume, systemPrompt: opts.systemPrompt })
     const child = spawn(opts.piCommand[0], [...opts.piCommand.slice(1), ...args], {
       cwd: opts.workDir, env: piEnv(opts) as NodeJS.ProcessEnv, stdio: ['pipe', 'pipe', 'ignore'],
@@ -186,7 +196,7 @@ export async function startPiShim(opts: PiShimOptions): Promise<PiShim> {
   const runTurn = async (slot: Slot, env: Envelope): Promise<void> => {
     // The tool list is per turn. Pi's is per process, so a changed list means a new process.
     let resume = false
-    if (slot.live && slot.live.tools !== toolsKey(env.tools)) {
+    if (slot.live && slot.live.tools !== toolsKey(held(env.tools))) {
       slot.live.rpc.close()
       slot.live = undefined
       resume = true

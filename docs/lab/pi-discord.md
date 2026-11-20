@@ -117,7 +117,7 @@ server, the channel or a person and choose **Copy ID**.
 | `discord.guildId` | none | The one server |
 | `discord.channelId` | none | The agent's own channel. Its threads count as part of it, private ones included, and share its conversation |
 | `discord.channelIds` | `[channelId]` | Every channel the agent is in, its own first, up to 10. Each is a conversation of its own, with its own notes: nothing said in one is shown in another, and the agent posts in no channel that is not listed. `channelId` alone is a list of one. A harness that keeps one memory for the whole agent (Letta Code) gets one channel |
-| `discord.perChannel` | `{}` | What is different in a channel after the first, by channel id: `anyoneInChannel` (`false`) hears anyone there, always by mention, threads included; `tools` (`"inherit"`) is `"inherit"`, `"web-only"` (web pages and search, and notes if they are on) or `"none"` (notes only, if they are on). A channel that hears anyone never gets shell or file tools: `"inherit"` there is refused while any is on. Admins, the people heard, the budget and the model are the agent's, the same in every channel |
+| `discord.perChannel` | `{}` | What is different in a channel after the first, by channel id: `anyoneInChannel` (`false`) hears anyone there, always by mention, threads included; `tools` (`"inherit"`) is `"inherit"`, `"web-only"` (web pages and search, and notes if they are on) or `"none"` (notes only, if they are on). A channel that hears anyone never gets shell or file tools: `"inherit"` there is refused while any is on. Admins, the people heard, the budget and the model are the agent's, the same in every channel. A channel with fewer tools beside an agent with shell or file tools is served by a [second cell](#two-cells) |
 | `discord.adminUserIds` | none | Admins of this agent. At least one. They are also heard |
 | `discord.allowedUserIds` | `[]` | Other people who are heard |
 | `discord.allowedRoleIds` | `[]` | Holders of these roles are heard |
@@ -183,6 +183,13 @@ reached them. It ends with one of:
 | S3 | No folder of your machine is in the cell, and its `/tmp` is in memory, 32 MB at most, and runs nothing |
 | S4 | The scratch folder, the cell's own folder and its `/tmp` can be written, and none takes more than its size |
 | S9 | The dry run left no container behind |
+
+With a [second cell](#two-cells), the dry run checks it too, under its own heading, the same way and
+with one more check:
+
+| Check | What it shows |
+|---|---|
+| S0t | The second cell holds no shell or file tool: the door took its hello only because every tool it declared is the web, search or notes |
 
 ## 7. Start
 
@@ -268,6 +275,37 @@ Both are on by default. Switch either off in the config, or on the dashboard's R
 **When it answers**. A change takes effect on the next start, like the persona: neither is part of
 the policy, so neither changes the policy's hash.
 
+## Two cells
+
+When `discord.perChannel` gives a channel fewer tools than the agent's own (`"web-only"` or
+`"none"`) and the agent's own channel has a shell or file tool, `start` starts two cells:
+
+- **The agent's own cell**, as it always was, for its own channel and every channel that inherits its tools.
+- **A second cell**, for the channels with fewer tools, and their threads. Pi there is started with
+  the web, search and the notes tool only, all three carried out by the door. Its shim declares only
+  those at hello, and the door takes no other: a second cell that declares a shell or file tool is
+  turned away. It has its own containers, networks, folder, token and port, and its own sessions,
+  so nothing a conversation there does can reach the agent's own folder or sessions.
+
+Both share the door: the rules, the receipts, the model route and the budget, and each room's notes.
+A message from a channel with fewer tools is sent to the second cell only. The door matches every
+reply, end and tool call to the cell its turn was sent to: one cell cannot answer, end or ask for a
+tool under the other's turn (`turn.cell`), and the second cell cannot ask for any tool but the web,
+search and notes (`tools.cell`), whatever the rules say.
+
+With one channel, or with no shell or file tool on, there is one cell, and nothing about the run,
+the policy or its hash changes. A web-only agent with a `"none"` channel has one cell too: its cell
+holds nothing that runs in it, and the door already refuses the web there.
+
+The dry run says when there are two cells and checks both. `status` lists both, and so does the
+Status card on the dashboard (**Cells**). `stop` removes both.
+
+| You see | It means |
+|---|---|
+| `drop turn.no-harness` | No cell is connected for that channel. With two cells, the sentence says which |
+| `deny turn.cell` / `drop turn.cell` | A cell asked for a tool, or sent a reply, an end or an error, for a turn that was sent to the other cell. Nothing came of it |
+| `deny tools.cell` | The second cell asked for a tool that is not the web, search or notes |
+
 ## 9. Stop
 
 ```bash
@@ -320,6 +358,7 @@ What is and is not shown for Letta Code itself is in [`letta-code.md`](letta-cod
 | `receipts.jsonl` | One line per decision |
 | `spend.json` | Model spend by month. Delete it and the budget starts again |
 | `run.json`, `compose.json` | What is running now. Removed on stop. Neither holds a secret |
+| `compose-reduced.json` | The [second cell](#two-cells), when there is one. Removed on stop |
 
 ## What this does not show
 

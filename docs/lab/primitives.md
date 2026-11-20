@@ -476,7 +476,7 @@ each gap they name is closed.
 | `priv.approver-roles` | Discord role may approve | Door reads live role | Wall for the answer | Same | D, C6 |
 | `priv.no-forged-identity` | Message text cannot raise privilege | Privilege comes from the door's turn record | Wall | No | C13 |
 | `tools.posture` | Public agents lose shell, file, code-exec, chat-admin | Start flags + gate; egress and missing keys behind it | Guardrail, wall behind | **Yes**: `toolMap`, veto | C4, C5, C10 |
-| `tools.per-room` | Tool set differs by room | Gate, from the turn's room | Guardrail only | **Yes** | C4 |
+| `tools.per-room` | Tool set differs by room | Gate, from the turn's room. With a second cell (pi-discord.md, Two cells): the rooms with fewer tools go to a cell built without shell or file tools | Guardrail; wall with a second cell | **Yes** | C4 |
 | `tools.unknown` | Unclassified tool is denied on public | Gate | Guardrail | **Yes**: honest `toolMap` | C7 |
 | `tools.browser-guard` | Public browser: public hosts only, no page JS, no raw CDP | Hosts: egress `blockPrivateRanges`. JS and CDP: gate on args | Wall / guardrail | Partly | C9, C4 |
 | `keys.not-in-cell` | No real secret is readable in the cell | Model route, broker, sidecar tools | Wall | `modelBaseUrl` | C8 |
@@ -653,7 +653,8 @@ Nothing in the first slice touches a Hermes agent.
 2. **Native mode is a standing temptation.** While Hermes stays in it, the fleet's chat rules are
    still "render and prove", not "cannot vanish". N1-N4 limit that; they do not remove it.
 3. **The tool gate is a guardrail inside an untrusted cell.** C10 proves the wall behind it, but
-   per-room tool rules have no wall at all. Needing one means a second agent.
+   per-room tool rules have no wall in one cell. The door-agent launcher gives a room with fewer
+   tools a second cell of its own, built without the tools it lacks (pi-discord.md, Two cells).
 4. **Tool-class mapping can be wrong.** The suite catches unmapped tools, not mis-mapped ones.
 5. **Mixed rooms are unsolved.** An admin and a stranger share a session; the stranger's observed
    text sits in the admin's turn. "Triggering sender's privilege, risky tools ask" is a choice.

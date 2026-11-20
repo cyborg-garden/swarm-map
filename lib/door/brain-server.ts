@@ -24,6 +24,8 @@ export interface BrainServerOptions {
   token: string
   onShim: (link: ShimLink, caps: Capabilities) => void
   onRefused?: (why: string) => void
+  /** Why these capabilities are not taken here, or undefined. Checked after the usual checks. Left out, any that pass them. */
+  accept?: (caps: Capabilities) => string | undefined
   host?: string
   port?: number
   helloTimeoutMs?: number
@@ -66,6 +68,8 @@ export function createBrainServer(opts: BrainServerOptions): Promise<BrainServer
         if (current) return refuse('a shim is already connected')
         const problem = capsProblem(msg.caps)
         if (problem) return refuse(`bad capabilities: ${problem}`)
+        const misfit = opts.accept?.(msg.caps)
+        if (misfit) return refuse(`bad capabilities: ${misfit}`)
         greeted = true
         current = socket
         clearTimeout(helloTimer)

@@ -323,6 +323,25 @@ describe('status', () => {
     expect(svc.status('h_pi_one')).toEqual({ state: 'stopped', cellSealed: null, rulesInForce: null, startedBy: null })
   })
 
+  it('says when a second cell, with no shell or file tools, holds the channels with fewer tools; with one channel there is none', async () => {
+    await filled()
+    expect(svc.status('h_pi_one').secondCell).toBeUndefined()
+    const other = '100000000000000009'
+    const rules = {
+      ...RULES, tools: { enabled: ['shell', 'file_read'], approvalSeconds: 60 },
+      discord: { ...RULES.discord, channelIds: [RULES.discord.channelId, other], perChannel: { [other]: { anyoneInChannel: false, tools: 'web-only' } } },
+    }
+    await svc.saveRules('h_pi_one', { rules, secrets, version: 2 })
+    // Stopped: what the rules on record would start.
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'stopped', secondCell: { channels: 1 } })
+    // Running: what the run has.
+    livePids = new Set([4242])
+    writeState('run.json', JSON.stringify({ pid: 4242, project: 'smlab-fake0000', reducedProject: 'smlab-fake0001', agentId: 'pi-one', policyHash: policyHashOf(rules), startedAt: NOW.toISOString() }))
+    expect(svc.status('h_pi_one')).toMatchObject({ state: 'running', secondCell: { channels: 1 } })
+    writeState('run.json', JSON.stringify({ pid: 4242, project: 'smlab-fake0000', agentId: 'pi-one', policyHash: policyHashOf(rules), startedAt: NOW.toISOString() }))
+    expect(svc.status('h_pi_one').secondCell).toBeUndefined()
+  })
+
   it('is running only while the door\'s own process is alive', async () => {
     await filled()
     await svc.start('h_pi_one')
