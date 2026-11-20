@@ -2,6 +2,7 @@
 // checks are the same for all of them.
 import { CLAUDE_SDK_VERSION, CLAUDE_SDK_VERSION_LINE } from '../../lib/runtimes/claude-sdk/caps.ts'
 import { LETTA_CODE_VERSION, LETTA_CODE_VERSION_LINE } from '../../lib/runtimes/letta-code/caps.ts'
+import { OPENCODE_VERSION } from '../../lib/runtimes/opencode/caps.ts'
 import { PI_CELL, SWARM_ROOT, type CellKind } from './compose.ts'
 
 export const LETTA_CODE_BIN = '/usr/local/bin/letta'
@@ -17,6 +18,14 @@ export const CLAUDE_SDK_CELL: CellKind = {
   version: { command: ['node', `${SWARM_ROOT}/conformance/docker/claude-sdk/version.ts`], env: {}, says: CLAUDE_SDK_VERSION_LINE },
 }
 
+export const OPENCODE_BIN = '/usr/local/bin/opencode'
+
+export const OPENCODE_CELL: CellKind = {
+  harness: 'opencode', name: `opencode-${OPENCODE_VERSION}`, target: 'cell-opencode', entry: 'opencode/cell-main.ts',
+  version: { command: [OPENCODE_BIN, '--version'], env: { OPENCODE_DISABLE_AUTOUPDATE: '1', OPENCODE_DISABLE_MODELS_FETCH: '1' }, says: OPENCODE_VERSION },
+}
+
 export const CELL_KINDS: Record<string, CellKind> = {
   [PI_CELL.harness]: PI_CELL, [LETTA_CODE_CELL.harness]: LETTA_CODE_CELL, [CLAUDE_SDK_CELL.harness]: CLAUDE_SDK_CELL,
+  [OPENCODE_CELL.harness]: OPENCODE_CELL,
 }

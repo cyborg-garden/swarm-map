@@ -34,6 +34,13 @@ version: 2
 # pinned SDK version (package.json in that folder, and CLAUDE_SDK_VERSION and
 # CLAUDE_CODE_VERSION in lib/runtimes/claude-sdk/caps.ts), regenerate the
 # lock file, and rerun the lab checks against the new version.
+#
+# conformance/docker/opencode is the same kind of folder again. It pins one
+# third-party package, OpenCode, whose lock file holds only its launcher and
+# its compiled program for each platform. To move it: bump the pinned version
+# (package.json in that folder and OPENCODE_VERSION in
+# lib/runtimes/opencode/caps.ts), regenerate the lock file, and rerun the lab
+# checks against the new version.
 updates:
   - package-ecosystem: "npm"
     directory: "/conformance/docker/letta-code"
@@ -44,6 +51,13 @@ updates:
       - dependency-name: "*"
   - package-ecosystem: "npm"
     directory: "/conformance/docker/claude-sdk"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
+  - package-ecosystem: "npm"
+    directory: "/conformance/docker/opencode"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 0

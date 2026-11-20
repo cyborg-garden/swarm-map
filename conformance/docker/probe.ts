@@ -149,6 +149,11 @@ function binary(name: string): string {
  * which by what is in it.
  */
 function sealedFiles(): { gate: string; shim: string; entry: string; folder: string; binary: string } {
+  const fourth = `${SWARM_ROOT}/lib/runtimes/opencode`
+  if (existsSync(`${fourth}/shim.ts`)) {
+    // Its veto is the ACP client's answer to a permission request. The harness is the OpenCode program.
+    return { gate: `${SWARM_ROOT}/lib/runtimes/acp/client.ts`, shim: `${SWARM_ROOT}/lib/runtimes/acp/shim.ts`, entry: `${SWARM_ROOT}/conformance/docker/opencode/cell-main.ts`, folder: fourth, binary: binary('opencode') }
+  }
   const third = `${SWARM_ROOT}/lib/runtimes/claude-sdk`
   if (existsSync(`${third}/shim.ts`)) {
     // Its veto is a callback in the pump too. The harness is the Claude Code program the SDK starts.
