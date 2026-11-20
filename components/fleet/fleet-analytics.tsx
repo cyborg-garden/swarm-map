@@ -18,6 +18,21 @@ export function FleetAnalytics() {
   })) : []
   const sessionsBySource = data ? data.days.map((d) => ({ label: d.date, values: d.bySource })) : []
 
+  // Biggest use first: cost, then tokens (unpriced models cost 0), then name.
+  // Pending harnesses have no figures yet, so they sit at the bottom.
+  const harnesses = data ? [...data.harnesses].sort((a, b) =>
+    Number(a.pending) - Number(b.pending)
+    || (b.cost ?? 0) - (a.cost ?? 0)
+    || (b.tokens ?? 0) - (a.tokens ?? 0)
+    || a.name.localeCompare(b.name)) : []
+  const totals = harnesses.reduce(
+    (s, h) => ({
+      cost: s.cost + (h.cost ?? 0), sessions: s.sessions + (h.sessions ?? 0),
+      toolCalls: s.toolCalls + (h.toolCalls ?? 0), tokens: s.tokens + (h.tokens ?? 0),
+    }),
+    { cost: 0, sessions: 0, toolCalls: 0, tokens: 0 },
+  )
+
   return (
     <section className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4 mt-6">
       <div className="flex items-center justify-between mb-3">
@@ -47,7 +62,7 @@ export function FleetAnalytics() {
                 </tr>
               </thead>
               <tbody>
-                {data.harnesses.map((h) => (
+                {harnesses.map((h) => (
                   <tr key={h.harnessId} className="border-b border-[var(--border)] last:border-0">
                     <td className="px-2 py-1.5 font-mono text-xs">
                       {h.name}
@@ -66,6 +81,17 @@ export function FleetAnalytics() {
                   </tr>
                 ))}
               </tbody>
+              {harnesses.length > 0 && (
+                <tfoot>
+                  <tr className="border-t border-[var(--border)] font-medium">
+                    <th scope="row" className="text-left px-2 py-1.5 text-xs uppercase tracking-wide">Total</th>
+                    <td className="px-2 py-1.5 text-right">{data.costStatus === 'unknown' ? '—' : formatUsd(totals.cost)}</td>
+                    <td className="px-2 py-1.5 text-right">{totals.sessions}</td>
+                    <td className="px-2 py-1.5 text-right">{formatCompact(totals.toolCalls)}</td>
+                    <td className="px-2 py-1.5 text-right">{formatCompact(totals.tokens)}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
