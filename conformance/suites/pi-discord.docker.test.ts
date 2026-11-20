@@ -577,12 +577,17 @@ describe('pi-discord: two cells, end to end: the agent\'s own, and a second for 
     }
     expect(forger).toBeDefined()
     try {
-      // The own cell's turn waits for an admin on a shell call, so it is live.
-      script.unshift({ match: 'CANARY-held', tools: [{ name: 'bash', args: { command: 'ls' } }], text: 'listed' })
+      // The own cell's turn waits for an admin on a shell call, so it is live. The command writes a file:
+      // one that only lists is on the command policy's allow list, and would run with no yes and hold nothing.
+      script.unshift({ match: 'CANARY-held', tools: [{ name: 'bash', args: { command: `printf '%s\\n' HELD-${nonce} > held.txt` } }], text: 'listed' })
       const posts = fake.posted.length
       say(IDS.home, IDS.member, 'CANARY-held')
       await until(() => fake.posted.length === posts + 1)
-      const turnId = receipts().filter((r) => r.event.kind === 'tool' && r.rule === 'priv.approval' && r.event.room === IDS.home).at(-1)?.event.turnId
+      expect(fake.posted[posts].content.split('\n')[0]).toBe('Approval needed. The agent wants to run bash:')
+      // The door writes its receipt for the request just after the request is posted.
+      const held = (): string | undefined => receipts().filter((r) => r.event.kind === 'tool' && r.verdict === 'ask' && r.rule === 'priv.approval' && r.event.room === IDS.home).at(-1)?.event.turnId
+      await until(() => held() !== undefined, 10_000)
+      const turnId = held()
       expect(turnId).toMatch(/^[0-9a-f-]{36}$/)
       const answer = await forger!.requestTool(turnId!, 'web_fetch', { url: 'https://example.org/' })
       expect(answer).toMatchObject({ allow: false, reason: 'not a turn of this cell' })
