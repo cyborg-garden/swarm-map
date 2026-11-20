@@ -111,6 +111,23 @@ export function fetchGitArtifact(src: GitSource, opts: FetchOpts): string {
         `git clone failed for ${src.org}/${src.repo}#${src.ref}: ${redactSecrets(raw, opts.token)}`,
       )
     }
+
+    // A tag can be moved or re-created on the remote. When the manifest records
+    // the commit the tag pointed at on review, the clone must be that commit.
+    if (src.commit) {
+      let head = ''
+      try {
+        head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dest, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+      } catch {
+        /* head stays empty and is refused below */
+      }
+      if (head.toLowerCase() !== src.commit.toLowerCase()) {
+        fs.rmSync(dest, { recursive: true, force: true })
+        throw new Error(
+          `git ref '${src.ref}' of ${src.org}/${src.repo} is at ${head || 'an unreadable commit'}, not the recorded ${src.commit}. Not installed.`,
+        )
+      }
+    }
   } finally {
     if (askpass) {
       try {

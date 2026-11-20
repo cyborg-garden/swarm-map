@@ -163,6 +163,7 @@ const OTHER_FIELDS: Record<string, string> = {
   './fleet/model-updates/apply/route.ts': 'from provider to',
   './fleet/model-updates/check/route.ts': 'apply',
   './harnesses/[id]/analytics/route.ts': '?days',
+  './harnesses/[id]/artifacts/pack/route.ts': 'overwrite pack restart',
   './harnesses/[id]/artifacts/sync/route.ts': 'assignKeys dryRun force includeVision packs surface',
   './harnesses/[id]/cascade/save-as/route.ts': 'name overwrite',
   './harnesses/[id]/chat-updates/route.ts': 'level',

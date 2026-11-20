@@ -14,6 +14,9 @@ export interface ArtifactEntry {
   source: string
   // plugins only: write into config.yaml plugins.enabled so the runtime loads this standalone plugin
   enabled?: boolean
+  // git sources only: the full commit SHA the pinned tag pointed at when it was
+  // reviewed. The fetch refuses a clone whose HEAD is any other commit.
+  commit?: string
 }
 
 export interface ArtifactsManifest {
@@ -27,7 +30,11 @@ export interface GitSource {
   repo: string
   ref: string
   subdir?: string
+  // Expected commit for `ref`; see ArtifactEntry.commit.
+  commit?: string
 }
+
+const GIT_COMMIT_RE = /^[0-9a-f]{40}$/i
 
 // org / repo names and refs are charset-validated because the parsed values
 // later feed a git command — a stray shell metacharacter or path traversal
@@ -152,6 +159,8 @@ export interface InstallOpts {
   // trust-gated BEFORE the existing dir is removed, so a refused update never
   // destroys the working artifact.
   overwrite?: boolean
+  // Refuse a git source whose manifest entry records no commit SHA.
+  requireCommit?: boolean
 }
 
 // Sources supported:
@@ -170,15 +179,19 @@ export async function installArtifacts(
   const results: InstallResult[] = []
   const types: ArtifactType[] = ['plugins', 'skills', 'hooks']
 
+  // Clones land in a cache dir. When the caller names none, this call makes
+  // its own and removes it before returning: the installed copy is all it keeps.
+  let ownCache: string | undefined
   const gitFetch =
     opts.gitFetch ??
     ((src: GitSource): string =>
       fetchGitArtifact(src, {
         baseUrl: opts.gitBaseUrl,
         token: opts.gitToken,
-        cacheRoot: opts.cacheRoot ?? fs.mkdtempSync(path.join(os.tmpdir(), 'hsm-artifact-cache-')),
+        cacheRoot: opts.cacheRoot ?? (ownCache ??= fs.mkdtempSync(path.join(os.tmpdir(), 'hsm-artifact-cache-'))),
       }))
 
+  try {
   for (const type of types) {
     for (const entry of manifest[type]) {
       // Defense in depth: the artifact name becomes a path segment and a
@@ -204,6 +217,14 @@ export async function installArtifacts(
       // Throws loudly on a malformed / unpinned git source; null for non-git.
       const git = parseGitSource(entry.source)
       if (git) {
+        if (entry.commit !== undefined) {
+          if (typeof entry.commit !== 'string' || !GIT_COMMIT_RE.test(entry.commit)) {
+            throw new Error(`invalid commit for ${type}/${entry.name}: expected a full 40-character SHA`)
+          }
+          git.commit = entry.commit
+        } else if (opts.requireCommit) {
+          throw new Error(`git-sourced ${type}/${entry.name} has no recorded commit. Not installed.`)
+        }
         const fetchedDir = gitFetch(git)
         const gate = gateArtifactDir(fetchedDir, opts.scope)
         if (!gate.ok) {
@@ -238,6 +259,9 @@ export async function installArtifacts(
         results.push({ type, name: entry.name, installed: false, error: `source not found: ${(e as Error).message}` })
       }
     }
+  }
+  } finally {
+    if (ownCache) await rm(ownCache, { recursive: true, force: true }).catch(() => {})
   }
   return results
 }

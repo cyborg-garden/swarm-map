@@ -7,6 +7,7 @@ import { generateDefaultConfig } from '@/lib/templates/config-yaml'
 import type { Storage } from './storage'
 import type { DockerService } from './docker'
 import type { AuditService } from './audit'
+import { installPackToDir, type PackInstallResult } from './pack-install'
 import type { ConfigService } from './config'
 import { getCostToday, getInvocationsToday } from './usage'
 import { markRestarting, isRestarting, clearRestarting } from './restart-tracker'
@@ -1521,6 +1522,45 @@ export class HarnessService {
     }
     this.restart(id, 'recreate')
     return { ok: true, serviceName: harness.serviceName }
+  }
+
+  /**
+   * Install one opt-in pack (git-sourced artifacts included) into an existing
+   * agent, then recreate it so the runtime loads the new plugin. Add-only.
+   */
+  async installPack(
+    id: string,
+    pack: string,
+    opts: { overwrite?: boolean; restart?: boolean } = {},
+  ): Promise<PackInstallResult & { restarted: boolean; restartError?: string }> {
+    const harness = this.get(id)
+    if (!harness?.serviceName) {
+      throw new Error(`Harness ${id} not found`)
+    }
+    const dataDir = guessDataDir(harness.serviceName, harness.serviceName)
+    let result: PackInstallResult
+    try {
+      result = await installPackToDir(dataDir, pack, {
+        overwrite: opts.overwrite,
+        gitToken: process.env.ARTIFACT_GIT_TOKEN || process.env.GITHUB_TOKEN || undefined,
+      })
+    } catch (err) {
+      // A refusal (gate, surface, pin) is as much a part of the record as a success.
+      this.audit.append({ who: 'admin', what: `pack:install:${pack}:failed`, target: harness.name })
+      throw err
+    }
+    this.audit.append({ who: 'admin', what: `pack:install:${pack}${result.installed ? '' : ':failed'}`, target: harness.name })
+    const changed = result.installed && result.results.some((r) => r.installed && !r.skipped)
+    if (!changed || opts.restart === false) return { ...result, restarted: false }
+    try {
+      this.restart(id, 'recreate')
+    } catch (err) {
+      // The pack is on disk; the agent just has not loaded it yet. Say so
+      // instead of reporting the whole install as failed.
+      this.audit.append({ who: 'admin', what: `pack:install:${pack}:restart-failed`, target: harness.name })
+      return { ...result, restarted: false, restartError: err instanceof Error ? err.message : 'restart failed' }
+    }
+    return { ...result, restarted: true }
   }
 
   /**

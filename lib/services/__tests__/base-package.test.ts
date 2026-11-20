@@ -17,6 +17,7 @@ import {
   ORIENTATION_END,
 } from '../base-package'
 import { installBaselineTemplates } from '../templates'
+import { parseGitSource } from '../artifacts-manifest'
 import { readBlockList } from '../../yaml-block-list'
 import { generateDefaultConfig } from '../../templates/config-yaml'
 
@@ -77,9 +78,14 @@ describe('base package definition (infra/artifacts.json)', () => {
     }
   })
 
-  it('every manifest template exists in the repo', () => {
+  it('every local manifest template exists in the repo, and every git source is pinned', () => {
     for (const t of ['plugins', 'skills', 'hooks'] as const) {
       for (const e of pkg.manifest[t]) {
+        if (e.source.startsWith('git:')) {
+          // Fetched at install time; here it only has to parse (pinned to a tag).
+          expect(parseGitSource(e.source), `${t}/${e.name}`).not.toBeNull()
+          continue
+        }
         expect(fs.existsSync(path.join(repoRoot, 'infra', 'templates', t, e.name)), `${t}/${e.name}`).toBe(true)
       }
     }
