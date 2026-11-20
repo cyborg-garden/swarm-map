@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { FleetAnalytics } from './fleet-analytics'
 
 const sample = {
@@ -41,6 +41,32 @@ describe('FleetAnalytics', () => {
     expect(newRow).toHaveTextContent(/pending/i)
     expect(newRow).not.toHaveTextContent('$0.00')
     expect(screen.getByText(/read from a snapshot export/i)).toHaveTextContent(/5 min/)
+  })
+
+  it('orders harnesses by use, biggest first, with pending rows last', async () => {
+    const shuffled = {
+      ...sample,
+      harnesses: [
+        sample.harnesses[2], // pending
+        { harnessId: 'h_free', name: 'free', cost: 0, tokens: 50, sessions: 1, toolCalls: 0, costStatus: 'unknown', stale: false, pending: false },
+        sample.harnesses[1], // ledger, $1
+        sample.harnesses[0], // heron, $2
+      ],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', json: async () => shuffled })))
+    render(<FleetAnalytics />)
+    const table = await screen.findByRole('table', { name: /per harness/i })
+    const names = within(table).getAllByRole('row').slice(1, 5).map((r) => within(r).getAllByRole('cell')[0].textContent)
+    expect(names).toEqual(['heron', 'ledger·snapshot', 'free', 'new'])
+  })
+
+  it('shows a total row summing every counted harness', async () => {
+    render(<FleetAnalytics />)
+    await screen.findByRole('table', { name: /per harness/i })
+    const total = screen.getByRole('row', { name: /total/i })
+    const cells = within(total).getAllByRole('cell').map((c) => c.textContent)
+    // heron + ledger; the pending harness adds nothing.
+    expect(cells).toEqual(['$3.00', '4', '1', '15'])
   })
 
   it('refetches with the selected range', async () => {
