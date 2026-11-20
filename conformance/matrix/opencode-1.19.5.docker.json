@@ -13,7 +13,8 @@
   "caveats": [
     "Every row was run against a scripted model. That tests the plumbing, not what a real model would say.",
     "The harness ran in a Docker cell on one machine (Docker Desktop, aarch64, Docker 29.4.3). Another Docker host, or another version, is not shown.",
-    "A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell."
+    "A tool gate inside the harness is a guardrail. It stops mistakes, not an attacker with a shell.",
+    "ACP permission requests are advisory: OpenCode runs the tool itself. The shim catches a call that ran without a yes only after it ran, from what OpenCode reports. The sealed cell is what bounds it."
   ],
   "rows": [
     {
