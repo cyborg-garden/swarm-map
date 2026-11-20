@@ -47,9 +47,11 @@ process and drops its session; there is no turn left to fail.
 
 That is caught **after** the tool ran. What bounds it **before** is the cell: no network but the
 door, no secret, a read-only disk but for its own folders. That is why an ACP agent is meant to run
-in the same sealed cell as the other harnesses. The cell checks (S0-S3, C8, C9, C10) are written
-for OpenCode but **not yet run in the cell**; until its Docker matrix is committed, OpenCode is
-not one of the launcher's harnesses.
+in the same sealed cell as the other harnesses. The cell checks (S0-S3, C8, C9, C10) were run
+with OpenCode in the cell and pass, on one machine and one Docker
+(`conformance/matrix/opencode-1.19.5.docker.json`). For C10, "the gate removed" means the shim is
+cut out altogether: it is asked nothing and shown no tool call. OpenCode is not yet one of the
+launcher's harnesses: the launcher's own path, with a real chat surface, has no run for it.
 
 What the shim does not hold, because the agent runs its own tools:
 
@@ -82,7 +84,7 @@ name or version at `initialize`. It starts `opencode acp`, one process per conve
 
 Its tools, by the names its rules use: `bash` (shell), `read` (file_read), `edit` (file_write,
 which covers its write and patch tools too). A changed tool list restarts its process on the same
-session. The launcher does not offer it yet: that waits for the Docker matrix.
+session. The launcher does not offer it yet: that waits for a run of the launcher's own path.
 
 ## The checks
 
@@ -91,7 +93,7 @@ session. The launcher does not offer it yet: that waits for the Docker matrix.
 | `lib/runtimes/acp/__tests__/` | The client and the shim against a scripted ACP agent (a small program speaking JSON-RPC over stdio): once only, the hash, unknown kinds, paths, client methods, the version pin, and each kind of breach | CI, no Docker |
 | `conformance/suites/opencode.fake.test.ts` | The shared suite and the ask flow (C6, C6n, C6d, C6t, C6x, C6r) against a fake OpenCode, and nine broken shims and agents | CI, no Docker |
 | `conformance/suites/opencode.real.test.ts` | The same against a real OpenCode, as a process | by hand |
-| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker; not yet run |
+| `conformance/suites/opencode.docker.test.ts` | The same in a sealed Docker cell, plus S0-S3, C8, C9, C10 and the broken rigs | by hand, on a machine with Docker: 38 of 38 pass |
 
 Broken on purpose, each of which must turn its named checks red:
 
