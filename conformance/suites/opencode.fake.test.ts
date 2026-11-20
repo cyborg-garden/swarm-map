@@ -13,7 +13,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { OPENCODE_VERSION } from '../../lib/runtimes/opencode/caps.ts'
 import { armTripwire, tripwireAttempts } from '../guards/tripwire.ts'
 import type { Matrix } from '../matrix.ts'
-import { ALL_CHECKS, fakeOpenCodeCommand, openCodeHarness } from '../harnesses/opencode.ts'
+import { ALL_CHECKS, fakeOpenCodeCommand, openCodeHarness, wrapped } from '../harnesses/opencode.ts'
 import { runChecks, type CheckResult } from './checks.ts'
 import { brokenVariants } from './harness.ts'
 import { startLab } from './lab.ts'
@@ -93,6 +93,21 @@ describe('ACP: what the shim catches that ACP itself cannot stop', () => {
       expect(breaches).toEqual(['the agent ran a call it never asked the door about'])
       // The first turn's reply was posted; the second turn's was not.
       expect(caught(lab)).toEqual({ errors: 1, modelPosts: 1 })
+    } finally { await lab.close() }
+  }, 30_000)
+
+  it('[U:opencode-must-fail] the wrapper the cell checks use for "the gate removed" does remove it: a denied tool runs, nobody is asked, and the turn still replies', async () => {
+    const noGate = openCodeHarness(wrapped('no-gate', fakeOpenCodeCommand()), 'fake')
+    const lab = await startLab({ harness: noGate, shim: 'good', policy: { 'tools.allow': ['shell'] }, silentVerdicts: true })
+    try {
+      const canary = lab.canary('nogate')
+      const file = lab.file('nogate.touched')
+      lab.script({ match: canary, tool: lab.harness.shell.touch(file), text: 'done' })
+      lab.fake.say({ room: 'r-general', sender: 'u-alice', mention: true, text: `run ${canary}` })
+      await lab.door.idle()
+      expect(existsSync(file)).toBe(true)
+      expect(lab.receipts.all().filter((r) => r.event.kind === 'tool')).toEqual([])
+      expect(caught(lab)).toEqual({ errors: 0, modelPosts: 1 })
     } finally { await lab.close() }
   }, 30_000)
 

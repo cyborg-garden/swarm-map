@@ -32,9 +32,11 @@ const dirs = { home: path.join(LAB_DIR, 'home'), work: path.join(LAB_DIR, 'work'
 for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true })
 
 const bin = '/usr/local/bin/opencode'
-// "The gate removed", for this harness: its permission rules set to allow, so it asks nobody.
+// "The gate removed", for this harness: the shim is cut out of every permission request and shown no
+// tool call, so neither its veto nor its watch is left. (With OpenCode's rules set to allow instead, the
+// shim's watch would still see the call and end the turn, and the check could not show its last half.)
 const command = process.env.SMLAB_GATE === 'allows-all'
-  ? [process.execPath, `${SWARM_ROOT}/conformance/broken/opencode-wrapped.ts`, 'allows-all', '1', bin]
+  ? [process.execPath, `${SWARM_ROOT}/conformance/broken/opencode-wrapped.ts`, 'no-gate', '1', bin]
   : [bin]
 const options: OpenCodeShimOptions = {
   host: 'door', port: BRAIN_PORT, token: process.env.SWARMLAB_BRAIN ?? '',

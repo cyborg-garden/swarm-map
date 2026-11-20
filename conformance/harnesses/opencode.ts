@@ -22,7 +22,7 @@ export function fakeOpenCodeCommand(): string[] {
   return [process.execPath, path.resolve(HERE, '..', 'rig', 'fake-opencode.ts')]
 }
 
-export type WrappedHow = 'allows-all' | 'other-version' | 'dials-out' | 'ignores-reject' | 'picks-always'
+export type WrappedHow = 'allows-all' | 'other-version' | 'dials-out' | 'ignores-reject' | 'picks-always' | 'no-gate'
 /** OpenCode started wrong in one named way. See broken/opencode-wrapped.ts. */
 export const wrapped = (how: WrappedHow, command: string[]): string[] =>
   [process.execPath, WRAPPED, how, String(command.length), ...command]

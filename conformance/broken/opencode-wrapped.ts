@@ -14,6 +14,9 @@
 //                   reject": ACP cannot stop it, and the shim has to catch it.
 //   picks-always    every once-yes the shim answers is turned into "always allow", so the
 //                   agent stops asking about that tool. This is a shim that offered always.
+//   no-gate         the shim is cut out: every permission request is answered yes here and never
+//                   reaches it, and it is shown no tool call at all. This is "the gate removed"
+//                   for the cell checks: neither the veto nor the watch is left, only the wall.
 //
 // It imports nothing but Node, so it runs in a cell that has only OpenCode.
 import { spawn } from 'node:child_process'
@@ -59,7 +62,7 @@ function lines(onLine: (line: string) => string): (chunk: Buffer) => string {
     buffered += chunk.toString('utf8')
     const parts = buffered.split('\n')
     buffered = parts.pop() ?? ''
-    return parts.map((l) => onLine(l) + '\n').join('')
+    return parts.map(onLine).filter((l) => l !== '').map((l) => l + '\n').join('')
   }
 }
 
@@ -67,6 +70,15 @@ function lines(onLine: (line: string) => string): (chunk: Buffer) => string {
 const down = lines((line) => {
   let m: Msg
   try { m = JSON.parse(line) } catch { return line }
+  if (how === 'no-gate') {
+    if (m.method === 'session/request_permission') {
+      const once = (m.params?.options ?? []).find((o) => o.kind === 'allow_once')?.optionId
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { outcome: { outcome: 'selected', optionId: once } } }) + '\n')
+      return ''
+    }
+    const kind = (m.params as { update?: { sessionUpdate?: string } } | undefined)?.update?.sessionUpdate
+    if (m.method === 'session/update' && (kind === 'tool_call' || kind === 'tool_call_update')) return ''
+  }
   if (m.method === 'session/request_permission') options.set(m.id, m.params?.options ?? [])
   if (how === 'other-version' && m.result?.agentInfo) m.result.agentInfo.version = '0.0.1'
   return JSON.stringify(m)
