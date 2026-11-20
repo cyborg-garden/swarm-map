@@ -96,7 +96,7 @@ describe('orientation block', () => {
   })
 
   it('appends below an existing persona without touching it', () => {
-    const soul = '# cyborg-public\n\nHand-written persona, 2026-08-11.\n'
+    const soul = '# public-bot\n\nHand-written persona, 2026-08-11.\n'
     const { content, changed } = upsertOrientation(soul, block)
     expect(changed).toBe(true)
     expect(content.startsWith(soul)).toBe(true)
@@ -175,13 +175,13 @@ describe('applyBasePackageToDir — create-time injection', () => {
 })
 
 describe('applyBasePackageToDir — adopting an existing agent (idempotent, no clobber)', () => {
-  // The cyborg-public shape: inline [] plugins, hand-written persona, captcha
+  // The public-bot shape: inline [] plugins, hand-written persona, captcha
   // installed, its own skill, a customised plugin copy, people cards.
   function seedCyborgPublic() {
     seedAgent({
       config: 'model:\n  provider: zai\n  default: glm-5.3\nplugins:\n  enabled: []\nagent:\n  max_turns: 30\n  disabled_toolsets: [kanban]\ndiscord:\n  platforms:\n    enabled: []\n',
-      soul: '# cyborg-public\n\nThe 2026-08-11 persona.\n',
-      env: 'HERMES_AGENT_NAME=cyborg-public\nDISCORD_ALLOWED_CHANNELS=1,2\nHERMES_DM_POLICY=approved-only\n',
+      soul: '# public-bot\n\nThe 2026-08-11 persona.\n',
+      env: 'HERMES_AGENT_NAME=public-bot\nDISCORD_ALLOWED_CHANNELS=1,2\nHERMES_DM_POLICY=approved-only\n',
     })
     fs.mkdirSync(path.join(dataDir, 'plugins', 'captcha_cascade'), { recursive: true })
     fs.writeFileSync(path.join(dataDir, 'plugins', 'captcha_cascade', '__init__.py'), 'legacy')
@@ -229,7 +229,7 @@ describe('applyBasePackageToDir — adopting an existing agent (idempotent, no c
     expect(read('memories/MEMORY.md')).toBe('memory')
     expect(read('memories/people/discord:1.md')).toBe('card')
     // persona kept, orientation below it
-    expect(read('SOUL.md').startsWith('# cyborg-public\n\nThe 2026-08-11 persona.\n')).toBe(true)
+    expect(read('SOUL.md').startsWith('# public-bot\n\nThe 2026-08-11 persona.\n')).toBe(true)
     expect(read('SOUL.md')).toContain(ORIENTATION_START)
     // .env: DMs off added; dead key NOT removed (apply never removes) but reported
     expect(read('.env')).toMatch(/^DISCORD_ALLOW_ALL_USERS=false$/m)

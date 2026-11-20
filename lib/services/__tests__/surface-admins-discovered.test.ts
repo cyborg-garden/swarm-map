@@ -34,20 +34,20 @@ function writeEnv(name: string, content: string) {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-discovered-'))
   vi.spyOn(os, 'homedir').mockReturnValue(tmpDir)
-  const composeFile = path.join(tmpDir, 'compose', 'iris', 'docker-compose.yml')
+  const composeFile = path.join(tmpDir, 'compose', 'heron', 'docker-compose.yml')
   fs.mkdirSync(path.dirname(composeFile), { recursive: true })
   fs.writeFileSync(composeFile, 'services: {}\n')
 
   storage = new Storage(tmpDir)
   storage.write('settings.json', { hermesDir: tmpDir, dataDir: tmpDir, theme: 'light', composeFiles: [composeFile] })
 
-  // One running container, hermes-iris, and no harnesses.json at all.
+  // One running container, hermes-heron, and no harnesses.json at all.
   const docker = new DockerService()
   /* eslint-disable @typescript-eslint/no-explicit-any */
   ;(docker.isAvailable as any).mockReturnValue(true)
-  ;(docker.listComposeProjects as any).mockReturnValue([{ name: 'iris', status: 'running', configFiles: [composeFile] }])
+  ;(docker.listComposeProjects as any).mockReturnValue([{ name: 'heron', status: 'running', configFiles: [composeFile] }])
   ;(docker.inspectContainers as any).mockReturnValue([
-    { name: 'hermes-iris', service: 'hermes-iris', state: 'running', status: 'Up', ports: [], composeFile },
+    { name: 'hermes-heron', service: 'hermes-heron', state: 'running', status: 'Up', ports: [], composeFile },
   ])
   ;(docker.getAllContainerStats as any).mockReturnValue({})
   ;(docker.listContainers as any).mockReturnValue([])
@@ -57,7 +57,7 @@ beforeEach(() => {
   const harness = new HarnessService(storage, docker, audit, new ConfigService(storage))
   svc = new SurfaceAdminService(storage, audit, harness)
 
-  expect(harness.get('h_iris')?.status).toBe('running')
+  expect(harness.get('h_heron')?.status).toBe('running')
   expect(stored()).toEqual([])
 })
 
@@ -70,14 +70,14 @@ describe('approveGroupInvite with the real harness directory', () => {
   const envOf = (name: string) => fs.readFileSync(path.join(tmpDir, `.hermes-${name}`, '.env'), 'utf-8')
 
   it('approves for a discovered agent with no stored row, by slug or by id, and stores no row', () => {
-    writeEnv('iris', 'TELEGRAM_ALLOWED_USERS=111\n')
-    expect(svc.approveGroupInvite('iris', 'telegram', '-100777', '111'))
-      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_iris' })
-    expect(svc.approveGroupInvite('h_iris', 'telegram', '-100888', '111'))
-      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_iris' })
-    expect(envOf('iris')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777,-100888')
-    expect(svc.isGroupAllowed('iris', 'telegram', '-100888')).toBe(true)
-    expect(svc.isAdmin('iris', 'telegram', '111')).toBe(true)
+    writeEnv('heron', 'TELEGRAM_ALLOWED_USERS=111\n')
+    expect(svc.approveGroupInvite('heron', 'telegram', '-100777', '111'))
+      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_heron' })
+    expect(svc.approveGroupInvite('h_heron', 'telegram', '-100888', '111'))
+      .toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_heron' })
+    expect(envOf('heron')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777,-100888')
+    expect(svc.isGroupAllowed('heron', 'telegram', '-100888')).toBe(true)
+    expect(svc.isAdmin('heron', 'telegram', '111')).toBe(true)
     expect(stored()).toEqual([])
   })
 
@@ -93,16 +93,16 @@ describe('approveGroupInvite with the real harness directory', () => {
 
 describe('setAdmins with the real harness directory', () => {
   it('stores a discovered agent under its own id, by id or by slug', () => {
-    writeEnv('iris', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    expect(svc.setAdmins('iris', 'signal', ['+64111', '+64222'], '+64111')).toMatchObject({ ok: true, harnessId: 'h_iris' })
-    expect(stored().map((h) => h.id)).toEqual(['h_iris'])
-    expect(stored()[0]).toMatchObject({ name: 'iris', surfaceAdmins: { signal: ['+64111', '+64222'] } })
+    writeEnv('heron', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    expect(svc.setAdmins('heron', 'signal', ['+64111', '+64222'], '+64111')).toMatchObject({ ok: true, harnessId: 'h_heron' })
+    expect(stored().map((h) => h.id)).toEqual(['h_heron'])
+    expect(stored()[0]).toMatchObject({ name: 'heron', surfaceAdmins: { signal: ['+64111', '+64222'] } })
 
     // The row now exists, so the next write updates it in place.
-    expect(svc.setAdmins('h_iris', 'signal', ['+64222'], '+64222')).toMatchObject({ ok: true, harnessId: 'h_iris' })
-    expect(stored().map((h) => h.id)).toEqual(['h_iris'])
-    expect(svc.isAdmin('iris', 'signal', '+64111')).toBe(false)
-    expect(svc.isAdmin('iris', 'signal', '+64222')).toBe(true)
+    expect(svc.setAdmins('h_heron', 'signal', ['+64222'], '+64222')).toMatchObject({ ok: true, harnessId: 'h_heron' })
+    expect(stored().map((h) => h.id)).toEqual(['h_heron'])
+    expect(svc.isAdmin('heron', 'signal', '+64111')).toBe(false)
+    expect(svc.isAdmin('heron', 'signal', '+64222')).toBe(true)
   })
 
   it('refuses an id Docker does not list, even with a .env on disk, and stores nothing', () => {
@@ -114,8 +114,8 @@ describe('setAdmins with the real harness directory', () => {
   })
 
   it('refuses another spelling of the discovered agent, and stores nothing', () => {
-    writeEnv('iris', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    for (const id of ['h_Iris', 'h_iris_', 'h_h_iris']) {
+    writeEnv('heron', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    for (const id of ['h_Heron', 'h_heron_', 'h_h_heron']) {
       expect(svc.setAdmins(id, 'signal', ['+64111'], '+64111').ok, id).toBe(false)
     }
     expect(stored()).toEqual([])

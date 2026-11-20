@@ -45,7 +45,7 @@ describe('use-case template registry', () => {
   })
 
   it('derives a display name from the harness name', () => {
-    expect(agentDisplayName('vera')).toBe('Vera')
+    expect(agentDisplayName('otter')).toBe('Otter')
     expect(agentDisplayName('ops-bot')).toBe('Ops Bot')
     expect(agentDisplayName('McKenzie')).toBe('McKenzie')
   })
@@ -103,11 +103,11 @@ describe('installUseCaseTemplate (trust-gated, injected fetch)', () => {
     await installUseCaseTemplate(agentDir, TEMPLATE, {
       gitFetch: (src) => fetchBy(src.subdir),
       cacheRoot: fs.mkdtempSync(path.join(os.tmpdir(), 'uc-cache-')),
-      agentName: 'vera',
+      agentName: 'otter',
     })
     const soul = fs.readFileSync(path.join(agentDir, 'SOUL.md'), 'utf-8')
-    expect(soul).toContain('# Vera\n')
-    expect(soul).toContain('You are Vera, a generalist.')
+    expect(soul).toContain('# Otter\n')
+    expect(soul).toContain('You are Otter, a generalist.')
     expect(soul).not.toContain('{{AGENT_NAME}}')
     // Unknown placeholders are left alone (and warned about), never blanked.
     expect(soul).toContain('{{UNKNOWN_THING}}')

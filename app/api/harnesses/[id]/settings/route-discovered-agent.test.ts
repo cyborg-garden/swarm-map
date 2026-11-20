@@ -8,7 +8,7 @@
  * down: for a container Docker discovers, `HarnessService.discover()` builds a
  * fresh Harness literal, and the overlay's extraMounts/extraEnv were not
  * copied onto it. `get()` therefore returned `extraMounts: undefined` for
- * iris, the route faithfully forwarded `undefined`, and the next resources/VPN
+ * heron, the route faithfully forwarded `undefined`, and the next resources/VPN
  * PUT wrote a compose with the approval-gate spool mount gone. The container
  * came back healthy with its gate severed.
  *
@@ -48,8 +48,8 @@ import { SurfaceAdminService } from '@/lib/services/surface-admins'
 import { generateStandaloneCompose } from '@/lib/services/harness-compose'
 
 const SPOOL = {
-  hostPath: '/srv/iris/nimbleco/intake',
-  containerPath: '/opt/iris-intake',
+  hostPath: '/srv/heron/harbor/intake',
+  containerPath: '/opt/heron-intake',
   mode: 'rw' as const,
   note: 'approval-gate spool',
 }
@@ -60,7 +60,7 @@ function makeParams(id: string) {
 }
 
 function makeRequest(body: unknown): Request {
-  return new Request('http://localhost/api/harnesses/h_iris/settings', {
+  return new Request('http://localhost/api/harnesses/h_heron/settings', {
     method: 'PUT',
     body: JSON.stringify(body),
     headers: { 'content-type': 'application/json' },
@@ -80,22 +80,22 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
     vi.spyOn(os, 'homedir').mockReturnValue(tmpDir)
 
     // The agent's data dir + .env — what the route rewrites.
-    agentDir = path.join(tmpDir, '.hermes-iris')
+    agentDir = path.join(tmpDir, '.hermes-heron')
     fs.mkdirSync(agentDir, { recursive: true })
     fs.writeFileSync(path.join(agentDir, '.env'), 'GITHUB_TOKEN=x\n', { mode: 0o600 })
 
     // The CURRENT on-disk compose, generated the same way the agent's real one
     // was: with the gate mount present. This is the file the PUT regenerates.
-    composeFile = path.join(tmpDir, 'compose', 'iris', 'docker-compose.yml')
+    composeFile = path.join(tmpDir, 'compose', 'heron', 'docker-compose.yml')
     fs.mkdirSync(path.dirname(composeFile), { recursive: true })
     fs.writeFileSync(
       composeFile,
-      generateStandaloneCompose('iris', 8642, agentDir, {
+      generateStandaloneCompose('heron', 8642, agentDir, {
         defaultImage: 'ghcr.io/cyborg-garden/hermes-agent-mt:latest',
         memory: '2G',
         cpus: '2.0',
         extraMounts: [SPOOL],
-        extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+        extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
       }),
       'utf-8',
     )
@@ -109,26 +109,26 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
     })
     storage.write('harnesses.json', [
       {
-        id: 'h_iris',
-        name: 'iris',
+        id: 'h_heron',
+        name: 'heron',
         tier: 'team',
         resources: { memory: '2G', cpus: '2.0' },
         extraMounts: [SPOOL],
-        extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+        extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
       },
     ])
 
     docker = new DockerService()
-    // iris is RUNNING. This is the whole point: discovery returns a container,
+    // heron is RUNNING. This is the whole point: discovery returns a container,
     // so list()/get() go through the discovered literal, never normalizeStored.
     ;(docker.isAvailable as any).mockReturnValue(true)
     ;(docker.listComposeProjects as any).mockReturnValue([
-      { name: 'iris', status: 'running', configFiles: [composeFile] },
+      { name: 'heron', status: 'running', configFiles: [composeFile] },
     ])
     ;(docker.inspectContainers as any).mockReturnValue([
       {
-        name: 'hermes-iris',
-        service: 'hermes-iris',
+        name: 'hermes-heron',
+        service: 'hermes-heron',
         state: 'running',
         status: 'Up 3 days',
         ports: [{ published: 8642, target: 8000 }],
@@ -152,10 +152,10 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
   })
 
   it('the fixture really is a discovered, running agent', () => {
-    const iris = harness.get('h_iris')
-    expect(iris).toBeDefined()
-    expect(iris!.status).toBe('running')
-    expect(iris!.composeFile).toBe(composeFile)
+    const heron = harness.get('h_heron')
+    expect(heron).toBeDefined()
+    expect(heron!.status).toBe('running')
+    expect(heron!.composeFile).toBe(composeFile)
   })
 
   it('a resources PUT regenerates a compose that STILL CONTAINS the gate mount', async () => {
@@ -164,7 +164,7 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
 
     const res = await PUT(
       makeRequest({ dmPolicy: 'approved-only', resources: { memory: '4G', cpus: '4.0' } }),
-      makeParams('h_iris'),
+      makeParams('h_heron'),
     )
     expect(res.status).toBe(200)
 
@@ -174,19 +174,19 @@ describe('Settings PUT on a DISCOVERED (running) agent keeps its extra mounts (#
     expect(regenerated).toContain('memory: 4G')
     // …and the capability nobody mentioned in the request survived it.
     expect(regenerated).toContain(MOUNT_LINE)
-    expect(regenerated).toContain('IRIS_INTAKE_DIR=/opt/iris-intake')
+    expect(regenerated).toContain('HERON_INTAKE_DIR=/opt/heron-intake')
   })
 
   it('a VPN-enable PUT regenerates a compose that STILL CONTAINS the gate mount', async () => {
     const res = await PUT(
       makeRequest({ dmPolicy: 'approved-only', vpnEnabled: true }),
-      makeParams('h_iris'),
+      makeParams('h_heron'),
     )
     expect(res.status).toBe(200)
 
     const regenerated = fs.readFileSync(composeFile, 'utf-8')
     expect(regenerated).toContain('wireguard')
     expect(regenerated).toContain(MOUNT_LINE)
-    expect(regenerated).toContain('IRIS_INTAKE_DIR=/opt/iris-intake')
+    expect(regenerated).toContain('HERON_INTAKE_DIR=/opt/heron-intake')
   })
 })

@@ -92,7 +92,7 @@ describe('a stored row with a retired runtime', () => {
     fs.writeFileSync(decoyCompose, 'services: {}\n')
 
     storage.write('harnesses.json', [
-      { id: 'h_iris', name: 'iris', runtime: 'hermes', tier: 'team' },
+      { id: 'h_heron', name: 'heron', runtime: 'hermes', tier: 'team' },
       {
         id: 'h_old',
         name: 'old',
@@ -118,12 +118,12 @@ describe('a stored row with a retired runtime', () => {
 
   const runIris = () => {
     mock(docker.listComposeProjects).mockReturnValue([
-      { name: 'iris', status: 'running', configFiles: [composeFile] },
+      { name: 'heron', status: 'running', configFiles: [composeFile] },
     ])
     mock(docker.inspectContainers).mockReturnValue([
       {
-        name: 'hermes-iris',
-        service: 'hermes-iris',
+        name: 'hermes-heron',
+        service: 'hermes-heron',
         state: 'running',
         status: 'Up',
         ports: [{ published: 8642, target: 8000 }],
@@ -134,7 +134,7 @@ describe('a stored row with a retired runtime', () => {
 
   it('is not in list() or get(), with Docker empty (stored fallback path)', () => {
     const ids = service.list().map((h) => h.id)
-    expect(ids).toContain('h_iris')
+    expect(ids).toContain('h_heron')
     expect(ids).not.toContain('h_old')
     expect(ids).not.toContain('h_srv')
     expect(ids).not.toContain('h_odd')
@@ -144,7 +144,7 @@ describe('a stored row with a retired runtime', () => {
   it('is not in list() or get(), with a real Hermes agent running (merge path)', () => {
     runIris()
     const list = service.list()
-    expect(list.find((h) => h.id === 'h_iris')?.status).toBe('running')
+    expect(list.find((h) => h.id === 'h_heron')?.status).toBe('running')
     expect(list.map((h) => h.id)).not.toContain('h_old')
     expect(service.get('h_srv')).toBeUndefined()
   })
@@ -314,14 +314,14 @@ describe('a stored row with a retired runtime', () => {
     expect(fs.existsSync(decoyComposeDir)).toBe(true)
     expect(service.listRetired().map((r) => r.id)).not.toContain('h_old')
     // The Hermes row beside it is untouched.
-    expect(service.get('h_iris')).toBeDefined()
+    expect(service.get('h_heron')).toBeDefined()
   })
 
   it('control: the same remove() on a real Hermes row DOES delete its files', () => {
     // Proves the decoy check above can fail: without the guard, these go.
-    fs.mkdirSync(path.join(tmpDir, '.hermes-iris'))
-    const result = service.remove('h_iris', true)
+    fs.mkdirSync(path.join(tmpDir, '.hermes-heron'))
+    const result = service.remove('h_heron', true)
     expect(result.filesDeleted).toBe(true)
-    expect(fs.existsSync(path.join(tmpDir, '.hermes-iris'))).toBe(false)
+    expect(fs.existsSync(path.join(tmpDir, '.hermes-heron'))).toBe(false)
   })
 })

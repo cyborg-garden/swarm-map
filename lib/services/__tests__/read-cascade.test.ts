@@ -10,7 +10,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { readCascade, cascadeChain } from '../harness'
-import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, P2, OLLAMA_URL } from './fleet-shapes'
+import { EMBER, MATILDE, BADGER, KESTREL, HERON, P2, OLLAMA_URL } from './fleet-shapes'
 import { readModelProvider } from '../harness'
 
 let dir = ''
@@ -22,8 +22,8 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 describe('readCascade', () => {
-  it('cyborg: primary from model:, four fallbacks, primary not duplicated', () => {
-    write(CYBORG)
+  it('ember: primary from model:, four fallbacks, primary not duplicated', () => {
+    write(EMBER)
     const c = readCascade(dir)
     expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     expect(c.fallbacks).toEqual([
@@ -49,8 +49,8 @@ describe('readCascade', () => {
     expect(cascadeChain(c)[0].model).toBe('moonshotai/kimi-k3')
   })
 
-  it('cryptids: the HSM-saved duplicate row 0 is reported as the convention and dropped from the chain', () => {
-    write(CRYPTIDS)
+  it('badger: the HSM-saved duplicate row 0 is reported as the convention and dropped from the chain', () => {
+    write(BADGER)
     const c = readCascade(dir)
     expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     expect(c.fallbacks).toHaveLength(3)
@@ -62,15 +62,15 @@ describe('readCascade', () => {
     ])
   })
 
-  it('blackhouse: duplicate only → a one-entry chain', () => {
-    write(BLACKHOUSE)
+  it('kestrel: duplicate only → a one-entry chain', () => {
+    write(KESTREL)
     const c = readCascade(dir)
     expect(c.primaryDuplicatedAsRow0).toBe(true)
     expect(cascadeChain(c)).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
   })
 
-  it('iris: passthrough keys under model: (api_mode) do not disturb the primary', () => {
-    write(IRIS)
+  it('heron: passthrough keys under model: (api_mode) do not disturb the primary', () => {
+    write(HERON)
     const c = readCascade(dir)
     expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     expect(c.primaryDuplicatedAsRow0).toBe(false)

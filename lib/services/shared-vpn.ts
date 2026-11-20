@@ -97,8 +97,8 @@ export function vpnProjectName(group: string): string {
 }
 /**
  * Pinned by tag AND digest so the default can never silently drift. Digest is
- * the one the Mini resolved `qmcgaw/gluetun:v3.40.0` to on 2026-11-02 (the
- * image the hand-made vera setup was verified on). Bumping means re-verifying
+ * the one `qmcgaw/gluetun:v3.40.0` resolved to on 2026-11-02 (the image a
+ * hand-made setup was verified on). Bumping means re-verifying
  * the new tag's digest — and recreating every joined agent after gluetun.
  */
 export const SHARED_VPN_IMAGE =
@@ -268,7 +268,7 @@ export function serviceNetworkMode(compose: string, agentName: string): string |
 /**
  * The VPN group this agent's service is joined to, or null. "Joined" means
  * swarm-map's own marker header AND the matching network_mode line — a
- * hand-made `container:gluetun-vera` is not a group named "vera".
+ * hand-made `container:gluetun-scout` is not a group named "scout".
  */
 export function composeSharedVpnGroup(compose: string, agentName: string): string | null {
   const lines = compose.split('\n')

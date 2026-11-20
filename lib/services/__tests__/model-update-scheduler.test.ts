@@ -10,7 +10,7 @@ import path from 'path'
 import os from 'os'
 import { Storage } from '../storage'
 import { readFallbackProviders, readCascade, cascadeChain } from '../harness'
-import { CYBORG, CRYPTIDS, MATILDE } from './fleet-shapes'
+import { EMBER, BADGER, MATILDE } from './fleet-shapes'
 import {
   checkModelUpdates,
   applyModelUpdate,
@@ -476,10 +476,10 @@ describe('harnessDataDir', () => {
     // Bypass this file's guessDataDir stub: the real mapping is what production uses.
     const real = await vi.importActual<typeof import('@/lib/services/harness')>('@/lib/services/harness')
     expect(real.guessDataDir('hermes-personal', 'hermes-personal')).toBe(path.join(os.homedir(), '.hermes'))
-    expect(real.guessDataDir('hermes-osint', 'hermes-osint')).toBe(path.join(os.homedir(), '.hermes-osint'))
+    expect(real.guessDataDir('hermes-ledger', 'hermes-ledger')).toBe(path.join(os.homedir(), '.hermes-ledger'))
     // and the scheduler's helper derives the same (serviceName, containerName) pair the writer does
     expect(harnessDataDir({ name: 'personal', serviceName: 'hermes-personal' })).toBe(path.join(root, 'personal'))
-    expect(harnessDataDir({ name: 'osint', serviceName: 'hermes-osint' })).toBe(path.join(root, 'osint'))
+    expect(harnessDataDir({ name: 'ledger', serviceName: 'hermes-ledger' })).toBe(path.join(root, 'ledger'))
   })
 })
 
@@ -1014,11 +1014,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
     settings = { ...settings, mode: 'apply' }
   })
 
-  it('cyborg (primary not in the rows): the report lists the primary first with role primary, then each row', async () => {
+  it('ember (primary not in the rows): the report lists the primary first with role primary, then each row', async () => {
     settings = { ...settings, mode: 'notify' }
-    makeHarness('cyborg', { config: CYBORG })
+    makeHarness('ember', { config: EMBER })
     const report = await checkModelUpdates(deps)
-    const entries = report.harnesses.find((h) => h.id === 'h_cyborg')!.entries
+    const entries = report.harnesses.find((h) => h.id === 'h_ember')!.entries
     expect(entries.map((e) => [e.provider, e.model, e.role])).toEqual([
       ['openrouter', 'z-ai/glm-5.3', 'primary'],
       ['anthropic', 'claude-sonnet-4-6', 'fallback'],
@@ -1028,11 +1028,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
     ])
   })
 
-  it('cryptids (primary duplicated as row 0): ONE entry for the primary, not two', async () => {
+  it('badger (primary duplicated as row 0): ONE entry for the primary, not two', async () => {
     settings = { ...settings, mode: 'notify' }
-    makeHarness('cryptids', { config: CRYPTIDS })
+    makeHarness('badger', { config: BADGER })
     const report = await checkModelUpdates(deps)
-    const entries = report.harnesses.find((h) => h.id === 'h_cryptids')!.entries
+    const entries = report.harnesses.find((h) => h.id === 'h_badger')!.entries
     expect(entries.map((e) => [e.model, e.role])).toEqual([
       ['z-ai/glm-5.3', 'primary'],
       ['claude-sonnet-4-6', 'fallback'],
@@ -1041,7 +1041,7 @@ describe('chain semantics: the primary is a tracked entry too', () => {
   })
 
   it('rotating a tracked PRIMARY on a file that does not repeat it rewrites model.default and adds no row', async () => {
-    const cfg = CYBORG.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
+    const cfg = EMBER.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
     makeHarness('cyb', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
     const report = await checkModelUpdates(deps)
     const e = entryFor(report, 'h_cyb', 'z-ai/glm-5.2')!
@@ -1053,11 +1053,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
   })
 
   it('rotating a tracked PRIMARY on a file that repeats it rewrites model.default AND the duplicate row 0 together', async () => {
-    const cfg = CRYPTIDS.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.2')
+    const cfg = BADGER.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.2')
     makeHarness('cry', { config: cfg, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.2')]: true } })
     const report = await checkModelUpdates(deps)
     expect(entryFor(report, 'h_cry', 'z-ai/glm-5.2')!.applied).toBe(true)
-    expect(readConfig('cry')).toBe(CRYPTIDS)
+    expect(readConfig('cry')).toBe(BADGER)
     const after = readCascade(path.join(root, 'cry'))
     expect(after.primaryDuplicatedAsRow0).toBe(true)
     // A duplicate row that no longer matched the primary after a rotation would be a bug.
@@ -1077,7 +1077,7 @@ describe('chain semantics: the primary is a tracked entry too', () => {
 
   it('orphaned tracking is judged against the chain: the primary\'s key is never an orphan', async () => {
     settings = { ...settings, mode: 'notify' }
-    makeHarness('orph', { config: CYBORG, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.3')]: true, [trackingKey('openrouter', 'gone/model')]: true } })
+    makeHarness('orph', { config: EMBER, tracking: { [trackingKey('openrouter', 'z-ai/glm-5.3')]: true, [trackingKey('openrouter', 'gone/model')]: true } })
     const report = await checkModelUpdates(deps)
     const h = report.harnesses.find((x) => x.id === 'h_orph')!
     expect(h.orphanedTracking).toEqual(['openrouter/gone/model'])
@@ -1085,11 +1085,11 @@ describe('chain semantics: the primary is a tracked entry too', () => {
   })
 
   it('manual apply on the primary (not in the rows) works by model id, no provider needed', async () => {
-    const cfg = CYBORG.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
+    const cfg = EMBER.replace('  default: z-ai/glm-5.3', '  default: z-ai/glm-5.2')
     makeHarness('man', { config: cfg })
     const res = await applyModelUpdate({ harnessId: 'h_man', from: 'z-ai/glm-5.2', to: 'z-ai/glm-5.3' }, deps)
     expect(res.ok).toBe(true)
-    expect(readConfig('man')).toBe(CYBORG)
+    expect(readConfig('man')).toBe(EMBER)
     expect(cascadeChain(readCascade(path.join(root, 'man')))[0].model).toBe('z-ai/glm-5.3')
   })
 })

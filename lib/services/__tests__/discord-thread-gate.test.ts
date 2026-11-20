@@ -1,4 +1,4 @@
-// Discord thread mention gate (2026-10-06 #bounties-work incident).
+// Discord thread mention gate (2026-10-06 incident).
 //
 // Two bots answered un-mentioned messages inside a thread because
 // DISCORD_THREAD_REQUIRE_MENTION was absent from their .env and the adapter
@@ -157,12 +157,12 @@ describe('effectiveDiscordThreadGate — mirrors the adapter precedence', () => 
     expect(effectiveDiscordThreadGate({ env: env(), configYaml: '', adapterDefault: true }).requireMention).toBe(true)
   })
 
-  it('.env beats the top-level yaml discord: block (nimbleco: yaml false, env true)', () => {
+  it('.env beats the top-level yaml discord: block (harbor: yaml false, env true)', () => {
     expect(effectiveDiscordThreadGate({ env: env('true'), configYaml: yamlTop('false') }))
       .toEqual({ requireMention: true, source: 'env' })
   })
 
-  it('yaml discord: applies when .env is silent (the 2026-10-06 nimbleco shape)', () => {
+  it('yaml discord: applies when .env is silent (the 2026-10-06 harbor shape)', () => {
     expect(effectiveDiscordThreadGate({ env: env(), configYaml: yamlTop('false') }))
       .toEqual({ requireMention: false, source: 'yaml discord:' })
   })
@@ -205,16 +205,16 @@ describe('fleet heal + posture report', () => {
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
 
   it('heal writes only the Discord agents that lack the key, and skips opt-outs', () => {
-    const lacking = mk('nimbleco', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
-    const explicit = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=false\n')
-    const optedOut = mk('blackhouse', DISCORD_ENV)
+    const lacking = mk('harbor', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
+    const explicit = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=false\n')
+    const optedOut = mk('kestrel', DISCORD_ENV)
     const noDiscord = mk('signal-only', 'SIGNAL_ACCOUNT=+1\n')
     const missing = { name: 'ghost', dataDir: path.join(root, 'ghost') }
 
     const before = { explicit: readEnv(explicit), optedOut: readEnv(optedOut), noDiscord: readEnv(noDiscord) }
-    const res = healDiscordThreadGates([lacking, explicit, optedOut, noDiscord, missing], ['blackhouse'])
+    const res = healDiscordThreadGates([lacking, explicit, optedOut, noDiscord, missing], ['kestrel'])
 
-    expect(res.healed).toEqual(['nimbleco'])
+    expect(res.healed).toEqual(['harbor'])
     expect(res.failed).toEqual([])
     expect(readEnv(lacking)).toMatch(/^DISCORD_THREAD_REQUIRE_MENTION=true$/m)
     expect(readEnv(explicit)).toBe(before.explicit)
@@ -226,41 +226,41 @@ describe('fleet heal + posture report', () => {
   })
 
   it('heal preserves the .env file mode', () => {
-    const t = mk('iris', DISCORD_ENV)
+    const t = mk('heron', DISCORD_ENV)
     fs.chmodSync(path.join(t.dataDir, '.env'), 0o600)
     healDiscordThreadGates([t], [])
     expect(fs.statSync(path.join(t.dataDir, '.env')).mode & 0o777).toBe(0o600)
   })
 
   it('posture flags an open thread gate unless the agent is opted out, and never writes', () => {
-    const open = mk('nimbleco', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
-    const closed = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
-    const optedOut = mk('blackhouse', DISCORD_ENV + 'DISCORD_FREE_RESPONSE_CHANNELS=1542418448368271420\n',
+    const open = mk('harbor', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
+    const closed = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
+    const optedOut = mk('kestrel', DISCORD_ENV + 'DISCORD_FREE_RESPONSE_CHANNELS=1500000000000000420\n',
       'discord:\n  thread_require_mention: false\n')
     const noDiscord = mk('signal-only', 'SIGNAL_ACCOUNT=+1\n')
-    const extraOverride = mk('iris', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n',
+    const extraOverride = mk('heron', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n',
       'platforms:\n  discord:\n    extra:\n      thread_require_mention: false\n')
 
     const snapshot = () => [open, closed, optedOut, noDiscord, extraOverride].map(readEnv)
     const before = snapshot()
-    const report = discordThreadPosture([open, closed, optedOut, noDiscord, extraOverride], ['blackhouse'])
+    const report = discordThreadPosture([open, closed, optedOut, noDiscord, extraOverride], ['kestrel'])
     expect(snapshot()).toEqual(before)
 
     const byName = Object.fromEntries(report.agents.map((a) => [a.name, a]))
-    expect(byName.nimbleco).toMatchObject({ status: 'open', requireMention: false, source: 'yaml discord:' })
-    expect(byName.cyborg).toMatchObject({ status: 'ok', requireMention: true, source: 'env' })
-    expect(byName.blackhouse).toMatchObject({
-      status: 'opted-out', requireMention: false, freeResponseChannels: ['1542418448368271420'],
+    expect(byName.harbor).toMatchObject({ status: 'open', requireMention: false, source: 'yaml discord:' })
+    expect(byName.ember).toMatchObject({ status: 'ok', requireMention: true, source: 'env' })
+    expect(byName.kestrel).toMatchObject({
+      status: 'opted-out', requireMention: false, freeResponseChannels: ['1500000000000000420'],
     })
     expect(byName['signal-only']).toMatchObject({ status: 'no-discord' })
     // The one layer that outranks .env — a heal can't fix this, so it must be visible.
-    expect(byName.iris).toMatchObject({ status: 'open', source: 'platforms.discord.extra' })
-    expect(report.open.sort()).toEqual(['iris', 'nimbleco'])
+    expect(byName.heron).toMatchObject({ status: 'open', source: 'platforms.discord.extra' })
+    expect(report.open.sort()).toEqual(['harbor', 'heron'])
     expect(report.ok).toBe(false)
   })
 
   it('posture is ok when every Discord agent is gated or opted out', () => {
-    const a = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
+    const a = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
     const report = discordThreadPosture([a], [])
     expect(report.ok).toBe(true)
     expect(report.open).toEqual([])

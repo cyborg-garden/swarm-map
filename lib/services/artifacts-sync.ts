@@ -243,8 +243,8 @@ function writeLockForApplied(agentDataDir: string, results: SyncResult[]) {
  * dep). Returns the new content + which names were added (idempotent).
  *
  * Always leaves a BLOCK list behind: an inline `enabled: []` / `[a, b]` is
- * rewritten in place with the same entries (base package v1 — inline `[]` is
- * why cyborg-public loaded none of its plugins and why sync used to give up).
+ * rewritten in place with the same entries (base package v1 — an inline `[]`
+ * once left an agent loading none of its plugins, and sync used to give up).
  * A `plugins:` block without an `enabled:` child gains one. Shapes that can't
  * be edited safely (nested flow lists, `plugins: {..}`) are left untouched and
  * reported as added: []. See lib/yaml-block-list.ts.

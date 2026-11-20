@@ -383,7 +383,7 @@ def _is_allowed(label, value, allow):
 # in any file, fixture directories included. Everything else (PII, heuristic
 # assignments, connection strings) may be skipped in test-fixture paths.
 # Connection strings stay skippable: fixture URLs with user:pass are common in
-# tests (swarm-map and iris both have them) and are rarely real.
+# tests and are rarely real.
 HIGH_CONFIDENCE_LABELS = frozenset({
     "anthropic-key", "openai-key", "stripe-key", "github-token", "github-fine-grained-pat",
     "slack-token", "slack-webhook", "aws-access-key", "google-api-key",

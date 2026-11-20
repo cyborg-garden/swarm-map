@@ -12,10 +12,10 @@ import {
   discordApproverPosture,
 } from '../discord-approver-roles'
 
-const OPERATOR = '1533670688001495051'
+const OPERATOR = '1500000000000000051'
 const APPROVER = '1534000000000000001'
 
-// Real fleet shape (cryptids/mare): a nested `  platforms:` block under
+// Real fleet shape (badger/wren): a nested `  platforms:` block under
 // display:, a top-level `discord:` block, then the real top-level platforms:.
 const FLEET_YAML = [
   'display:',
@@ -36,7 +36,7 @@ const FLEET_YAML = [
   `      approver_roles: '${OPERATOR}'`,
   'plugins:',
   '  enabled:',
-  '    - iris',
+  '    - heron',
   '',
 ].join('\n')
 
@@ -88,7 +88,7 @@ describe('setApproverRolesYaml', () => {
     const r = setApproverRolesYaml(yaml, [APPROVER])
     expect(r.status).toBe('updated')
     expect(r.yaml).not.toContain('- "operator"')
-    expect(r.yaml).toContain('plugins:\n  enabled:\n    - iris')
+    expect(r.yaml).toContain('plugins:\n  enabled:\n    - heron')
     expect(readApproverRoles(r.yaml).roles).toEqual([APPROVER])
   })
 
@@ -137,12 +137,12 @@ describe('syncDiscordApproverRoles / discordApproverPosture', () => {
     if (yaml !== undefined) fs.writeFileSync(path.join(dir(name), 'config.yaml'), yaml, { mode: 0o600 })
   }
   const yamlOf = (n: string) => fs.readFileSync(path.join(dir(n), 'config.yaml'), 'utf-8')
-  const targets = () => ['iris', 'mare', 'signal-only', 'bare', 'missing'].map((name) => ({ name, dataDir: dir(name) }))
+  const targets = () => ['heron', 'wren', 'signal-only', 'bare', 'missing'].map((name) => ({ name, dataDir: dir(name) }))
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'approver-roles-'))
-    mk('iris', 'DISCORD_BOT_TOKEN=t\n', FLEET_YAML)
-    mk('mare', 'DISCORD_BOT_TOKEN=t\n', FLEET_YAML.replace(`approver_roles: '${OPERATOR}'`, `approver_roles: '${APPROVER}'`))
+    mk('heron', 'DISCORD_BOT_TOKEN=t\n', FLEET_YAML)
+    mk('wren', 'DISCORD_BOT_TOKEN=t\n', FLEET_YAML.replace(`approver_roles: '${OPERATOR}'`, `approver_roles: '${APPROVER}'`))
     mk('signal-only', 'SIGNAL_ACCOUNT=+64\n', FLEET_YAML)
     mk('bare', 'DISCORD_BOT_TOKEN=t\n', 'platforms:\n  discord:\n    enabled: true\n')
   })
@@ -150,28 +150,28 @@ describe('syncDiscordApproverRoles / discordApproverPosture', () => {
 
   it('writes Discord agents only, skips the rest with a reason, keeps file mode', () => {
     const res = syncDiscordApproverRoles(targets(), [APPROVER])
-    expect(res.updated).toEqual(['iris'])
-    expect(res.unchanged).toEqual(['mare'])
+    expect(res.updated).toEqual(['heron'])
+    expect(res.unchanged).toEqual(['wren'])
     expect(res.skipped).toEqual([
       { name: 'signal-only', reason: 'no-discord' },
       { name: 'bare', reason: 'no-extra-block' },
       { name: 'missing', reason: 'no-env' },
     ])
     expect(res.failed).toEqual([])
-    expect(readApproverRoles(yamlOf('iris')).roles).toEqual([APPROVER])
+    expect(readApproverRoles(yamlOf('heron')).roles).toEqual([APPROVER])
     expect(yamlOf('signal-only')).toBe(FLEET_YAML)
-    expect(fs.statSync(path.join(dir('iris'), 'config.yaml')).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(path.join(dir('heron'), 'config.yaml')).mode & 0o777).toBe(0o600)
   })
 
   it('posture reports each agent without writing', () => {
-    const before = yamlOf('iris')
+    const before = yamlOf('heron')
     const p = discordApproverPosture(targets(), [APPROVER])
-    expect(yamlOf('iris')).toBe(before)
+    expect(yamlOf('heron')).toBe(before)
     expect(p.desired).toEqual([APPROVER])
-    expect(p.drift).toEqual(['iris'])
-    const iris = p.agents.find((a) => a.name === 'iris')!
-    expect(iris).toMatchObject({ status: 'drift', roles: [OPERATOR], gateOn: true })
-    expect(p.agents.find((a) => a.name === 'mare')).toMatchObject({ status: 'ok', roles: [APPROVER] })
+    expect(p.drift).toEqual(['heron'])
+    const heron = p.agents.find((a) => a.name === 'heron')!
+    expect(heron).toMatchObject({ status: 'drift', roles: [OPERATOR], gateOn: true })
+    expect(p.agents.find((a) => a.name === 'wren')).toMatchObject({ status: 'ok', roles: [APPROVER] })
     expect(p.agents.find((a) => a.name === 'bare')).toMatchObject({ status: 'no-extra-block', gateOn: false })
   })
 
@@ -179,7 +179,7 @@ describe('syncDiscordApproverRoles / discordApproverPosture', () => {
     const p = discordApproverPosture(targets(), null)
     expect(p.desired).toBeNull()
     expect(p.drift).toEqual([])
-    expect(p.agents.find((a) => a.name === 'iris')).toMatchObject({ status: 'unmanaged', roles: [OPERATOR] })
+    expect(p.agents.find((a) => a.name === 'heron')).toMatchObject({ status: 'unmanaged', roles: [OPERATOR] })
   })
 })
 

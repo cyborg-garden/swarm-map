@@ -81,7 +81,7 @@ describe('generateEnvContent', () => {
     expect(env).toMatch(/^DISCORD_BOTS_REQUIRE_INLINE_MENTION=true$/m)
   })
 
-  it('seeds mention-required in threads (2026-10-06 #bounties-work incident)', () => {
+  it('seeds mention-required in threads (2026-10-06 incident)', () => {
     const env = generateEnvContent({ ...base, discordToken: 'discord.bot.token' })
     // Without it the adapter default (false) lets a bot answer every message in
     // any thread it has "participated" in, mentioned or not.

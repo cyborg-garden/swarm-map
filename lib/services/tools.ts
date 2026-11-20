@@ -4,6 +4,7 @@ import os from 'os'
 import crypto from 'crypto'
 import type { Tool, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
+import { defaultHarnessNames } from './default-harness-names'
 
 const TOOLS_FILE = 'tools.json'
 
@@ -277,15 +278,6 @@ export class ToolsService {
   }
 
   private defaultHarnessNames(): string[] {
-    return [
-      'personal',
-      'cryptids',
-      'cyborg',
-      'egregore',
-      'osint',
-      'seraph-doer',
-      'seraph-generalist',
-      'seraph-thinker',
-    ]
+    return defaultHarnessNames()
   }
 }

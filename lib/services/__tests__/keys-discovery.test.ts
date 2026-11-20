@@ -114,14 +114,14 @@ describe('bluesky pair detection (env discovery)', () => {
   }
 
   it('detects BLUESKY_APP_PASSWORD as a bluesky key carrying its companion identifier', () => {
-    writeAgentEnv('a', 'BLUESKY_IDENTIFIER=nimbleco.ai\nBLUESKY_APP_PASSWORD=abcd-efgh-ijkl-mnop')
+    writeAgentEnv('a', 'BLUESKY_IDENTIFIER=handle.example.com\nBLUESKY_APP_PASSWORD=abcd-efgh-ijkl-mnop')
     const found = keys.list(['a']).find((k) => k.provider === 'bluesky')
     expect(found).toBeTruthy()
-    expect(found!.identifier).toBe('nimbleco.ai')
+    expect(found!.identifier).toBe('handle.example.com')
   })
 
   it('does NOT surface BLUESKY_IDENTIFIER as a key of its own', () => {
-    writeAgentEnv('b', 'BLUESKY_IDENTIFIER=nimbleco.ai')
+    writeAgentEnv('b', 'BLUESKY_IDENTIFIER=handle.example.com')
     expect(keys.list(['b'])).toHaveLength(0)
   })
 

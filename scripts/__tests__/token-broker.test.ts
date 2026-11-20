@@ -120,7 +120,7 @@ describe('token broker', () => {
   })
 
   it('mints from the installation for a known agent secret', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const res = await createBroker({ dir }).requestToken(secret)
     expect(res.status).toBe(200)
     expect(res.body.token).toBe('fake-minted-1')
@@ -128,13 +128,13 @@ describe('token broker', () => {
   })
 
   it('applies the registry scope to the mint', async () => {
-    const secret = enroll('mare', { repos: ['swarm-map'], permissions: { contents: 'write' } })
+    const secret = enroll('wren', { repos: ['swarm-map'], permissions: { contents: 'write' } })
     await createBroker({ dir }).requestToken(secret)
     expect(gh.mints[0].body).toEqual({ repositories: ['swarm-map'], permissions: { contents: 'write' } })
   })
 
   it('denies an unknown or missing secret and never mints', async () => {
-    enroll('mare')
+    enroll('wren')
     const broker = createBroker({ dir })
     expect((await broker.requestToken('wrong')).status).toBe(401)
     expect((await broker.requestToken(undefined)).status).toBe(401)
@@ -153,7 +153,7 @@ describe('token broker', () => {
   })
 
   it('caches until 900s before expiry, then mints again', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     let t = Date.now()
     const broker = createBroker({ dir, now: () => t })
     await broker.requestToken(secret)
@@ -164,12 +164,12 @@ describe('token broker', () => {
   })
 
   it('mints fresh when the registry scope changes, with no restart', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const broker = createBroker({ dir })
     await broker.requestToken(secret)
     const regPath = path.join(dir, 'registry.json')
     const reg = JSON.parse(fs.readFileSync(regPath, 'utf-8'))
-    reg.agents.mare.repos = ['one']
+    reg.agents.wren.repos = ['one']
     fs.writeFileSync(regPath, JSON.stringify(reg))
     await broker.requestToken(secret)
     expect(gh.mints).toHaveLength(2)
@@ -177,7 +177,7 @@ describe('token broker', () => {
   })
 
   it('shares one in-flight mint between concurrent requests', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const broker = createBroker({ dir })
     const [x, y] = await Promise.all([broker.requestToken(secret), broker.requestToken(secret)])
     expect(gh.mints).toHaveLength(1)
@@ -185,7 +185,7 @@ describe('token broker', () => {
   })
 
   it('reports a failed mint as 502 without detail, and does not cache it', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const broker = createBroker({ dir })
     gh.fail(500)
     const bad = await broker.requestToken(secret)
@@ -196,7 +196,7 @@ describe('token broker', () => {
   })
 
   it('bounds a hung GitHub by wall clock', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const broker = createBroker({ dir, mintTimeoutMs: 100 })
     gh.hang()
     const started = Date.now()
@@ -205,20 +205,20 @@ describe('token broker', () => {
   })
 
   it('fails closed on a registry with a malformed scope', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const regPath = path.join(dir, 'registry.json')
     const reg = JSON.parse(fs.readFileSync(regPath, 'utf-8'))
-    reg.agents.mare.repos = 'everything'
+    reg.agents.wren.repos = 'everything'
     fs.writeFileSync(regPath, JSON.stringify(reg))
     expect((await createBroker({ dir }).requestToken(secret)).status).toBe(403)
     expect(gh.mints).toHaveLength(0)
   })
 
   describe('a broken registry.json', () => {
-    const breakRegistry = () => fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"mare": {"secret_sha256": "typo-here",},}}')
+    const breakRegistry = () => fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"wren": {"secret_sha256": "typo-here",},}}')
 
     it('keeps serving from the last good copy, and says so in the audit log', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       const broker = createBroker({ dir })
       expect((await broker.requestToken(secret)).status).toBe(200)
       breakRegistry()
@@ -230,7 +230,7 @@ describe('token broker', () => {
     })
 
     it('answers 503 and does not mint when it has never read a good copy', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       breakRegistry()
       const r = await createBroker({ dir }).requestToken(secret)
       expect(r.status).toBe(503)
@@ -238,7 +238,7 @@ describe('token broker', () => {
     })
 
     it('treats JSON of the wrong shape as broken', async () => {
-      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"mare": null}}')
+      fs.writeFileSync(path.join(dir, 'registry.json'), '{"agents": {"wren": null}}')
       expect((await createBroker({ dir }).requestToken('junk')).status).toBe(503)
       fs.writeFileSync(path.join(dir, 'registry.json'), 'null')
       expect((await createBroker({ dir }).requestToken('junk')).status).toBe(503)
@@ -247,7 +247,7 @@ describe('token broker', () => {
     it('never overwrites a broken file on enrol', () => {
       breakRegistry()
       const before = fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')
-      expect(() => enroll('cyborg')).toThrow()
+      expect(() => enroll('ember')).toThrow()
       expect(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).toBe(before)
     })
   })
@@ -297,7 +297,7 @@ describe('token broker', () => {
   describe('reporting its own health', () => {
     const readStatus = () => JSON.parse(fs.readFileSync(path.join(dir, 'status.json'), 'utf-8'))
     const healthCheck = (secretHome?: string) => checkGithubCredentials({
-      agents: secretHome ? [{ name: 'mare', dataDir: secretHome }] : [],
+      agents: secretHome ? [{ name: 'wren', dataDir: secretHome }] : [],
       keyPath: path.join(dir, 'private-key.pem'),
     })
 
@@ -352,13 +352,13 @@ describe('token broker', () => {
     })
 
     it('tracks a failing agent and clears it on success, with no secret in the file', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       const broker = createBroker({ dir })
       gh.fail(422)
       await broker.requestToken(secret)
       await broker.requestToken(secret)
       broker.writeStatus()
-      expect(readStatus().agents.mare).toEqual({ failures: 2, status: 422 })
+      expect(readStatus().agents.wren).toEqual({ failures: 2, status: 422 })
       expect(fs.readFileSync(path.join(dir, 'status.json'), 'utf-8')).not.toContain(secret)
       expect(fs.statSync(path.join(dir, 'status.json')).mode & 0o777).toBe(0o600)
       gh.fail(null)
@@ -368,16 +368,16 @@ describe('token broker', () => {
     })
 
     it('tracks an agent whose scope is invalid', async () => {
-      const secret = enroll('mare', { repos: [] })
+      const secret = enroll('wren', { repos: [] })
       const broker = createBroker({ dir })
       await broker.requestToken(secret)
       broker.writeStatus()
-      expect(readStatus().agents.mare).toEqual({ failures: 1, status: 'bad-scope' })
+      expect(readStatus().agents.wren).toEqual({ failures: 1, status: 'bad-scope' })
     })
 
     it('refuses empty permissions and an empty repo list without asking GitHub', async () => {
-      const noPerms = enroll('mare', { permissions: {} })
-      const noRepos = enroll('vera', { repos: [] })
+      const noPerms = enroll('wren', { permissions: {} })
+      const noRepos = enroll('otter', { repos: [] })
       const broker = createBroker({ dir })
       expect((await broker.requestToken(noPerms)).status).toBe(403)
       expect((await broker.requestToken(noRepos)).status).toBe(403)
@@ -385,27 +385,27 @@ describe('token broker', () => {
     })
 
     it('drops an agent from the report once it is unenrolled', async () => {
-      const secret = enroll('mare')
-      const other = enroll('vera')
+      const secret = enroll('wren')
+      const other = enroll('otter')
       const broker = createBroker({ dir })
       gh.fail(422)
       await broker.requestToken(secret)
       await broker.requestToken(other)
       broker.writeStatus()
-      expect(Object.keys(readStatus().agents).sort()).toEqual(['mare', 'vera'])
-      unenrollAgent({ dir, agent: 'mare', home: path.join(homes, 'mare') })
+      expect(Object.keys(readStatus().agents).sort()).toEqual(['otter', 'wren'])
+      unenrollAgent({ dir, agent: 'wren', home: path.join(homes, 'wren') })
       broker.writeStatus()
-      expect(Object.keys(readStatus().agents)).toEqual(['vera'])
+      expect(Object.keys(readStatus().agents)).toEqual(['otter'])
     })
 
     it('keeps its failure list when the registry has a typo', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       const broker = createBroker({ dir })
       gh.fail(422)
       await broker.requestToken(secret)
       fs.writeFileSync(path.join(dir, 'registry.json'), '{oops')
       broker.writeStatus()
-      expect(Object.keys(readStatus().agents)).toEqual(['mare'])
+      expect(Object.keys(readStatus().agents)).toEqual(['wren'])
     })
 
     it('the monitor reports at once and keeps reporting', async () => {
@@ -421,8 +421,8 @@ describe('token broker', () => {
     })
 
     it('the health check goes red on a key GitHub rejects, end to end', async () => {
-      enroll('mare')
-      const home = path.join(homes, 'mare')
+      enroll('wren')
+      const home = path.join(homes, 'wren')
       fs.writeFileSync(path.join(home, '.hsm-github-broker'), '')
       fs.writeFileSync(path.join(home, '.env'), 'OK=1\n')
       const broker = createBroker({ dir })
@@ -437,15 +437,15 @@ describe('token broker', () => {
     })
 
     it('the health check goes red when nothing ever started the broker', () => {
-      enroll('mare')
-      const home = path.join(homes, 'mare')
+      enroll('wren')
+      const home = path.join(homes, 'wren')
       fs.writeFileSync(path.join(home, '.hsm-github-broker'), '')
       expect(healthCheck(home).broker.running).toBe(false)
     })
   })
 
   it('keeps the audit log free of tokens, secrets and key material', async () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const broker = createBroker({ dir })
     await broker.requestToken(secret)
     await broker.requestToken(secret)
@@ -458,17 +458,17 @@ describe('token broker', () => {
   })
 
   it('enrol stores only a hash on the host and a 0600 secret in the agent home', () => {
-    const secret = enroll('mare')
+    const secret = enroll('wren')
     const reg = fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')
     expect(reg).not.toContain(secret)
-    expect(JSON.parse(reg).agents.mare).toMatchObject({ repos: 'all', permissions: 'all' })
+    expect(JSON.parse(reg).agents.wren).toMatchObject({ repos: 'all', permissions: 'all' })
     expect(fs.statSync(path.join(dir, 'registry.json')).mode & 0o777).toBe(0o600)
-    expect(fs.statSync(path.join(homes, 'mare', 'github-broker.json')).mode & 0o777).toBe(0o600)
+    expect(fs.statSync(path.join(homes, 'wren', 'github-broker.json')).mode & 0o777).toBe(0o600)
   })
 
   it('re-enrolling replaces the secret and keeps the agent scope', async () => {
-    const old = enroll('mare', { repos: ['x'], permissions: 'all' })
-    const fresh = enroll('mare')
+    const old = enroll('wren', { repos: ['x'], permissions: 'all' })
+    const fresh = enroll('wren')
     const broker = createBroker({ dir })
     expect((await broker.requestToken(old)).status).toBe(401)
     expect((await broker.requestToken(fresh)).status).toBe(200)
@@ -485,7 +485,7 @@ describe('token broker', () => {
     afterEach(() => new Promise((r) => { server.closeAllConnections(); server.close(r) }))
 
     it('serves a token for a bearer secret, marked no-store', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       const res = await fetch(`${base}/v1/token`, { method: 'POST', headers: { authorization: `Bearer ${secret}` } })
       expect(res.status).toBe(200)
       expect(res.headers.get('cache-control')).toBe('no-store')
@@ -503,7 +503,7 @@ describe('token broker', () => {
 
   describe('adoptKey', () => {
     it('proves the new key with a narrow test mint, then swaps it in with no restart', async () => {
-      const secret = enroll('mare')
+      const secret = enroll('wren')
       const broker = createBroker({ dir })
       await broker.requestToken(secret) // cached under key A
       trusted = [keyA.publicKey, keyB.publicKey]

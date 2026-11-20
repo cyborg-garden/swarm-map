@@ -586,7 +586,7 @@ describe('Models API — GET returns the chain the editor shows', () => {
 
   const get = () => GET(new Request('http://localhost/api/harnesses/h_test/models'), makeParams('h_test'))
 
-  it('cyborg-shaped (primary not in the rows): chain = [primary, ...rows], flag false, raw rows kept', async () => {
+  it('ember-shaped (primary not in the rows): chain = [primary, ...rows], flag false, raw rows kept', async () => {
     mockPrimary.mockReturnValue({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     mockExistingFp.mockReturnValue([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
     const json = await (await get()).json()

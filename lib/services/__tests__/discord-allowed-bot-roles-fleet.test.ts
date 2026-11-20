@@ -29,13 +29,13 @@ beforeEach(() => {
   vi.stubEnv('DISCORD_GUILD_IDS', '1600000000000000099')
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'bot-roles-fleet-'))
   vi.spyOn(os, 'homedir').mockReturnValue(home)
-  for (const n of ['iris', 'mare']) {
+  for (const n of ['heron', 'wren']) {
     fs.mkdirSync(dir(n), { recursive: true })
     fs.writeFileSync(path.join(dir(n), '.env'), ENV)
   }
   listMock.mockReturnValue([
-    { id: 'h_iris', name: 'iris', runtime: 'hermes' },
-    { id: 'h_mare', name: 'mare', runtime: 'hermes' },
+    { id: 'h_heron', name: 'heron', runtime: 'hermes' },
+    { id: 'h_wren', name: 'wren', runtime: 'hermes' },
     // A listed agent with no data dir on disk: skipped, never created.
     { id: 'h_l', name: 'l', runtime: 'hermes' },
   ])
@@ -49,8 +49,8 @@ afterEach(() => {
 
 describe('syncFleetDiscordAllowedBotRolesAtStartup', () => {
   it('writes the setting into every Discord agent', () => {
-    expect(syncFleetDiscordAllowedBotRolesAtStartup()?.updated).toEqual(['iris', 'mare'])
-    expect(envOf('iris')).toBe(ENV + `DISCORD_ALLOWED_BOT_ROLES=${ROLE}\n`)
+    expect(syncFleetDiscordAllowedBotRolesAtStartup()?.updated).toEqual(['heron', 'wren'])
+    expect(envOf('heron')).toBe(ENV + `DISCORD_ALLOWED_BOT_ROLES=${ROLE}\n`)
   })
 
   it('ignores a hand-edited setting that is not a list of role IDs, writing nothing', () => {
@@ -59,7 +59,7 @@ describe('syncFleetDiscordAllowedBotRolesAtStartup', () => {
       getSettingsMock.mockReturnValue({ discordAllowedBotRoles: bad })
       expect(syncFleetDiscordAllowedBotRolesAtStartup()).toBeNull()
     }
-    expect(envOf('iris')).toBe(ENV)
+    expect(envOf('heron')).toBe(ENV)
   })
 
   it('does nothing when the setting is unset or null (unmanaged)', () => {
@@ -67,7 +67,7 @@ describe('syncFleetDiscordAllowedBotRolesAtStartup', () => {
     expect(syncFleetDiscordAllowedBotRolesAtStartup()).toBeNull()
     getSettingsMock.mockReturnValue({ discordAllowedBotRoles: null })
     expect(syncFleetDiscordAllowedBotRolesAtStartup()).toBeNull()
-    expect(envOf('iris')).toBe(ENV)
+    expect(envOf('heron')).toBe(ENV)
   })
 
   it('never throws', () => {
@@ -80,22 +80,22 @@ describe('/api/fleet/discord-allowed-bot-roles', () => {
   it('GET reports drift without writing', async () => {
     const body = await (await GET()).json()
     expect(body.desired).toEqual([ROLE])
-    expect(body.drift).toEqual(['iris', 'mare'])
-    expect(envOf('iris')).toBe(ENV)
+    expect(body.drift).toEqual(['heron', 'wren'])
+    expect(envOf('heron')).toBe(ENV)
   })
 
   it('POST applies the setting and says a restart is needed', async () => {
     const res = await POST()
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.restartNeeded).toEqual(['iris', 'mare'])
-    expect(envOf('mare')).toContain(`DISCORD_ALLOWED_BOT_ROLES=${ROLE}`)
+    expect(body.restartNeeded).toEqual(['heron', 'wren'])
+    expect(envOf('wren')).toContain(`DISCORD_ALLOWED_BOT_ROLES=${ROLE}`)
   })
 
   it('POST refuses when the setting is unmanaged', async () => {
     getSettingsMock.mockReturnValue({})
     expect((await POST()).status).toBe(409)
-    expect(envOf('iris')).toBe(ENV)
+    expect(envOf('heron')).toBe(ENV)
   })
 })
 
@@ -109,7 +109,7 @@ describe('PUT /api/settings with discordAllowedBotRoles', () => {
       method: 'PUT', body: JSON.stringify({ discordAllowedBotRoles: [ROLE] }),
     }))
     expect(res.status).toBe(200)
-    expect(envOf('iris')).toContain(`DISCORD_ALLOWED_BOT_ROLES=${ROLE}`)
+    expect(envOf('heron')).toContain(`DISCORD_ALLOWED_BOT_ROLES=${ROLE}`)
   })
 
   it('does not sync for unrelated settings', async () => {
@@ -118,7 +118,7 @@ describe('PUT /api/settings with discordAllowedBotRoles', () => {
     ;(services.config as unknown as { updateSettings: typeof updateSettings }).updateSettings = updateSettings
     const { PUT } = await import('@/app/api/settings/route')
     await PUT(new Request('http://x/api/settings', { method: 'PUT', body: JSON.stringify({ onboarded: true }) }))
-    expect(envOf('iris')).toBe(ENV)
+    expect(envOf('heron')).toBe(ENV)
   })
 })
 

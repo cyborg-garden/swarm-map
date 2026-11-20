@@ -67,13 +67,13 @@ export interface InstallTemplateOpts {
   /** Seed the template SOUL over the agent's SOUL.md. Default true (create-time);
    *  re-apply passes false to preserve a deployed agent's identity. */
   seedSoul?: boolean
-  /** The agent's name as entered at create time (e.g. "vera"). Fills the
-   *  template SOUL's {{AGENT_NAME}} placeholder (as a display name, "Vera"). */
+  /** The agent's name as entered at create time (e.g. "scout"). Fills the
+   *  template SOUL's {{AGENT_NAME}} placeholder (as a display name, "Scout"). */
   agentName?: string
 }
 
 /**
- * Display name for an agent from its harness name: "vera" -> "Vera",
+ * Display name for an agent from its harness name: "scout" -> "Scout",
  * "ops-bot" -> "Ops Bot". Words that already carry capitals are kept as typed.
  */
 export function agentDisplayName(name: string): string {

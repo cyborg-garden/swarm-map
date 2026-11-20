@@ -14,22 +14,22 @@ describe('a credential in the compose file', () => {
   const PAT = ['gh', 'p_', 'y'.repeat(36)].join('')
   let root: string
   const setup = (compose: string, brokered: boolean) => {
-    const dataDir = path.join(root, 'mare')
+    const dataDir = path.join(root, 'wren')
     fs.mkdirSync(dataDir, { recursive: true })
     fs.writeFileSync(path.join(dataDir, '.env'), 'A=1\n')
     if (brokered) fs.writeFileSync(path.join(dataDir, '.hsm-github-broker'), '')
     const composeFile = path.join(root, 'docker-compose.yml')
     fs.writeFileSync(composeFile, compose)
-    return checkGithubCredentials({ agents: [{ name: 'mare', dataDir, composeFile }], keyPath: path.join(root, 'private-key.pem') })
+    return checkGithubCredentials({ agents: [{ name: 'wren', dataDir, composeFile }], keyPath: path.join(root, 'private-key.pem') })
   }
-  const service = (entries: string) => `services:\n  hermes-mare:\n    image: x\n    environment:\n${entries}    ports:\n      - "1:1"\n`
+  const service = (entries: string) => `services:\n  hermes-wren:\n    image: x\n    environment:\n${entries}    ports:\n      - "1:1"\n`
   beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-compose-')) })
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }) })
 
   it('fails a marked agent, naming the variable and not the value', () => {
     const r = setup(service(`      - HOME=/opt/data/home\n      - GH_TOKEN=${PAT}\n`), true)
     expect(r.status).toBe('fail')
-    expect(r.failing).toEqual([{ agent: 'mare', file: 'docker-compose.yml', vars: ['GH_TOKEN'], source: 'compose' }])
+    expect(r.failing).toEqual([{ agent: 'wren', file: 'docker-compose.yml', vars: ['GH_TOKEN'], source: 'compose' }])
     expect(r.message).toContain('extraEnv')
     expect(r.message).not.toContain(PAT)
     // roll can't remove this one, so it must not be the advice.
@@ -67,7 +67,7 @@ describe('a key pasted with its line breaks', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cred-multiline-'))
     const body = `GITHUB_APP_PRIVATE_KEY="\n${PEM_HEADER('RSA PRIVATE KEY')}\nQUJD\n"\n`
     fs.writeFileSync(path.join(root, '.env'), body)
-    const r = checkGithubCredentials({ agents: [{ name: 'mare', dataDir: root }], keyPath: path.join(root, 'private-key.pem') })
+    const r = checkGithubCredentials({ agents: [{ name: 'wren', dataDir: root }], keyPath: path.join(root, 'private-key.pem') })
     expect(r.pending.flatMap((f) => f.vars)).toEqual(scanEnvText(body))
     fs.rmSync(root, { recursive: true, force: true })
   })
@@ -412,11 +412,11 @@ describe('checkGithubCredentials', () => {
     })
 
     it('fails when an agent keeps failing to get a token', () => {
-      status({ agents: { mare: { failures: 2, status: 422 }, once: { failures: 1, status: 502 } } })
+      status({ agents: { wren: { failures: 2, status: 422 }, once: { failures: 1, status: 502 } } })
       const r = check([agent('a', 'OK=1\n', true)])
       expect(r.status).toBe('fail')
-      expect(r.broker.mintFailing).toEqual(['mare'])
-      expect(r.message).toMatch(/mare/)
+      expect(r.broker.mintFailing).toEqual(['wren'])
+      expect(r.message).toMatch(/wren/)
       expect(r.message).not.toMatch(/once/)
     })
 

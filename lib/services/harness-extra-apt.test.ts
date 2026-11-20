@@ -10,10 +10,10 @@ import {
 // hermes service only, so the rest of the fleet's images are unchanged and a
 // regeneration cannot silently drop them.
 
-const agentName = 'cyborg-public'
+const agentName = 'public-bot'
 const port = 8752
-const dataDir = '/Users/juni/.hermes-cyborg-public'
-const build = { build: '/Users/juni/Documents/GitHub/hermes-agent-mt' }
+const dataDir = '/Users/operator/.hermes-public-bot'
+const build = { build: '/Users/operator/Documents/GitHub/hermes-agent-mt' }
 const OFFICE = ['libreoffice-writer-nogui', 'pandoc', 'fonts-liberation2']
 
 function serviceBlock(compose: string, service: string): string {

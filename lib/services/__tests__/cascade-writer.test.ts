@@ -46,7 +46,7 @@ vi.mock('@/lib/services/harness', async () => {
 
 import { applyCascadeToHarness } from '../cascade-writer'
 import { readFallbackProviders, readModelConfig, readCascade, cascadeChain } from '@/lib/services/harness'
-import { CYBORG, MATILDE, CRYPTIDS, BLACKHOUSE, IRIS, P2, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
+import { EMBER, MATILDE, BADGER, KESTREL, HERON, P2, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
 import { services } from '@/lib/services'
 
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -1135,15 +1135,15 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
     })
   }
 
-  it('cyborg: reordering the fallbacks leaves model: alone and never adds a duplicate row', () => {
-    fs.writeFileSync(configPath(), CYBORG)
+  it('ember: reordering the fallbacks leaves model: alone and never adds a duplicate row', () => {
+    fs.writeFileSync(configPath(), EMBER)
     const chain = cascadeChain(readCascade(tmpDir))
     const reordered = [chain[0], chain[2], chain[1], chain[3], chain[4]]
     const res = applyCascadeToHarness('h_test', reordered, { who: 'api', expected: chain })
     expect(res.ok).toBe(true)
     const out = fs.readFileSync(configPath(), 'utf-8')
     expect(out).toBe(
-      CYBORG.replace(
+      EMBER.replace(
         '  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n',
         '  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
       )
@@ -1152,29 +1152,29 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
     expect(cascadeChain(readCascade(tmpDir))).toEqual(reordered)
   })
 
-  it('iris: promoting a fallback to primary swaps model.default and the row, keeps api_mode, adds no duplicate', () => {
-    fs.writeFileSync(configPath(), IRIS)
+  it('heron: promoting a fallback to primary swaps model.default and the row, keeps api_mode, adds no duplicate', () => {
+    fs.writeFileSync(configPath(), HERON)
     const chain = cascadeChain(readCascade(tmpDir))
     const res = applyCascadeToHarness('h_test', [chain[1], chain[0], chain[2]], { who: 'api', expected: chain })
     expect(res.ok).toBe(true)
     expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-      IRIS.replace('  default: z-ai/glm-5.3\n', '  default: moonshotai/kimi-k3\n').replace('    model: moonshotai/kimi-k3\n', '    model: z-ai/glm-5.3\n')
+      HERON.replace('  default: z-ai/glm-5.3\n', '  default: moonshotai/kimi-k3\n').replace('    model: moonshotai/kimi-k3\n', '    model: z-ai/glm-5.3\n')
     )
   })
 
-  it('cryptids: changing the primary rewrites model.default AND the duplicate row 0 together', () => {
-    fs.writeFileSync(configPath(), CRYPTIDS)
+  it('badger: changing the primary rewrites model.default AND the duplicate row 0 together', () => {
+    fs.writeFileSync(configPath(), BADGER)
     const chain = cascadeChain(readCascade(tmpDir))
     const res = applyCascadeToHarness('h_test', [{ provider: 'openrouter', model: 'z-ai/glm-5.4' }, ...chain.slice(1)], { who: 'api', expected: chain })
     expect(res.ok).toBe(true)
-    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(CRYPTIDS.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.4'))
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(BADGER.replaceAll('z-ai/glm-5.3', 'z-ai/glm-5.4'))
     const after = readCascade(tmpDir)
     expect(after.primaryDuplicatedAsRow0).toBe(true)
     expect(after.fallbacks[0]).toEqual(after.primary)
   })
 
-  it('cryptids: a rotation of the primary (carryFrom) keeps the duplicate row in sync, extras included', () => {
-    fs.writeFileSync(configPath(), CRYPTIDS.replace('    model: z-ai/glm-5.3\n', '    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n'))
+  it('badger: a rotation of the primary (carryFrom) keeps the duplicate row in sync, extras included', () => {
+    fs.writeFileSync(configPath(), BADGER.replace('    model: z-ai/glm-5.3\n', '    model: z-ai/glm-5.3\n    key_env: OPENROUTER_KEY_B\n'))
     mockEnvVars.mockReturnValue(new Set(['ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'OPENROUTER_KEY_B']))
     const chain = cascadeChain(readCascade(tmpDir))
     const res = applyCascadeToHarness(
@@ -1193,14 +1193,14 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
     expect(after.fallbacks[0].model).toBe('z-ai/glm-5.4')
   })
 
-  it('blackhouse: adding a fallback keeps the duplicate-only convention (row 0 stays the primary)', () => {
-    fs.writeFileSync(configPath(), BLACKHOUSE)
+  it('kestrel: adding a fallback keeps the duplicate-only convention (row 0 stays the primary)', () => {
+    fs.writeFileSync(configPath(), KESTREL)
     const chain = cascadeChain(readCascade(tmpDir))
     expect(chain).toEqual([{ provider: 'openrouter', model: 'z-ai/glm-5.2' }])
     const res = applyCascadeToHarness('h_test', [...chain, { provider: 'anthropic', model: 'claude-sonnet-4-6' }], { who: 'api', expected: chain })
     expect(res.ok).toBe(true)
     expect(fs.readFileSync(configPath(), 'utf-8')).toBe(
-      BLACKHOUSE.replace('    model: z-ai/glm-5.2\n', '    model: z-ai/glm-5.2\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
+      KESTREL.replace('    model: z-ai/glm-5.2\n', '    model: z-ai/glm-5.2\n  - provider: anthropic\n    model: claude-sonnet-4-6\n')
     )
   })
 
@@ -1220,13 +1220,13 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
   })
 
   it('`expected` is compared against the CHAIN (primary first), so a stale editor loses to a rotated primary', () => {
-    fs.writeFileSync(configPath(), CYBORG)
+    fs.writeFileSync(configPath(), EMBER)
     const chain = cascadeChain(readCascade(tmpDir))
     const stale = [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, ...chain.slice(1)]
     const res = applyCascadeToHarness('h_test', stale, { who: 'api', expected: stale })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.status).toBe(409)
-    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(CYBORG)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(EMBER)
   })
 
   it('model.fallback is rewritten only when the file already has the key (the runtime never reads it)', () => {

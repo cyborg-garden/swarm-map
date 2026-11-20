@@ -127,7 +127,7 @@ export function generateEnvContent(params: {
     lines.push(`DISCORD_BOTS_REQUIRE_INLINE_MENTION=true`)
     // Org policy (2026-10-06): @mention required inside threads too. The
     // adapter default (false) lets a bot answer every message in any thread it
-    // has joined — the #bounties-work incident. Seeded on BOTH creation paths
+    // has joined, so a bot in a busy thread replies to everything. Seeded on BOTH creation paths
     // (ensurePolicyDefaults mirrors it) so they cannot drift.
     lines.push(`DISCORD_THREAD_REQUIRE_MENTION=true`)
     // Org policy: no DMs except the agent's admins. A new agent has none yet, so

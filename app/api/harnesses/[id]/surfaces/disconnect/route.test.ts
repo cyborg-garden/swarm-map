@@ -36,17 +36,17 @@ afterEach(() => {
 
 describe('surface disconnect — applies removal by recreating the container', () => {
   it('recreates the container after stripping the telegram env', async () => {
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/disconnect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/disconnect', {
       method: 'POST',
       body: JSON.stringify({ platform: 'telegram' }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(restartMock).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(restartMock).toHaveBeenCalledWith('h_sentinel', 'recreate')
   })
 
   it('recreates the container after stripping the discord env', async () => {
@@ -64,17 +64,17 @@ describe('surface disconnect — applies removal by recreating the container', (
       'DISCORD_REQUIRE_MENTION=true',
       'DISCORD_CHANNEL_SCOPED_ACCESS=true',
     ].join('\n') + '\n' as never)
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/disconnect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/disconnect', {
       method: 'POST',
       body: JSON.stringify({ platform: 'discord' }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(restartMock).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(restartMock).toHaveBeenCalledWith('h_sentinel', 'recreate')
 
     // Credentials and identity-bound lists are stripped — ids are meaningless
     // outside the disconnected guild and must not leak into a future connect.
@@ -95,17 +95,17 @@ describe('surface disconnect — applies removal by recreating the container', (
   })
 
   it('recreates the container after stripping the slack env', async () => {
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/disconnect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/disconnect', {
       method: 'POST',
       body: JSON.stringify({ platform: 'slack' }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
     expect(body.ok).toBe(true)
-    expect(restartMock).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(restartMock).toHaveBeenCalledWith('h_sentinel', 'recreate')
   })
 })
 
@@ -115,11 +115,11 @@ describe('surface disconnect — disables the platform in config.yaml', () => {
 
   function disconnect(platform: string) {
     return POST(
-      new Request('http://localhost/api/harnesses/h_seraph/surfaces/disconnect', {
+      new Request('http://localhost/api/harnesses/h_sentinel/surfaces/disconnect', {
         method: 'POST',
         body: JSON.stringify({ platform }),
       }),
-      makeParams('h_seraph')
+      makeParams('h_sentinel')
     )
   }
 

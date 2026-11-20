@@ -6,6 +6,7 @@ import crypto from 'crypto'
 import type { MemoryScope, HabitatTier } from '@/lib/types'
 import type { Storage } from './storage'
 import { resolveStateDbPath } from './db-path'
+import { defaultHarnessNames, harnessNamesFromEnv, ORG_PUBLIC_HARNESSES_ENV } from './default-harness-names'
 
 const MEMORY_FILE = 'memory-scopes.json'
 
@@ -21,7 +22,7 @@ function agentDataDir(harnessName: string): string {
 function inferTier(harnessName: string): HabitatTier {
   if (harnessName === 'personal') return 'individual'
   if (harnessName.startsWith('seraph-')) return 'org'
-  if (harnessName === 'egregore') return 'orgpublic'
+  if (harnessNamesFromEnv(ORG_PUBLIC_HARNESSES_ENV).includes(harnessName)) return 'orgpublic'
   return 'team'
 }
 
@@ -77,16 +78,7 @@ export class MemoryService {
   constructor(private storage: Storage) {}
 
   private defaultHarnessNames(): string[] {
-    return [
-      'personal',
-      'cryptids',
-      'cyborg',
-      'egregore',
-      'osint',
-      'seraph-doer',
-      'seraph-generalist',
-      'seraph-thinker',
-    ]
+    return defaultHarnessNames()
   }
 
   list(harnessNames?: string[]): MemoryScope[] {

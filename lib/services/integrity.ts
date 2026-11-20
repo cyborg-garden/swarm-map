@@ -26,7 +26,7 @@
  *     fine for the unmigrated case where the file IS host-readable);
  *   - symlink → async `docker exec <container> python3` running the PRAGMA
  *     inside the VM, where SQLite's locking assumptions actually hold AND the
- *     event loop is never blocked (matilde's 287MB quick_check blocked the
+ *     event loop is never blocked (a 287MB quick_check blocked the
  *     single pm2 fork ~3.2s on the host path).
  *
  * KNOWN GAP (acknowledged, not unit-testable here — applies to the UNMIGRATED

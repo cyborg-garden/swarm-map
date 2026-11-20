@@ -175,8 +175,8 @@ describe('spliceChatUpdateLevel', () => {
   })
 })
 
-// The display block on mare, read on the Mini 2026-11-09 (trimmed).
-const MARE_DISPLAY = [
+// The display block on wren, read on a live host 2026-11-09 (trimmed).
+const WREN_DISPLAY = [
   'display:',
   '  compact: false',
   "  personality: ''",
@@ -201,43 +201,43 @@ const MARE_DISPLAY = [
 ].join('\n')
 
 describe('per-platform overrides', () => {
-  it('is false for the live mare shape (platforms only sets streaming)', () => {
-    expect(hasPlatformOverride(MARE_DISPLAY)).toBe(false)
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('  platforms:', '  tool_progress_overrides: {}\n  platforms:'))).toBe(false)
+  it('is false for the live wren shape (platforms only sets streaming)', () => {
+    expect(hasPlatformOverride(WREN_DISPLAY)).toBe(false)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('  platforms:', '  tool_progress_overrides: {}\n  platforms:'))).toBe(false)
   })
 
   it('flags a per-platform tool_progress, interim or heartbeat value', () => {
     for (const key of ['tool_progress: all', 'interim_assistant_messages: true', 'long_running_notifications: true']) {
-      expect(hasPlatformOverride(MARE_DISPLAY.replace('      streaming: false', `      ${key}`)), key).toBe(true)
+      expect(hasPlatformOverride(WREN_DISPLAY.replace('      streaming: false', `      ${key}`)), key).toBe(true)
     }
   })
 
   it('flags an inline per-platform value', () => {
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {tool_progress: all}'))).toBe(true)
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false, long_running_notifications: true}'))).toBe(true)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {tool_progress: all}'))).toBe(true)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false, long_running_notifications: true}'))).toBe(true)
     expect(hasPlatformOverride('display:\n  platforms: {discord: {interim_assistant_messages: true}}\n')).toBe(true)
     expect(hasPlatformOverride('display:\n  platforms: {discord: {"tool_progress": all}}\n')).toBe(true)
     // Inline values that do not touch the three keys are not overrides,
     // including a key named only in a comment.
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('      streaming: false', '      streaming: false  # was {tool_progress: all}'))).toBe(false)
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false}'))).toBe(false)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('      streaming: false', '      streaming: false  # was {tool_progress: all}'))).toBe(false)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('    discord:\n      streaming: false', '    discord: {streaming: false}'))).toBe(false)
     expect(hasPlatformOverride('display:\n  platforms: {}\n  tool_progress_overrides: null\n')).toBe(false)
   })
 
   it('flags a non-empty tool_progress_overrides, inline or block', () => {
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('  platforms:', '  tool_progress_overrides: {discord: all}\n  platforms:'))).toBe(true)
-    expect(hasPlatformOverride(MARE_DISPLAY.replace('  platforms:', '  tool_progress_overrides:\n    discord: all\n  platforms:'))).toBe(true)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('  platforms:', '  tool_progress_overrides: {discord: all}\n  platforms:'))).toBe(true)
+    expect(hasPlatformOverride(WREN_DISPLAY.replace('  platforms:', '  tool_progress_overrides:\n    discord: all\n  platforms:'))).toBe(true)
   })
 
   it('setting a level leaves a nested override in place and still reports it', () => {
-    const withOverride = MARE_DISPLAY.replace('      streaming: false', '      tool_progress: all')
+    const withOverride = WREN_DISPLAY.replace('      streaming: false', '      tool_progress: all')
     const out = splice(withOverride, 'quiet')
     expect(readChatUpdateLevel(out)).toBe('quiet')
     expect(hasPlatformOverride(out)).toBe(true)
   })
 
-  it('splices the live mare shape cleanly', () => {
-    const out = splice(MARE_DISPLAY, 'quiet')
+  it('splices the live wren shape cleanly', () => {
+    const out = splice(WREN_DISPLAY, 'quiet')
     expect(readChatUpdateLevel(out)).toBe('quiet')
     expect(out.split('\n').filter((l) => l.includes('tool_progress:')).length).toBe(1)
     expect(out).toContain('      - context_pct')

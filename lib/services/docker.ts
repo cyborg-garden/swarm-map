@@ -619,7 +619,7 @@ export class DockerService {
    * ASYNC on purpose: the callers are the DB snapshot exporter and the
    * integrity transport for volume-migrated DBs — a multi-hundred-MB SQLite
    * backup/quick_check must not block the single pm2 fork's event loop the way
-   * synchronous better-sqlite3 access did (issue #204: matilde's 287MB DB
+   * synchronous better-sqlite3 access did (issue #204: one agent's 287MB DB
    * blocked ~3.2s per check).
    *
    * argv array + no shell, per the security header at the top of this file.

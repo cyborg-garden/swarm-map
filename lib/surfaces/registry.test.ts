@@ -228,7 +228,7 @@ describe('identity-regex unification (D8): isValidIdentity == canonical pattern'
     },
     telegram: {
       valid: ['123456789', '-1001234567'],
-      invalid: ['1'.repeat(21), '@juniper', '--1'],
+      invalid: ['1'.repeat(21), '@operator', '--1'],
     },
     mattermost: {
       valid: ['abcdefghijklmnopqrstuvwxyz'],

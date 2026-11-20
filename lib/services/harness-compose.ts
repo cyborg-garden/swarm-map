@@ -21,7 +21,7 @@ import { GITHUB_BROKER_CONFIG, githubBrokered } from './keys'
 /**
  * Expand a leading `~` in a HOST path to this user's home directory.
  *
- * `~/.iris/nimbleco/intake` is the spelling every other host path in this
+ * `~/.gate/intake` is the spelling every other host path in this
  * codebase accepts (harness.ts's `expandPath`), and it is what an operator
  * hand-editing `harnesses.json` will type. Docker Compose does NOT expand `~` —
  * it would bind-mount a literal relative directory named `~` — so the expansion

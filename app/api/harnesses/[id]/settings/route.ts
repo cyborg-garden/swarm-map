@@ -167,8 +167,7 @@ type SettingsResponse = {
   // Optimistic-concurrency token: the .env mtime as GET observed it. Clients
   // round-trip it in PUT; a mismatch means someone else wrote settings since
   // this snapshot was loaded and the PUT is rejected with 409 instead of
-  // silently reverting their change (the lost-update bug — see
-  // docs/audits/hsm-settings-lost-update.md in nimbleco-egregore). Optional on
+  // silently reverting their change (the lost-update bug). Optional on
   // PUT so hand-built callers keep working; both UI clients send it.
   version?: string
   // Read-only in GET: whether DISCORD_CHANNEL_SCOPED_ACCESS is enabled on the
@@ -918,7 +917,7 @@ export async function PUT(
       )
     }
   }
-  // A network_mode swarm-map did not write (the hand-made container:gluetun-vera
+  // A network_mode swarm-map did not write (a hand-made container:<gluetun>
   // setup) is reported as off, so a whole-document PUT carrying false is not a
   // change. The per-agent wireguard variant also has its own network_mode; it is
   // swarm-map's, and the standalone generator re-renders it.
@@ -1269,8 +1268,8 @@ export async function PUT(
   // …but skip the recreate entirely when nothing that requires one changed:
   // identical .env and no VPN/resource change means the running container is
   // already in the desired state, and a recreate would only destroy in-flight
-  // work. (This alone would have prevented the destroyed-run incidents — see
-  // docs/audits/hsm-settings-lost-update.md in nimbleco-egregore.)
+  // work. (This alone would have prevented recreates destroying in-flight
+  // runs.)
   let restarted = false
   if (!envUnchanged || vpnChanged || resourcesChanged || sharedVpnChanged) {
     try { services.harness.restart(id, 'recreate'); restarted = true } catch {}

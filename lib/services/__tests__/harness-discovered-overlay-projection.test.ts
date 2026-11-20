@@ -7,9 +7,9 @@
  * anything at all. `normalizeStored()` — the only other projection — is the
  * fallback for agents with NO running container.
  *
- * So for the one agent #222 was written for (iris, running, gated), every read
+ * So for the one agent #222 was written for (heron, running, gated), every read
  * goes through the discovered literal. If that literal omits extraMounts /
- * extraEnv, then `services.harness.get('h_iris').extraMounts` is `undefined`,
+ * extraEnv, then `services.harness.get('h_heron').extraMounts` is `undefined`,
  * and the settings route hands `undefined` to the compose generator — the
  * silent mount drop the whole feature exists to prevent, on the exact path a
  * live agent takes. Every existing test either calls the generator directly or
@@ -31,8 +31,8 @@ import os from 'os'
 vi.mock('../docker')
 
 const SPOOL = {
-  hostPath: '/srv/iris/nimbleco/intake',
-  containerPath: '/opt/iris-intake',
+  hostPath: '/srv/heron/harbor/intake',
+  containerPath: '/opt/heron-intake',
   mode: 'rw' as const,
   note: 'approval-gate spool',
 }
@@ -69,23 +69,23 @@ describe('discovered harness projection carries overlay host access (#222)', () 
     // field for it, so harnesses.json is the only place it can come from.
     storage.write('harnesses.json', [
       {
-        id: 'h_iris',
-        name: 'iris',
+        id: 'h_heron',
+        name: 'heron',
         tier: 'team',
         extraMounts: [SPOOL],
-        extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+        extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
       },
     ])
 
-    // Docker DOES find the container — this is the whole point. iris is running.
+    // Docker DOES find the container — this is the whole point. heron is running.
     ;(docker.isAvailable as any).mockReturnValue(true)
     ;(docker.listComposeProjects as any).mockReturnValue([
-      { name: 'iris', status: 'running', configFiles: [composeFile] },
+      { name: 'heron', status: 'running', configFiles: [composeFile] },
     ])
     ;(docker.inspectContainers as any).mockReturnValue([
       {
-        name: 'hermes-iris',
-        service: 'hermes-iris',
+        name: 'hermes-heron',
+        service: 'hermes-heron',
         state: 'running',
         status: 'Up 3 days',
         ports: [{ published: 8642, target: 8000 }],
@@ -102,41 +102,41 @@ describe('discovered harness projection carries overlay host access (#222)', () 
   })
 
   it('discovery really is the path under test (the agent is RUNNING, not a stored fallback)', () => {
-    const iris = service.get('h_iris')
-    expect(iris).toBeDefined()
+    const heron = service.get('h_heron')
+    expect(heron).toBeDefined()
     // If this were the normalizeStored fallback, status would be forced
     // 'stopped'. 'running' proves the discovered literal is what we're reading.
-    expect(iris!.status).toBe('running')
+    expect(heron!.status).toBe('running')
   })
 
   it('get() on a RUNNING agent surfaces the overlay extraMounts/extraEnv', () => {
-    const iris = service.get('h_iris')
-    expect(iris!.extraMounts).toEqual([SPOOL])
-    expect(iris!.extraEnv).toEqual({ IRIS_INTAKE_DIR: '/opt/iris-intake' })
+    const heron = service.get('h_heron')
+    expect(heron!.extraMounts).toEqual([SPOOL])
+    expect(heron!.extraEnv).toEqual({ HERON_INTAKE_DIR: '/opt/heron-intake' })
   })
 
   it('list() on a RUNNING agent surfaces the overlay extraMounts/extraEnv', () => {
-    const iris = service.list().find((h) => h.id === 'h_iris')
-    expect(iris).toBeDefined()
-    expect(iris!.status).toBe('running')
-    expect(iris!.extraMounts).toEqual([SPOOL])
-    expect(iris!.extraEnv).toEqual({ IRIS_INTAKE_DIR: '/opt/iris-intake' })
+    const heron = service.list().find((h) => h.id === 'h_heron')
+    expect(heron).toBeDefined()
+    expect(heron!.status).toBe('running')
+    expect(heron!.extraMounts).toEqual([SPOOL])
+    expect(heron!.extraEnv).toEqual({ HERON_INTAKE_DIR: '/opt/heron-intake' })
   })
 
   it('omits the fields entirely for an agent that has none (no undefined keys added)', () => {
-    storage.write('harnesses.json', [{ id: 'h_iris', name: 'iris', tier: 'team' }])
-    const iris = service.get('h_iris')!
-    expect('extraMounts' in iris).toBe(false)
-    expect('extraEnv' in iris).toBe(false)
+    storage.write('harnesses.json', [{ id: 'h_heron', name: 'heron', tier: 'team' }])
+    const heron = service.get('h_heron')!
+    expect('extraMounts' in heron).toBe(false)
+    expect('extraEnv' in heron).toBe(false)
   })
 
   it('an empty extraMounts array does not become a key (parity with normalizeStored)', () => {
     storage.write('harnesses.json', [
-      { id: 'h_iris', name: 'iris', extraMounts: [], extraEnv: {} },
+      { id: 'h_heron', name: 'heron', extraMounts: [], extraEnv: {} },
     ])
-    const iris = service.get('h_iris')!
-    expect('extraMounts' in iris).toBe(false)
-    expect('extraEnv' in iris).toBe(false)
+    const heron = service.get('h_heron')!
+    expect('extraMounts' in heron).toBe(false)
+    expect('extraEnv' in heron).toBe(false)
   })
 
   // Same projection gap, different fields: the image pin. `imageStatus()` reads
@@ -149,18 +149,18 @@ describe('discovered harness projection carries overlay host access (#222)', () 
   it('carries pinnedImageRef/lastKnownDigest/apiPort onto the discovered literal', () => {
     storage.write('harnesses.json', [
       {
-        id: 'h_iris',
-        name: 'iris',
+        id: 'h_heron',
+        name: 'heron',
         apiPort: 8642,
         pinnedImageRef: 'ghcr.io/cyborg-garden/hermes-agent-mt:1.4.0',
         lastKnownDigest: 'sha256:aaaa',
       },
     ])
-    const iris = service.get('h_iris')!
-    expect(iris.status).toBe('running')
-    expect(iris.pinnedImageRef).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:1.4.0')
-    expect(iris.lastKnownDigest).toBe('sha256:aaaa')
-    expect(iris.apiPort).toBe(8642)
+    const heron = service.get('h_heron')!
+    expect(heron.status).toBe('running')
+    expect(heron.pinnedImageRef).toBe('ghcr.io/cyborg-garden/hermes-agent-mt:1.4.0')
+    expect(heron.lastKnownDigest).toBe('sha256:aaaa')
+    expect(heron.apiPort).toBe(8642)
   })
 
   // The model-update scheduler decides whether it may rotate a RUNNING agent's
@@ -168,13 +168,13 @@ describe('discovered harness projection carries overlay host access (#222)', () 
   // applied — and an empty map must not become a key (parity with the rest).
   it('carries modelTracking onto the discovered literal; an empty map is omitted', () => {
     storage.write('harnesses.json', [
-      { id: 'h_iris', name: 'iris', modelTracking: { 'openrouter/z-ai/glm-5.2': true } },
+      { id: 'h_heron', name: 'heron', modelTracking: { 'openrouter/z-ai/glm-5.2': true } },
     ])
-    const iris = service.get('h_iris')!
-    expect(iris.status).toBe('running')
-    expect(iris.modelTracking).toEqual({ 'openrouter/z-ai/glm-5.2': true })
+    const heron = service.get('h_heron')!
+    expect(heron.status).toBe('running')
+    expect(heron.modelTracking).toEqual({ 'openrouter/z-ai/glm-5.2': true })
 
-    storage.write('harnesses.json', [{ id: 'h_iris', name: 'iris', modelTracking: {} }])
-    expect('modelTracking' in service.get('h_iris')!).toBe(false)
+    storage.write('harnesses.json', [{ id: 'h_heron', name: 'heron', modelTracking: {} }])
+    expect('modelTracking' in service.get('h_heron')!).toBe(false)
   })
 })

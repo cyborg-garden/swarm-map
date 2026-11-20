@@ -24,8 +24,8 @@ const DAY = 86_400_000
 
 function d(over: Partial<DriftSummary> = {}): DriftSummary {
   return {
-    harnessId: 'h_iris',
-    name: 'iris',
+    harnessId: 'h_heron',
+    name: 'heron',
     state: 'current',
     containerSha: 'a'.repeat(40),
     sourceSha: 'a'.repeat(40),

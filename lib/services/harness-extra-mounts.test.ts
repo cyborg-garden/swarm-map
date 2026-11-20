@@ -49,14 +49,14 @@ const port = 8642
 const dataDir = '/opt/hermes/test-agent'
 
 const SPOOL: ExtraMount = {
-  hostPath: '/Users/juni/.iris/nimbleco/intake',
-  containerPath: '/opt/iris-intake',
+  hostPath: '/Users/operator/.heron/harbor/intake',
+  containerPath: '/opt/heron-intake',
   mode: 'rw',
   note: 'approval-gate spool: the only writable gate path',
 }
 const PACKAGE: ExtraMount = {
-  hostPath: '/Users/juni/iris-gates/nimbleco',
-  containerPath: '/opt/iris',
+  hostPath: '/Users/operator/heron-gates/harbor',
+  containerPath: '/opt/heron',
 }
 
 describe('renderExtraMounts', () => {
@@ -67,13 +67,13 @@ describe('renderExtraMounts', () => {
 
   it('defaults mode to ro — write access has to be asked for', () => {
     expect(renderExtraMounts([PACKAGE])).toBe(
-      '      - /Users/juni/iris-gates/nimbleco:/opt/iris:ro\n')
+      '      - /Users/operator/heron-gates/harbor:/opt/heron:ro\n')
   })
 
   it('renders the note as a comment above the mount', () => {
     const out = renderExtraMounts([SPOOL])
     expect(out).toContain('# approval-gate spool: the only writable gate path')
-    expect(out).toContain('- /Users/juni/.iris/nimbleco/intake:/opt/iris-intake:rw')
+    expect(out).toContain('- /Users/operator/.heron/harbor/intake:/opt/heron-intake:rw')
   })
 
   // --- injection: every value lands in generated YAML -----------------------
@@ -103,7 +103,7 @@ describe('renderExtraMounts', () => {
 
   // --- tilde expansion ------------------------------------------------------
   //
-  // `~/.iris/...` is the spelling harness.ts's expandPath accepts everywhere
+  // `~/.heron/...` is the spelling harness.ts's expandPath accepts everywhere
   // else, so it is what someone hand-editing harnesses.json will type. It is
   // ALSO non-absolute, so before expansion it hit the absolute-path throw — and
   // that throw ran mid-PUT, after the .env had already been written. Compose
@@ -114,22 +114,22 @@ describe('renderExtraMounts', () => {
     afterEach(() => vi.restoreAllMocks())
 
     it('expands a leading ~ in a host path to the real home directory', () => {
-      vi.spyOn(os, 'homedir').mockReturnValue('/Users/juni')
+      vi.spyOn(os, 'homedir').mockReturnValue('/Users/operator')
       expect(renderExtraMounts([
-        { hostPath: '~/.iris/nimbleco/intake', containerPath: '/opt/iris-intake', mode: 'rw' },
-      ])).toBe('      - /Users/juni/.iris/nimbleco/intake:/opt/iris-intake:rw\n')
+        { hostPath: '~/.heron/harbor/intake', containerPath: '/opt/heron-intake', mode: 'rw' },
+      ])).toBe('      - /Users/operator/.heron/harbor/intake:/opt/heron-intake:rw\n')
       expect(validateExtraMounts([
-        { hostPath: '~/.iris/nimbleco/intake', containerPath: '/opt/iris-intake' },
+        { hostPath: '~/.heron/harbor/intake', containerPath: '/opt/heron-intake' },
       ])).toBeNull()
     })
 
     it('expands a bare ~', () => {
-      vi.spyOn(os, 'homedir').mockReturnValue('/Users/juni')
-      expect(expandHostPath('~')).toBe('/Users/juni')
+      vi.spyOn(os, 'homedir').mockReturnValue('/Users/operator')
+      expect(expandHostPath('~')).toBe('/Users/operator')
     })
 
     it('does NOT expand ~user — that would silently invent a wrong path', () => {
-      vi.spyOn(os, 'homedir').mockReturnValue('/Users/juni')
+      vi.spyOn(os, 'homedir').mockReturnValue('/Users/operator')
       // /Users/junisomeone/x would be absolute, pass validation, and bind-mount
       // a directory nobody named. Better to fail the absolute check.
       expect(expandHostPath('~someone/x')).toBe('~someone/x')
@@ -139,7 +139,7 @@ describe('renderExtraMounts', () => {
     })
 
     it('leaves container paths alone — the home dir here is the HOST\'s', () => {
-      vi.spyOn(os, 'homedir').mockReturnValue('/Users/juni')
+      vi.spyOn(os, 'homedir').mockReturnValue('/Users/operator')
       expect(() => renderExtraMounts([
         { hostPath: '/a', containerPath: '~/b' },
       ])).toThrow(/absolute/)
@@ -170,8 +170,8 @@ describe('renderExtraEnv', () => {
   })
 
   it('renders KEY=value list entries', () => {
-    expect(renderExtraEnv({ IRIS_BRAND: 'nimbleco' }))
-      .toBe('      - IRIS_BRAND=nimbleco\n')
+    expect(renderExtraEnv({ HERON_BRAND: 'harbor' }))
+      .toBe('      - HERON_BRAND=harbor\n')
   })
 
   it('refuses a newline in a key or value', () => {
@@ -220,8 +220,8 @@ describe('renderExtraEnv', () => {
   })
 
   it('still allows ordinary agent-specific env', () => {
-    expect(renderExtraEnv({ IRIS_INTAKE_DIR: '/opt/iris-intake' }))
-      .toBe('      - IRIS_INTAKE_DIR=/opt/iris-intake\n')
+    expect(renderExtraEnv({ HERON_INTAKE_DIR: '/opt/heron-intake' }))
+      .toBe('      - HERON_INTAKE_DIR=/opt/heron-intake\n')
   })
 })
 
@@ -235,7 +235,7 @@ describe('validateExtraMounts / validateExtraEnv agree with the renderers', () =
   const CASES: Array<{ label: string; mounts?: ExtraMount[]; env?: Record<string, string> }> = [
     { label: 'nothing configured' },
     { label: 'empty collections', mounts: [], env: {} },
-    { label: 'valid mounts + env', mounts: [SPOOL, PACKAGE], env: { IRIS_BRAND: 'nimbleco' } },
+    { label: 'valid mounts + env', mounts: [SPOOL, PACKAGE], env: { HERON_BRAND: 'harbor' } },
     { label: 'relative host path', mounts: [{ hostPath: 'nope', containerPath: '/b' }] },
     { label: 'newline in a path', mounts: [{ hostPath: '/a\n x: y', containerPath: '/b' }] },
     { label: 'colon in a path', mounts: [{ hostPath: '/a:/b:rw', containerPath: '/b' }] },
@@ -276,17 +276,17 @@ describe('generateStandaloneCompose with extra mounts', () => {
         const compose = generateStandaloneCompose(agentName, port, dataDir, {
           vpnEnabled,
           extraMounts: [SPOOL, PACKAGE],
-          extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake', IRIS_BRAND: 'nimbleco' },
+          extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake', HERON_BRAND: 'harbor' },
         })
         const volumes = listEntries(compose, `hermes-${agentName}`, 'volumes')
         const environment = listEntries(compose, `hermes-${agentName}`, 'environment')
 
-        expect(volumes).toContain('/Users/juni/.iris/nimbleco/intake:/opt/iris-intake:rw')
-        expect(volumes).toContain('/Users/juni/iris-gates/nimbleco:/opt/iris:ro')
+        expect(volumes).toContain('/Users/operator/.heron/harbor/intake:/opt/heron-intake:rw')
+        expect(volumes).toContain('/Users/operator/heron-gates/harbor:/opt/heron:ro')
         // The standard mounts survive alongside them.
         expect(volumes).toContain(`${dataDir}:/opt/data`)
-        expect(environment).toContain('IRIS_INTAKE_DIR=/opt/iris-intake')
-        expect(environment).toContain('IRIS_BRAND=nimbleco')
+        expect(environment).toContain('HERON_INTAKE_DIR=/opt/heron-intake')
+        expect(environment).toContain('HERON_BRAND=harbor')
         expect(environment).toContain('HERMES_HOME=/opt/data')
         // command: must still follow the volumes block, not be swallowed by it.
         expect(compose).toContain('    command: gateway')
@@ -320,11 +320,11 @@ describe('generateStandaloneCompose with extra mounts', () => {
   it('is deterministic across regenerations (see note: route.test.ts owns the real claim)', () => {
     const options = {
       extraMounts: [SPOOL, PACKAGE],
-      extraEnv: { IRIS_INTAKE_DIR: '/opt/iris-intake' },
+      extraEnv: { HERON_INTAKE_DIR: '/opt/heron-intake' },
     }
     const first = generateStandaloneCompose(agentName, port, dataDir, options)
     const regenerated = generateStandaloneCompose(agentName, port, dataDir, options)
     expect(regenerated).toBe(first)
-    expect(regenerated).toContain('/opt/iris-intake:rw')
+    expect(regenerated).toContain('/opt/heron-intake:rw')
   })
 })

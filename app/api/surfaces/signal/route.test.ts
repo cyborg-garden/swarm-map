@@ -3,7 +3,7 @@
  *
  * Regression (#57): the route called listSurfaces() with NO harness-name list,
  * so it fell back to a hardcoded DEFAULT_HARNESS_NAMES list. A harness whose
- * data-dir name isn't in that list (e.g. nimbleco) never produced a Signal
+ * data-dir name isn't in that list (e.g. harbor) never produced a Signal
  * surface, so its pinStatus was never populated — the Surfaces tab showed
  * "Registration Lock: not set" even though the PIN was saved to keys.json.
  *
@@ -53,7 +53,7 @@ describe('GET /api/surfaces/signal', () => {
   it('passes live harness names — including non-default ones — to listSurfaces', async () => {
     listMock.mockReturnValue([
       { id: 'h_personal', name: 'personal' },
-      { id: 'h_nimbleco', name: 'nimbleco' },
+      { id: 'h_harbor', name: 'harbor' },
     ])
 
     await GET()
@@ -61,21 +61,21 @@ describe('GET /api/surfaces/signal', () => {
     expect(listSurfacesMock).toHaveBeenCalledTimes(1)
     const namesArg = listSurfacesMock.mock.calls[0][0]
     expect(namesArg).toBeDefined()
-    expect(namesArg).toContain('nimbleco')
+    expect(namesArg).toContain('harbor')
     expect(namesArg).toContain('personal')
   })
 
   it('populates pinStatus for a non-default harness whose Signal surface is connected', async () => {
-    // nimbleco is NOT in DEFAULT_HARNESS_NAMES — the bug missed it entirely.
-    listMock.mockReturnValue([{ id: 'h_nimbleco', name: 'nimbleco' }])
+    // harbor is NOT in DEFAULT_HARNESS_NAMES — the bug missed it entirely.
+    listMock.mockReturnValue([{ id: 'h_harbor', name: 'harbor' }])
     listSurfacesMock.mockReturnValue([
       {
-        id: 'int_sg_nimbleco',
+        id: 'int_sg_harbor',
         platform: 'signal',
         name: 'Signal',
         status: 'connected',
         config: { phone: '+15551234567', url: 'http://localhost:8080' },
-        harnessIds: ['h_nimbleco'],
+        harnessIds: ['h_harbor'],
       },
     ])
     getPinStatusMock.mockReturnValue('locked')
@@ -88,15 +88,15 @@ describe('GET /api/surfaces/signal', () => {
   })
 
   it('uses checkPinHealth when the daemon is healthy', async () => {
-    listMock.mockReturnValue([{ id: 'h_nimbleco', name: 'nimbleco' }])
+    listMock.mockReturnValue([{ id: 'h_harbor', name: 'harbor' }])
     listSurfacesMock.mockReturnValue([
       {
-        id: 'int_sg_nimbleco',
+        id: 'int_sg_harbor',
         platform: 'signal',
         name: 'Signal',
         status: 'connected',
         config: { phone: '+15551234567', url: 'http://localhost:8080' },
-        harnessIds: ['h_nimbleco'],
+        harnessIds: ['h_harbor'],
       },
     ])
     // healthy check, then listAccounts RPC

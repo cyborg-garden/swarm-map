@@ -105,8 +105,8 @@ describe('validateSettingsPatch (P3/F6)', () => {
 
 describe('validateSettingsPatch — discordThreadMentionOptOuts', () => {
   it('accepts a list of harness names', () => {
-    expect(validateSettingsPatch({ discordThreadMentionOptOuts: ['blackhouse', 'cyborg-public'] }))
-      .toEqual({ discordThreadMentionOptOuts: ['blackhouse', 'cyborg-public'] })
+    expect(validateSettingsPatch({ discordThreadMentionOptOuts: ['kestrel', 'public-bot'] }))
+      .toEqual({ discordThreadMentionOptOuts: ['kestrel', 'public-bot'] })
   })
 
   it('accepts an empty list (no opt-outs)', () => {
@@ -114,7 +114,7 @@ describe('validateSettingsPatch — discordThreadMentionOptOuts', () => {
   })
 
   it('rejects a non-array, a non-string entry, or a name that is not a harness slug', () => {
-    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: 'blackhouse' })).toThrow()
+    expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: 'kestrel' })).toThrow()
     expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: [1] })).toThrow()
     expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: ['Black House'] })).toThrow()
     expect(() => validateSettingsPatch({ discordThreadMentionOptOuts: ['x\ny'] })).toThrow()
@@ -123,18 +123,18 @@ describe('validateSettingsPatch — discordThreadMentionOptOuts', () => {
 
 describe('validateSettingsPatch — discordApproverRoles', () => {
   it('accepts Discord role IDs, an empty list (nobody by role) and null (unmanaged)', () => {
-    expect(validateSettingsPatch({ discordApproverRoles: ['1533670688001495051'] }))
-      .toEqual({ discordApproverRoles: ['1533670688001495051'] })
+    expect(validateSettingsPatch({ discordApproverRoles: ['1500000000000000051'] }))
+      .toEqual({ discordApproverRoles: ['1500000000000000051'] })
     expect(validateSettingsPatch({ discordApproverRoles: [] })).toEqual({ discordApproverRoles: [] })
     expect(validateSettingsPatch({ discordApproverRoles: null })).toEqual({ discordApproverRoles: null })
   })
 
   it('rejects names, non-IDs and anything that could break the yaml line', () => {
-    expect(() => validateSettingsPatch({ discordApproverRoles: '1533670688001495051' })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: '1500000000000000051' })).toThrow()
     expect(() => validateSettingsPatch({ discordApproverRoles: ['approver'] })).toThrow()
     expect(() => validateSettingsPatch({ discordApproverRoles: ['123'] })).toThrow()
-    expect(() => validateSettingsPatch({ discordApproverRoles: ["1533670688001495051'\nx: y"] })).toThrow()
-    expect(() => validateSettingsPatch({ discordApproverRoles: ['1533670688001495051,1'] })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ["1500000000000000051'\nx: y"] })).toThrow()
+    expect(() => validateSettingsPatch({ discordApproverRoles: ['1500000000000000051,1'] })).toThrow()
   })
 })
 

@@ -6,7 +6,7 @@ const params = (qs: string) => new URLSearchParams(qs)
 describe('parseKeyRequestParams', () => {
   it('returns null when there is no request param', () => {
     expect(parseKeyRequestParams(params(''))).toBeNull()
-    expect(parseKeyRequestParams(params('assign=h_mare&name=Mare'))).toBeNull()
+    expect(parseKeyRequestParams(params('assign=h_wren&name=Wren'))).toBeNull()
   })
 
   it('parses a bare provider request', () => {
@@ -18,10 +18,10 @@ describe('parseKeyRequestParams', () => {
   })
 
   it('parses comma-separated assign ids and optional name', () => {
-    expect(parseKeyRequestParams(params('request=hedra&assign=h_mare,h_cyborg&name=Mare%20Video'))).toEqual({
+    expect(parseKeyRequestParams(params('request=hedra&assign=h_wren,h_ember&name=Wren%20Video'))).toEqual({
       provider: 'hedra',
-      assignTo: ['h_mare', 'h_cyborg'],
-      name: 'Mare Video',
+      assignTo: ['h_wren', 'h_ember'],
+      name: 'Wren Video',
     })
   })
 
@@ -36,19 +36,19 @@ describe('parseKeyRequestParams', () => {
   })
 
   it('drops empty entries in the assign list', () => {
-    expect(parseKeyRequestParams(params('request=hedra&assign=h_mare,,%20'))?.assignTo).toEqual(['h_mare'])
+    expect(parseKeyRequestParams(params('request=hedra&assign=h_wren,,%20'))?.assignTo).toEqual(['h_wren'])
   })
 
   it('filters assign ids against known harness ids when provided', () => {
-    const parsed = parseKeyRequestParams(params('request=hedra&assign=h_mare,h_ghost'), ['h_mare', 'h_cyborg'])
-    expect(parsed?.assignTo).toEqual(['h_mare'])
+    const parsed = parseKeyRequestParams(params('request=hedra&assign=h_wren,h_ghost'), ['h_wren', 'h_ember'])
+    expect(parsed?.assignTo).toEqual(['h_wren'])
   })
 
   it('parses the optional identifier param (bluesky handle prefill)', () => {
-    const parsed = parseKeyRequestParams(params('request=bluesky&assign=h_iris&identifier=nimbleco.ai'))
+    const parsed = parseKeyRequestParams(params('request=bluesky&assign=h_heron&identifier=handle.example.com'))
     expect(parsed?.provider).toBe('bluesky')
-    expect(parsed?.assignTo).toEqual(['h_iris'])
-    expect(parsed?.identifier).toBe('nimbleco.ai')
+    expect(parsed?.assignTo).toEqual(['h_heron'])
+    expect(parsed?.identifier).toBe('handle.example.com')
   })
 
   it('leaves identifier undefined when absent or blank', () => {

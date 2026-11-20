@@ -20,7 +20,7 @@ function call(id: string, query = '') {
 }
 
 const sample = {
-  harnessId: 'h_iris', days: [{ date: '2026-09-22', cost: 1.5, tokens: 10, sessions: 1, toolCalls: 2, byModel: {}, bySource: { cli: 1 } }],
+  harnessId: 'h_heron', days: [{ date: '2026-09-22', cost: 1.5, tokens: 10, sessions: 1, toolCalls: 2, byModel: {}, bySource: { cli: 1 } }],
   topTools: [], topUsers: [], costStatus: 'estimated', stale: false,
 }
 
@@ -29,30 +29,30 @@ describe('GET /api/harnesses/:id/analytics', () => {
 
   it('returns the service result with the default 30-day window', async () => {
     getHarnessAnalytics.mockReturnValue(sample)
-    const res = await call('h_iris')
+    const res = await call('h_heron')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual(sample)
-    expect(getHarnessAnalytics).toHaveBeenCalledWith('h_iris', 30)
+    expect(getHarnessAnalytics).toHaveBeenCalledWith('h_heron', 30)
   })
 
   it('passes a valid days query through and clamps bad ones', async () => {
     getHarnessAnalytics.mockReturnValue(sample)
-    await call('h_iris', '?days=7')
-    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_iris', 7)
-    await call('h_iris', '?days=abc')
-    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_iris', 30)
-    await call('h_iris', '?days=0')
-    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_iris', 30)
-    await call('h_iris', '?days=99999')
-    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_iris', 365)
+    await call('h_heron', '?days=7')
+    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_heron', 7)
+    await call('h_heron', '?days=abc')
+    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_heron', 30)
+    await call('h_heron', '?days=0')
+    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_heron', 30)
+    await call('h_heron', '?days=99999')
+    expect(getHarnessAnalytics).toHaveBeenLastCalledWith('h_heron', 365)
   })
 
   it('reports a pending harness as pending, not as a zero series', async () => {
     getHarnessAnalytics.mockReturnValue(null)
-    const res = await call('h_iris')
+    const res = await call('h_heron')
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toEqual({ harnessId: 'h_iris', pending: true })
+    expect(body).toEqual({ harnessId: 'h_heron', pending: true })
     expect(body.days).toBeUndefined()
   })
 
@@ -65,7 +65,7 @@ describe('GET /api/harnesses/:id/analytics', () => {
 
   it('500s on any other service failure', async () => {
     getHarnessAnalytics.mockImplementation(() => { throw new Error('disk on fire') })
-    const res = await call('h_iris')
+    const res = await call('h_heron')
     expect(res.status).toBe(500)
     expect((await res.json()).error).toBe('disk on fire')
   })

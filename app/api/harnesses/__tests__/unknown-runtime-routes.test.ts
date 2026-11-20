@@ -53,7 +53,7 @@ import { ConfigService } from '@/lib/services/config'
 
 const OWNER = '111111111111111111'
 const OLD_ENV = `DISCORD_BOT_TOKEN=x\nDISCORD_ALLOWED_USERS=${OWNER}\nDISCORD_GROUP_INVITE_POLICY=allow-all\nDISCORD_ALLOWED_CHANNELS=c1\n`
-const IRIS = { id: 'h_iris', name: 'iris', runtime: 'hermes', tier: 'team' }
+const HERON = { id: 'h_heron', name: 'heron', runtime: 'hermes', tier: 'team' }
 
 let home: string
 let storage: Storage
@@ -87,8 +87,8 @@ beforeEach(() => {
   // Hermes, these are what a write would land in.
   fs.mkdirSync(path.join(home, '.hermes-old'))
   fs.writeFileSync(path.join(home, '.hermes-old', '.env'), OLD_ENV)
-  fs.mkdirSync(path.join(home, '.hermes-iris'))
-  fs.writeFileSync(path.join(home, '.hermes-iris', '.env'), OLD_ENV)
+  fs.mkdirSync(path.join(home, '.hermes-heron'))
+  fs.writeFileSync(path.join(home, '.hermes-heron', '.env'), OLD_ENV)
 
   docker = new DockerService()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -114,7 +114,7 @@ describe.each([
   let before: Record<string, string>
 
   beforeEach(() => {
-    storage.write('harnesses.json', [row, IRIS])
+    storage.write('harnesses.json', [row, HERON])
     before = snapshot()
   })
 
@@ -132,10 +132,10 @@ describe.each([
   })
 
   it('an id from a request body is refused the same way', async () => {
-    const refusal = refuseUnknownHarnesses(['h_iris', 'h_old'])
+    const refusal = refuseUnknownHarnesses(['h_heron', 'h_old'])
     expect(refusal?.status).toBe(409)
     expect(await refusal!.json()).toMatchObject({ reason, runtime: row.runtime })
-    expect(refuseUnknownHarnesses(['h_iris'])).toBeUndefined()
+    expect(refuseUnknownHarnesses(['h_heron'])).toBeUndefined()
   })
 
   it('write and lifecycle routes change nothing', async () => {
@@ -143,7 +143,7 @@ describe.each([
     expect(tier.status).toBe(409)
     const start = await startAgent(json('POST', {}), params({ id: 'h_old' }))
     expect(start.status).toBe(409)
-    expect(rows()).toEqual([row, IRIS])
+    expect(rows()).toEqual([row, HERON])
     expect(snapshot()).toEqual(before)
   })
 
@@ -160,7 +160,7 @@ describe.each([
       const group = await getGroup(new Request('http://localhost/x'), params({ id, platform: 'discord', groupId: 'c1' }))
       expect((await group.json()).allowed, id).toBe(false)
     }
-    expect(rows()).toEqual([row, IRIS])
+    expect(rows()).toEqual([row, HERON])
     expect(oldEnv()).toBe(OLD_ENV)
     expect(snapshot()).toEqual(before)
   })
@@ -173,16 +173,16 @@ describe.each([
     const res = await deleteAgent(json('DELETE', {}, '?deleteFiles=true'), params({ id: 'h_old' }))
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ removed: true, stopped: false, filesDeleted: false, volumeRemoved: false })
-    expect(rows()).toEqual([IRIS])
+    expect(rows()).toEqual([HERON])
     expect(snapshot()).toEqual(before)
   })
 
   it('the other agent in the file is not affected', async () => {
-    expect(requireHarness('h_iris').harness?.id).toBe('h_iris')
-    const tier = await patchTier(json('PATCH', { tier: 'public' }), params({ id: 'h_iris' }))
+    expect(requireHarness('h_heron').harness?.id).toBe('h_heron')
+    const tier = await patchTier(json('PATCH', { tier: 'public' }), params({ id: 'h_heron' }))
     expect(tier.status).toBe(200)
-    expect(rows()).toEqual([row, { ...IRIS, tier: 'public' }])
-    const invite = await postGroup(json('POST', { addedByUserId: OWNER }), params({ id: 'iris', platform: 'discord', groupId: 'c2' }))
+    expect(rows()).toEqual([row, { ...HERON, tier: 'public' }])
+    const invite = await postGroup(json('POST', { addedByUserId: OWNER }), params({ id: 'heron', platform: 'discord', groupId: 'c2' }))
     expect(await invite.json()).toMatchObject({ approved: true })
   })
 })

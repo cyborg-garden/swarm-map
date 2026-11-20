@@ -67,12 +67,12 @@ afterEach(() => {
 
 describe('surface connect — applies env by recreating the container', () => {
   it('recreates the container after writing the new telegram env', async () => {
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({ platform: 'telegram', config: { token: 'new-bot-token' } }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -80,7 +80,7 @@ describe('surface connect — applies env by recreating the container', () => {
     // The env was written...
     expect(writeSpy).toHaveBeenCalled()
     // ...and the container recreated so the env takes effect (no rebuild needed).
-    expect(restartMock).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(restartMock).toHaveBeenCalledWith('h_sentinel', 'recreate')
   })
 
   it('writes both the phone and its resolved UUID into SIGNAL_ALLOWED_USERS', async () => {
@@ -88,7 +88,7 @@ describe('surface connect — applies env by recreating the container', () => {
     // Signal connect runs a pre-flight daemon health check via fetch.
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ result: [] }) })))
 
-    const req = new Request('http://localhost/api/harnesses/h_nimbleco/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_harbor/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({
         platform: 'signal',
@@ -96,7 +96,7 @@ describe('surface connect — applies env by recreating the container', () => {
       }),
     })
 
-    const res = await POST(req, makeParams('h_nimbleco'))
+    const res = await POST(req, makeParams('h_harbor'))
     expect(res.status).toBe(200)
 
     // Target the .env write — connect now also writes config.yaml afterwards.
@@ -109,24 +109,24 @@ describe('surface connect — applies env by recreating the container', () => {
 
   it('resolves telegram @handles to numeric IDs and normalizes multiple admins', async () => {
     resolveTelegramUsernameMock.mockResolvedValue({
-      display: '@juniper',
+      display: '@operator',
       nativeId: '424242',
-      profileName: 'Juniper',
+      profileName: 'Operator',
     })
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({
         platform: 'telegram',
-        config: { token: 'new-bot-token', adminUser: '123456789, @juniper' },
+        config: { token: 'new-bot-token', adminUser: '123456789, @operator' },
       }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(200)
 
     // The token from the request payload is used (the .env may not have it yet).
-    expect(resolveTelegramUsernameMock).toHaveBeenCalledWith('h_seraph', '@juniper', 'new-bot-token')
+    expect(resolveTelegramUsernameMock).toHaveBeenCalledWith('h_sentinel', '@operator', 'new-bot-token')
 
     // Numeric IDs only in the env — never a raw @handle.
     const envCall = writeSpy.mock.calls.find((c: unknown[]) => String(c[0]).endsWith('.env'))
@@ -137,17 +137,17 @@ describe('surface connect — applies env by recreating the container', () => {
     expect(resolvedCall).toBeTruthy()
     expect(JSON.parse(resolvedCall![1] as string).telegram).toEqual([
       { display: '123456789', nativeId: '123456789' },
-      { display: '@juniper', nativeId: '424242', profileName: 'Juniper' },
+      { display: '@operator', nativeId: '424242', profileName: 'Operator' },
     ])
 
     // Policy-plane overlay kept converged with the allowlist just written.
-    expect(syncFromAllowlistMock).toHaveBeenCalledWith('h_seraph', 'telegram', ['123456789', '424242'])
+    expect(syncFromAllowlistMock).toHaveBeenCalledWith('h_sentinel', 'telegram', ['123456789', '424242'])
   })
 
   it('returns 400 (and writes nothing) when a telegram @handle fails to resolve', async () => {
     resolveTelegramUsernameMock.mockResolvedValue(null)
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({
         platform: 'telegram',
@@ -155,7 +155,7 @@ describe('surface connect — applies env by recreating the container', () => {
       }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(400)
     expect((await res.json()).error).toContain('@ghosthandle')
     expect(writeSpy).not.toHaveBeenCalled()
@@ -165,12 +165,12 @@ describe('surface connect — applies env by recreating the container', () => {
   it('still succeeds (does not 500) when recreate fails', async () => {
     restartMock.mockImplementationOnce(() => { throw new Error('no compose file') })
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/surfaces/connect', {
       method: 'POST',
       body: JSON.stringify({ platform: 'telegram', config: { token: 'new-bot-token' } }),
     })
 
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(200)
   })
 })
@@ -181,11 +181,11 @@ describe('surface connect — enables the platform in config.yaml', () => {
 
   function connectDiscord() {
     return POST(
-      new Request('http://localhost/api/harnesses/h_seraph/surfaces/connect', {
+      new Request('http://localhost/api/harnesses/h_sentinel/surfaces/connect', {
         method: 'POST',
         body: JSON.stringify({ platform: 'discord', config: { token: 'bot.token' } }),
       }),
-      makeParams('h_seraph')
+      makeParams('h_sentinel')
     )
   }
 

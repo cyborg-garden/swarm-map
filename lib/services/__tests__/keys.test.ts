@@ -27,23 +27,23 @@ describe('KeysService', () => {
   it('does not duplicate a key that was added and assigned to a harness', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(tmpDir)
     const value = 'github_pat_11ABCDEFG0aBcDeFgHiJkLmnwvYN'
-    keys.add({ provider: 'github', value, assignedTo: ['h_cryptids'] })
-    keys.writeKeyToEnv('h_cryptids', 'github', value)
+    keys.add({ provider: 'github', value, assignedTo: ['h_badger'] })
+    keys.writeKeyToEnv('h_badger', 'github', value)
 
-    const github = keys.list(['cryptids']).filter((k) => k.provider === 'github')
+    const github = keys.list(['badger']).filter((k) => k.provider === 'github')
     expect(github).toHaveLength(1)
   })
 
   it('keeps the optional name on an added+assigned key (no dup, name preserved)', () => {
     vi.spyOn(os, 'homedir').mockReturnValue(tmpDir)
     const value = 'github_pat_11ABCDEFG0aBcDeFgHiJkLmnwvYN'
-    keys.add({ provider: 'github', value, name: 'hermes-cryptids', assignedTo: ['h_cryptids'] })
-    keys.writeKeyToEnv('h_cryptids', 'github', value)
+    keys.add({ provider: 'github', value, name: 'hermes-badger', assignedTo: ['h_badger'] })
+    keys.writeKeyToEnv('h_badger', 'github', value)
 
-    const github = keys.list(['cryptids']).filter((k) => k.provider === 'github')
+    const github = keys.list(['badger']).filter((k) => k.provider === 'github')
     expect(github).toHaveLength(1)
-    expect(github[0].name).toBe('hermes-cryptids')
-    expect(github[0].assignedTo).toContain('h_cryptids')
+    expect(github[0].name).toBe('hermes-badger')
+    expect(github[0].assignedTo).toContain('h_badger')
   })
 
   // Pass [] as harnessNames so discovery is skipped (no real agent dirs in test env)
@@ -299,10 +299,13 @@ describe('discovered keys persist when unassigned (no self-delete)', () => {
     tmpStore = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-pstore-'))
     prevHome = process.env.HOME
     process.env.HOME = tmpHome
+    // The agents scanned by default are configured per deployment.
+    vi.stubEnv('SWARM_MAP_DEFAULT_HARNESSES', 'personal,agent-a,agent-b')
     const storage = new Storage(tmpStore)
     keys = new KeysService(storage, new AuditService(storage))
   })
   afterEach(() => {
+    vi.unstubAllEnvs()
     if (prevHome === undefined) delete process.env.HOME
     else process.env.HOME = prevHome
     fs.rmSync(tmpHome, { recursive: true, force: true })
@@ -310,7 +313,7 @@ describe('discovered keys persist when unassigned (no self-delete)', () => {
   })
 
   it('keeps a discovered key (and its value) listed after unassigning its last agent', () => {
-    const dir = path.join(tmpHome, '.hermes-cryptids')
+    const dir = path.join(tmpHome, '.hermes-agent-a')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, '.env'), 'ANTHROPIC_API_KEY=sk-ant-api03-DISCOVERED\n')
 
@@ -319,7 +322,7 @@ describe('discovered keys persist when unassigned (no self-delete)', () => {
 
     // Route order: update (unassign) THEN strip from env.
     keys.update(discovered!.id, { assignedTo: [] })
-    keys.removeKeyFromEnv('cryptids', 'anthropic')
+    keys.removeKeyFromEnv('agent-a', 'anthropic')
 
     const after = keys.list().find((k) => k.id === discovered!.id)
     expect(after).toBeTruthy()              // did NOT self-delete
@@ -328,18 +331,18 @@ describe('discovered keys persist when unassigned (no self-delete)', () => {
   })
 
   it('can re-assign a previously-unassigned discovered key (value still available to write)', () => {
-    const dir = path.join(tmpHome, '.hermes-osint')
+    const dir = path.join(tmpHome, '.hermes-agent-b')
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, '.env'), 'ANTHROPIC_API_KEY=sk-ant-api03-KEEPME\n')
     const id = keys.list().find((k) => k.provider === 'anthropic')!.id
 
     keys.update(id, { assignedTo: [] })
-    keys.removeKeyFromEnv('osint', 'anthropic')
+    keys.removeKeyFromEnv('agent-b', 'anthropic')
     // Re-assign: value must still resolve so it can be written back.
     const val = keys.getDecryptedValue(id)
     expect(val).toBe('sk-ant-api03-KEEPME')
-    keys.update(id, { assignedTo: ['h_osint'] })
-    expect(keys.list().find((k) => k.id === id)!.assignedTo).toEqual(['h_osint'])
+    keys.update(id, { assignedTo: ['h_agent_b'] })
+    expect(keys.list().find((k) => k.id === id)!.assignedTo).toEqual(['h_agent_b'])
   })
 })
 
@@ -370,49 +373,49 @@ describe('bluesky credential pair (writeKeyToEnv/removeKeyFromEnv)', () => {
   const PASS = 'abcd-efgh-ijkl-mnop'
 
   it('writes BOTH vars when the identifier hint is present', () => {
-    keys.writeKeyToEnv('iris', 'bluesky', PASS, { identifier: 'nimbleco.ai' })
-    const env = read('iris')
+    keys.writeKeyToEnv('heron', 'bluesky', PASS, { identifier: 'handle.example.com' })
+    const env = read('heron')
     expect(env).toMatch(new RegExp(`^BLUESKY_APP_PASSWORD=${PASS}$`, 'm'))
-    expect(env).toMatch(/^BLUESKY_IDENTIFIER=nimbleco\.ai$/m)
+    expect(env).toMatch(/^BLUESKY_IDENTIFIER=handle\.example\.com$/m)
   })
 
   it('writes only the password without an identifier hint (never half-clears)', () => {
-    fs.mkdirSync(path.join(tmpHome, '.hermes-iris'), { recursive: true })
-    fs.writeFileSync(envFor('iris'), 'BLUESKY_IDENTIFIER=hand.written\n')
-    keys.writeKeyToEnv('iris', 'bluesky', PASS)
-    const env = read('iris')
+    fs.mkdirSync(path.join(tmpHome, '.hermes-heron'), { recursive: true })
+    fs.writeFileSync(envFor('heron'), 'BLUESKY_IDENTIFIER=hand.written\n')
+    keys.writeKeyToEnv('heron', 'bluesky', PASS)
+    const env = read('heron')
     expect(env).toMatch(/^BLUESKY_APP_PASSWORD=/m)
     // A pre-existing hand-written identifier survives an identifier-less write.
     expect(env).toMatch(/^BLUESKY_IDENTIFIER=hand\.written$/m)
   })
 
   it('updates a stale identifier on rewrite', () => {
-    keys.writeKeyToEnv('iris', 'bluesky', PASS, { identifier: 'old.handle' })
-    keys.writeKeyToEnv('iris', 'bluesky', PASS, { identifier: 'new.handle' })
-    const env = read('iris')
+    keys.writeKeyToEnv('heron', 'bluesky', PASS, { identifier: 'old.handle' })
+    keys.writeKeyToEnv('heron', 'bluesky', PASS, { identifier: 'new.handle' })
+    const env = read('heron')
     expect(env).toMatch(/^BLUESKY_IDENTIFIER=new\.handle$/m)
     expect(env).not.toMatch(/old\.handle/)
   })
 
   it('removeKeyFromEnv clears both halves of the pair', () => {
-    keys.writeKeyToEnv('iris', 'bluesky', PASS, { identifier: 'nimbleco.ai' })
-    keys.removeKeyFromEnv('iris', 'bluesky')
-    const env = read('iris')
+    keys.writeKeyToEnv('heron', 'bluesky', PASS, { identifier: 'handle.example.com' })
+    keys.removeKeyFromEnv('heron', 'bluesky')
+    const env = read('heron')
     expect(env).not.toMatch(/BLUESKY_APP_PASSWORD/)
     expect(env).not.toMatch(/BLUESKY_IDENTIFIER/)
   })
 
   it('preserves unrelated env vars when writing/removing the pair', () => {
-    fs.mkdirSync(path.join(tmpHome, '.hermes-iris'), { recursive: true })
-    fs.writeFileSync(envFor('iris'), 'GITHUB_TOKEN=ghp_KEEP\n')
-    keys.writeKeyToEnv('iris', 'bluesky', PASS, { identifier: 'nimbleco.ai' })
-    keys.removeKeyFromEnv('iris', 'bluesky')
-    expect(read('iris')).toMatch(/^GITHUB_TOKEN=ghp_KEEP$/m)
+    fs.mkdirSync(path.join(tmpHome, '.hermes-heron'), { recursive: true })
+    fs.writeFileSync(envFor('heron'), 'GITHUB_TOKEN=ghp_KEEP\n')
+    keys.writeKeyToEnv('heron', 'bluesky', PASS, { identifier: 'handle.example.com' })
+    keys.removeKeyFromEnv('heron', 'bluesky')
+    expect(read('heron')).toMatch(/^GITHUB_TOKEN=ghp_KEEP$/m)
   })
 
   it('add() keeps the identifier on the stored key', () => {
-    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'nimbleco.ai' })
-    expect(key.identifier).toBe('nimbleco.ai')
-    expect(keys.list([]).find((k) => k.id === key.id)!.identifier).toBe('nimbleco.ai')
+    const key = keys.add({ provider: 'bluesky', value: PASS, identifier: 'handle.example.com' })
+    expect(key.identifier).toBe('handle.example.com')
+    expect(keys.list([]).find((k) => k.id === key.id)!.identifier).toBe('handle.example.com')
   })
 })

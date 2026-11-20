@@ -58,9 +58,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2,group3\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=signal&chatId=group2'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=signal&chatId=group2'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -71,9 +71,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=signal&chatId=unknown-group'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=signal&chatId=unknown-group'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -84,9 +84,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('TELEGRAM_GROUP_ALLOWED_CHATS=*\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=telegram&chatId=-100999'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=telegram&chatId=-100999'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -97,9 +97,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=signal&chatId=group1'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=signal&chatId=group1'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -110,9 +110,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('SOME_OTHER_VAR=hello\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=signal&chatId=group1'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=signal&chatId=group1'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -132,18 +132,18 @@ describe('Policy API — group-check (GET)', () => {
 
   it('returns 400 when platform or chatId missing', async () => {
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=signal'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=signal'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(400)
   })
 
   it('returns 400 for unsupported platform', async () => {
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=whatsapp&chatId=123'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=whatsapp&chatId=123'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(400)
   })
@@ -165,9 +165,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('MATTERMOST_ALLOWED_CHANNELS=chan1,chan2\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=mattermost&chatId=chan1'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=mattermost&chatId=chan1'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -178,9 +178,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('DISCORD_ALLOWED_CHANNELS=chan1,chan2\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=discord&chatId=chan1'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=discord&chatId=chan1'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -191,9 +191,9 @@ describe('Policy API — group-check (GET)', () => {
     readSpy.mockReturnValue('SLACK_ALLOWED_CHANNELS=C111,C222\n')
 
     const req = new Request(
-      'http://localhost/api/harnesses/h_seraph/policy?action=group-check&platform=slack&chatId=C111'
+      'http://localhost/api/harnesses/h_sentinel/policy?action=group-check&platform=slack&chatId=C111'
     )
-    const res = await GET(req, makeParams('h_seraph'))
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -205,12 +205,12 @@ describe('Policy API — group-register (POST)', () => {
   it('appends chatId to existing GROUP_ALLOWED var', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal', chatId: 'group3' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -220,12 +220,12 @@ describe('Policy API — group-register (POST)', () => {
   it('creates GROUP_ALLOWED var if it does not exist', async () => {
     readSpy.mockReturnValue('SOME_OTHER_VAR=hello\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'telegram', chatId: '-100123' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -235,12 +235,12 @@ describe('Policy API — group-register (POST)', () => {
   it('does not duplicate if chatId already present', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal', chatId: 'group1' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -264,12 +264,12 @@ describe('Policy API — group-register (POST)', () => {
   })
 
   it('returns 400 when platform or chatId missing', async () => {
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(400)
   })
@@ -277,12 +277,12 @@ describe('Policy API — group-register (POST)', () => {
   it('sets first chatId when var was empty', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal', chatId: 'first-group' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -307,12 +307,12 @@ describe('Policy API — group-deregister (POST)', () => {
   it('removes chatId from GROUP_ALLOWED var', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2,group3\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-deregister', platform: 'signal', chatId: 'group2' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -323,12 +323,12 @@ describe('Policy API — group-deregister (POST)', () => {
   it('handles removing the only chatId (leaves empty)', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=only-group\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-deregister', platform: 'signal', chatId: 'only-group' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
     const writtenContent = writeSpy.mock.calls[0][1] as string
@@ -338,12 +338,12 @@ describe('Policy API — group-deregister (POST)', () => {
   it('returns 200 even if chatId was not in the list (idempotent)', async () => {
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1\n')
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-deregister', platform: 'signal', chatId: 'nonexistent' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(200)
   })
@@ -351,25 +351,25 @@ describe('Policy API — group-deregister (POST)', () => {
   it('recreates the harness when a new group is registered (cached allow-list reloads)', async () => {
     vi.mocked(services.harness.restart).mockClear()
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1\n')
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal', chatId: 'group2' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(200)
-    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(services.harness.restart).toHaveBeenCalledWith('h_sentinel', 'recreate')
   })
 
   it('does NOT recreate when registering an already-present group (loop-safe)', async () => {
     vi.mocked(services.harness.restart).mockClear()
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1\n')
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-register', platform: 'signal', chatId: 'group1' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(200)
     expect(services.harness.restart).not.toHaveBeenCalled()
   })
@@ -377,14 +377,14 @@ describe('Policy API — group-deregister (POST)', () => {
   it('recreates on deregister only when a group was actually removed', async () => {
     vi.mocked(services.harness.restart).mockClear()
     readSpy.mockReturnValue('SIGNAL_GROUP_ALLOWED_USERS=group1,group2\n')
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'group-deregister', platform: 'signal', chatId: 'group2' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
     expect(res.status).toBe(200)
-    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(services.harness.restart).toHaveBeenCalledWith('h_sentinel', 'recreate')
   })
 
   it('returns 404 when agent .env not found', async () => {
@@ -401,12 +401,12 @@ describe('Policy API — group-deregister (POST)', () => {
   })
 
   it('returns 400 for unknown action', async () => {
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy', {
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'unknown-action', platform: 'signal', chatId: 'group1' }),
     })
-    const res = await POST(req, makeParams('h_seraph'))
+    const res = await POST(req, makeParams('h_sentinel'))
 
     expect(res.status).toBe(400)
   })
@@ -419,11 +419,11 @@ describe('Policy API — budget-check (GET)', () => {
   it('returns exceeded:true when costMonth >= totalBudget', async () => {
     mockedGetCostMonth.mockReturnValue(50)
     mockedKeysList.mockReturnValue([
-      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_seraph'], budgetUsd: 40, health: 'ok' },
+      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], budgetUsd: 40, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -436,11 +436,11 @@ describe('Policy API — budget-check (GET)', () => {
   it('returns exceeded:false when costMonth < totalBudget', async () => {
     mockedGetCostMonth.mockReturnValue(15)
     mockedKeysList.mockReturnValue([
-      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_seraph'], budgetUsd: 50, health: 'ok' },
+      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], budgetUsd: 50, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -456,8 +456,8 @@ describe('Policy API — budget-check (GET)', () => {
       { id: 'k1', provider: 'openai', maskedValue: 'sk-***', assignedTo: ['h_other'], budgetUsd: 100, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -468,11 +468,11 @@ describe('Policy API — budget-check (GET)', () => {
   it('returns budget:null when assigned keys have no budgetUsd', async () => {
     mockedGetCostMonth.mockReturnValue(5)
     mockedKeysList.mockReturnValue([
-      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_seraph'], health: 'ok' },
+      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -483,13 +483,13 @@ describe('Policy API — budget-check (GET)', () => {
   it('sums budgets from multiple assigned keys', async () => {
     mockedGetCostMonth.mockReturnValue(60)
     mockedKeysList.mockReturnValue([
-      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_seraph'], budgetUsd: 30, health: 'ok' },
-      { id: 'k2', provider: 'openai', maskedValue: 'sk-***', assignedTo: ['h_seraph'], budgetUsd: 50, health: 'ok' },
+      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], budgetUsd: 30, health: 'ok' },
+      { id: 'k2', provider: 'openai', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], budgetUsd: 50, health: 'ok' },
       { id: 'k3', provider: 'google', maskedValue: 'ai-***', assignedTo: ['h_other'], budgetUsd: 100, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -506,8 +506,8 @@ describe('Policy API — budget-check (GET)', () => {
       { id: 'k2', provider: 'openai', maskedValue: 'sk-***', assignedTo: ['h_another'], budgetUsd: 100, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -518,11 +518,11 @@ describe('Policy API — budget-check (GET)', () => {
   it('returns exceeded:true when costMonth exactly equals budget (edge case)', async () => {
     mockedGetCostMonth.mockReturnValue(100)
     mockedKeysList.mockReturnValue([
-      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_seraph'], budgetUsd: 100, health: 'ok' },
+      { id: 'k1', provider: 'anthropic', maskedValue: 'sk-***', assignedTo: ['h_sentinel'], budgetUsd: 100, health: 'ok' },
     ])
 
-    const req = new Request('http://localhost/api/harnesses/h_seraph/policy?action=budget-check')
-    const res = await GET(req, makeParams('h_seraph'))
+    const req = new Request('http://localhost/api/harnesses/h_sentinel/policy?action=budget-check')
+    const res = await GET(req, makeParams('h_sentinel'))
     const body = await res.json()
 
     expect(res.status).toBe(200)

@@ -46,13 +46,13 @@ describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
   })
 
   it('pre-checks with the SLUGGED id so a case-variant collision is a 409, not a 404', async () => {
-    // "mare" exists; the service would create "Mare" as slug "mare" and its
+    // "wren" exists; the service would create "Wren" as slug "wren" and its
     // collision guard returns undefined → without a slug-aware pre-check the
     // user gets a misleading 404 "Source harness not found".
-    h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : id === 'h_mare' ? { id: 'h_mare', name: 'mare' } : undefined))
-    const res = await POST(makeRequest('Mare'), makeParams('h_src'))
+    h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : id === 'h_wren' ? { id: 'h_wren', name: 'wren' } : undefined))
+    const res = await POST(makeRequest('Wren'), makeParams('h_src'))
     expect(res.status).toBe(409)
-    expect(h.get).toHaveBeenCalledWith('h_mare')
+    expect(h.get).toHaveBeenCalledWith('h_wren')
     expect(h.duplicateOverlay).not.toHaveBeenCalled()
   })
 

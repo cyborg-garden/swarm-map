@@ -11,7 +11,7 @@ import type { ContainerRuntimeAdapter } from '../runtime-adapter'
 
 describe('hermesAdapter Phase-2 members (delegation)', () => {
   it('serviceName follows the hermes-<name> convention', () => {
-    expect(hermesAdapter.serviceName('osint')).toBe('hermes-osint')
+    expect(hermesAdapter.serviceName('ledger')).toBe('hermes-ledger')
   })
 
   it('defaultImageRepo is the hermes-agent-mt repo', () => {

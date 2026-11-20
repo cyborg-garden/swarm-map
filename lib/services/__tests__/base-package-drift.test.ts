@@ -42,7 +42,7 @@ const ids = (r: ReturnType<typeof checkBasePackageDrift>) => r.findings.map((f) 
 const brave = (assignedTo: string[]): Key => ({ id: 'k_brave', provider: 'brave', maskedValue: 'BSA…', assignedTo, health: 'healthy' } as unknown as Key)
 
 describe('checkBasePackageDrift', () => {
-  it('a cyborg-public-shaped agent: reports every problem class and writes nothing', () => {
+  it('a public-bot-shaped agent: reports every problem class and writes nothing', () => {
     seed({
       'config.yaml': [
         'model:', '  provider: zai', '  default: glm-5.3',
@@ -51,12 +51,12 @@ describe('checkBasePackageDrift', () => {
         'web:', '  search_backend: brave-free',
       ].join('\n') + '\n',
       '.env': 'GLM_API_KEY=x\nDISCORD_ALLOWED_CHANNELS=1\nHERMES_DM_POLICY=approved-only\nCAPSOLVER_API_KEY=x\n',
-      'SOUL.md': '# cyborg-public\n',
+      'SOUL.md': '# public-bot\n',
       'plugins/captcha_cascade/__init__.py': 'x',
       '.hsm-base-package': JSON.stringify({ version: '0.9.0', surface: 'public', packs: [] }),
     })
     const before = snapshot()
-    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_cyborg_public', keys: [brave(['h_other'])] })
+    const r = checkBasePackageDrift(dataDir, pkg, { harnessId: 'h_public_bot', keys: [brave(['h_other'])] })
     expect(snapshot()).toBe(before)
     expect(r.surface).toBe('public')
     expect(ids(r)).toEqual(expect.arrayContaining([
@@ -132,7 +132,7 @@ describe('public reachability + dead top-level toolsets (review fixes)', () => {
   it('flags a public Discord agent that the public cannot reach, and a top-level disabled_toolsets', () => {
     seed({
       'config.yaml': 'disabled_toolsets:\n  - discord_admin\nplugins:\n  enabled: []\n',
-      // cyborg-public shape: allow-all was its only grant; no channel-scoped access.
+      // public-bot shape: allow-all was its only grant; no channel-scoped access.
       '.env': 'DISCORD_BOT_TOKEN=x\nDISCORD_ALLOW_ALL_USERS=false\nDISCORD_ALLOWED_USERS=\nDISCORD_ALLOWED_CHANNELS=111,222\n',
       '.hsm-base-package': JSON.stringify({ version: pkg.version, surface: 'public', packs: [] }),
     })
