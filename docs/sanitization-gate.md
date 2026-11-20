@@ -77,6 +77,26 @@ offline and on fork PRs. A hit is a **hard fail**: remove the value before mergi
 It scans **every** changed file, not just prose. A key committed to engine or
 collector code is still a key.
 
+Pull-request scans (`mode: pr`, `--diff`, or a file list) use the full shape set
+on every file. Whole-tree scans (`mode: full-tree`, `--full-tree`) also read a
+repo's media and data files, so they add a noise filter, the audit profile:
+
+- A file that is binary by content is scanned for the credential shapes and for
+  email addresses. Binary is decided by content, never by name: the file has a
+  NUL byte, is not UTF-16/32 text, and at least 5% of all its bytes are control
+  bytes and at least 30% are control bytes or invalid UTF-8.
+- In numeric data, a card number is a whole number, a phone number is not spread
+  across padded columns or lines, and an email address ends in a letter case
+  someone would type.
+- A card number is also found in a row of other numbers.
+
+Credential shapes are the same in both. Every whole-tree scan prints how many
+files it treated as binary, zero included:
+
+```
+audit profile: 3 of 120 file(s) are binary by content — phone, SSN, card and IP shapes were skipped there; credential shapes and email were still scanned.
+```
+
 ## Layer 2: particulars (semantic)
 
 A model reads content-bearing files and judges whether they carry particulars of
@@ -157,6 +177,8 @@ The summary line always names the layers that actually ran:
 - `clean — DETERMINISTIC ONLY; semantic layer did not run`: layer 2 was supposed
   to run and could not. Not a full pass. Read the warning above it.
 - `ok <file>` appears only for files layer 2 actually reviewed and cleared.
+- `audit profile: N of M file(s) are binary by content` (whole-tree scans): N
+  files were scanned for the credential shapes and email only.
 
 CI runs the layers as two separate steps so a red check names its own cause: a red
 step 1 is a leak in the diff. A red step 2 is particulars found, or the semantic
@@ -186,7 +208,8 @@ point. Take it to a maintainer and record the outcome.
 
 New detectors go in `_DETERMINISTIC_PATTERNS` in `scripts/check_sanitization.py`,
 with a test in `scripts/test_check_sanitization.py` that fails without them, then a
-new tag (see above). Two house rules:
+new tag (see above). The shape table is pinned by a digest in the tests; update it
+in the same commit. Two house rules:
 
 - The scanner module is itself scanned. Never write a literal sample of anything
   it detects into that file. Describe the shape instead. A self-test enforces this. Real
