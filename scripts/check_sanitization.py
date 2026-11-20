@@ -10,7 +10,9 @@ Layer 1 (deterministic): scans changed text for credentials / PII — API keys,
 private keys, tokens, bearer/basic auth, credential-bearing connection strings,
 hardcoded credential assignments, emails, phones, SSNs, Luhn-valid card numbers,
 and IPs. NO external dependencies, no API key. FAILS CLOSED. Always runs, even
-offline. Run it alone with ``--deterministic-only``.
+offline. Run it alone with ``--deterministic-only``. Every file is scanned for
+the credential shapes; the PII shapes are scanned in text only, and each run
+prints how many files it treated as binary.
 
 Layer 2 (semantic): sends content-bearing files (skills, souls, docs, prose) to
 an LLM that flags operator/engagement *particulars* — names, case IDs, hostnames,
@@ -101,6 +103,12 @@ _CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|
               r"(?-i:(?:_(?:PROD|PRODUCTION|DEV|STAGING|STAGE|TEST|LIVE|PRIMARY|SECONDARY"
               r"|BASE|V\d+|\d+))*)")
 
+# One domain label: letters, digits and inner hyphens.
+_DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?"
+# One separator inside a phone number: a hyphen, or whitespace that is not a line
+# break (a no-break space counts).
+_PHONE_SEP = r"(?:-|[^\S\r\n])"
+
 # (label, regex, gate). The gate says how to derive the "body" that placeholder /
 # entropy checks look at, so a documentation stub (sk-ant-xxxxxxxx) does not read
 # as a live credential while a real key still does:
@@ -117,6 +125,13 @@ _CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|
 #   "luhn"          → the digits must be Luhn-valid (card numbers). Also not
 #                     placeholder-gated: the canonical Visa test number is
 #                     Luhn-valid and built from only two distinct digits.
+#   "email"         → PII, plus the letter-case check in ``_is_typed_domain``.
+#   "intl-phone"    → PII, plus an E.164 digit count (7 to 15).
+#   "ipv4"          → PII: four octets in range, optionally public only.
+#
+# The "pii", "email", "intl-phone", "luhn" and "ipv4" gates are the PII shapes:
+# short patterns over digits and a few symbols, which compressed bytes satisfy
+# by chance. They are scanned in text only (see ``is_binary``).
 #
 # NOTE: this module is itself scanned by the gate, so it must not contain a
 # literal sample of anything it detects. Describe the shape; never write it out.
@@ -167,17 +182,34 @@ _DETERMINISTIC_PATTERNS = [
     ("hardcoded-credential-unquoted", re.compile(
         r"(?i)" + _CRED_NAME +
         r"[\"']?\s*(?::=|[=:])\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
-    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"), "pii"),
+    # Each domain label starts and ends with a letter or digit, so "@-x.io" and
+    # "@x..io" are not domains.
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@(?:" + _DOMAIN_LABEL + r"\.)+[A-Za-z]{2,}\b"),
+     "email"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),
     # E.164 international (e.g. a contact wired into config/SOUL): "+" + 7–15 digits,
     # no separators. The us-phone pattern only covers North-American formatting.
-    ("intl-phone", re.compile(r"(?<!\d)\+\d{7,15}(?!\d)"), "pii"),
-    # International number written with separators (plus, country code, then
-    # space/dot/dash-grouped digits). The
-    # separator-free form above misses every human-formatted number.
-    ("intl-phone", re.compile(r"(?<![\w.])\+\d{1,3}[\s.\-]?\d[\d\s.\-]{6,}\d(?![\w.])"), "pii"),
+    # No country code starts with 0, and a decimal point after the digits makes
+    # it a signed amount.
+    ("intl-phone", re.compile(r"(?<!\d)\+[1-9]\d{6,14}(?!\d)(?!\.\d)"), "intl-phone"),
+    # International number written with separators: plus, country code, then
+    # digit groups. The separator-free form above misses every human-formatted
+    # number. Between two digits there is at most ONE separator, a space (never
+    # a line break) or a hyphen, and the run must end where the match ends:
+    # padded columns, one value per line and a slice of a longer number row are
+    # tables, not phone numbers.
+    ("intl-phone", re.compile(
+        r"(?<![\w.])\+[1-9]\d{0,2}(?:" + _PHONE_SEP + r"?\d){6,14}(?![\w.])(?!" + _PHONE_SEP + r"\d)"),
+     "intl-phone"),
+    # The dotted style groups with dots throughout. One dot is a signed decimal,
+    # so at least two are required.
+    ("intl-phone", re.compile(r"(?<![\w.])\+[1-9]\d{0,2}(?:\.\d+){2,}(?![\w.])"), "intl-phone"),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "pii"),
-    ("credit-card", re.compile(r"\b(?:\d[ \-]?){12,18}\d\b"), "luhn"),
+    # The whole number, never a slice of something longer: not the fraction or
+    # the integer part of a decimal (a coordinate, a float in a results file),
+    # and not cut out of a longer digit run or a longer row of digit groups.
+    ("credit-card", re.compile(
+        r"(?<!\w)(?<!\d\.)(?<!\d[ \-])(?:\d[ \-]?){12,18}\d(?!\w)(?!\.\d)(?![ \-]\d)"), "luhn"),
     ("ipv4", re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"), "ipv4"),
 ]
 
@@ -291,6 +323,17 @@ def _is_fiction_phone(text):
     return len(nanp) == 10 and (nanp[0:3] == "555" or nanp[3:6] == "555")
 
 
+def _is_typed_domain(domain):
+    """Letter case a person or a program would give a domain: lower case, all
+    capitals, or every label capitalised. "o.UY" and "Zk.xQ" are what chance
+    produces, not an address."""
+    labels = domain.split(".")
+    tld = labels[-1]
+    if tld.islower() or domain == domain.upper():
+        return True
+    return tld.istitle() and all(not label[0].islower() for label in labels)
+
+
 IPV4_SCOPES = ("all", "public")
 
 
@@ -312,7 +355,11 @@ def _is_finding(match, gate, det_cfg=None):
         if det_cfg.get("ipv4_scope", "all") == "public":
             return _is_public_ipv4(octets)
         return True  # PII: never placeholder-gated (see the gate legend above)
-    if gate == "pii":
+    if gate == "email":
+        return _is_typed_domain(match.group(0).rsplit("@", 1)[-1])
+    if gate == "intl-phone" and not 7 <= sum(c.isdigit() for c in match.group(0)) <= 15:
+        return False  # E.164 allows 15 digits; more is a number row
+    if gate in ("pii", "intl-phone"):
         if det_cfg.get("allow_fiction_phones") and _is_fiction_phone(match.group(0)):
             return False
         return True  # never placeholder-gated: see the gate legend above
@@ -391,6 +438,12 @@ HIGH_CONFIDENCE_LABELS = frozenset({
     "openrouter-key", "discord-bot-token", "discord-webhook", "telegram-bot-token",
     "huggingface-token", "npm-token", "gitlab-token", "jwt",
 })
+
+# The PII shapes (see the gate legend). Everything else is a credential shape,
+# long and specific enough that bytes do not match it by chance.
+PII_LABELS = frozenset(label for label, _, gate in _DETERMINISTIC_PATTERNS
+                       if gate in ("pii", "email", "intl-phone", "luhn", "ipv4"))
+CREDENTIAL_LABELS = frozenset(label for label, _, _ in _DETERMINISTIC_PATTERNS) - PII_LABELS
 
 # Credential-bearing file names are never skipped, wherever they sit.
 _CREDENTIAL_FILE = re.compile(r"^(\.env.*|.+\.env|.+\.pem|.+\.key|id_[a-z0-9_]+(\.pub)?)$", re.I)
@@ -860,6 +913,42 @@ def _sniff_wide(head):
     return None
 
 
+# Share of the sniffed bytes that must be non-text before a NUL-bearing file
+# counts as binary. Compressed data sits near one half; prose with a stray NUL,
+# or a text file with a few NULs of padding, sits near zero.
+_BINARY_NONTEXT_SHARE = 0.10
+_TEXT_CONTROLS = frozenset(b"\t\n\r\f\x1b")
+
+
+def is_binary(data):
+    """True when ``data`` (a file's bytes) is binary by CONTENT, never by name.
+
+    Binary means all three: a NUL in the first 8 KiB, no UTF-16/32 reading (a
+    byte-order mark or the NUL pattern of wide text), and at least a tenth of
+    those bytes being control bytes or invalid UTF-8. The third test keeps one
+    stray NUL from reclassifying a text file. A failed UTF-8 decode alone never
+    makes a file binary: latin-1 prose has no NUL.
+
+    Layer 1 scans a binary for ``CREDENTIAL_LABELS`` only. The PII shapes are
+    short runs of digits and a few symbols, which compressed image and audio
+    bytes satisfy by chance; a provider token or a private-key header is not.
+    """
+    head = data[:_BINARY_SNIFF]
+    if b"\0" not in head or any(data.startswith(bom) for bom, _ in _BOMS) or _sniff_wide(head):
+        return False
+    controls = sum(1 for b in head if (b < 0x20 and b not in _TEXT_CONTROLS) or b == 0x7f)
+    invalid = head.decode("utf-8", errors="replace").count("\ufffd")
+    return controls + invalid >= _BINARY_NONTEXT_SHARE * len(head)
+
+
+def is_binary_file(path):
+    """``is_binary`` for a path. A symlink is its target string: text."""
+    if os.path.islink(path):
+        return False
+    with open(path, "rb") as fh:
+        return is_binary(fh.read(_BINARY_SNIFF))
+
+
 _BACKSLASH_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|([nrt\"'/\\]))")
 _ESCAPED_CHARS = {"n": "\n", "r": "\r", "t": "\t"}
 
@@ -901,10 +990,10 @@ def layer1_texts(path):
 def read_for_layer1(path):
     """Text for the secrets/PII layer, which must scan EVERY file.
 
-    A NUL in the first 8 KiB used to make both layers skip the file, so a key
-    behind a NUL prefix, or in UTF-16 text, passed. Now: a BOM or the NUL
-    pattern of UTF-16/32 selects that decoding; any other file containing NULs
-    is read byte-for-byte as latin-1, where ASCII-shaped secrets still match.
+    A file is never dropped for containing a NUL: a key behind a NUL prefix, or
+    in UTF-16 text, has to be found. A BOM or the NUL pattern of UTF-16/32
+    selects that decoding; any other file containing NULs is read byte-for-byte
+    as latin-1, where ASCII-shaped secrets still match.
     A symlink is scanned as its target string (what git stores), and never
     followed, dangling or not.
     """
@@ -1116,16 +1205,26 @@ def main(argv, root=".", client_factory=_make_client):
 
     # ---- Layer 1: deterministic, over EVERY candidate file (fails closed). No
     # config can switch it off or narrow it (config_problems rejects that); only
-    # test-fixture paths in skip_paths are excluded. Binaries are scanned too.
+    # test-fixture paths in skip_paths are excluded. Binaries are scanned too,
+    # for the credential shapes; the PII shapes are scanned in text only.
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
+    scanned = binaries = 0
     for rel in candidates:
         path = os.path.join(root, rel)
         if not os.path.islink(path) and not os.path.isfile(path):
             continue  # submodule or directory: its files are scanned in their own repo
+        scanned += 1
+        binary = is_binary_file(path)
+        binaries += binary
         # Inside a fixture skip path only the PII-style and heuristic shapes are
         # skipped; provider tokens and private keys are always reported.
-        only = HIGH_CONFIDENCE_LABELS if _is_skipped(rel, skip_paths) else None
+        if _is_skipped(rel, skip_paths):
+            only = HIGH_CONFIDENCE_LABELS
+        elif binary:
+            only = CREDENTIAL_LABELS
+        else:
+            only = None
         hits = []
         for text in layer1_texts(path):
             for hit in scan_deterministic(text, allow, det_cfg, only=only):
@@ -1133,6 +1232,11 @@ def main(argv, root=".", client_factory=_make_client):
                     hits.append(hit)
         if hits:
             det_hits[rel] = hits
+    # Said on every run, zero included: a file class the PII shapes did not see
+    # must be visible in the log, not inferred from a quiet result.
+    print(f"binary: {binaries} of {scanned} file(s) are binary by content — PII shapes "
+          f"(email, phone, SSN, card, IP) were skipped there; credential shapes were "
+          f"still scanned.")
 
     # ---- Layer 2: semantic, over content-bearing files only
     sem_flagged = {}
