@@ -63,6 +63,8 @@ export const RESERVED_EXTRA_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   // Set by the generated `environment:` block that extraEnv is appended to.
   'HOME',
   'HERMES_HOME',
+  'HERMES_UID',
+  'HERMES_GID',
   // The agent's identity to HSM policy (swarm_map_policy allowlist + admin
   // lookups) and to lifecycle notifications. Overriding it lets one agent
   // impersonate another — the same hazard the duplicate path resets it for.
@@ -142,11 +144,24 @@ function checkEnv(env?: Record<string, string>, dataDir?: string): Array<[string
     throw new Error('extraEnv must be an object of NAME: value pairs')
   }
   const onBroker = !!dataDir && (githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG)))
-  return Object.entries(env).map(([key, value]) => {
+  return Object.entries(env).flatMap(([key, value]) => {
     assertNoNewline(key, `extraEnv key '${key}'`)
     assertNoNewline(String(value), `extraEnv['${key}']`)
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`extraEnv key '${key}' is not a valid environment variable name`)
+    }
+    if (key === 'HERMES_UID' || key === 'HERMES_GID') {
+      // Swarm Map now writes these itself. An agent that already set the same
+      // value keeps working (the generated line stands in for it); a different
+      // value is refused with what to do, since two lines for one name would
+      // leave the container's uid to whichever compose read last.
+      const { uid, gid } = processUidGid()
+      const generated = key === 'HERMES_UID' ? uid : gid
+      if (String(value).trim() === generated) return []
+      throw new Error(
+        `extraEnv key '${key}' is now set by Swarm Map, to the id it runs as (${generated}), so the agent ` +
+        `can write its data dir. This agent's extraEnv asks for ${JSON.stringify(String(value))} instead. ` +
+        `Remove ${key} from the agent's extraEnv and save again; to run agents under another id, run Swarm Map as that user.`)
     }
     if (RESERVED_EXTRA_ENV_NAMES.has(key)) {
       throw new Error(
@@ -160,7 +175,7 @@ function checkEnv(env?: Record<string, string>, dataDir?: string): Array<[string
         `extraEnv key '${key}' is refused: this agent is on the GitHub token broker and holds no ` +
         `GitHub credential. Take it out of extraEnv.`)
     }
-    return [key, String(value)] as [string, string]
+    return [[key, String(value)] as [string, string]]
   })
 }
 
@@ -439,10 +454,18 @@ volumes:
 export const STATE_INIT_SCRIPT = `set -eu
 DATA="\${STATE_INIT_DATA:-/opt/data}"
 STATE="\${STATE_INIT_STATE:-/state}"
-# Volume dir must be writable by whatever uid s6 drops the gateway to; match
-# the data dir's ownership (a root-owned fresh volume would break WAL creation
-# for a non-root writer).
-chown "$(stat -c '%u:%g' "$DATA" 2>/dev/null || echo 0:0)" "$STATE" || true
+# /state must be owned by the uid s6 drops the gateway to, or SQLite can't create
+# -wal/-shm. Not /opt/data's owner: on macOS VirtioFS that isn't the gateway's
+# uid. Resolve it like the image's stage2: HERMES_UID/PUID (extraEnv, else the
+# agent .env — read, never sourced), else the image's hermes user.
+envf() { sed -n "s/^\\(export \\)\\{0,1\\}$1=[\\"']\\{0,1\\}\\([0-9]*\\).*/\\2/p" "$DATA/.env" 2>/dev/null | tail -n 1; }
+uid="\${HERMES_UID:-$(envf HERMES_UID)}"; uid="\${uid:-\${PUID:-$(envf PUID)}}"
+gid="\${HERMES_GID:-$(envf HERMES_GID)}"; gid="\${gid:-\${PGID:-$(envf PGID)}}"
+# Same range as stage2 (1-65534): outside it stage2 does not remap, so the
+# gateway keeps the image's hermes user and /state must go to that user too.
+valid() { case "$1" in ''|*[!0-9]*|??????*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65534 ]; }
+valid "$uid" || uid="$(id -u hermes 2>/dev/null || echo 10000)"
+valid "$gid" || gid="$(id -g hermes 2>/dev/null || echo 10000)"
 for db in ${MIGRATED_DB_FILES.join(' ')}; do
   src="$DATA/$db"; dst="$STATE/$db"
   if [ -f "$src" ] && [ ! -L "$src" ]; then
@@ -484,7 +507,11 @@ for db in ${MIGRATED_DB_FILES.join(' ')}; do
     if [ -e "$src$suf" ] || [ -L "$src$suf" ]; then rm -f "$src$suf"; fi
   done
 done
-echo "state-init: migration/symlinks OK"
+# Give /state and everything in it to the gateway's uid. This runs after the
+# migration loop because cp -p copies each DB with the bind mount's (wrong)
+# owner, and it is recursive so those DBs and their -wal/-shm files are fixed too.
+chown -R "$uid:$gid" "$STATE" || echo "state-init: WARNING: could not chown $STATE to $uid:$gid" >&2
+echo "state-init: migration/symlinks OK ($STATE owned by $uid:$gid)"
 `
 
 /**
@@ -506,13 +533,19 @@ echo "state-init: migration/symlinks OK"
  * All shell `$` are escaped as `$$` on embed — docker compose interpolates `$`
  * in compose files, and an unescaped shell variable would be substituted (as
  * empty, with a warning) at compose parse time, not at run time.
+ *
+ * `extraEnvLines` (the hermes service's rendered extraEnv) contributes only its
+ * uid-remap entries, so /state is chowned to the uid the gateway will run as.
  */
 export function stateInitService(
   agentName: string,
   agentDataDir: string,
   sourceBlock: string,
+  extraEnvLines = '',
 ): string {
   const vol = stateVolumeName(agentName)
+  const remap = extraEnvLines.split('\n').filter((l) => /^ +- (HERMES_UID|HERMES_GID|PUID|PGID)=/.test(l))
+  const envBlock = remap.length ? `    environment:\n${remap.join('\n')}\n` : ''
   const embedded = STATE_INIT_SCRIPT
     .replace(/\$/g, '$$$$') // '$' → '$$' (compose interpolation escape)
     .split('\n')
@@ -523,7 +556,7 @@ export function stateInitService(
 ${sourceBlock}
     container_name: state-init-${agentName}
     restart: "no"
-    entrypoint:
+${envBlock}    entrypoint:
       - /bin/sh
       - -c
       - |
@@ -549,6 +582,35 @@ ${embedded}
 export const DEFAULT_CAMOFOX_IMAGE =
   'ghcr.io/jo-inc/camofox-browser:1.13.0@sha256:64b30ffdbbc4ae0e28200a66dfbd6f55ac4188229eb34ef769afcf7be40faa6e'
 
+/**
+ * The uid/gid to run the agent runtime as: the Swarm Map process's own.
+ * hermes-agent-mt's s6-overlay stage2 hook remaps its baked 10000 `hermes`
+ * user to HERMES_UID/HERMES_GID via usermod/groupmod when they are set (its
+ * own compose documents `HERMES_UID=$(id -u) HERMES_GID=$(id -g)`), which is
+ * what keeps files created in-container readable/writable on a Linux bind
+ * mount. On platforms without process uids (Windows) fall back to the image's
+ * baked 10000, which hermes also defaults to.
+ */
+export function processUidGid(): { uid: string; gid: string } {
+  // The image's stage2 only remaps to 1-65534. Outside that range (root, or a
+  // directory-service uid above 65534) it keeps the baked user, so say 10000
+  // here rather than write a value the container will not run as.
+  const pick = (get?: () => number): string => {
+    const n = typeof get === 'function' ? get() : NaN
+    return Number.isInteger(n) && n >= 1 && n <= 65534 ? String(n) : '10000'
+  }
+  return { uid: pick(process.getuid), gid: pick(process.getgid) }
+}
+
+/**
+ * The HERMES_UID/HERMES_GID lines the hermes service gets, handed to the
+ * state-init service too, so /state is chowned to the uid stage2 remaps the
+ * gateway to rather than to the image's baked default.
+ */
+function remapEnvLines(uid: string, gid: string): string {
+  return `      - HERMES_UID=${uid}\n      - HERMES_GID=${gid}\n`
+}
+
 export function generateStandaloneCompose(
   agentName: string,
   port: number,
@@ -556,6 +618,7 @@ export function generateStandaloneCompose(
   options?: ComposeOptions,
 ): string {
   const { imageOrBuild, defaultImage, vpnEnabled, camofoxImage, vncBindHost, controlBindHost, apiBindHost, bundledOllama, ollamaImage, memory, cpus, extraMounts, extraEnv, extraAptPackages, sharedVpn, useStateVolume } = options ?? {}
+  const { uid, gid } = processUidGid()
   const resolved = imageOrBuild ?? { image: defaultImage || 'ghcr.io/cyborg-garden/hermes-agent-mt:latest' }
   const sourceBlock = 'image' in resolved
     ? `    image: ${resolved.image}`
@@ -572,15 +635,15 @@ export function generateStandaloneCompose(
   if (sharedVpn !== undefined && sharedVpn !== null) {
     assertSharedVpnCompatible({ vpnEnabled, bundledOllama })
     return applySharedVpnToCompose(
-      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume),
+      generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume, uid, gid),
       agentName, port, sharedVpn)
   }
 
   if (vpnEnabled) {
-    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume)
+    return generateVpnCompose(agentName, port, agentDataDir, sourceBlock, camofoxImage, vncBindHost, controlBindHost, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume, uid, gid)
   }
 
-  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume)
+  return generatePlainCompose(agentName, port, agentDataDir, sourceBlock, bundledOllama, ollamaImage, memory, cpus, mountLines, envLines, hermesSourceBlock, apiBindHost, useStateVolume, uid, gid)
 }
 
 /**
@@ -725,6 +788,8 @@ function generatePlainCompose(
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
   stateVolumeOption?: boolean | null,
+  uid = '10000',
+  gid = '10000',
 ): string {
   // Only an explicit false turns the layout off; undefined and null are ON.
   const useStateVolume = stateVolumeOption !== false
@@ -737,7 +802,7 @@ function generatePlainCompose(
   // VirtioFS torn writes. Where there is no such layer it is unnecessary.
   // Callers decide per agent (resolveUseStateVolume); see
   // ComposeOptions.useStateVolume.
-  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
+  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock, remapEnvLines(uid, gid) + extraEnvLines) : ''
   // depends_on in map form so the conditional entries merge (compose can't mix
   // list + map forms). With no sidecar or init service to gate, the whole key
   // is omitted rather than emitted empty.
@@ -764,6 +829,12 @@ ${hermesDepends}    extra_hosts:
       # data dir so every agent works regardless of image-level ENV.
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
+      # hermes-agent-mt's stage2 hook remaps its baked 10000 hermes user to
+      # HERMES_UID/HERMES_GID via usermod/groupmod. Without them a Linux bind
+      # mount owned by anyone else is unwritable to the gateway (crash-loop,
+      # 'SessionStore SQLite handle unavailable' while the container stays Up).
+      - HERMES_UID=${uid}
+      - HERMES_GID=${gid}
 ${extraEnvLines}    ports:
       - host_ip: "${resolveApiBindHost(apiBindHost)}"
         published: ${port}
@@ -805,6 +876,8 @@ function generateVpnCompose(
   hermesSourceBlock: string = sourceBlock,
   apiBindHost?: string,
   stateVolumeOption?: boolean | null,
+  uid = '10000',
+  gid = '10000',
 ): string {
   // Only an explicit false turns the layout off; undefined and null are ON.
   const useStateVolume = stateVolumeOption !== false
@@ -831,7 +904,7 @@ function generateVpnCompose(
     (useStateVolume ? `      state-init-${agentName}:\n        condition: service_completed_successfully\n` : '')
   // Init runs on the default network (no wireguard namespace) — it only touches
   // the two mounts and must not depend on VPN bring-up.
-  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock) : ''
+  const initBlock = useStateVolume ? stateInitService(agentName, agentDataDir, sourceBlock, remapEnvLines(uid, gid) + extraEnvLines) : ''
 
   return `# Generated by hermes-swarm-map — agent: ${agentName} (VPN mode)
 services:
@@ -898,6 +971,10 @@ ${hermesDepends}    extra_hosts:
       # hit /root and fail with EACCES ("Provider authentication failed").
       - HOME=/opt/data
       - HERMES_HOME=/opt/data
+      # See generatePlainCompose: remap the hermes user to the host owner so
+      # Linux bind mounts stay writable.
+      - HERMES_UID=${uid}
+      - HERMES_GID=${gid}
 ${extraEnvLines}    volumes:
       - ${agentDataDir}:/opt/data
 ${useStateVolume ? `      - ${stateVolumeName(agentName)}:/state

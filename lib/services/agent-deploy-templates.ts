@@ -6,7 +6,7 @@
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { AGENT_PIDS_LIMIT, resolveApiBindHost, assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { AGENT_PIDS_LIMIT, resolveApiBindHost, assertSharedVpnCompatible, ollamaSidecar, processUidGid, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
 import { applySharedVpnToCompose } from './shared-vpn'
 import { assertNoNewline } from '@/lib/env-helpers'
 
@@ -75,6 +75,12 @@ export function generateEnvContent(params: {
     '',
     keyLine,
     `API_SERVER_PORT=${port}`,
+    // Remap the container's hermes user to the host process owner (stage2
+    // usermod/groupmod) so Linux bind mounts stay readable/writable; hermes
+    // defaults to 10000 otherwise. Same contract as upstream's own compose
+    // (HERMES_UID=$(id -u) HERMES_GID=$(id -g)).
+    `HERMES_UID=${processUidGid().uid}`,
+    `HERMES_GID=${processUidGid().gid}`,
     '',
     `# Platform integration`,
   ]

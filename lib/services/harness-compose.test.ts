@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { applySharedVpnToCompose, removeSharedVpnFromCompose, readServicePublishedPort } from './shared-vpn'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT, AGENT_API_BIND_HOST, resolveApiBindHost } from './harness-compose'
+import { generateStandaloneCompose, validateExtraEnv, DEFAULT_CAMOFOX_IMAGE, AGENT_PIDS_LIMIT, AGENT_API_BIND_HOST, resolveApiBindHost, processUidGid } from './harness-compose'
 
 describe('generateStandaloneCompose', () => {
   const agentName = 'test-agent'
@@ -443,10 +443,62 @@ describe('generateStandaloneCompose', () => {
       expect(result).toContain('HERMES_HOME=/opt/data')
     })
 
+    it('pins HERMES_UID/HERMES_GID to the process owner in non-VPN compose (Linux bind-mount writability)', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir)
+      expect(result).toMatch(/HERMES_UID=\d+/)
+      expect(result).toMatch(/HERMES_GID=\d+/)
+      expect(result).toMatch(new RegExp(`HERMES_UID=${processUidGid().uid}`))
+    })
+
     it('sets HOME and HERMES_HOME to /opt/data in VPN compose', () => {
       const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
       expect(result).toContain('HOME=/opt/data')
       expect(result).toContain('HERMES_HOME=/opt/data')
+    })
+
+    it.each([
+      [0, '10000'],
+      [1, '1'],
+      [65534, '65534'],
+      [65535, '10000'],
+      [1234567890, '10000'],
+    ])('host id %i is written as %s: only what the image will remap to', (id, written) => {
+      const u = vi.spyOn(process, 'getuid').mockReturnValue(id)
+      const g = vi.spyOn(process, 'getgid').mockReturnValue(id)
+      try {
+        expect(processUidGid()).toEqual({ uid: written, gid: written })
+        const result = generateStandaloneCompose(agentName, port, dataDir)
+        expect(result.match(/^ {6}- HERMES_UID=(\d+)$/gm)).toEqual([`      - HERMES_UID=${written}`, `      - HERMES_UID=${written}`])
+      } finally {
+        u.mockRestore()
+        g.mockRestore()
+      }
+    })
+
+    it('an agent whose extraEnv already holds the generated ids regenerates, with one line per name', () => {
+      const { uid, gid } = processUidGid()
+      const result = generateStandaloneCompose(agentName, port, dataDir, { extraEnv: { HERMES_UID: uid, HERMES_GID: gid, FOO: 'bar' } })
+      const hermes = result.slice(result.indexOf(`  hermes-${agentName}:`))
+      expect(hermes.match(/- HERMES_UID=/g)).toHaveLength(1)
+      expect(hermes.match(/- HERMES_GID=/g)).toHaveLength(1)
+      expect(hermes).toContain('FOO')
+      expect(validateExtraEnv({ HERMES_UID: uid, HERMES_GID: gid })).toBeNull()
+    })
+
+    it('an extraEnv id that differs is refused, saying what to do', () => {
+      const other = String(Number(processUidGid().uid) === 4242 ? 4243 : 4242)
+      for (const key of ['HERMES_UID', 'HERMES_GID']) {
+        const problem = validateExtraEnv({ [key]: other })
+        expect(problem).toContain(`Remove ${key} from the agent's extraEnv`)
+        expect(problem).toContain(other)
+        expect(() => generateStandaloneCompose(agentName, port, dataDir, { extraEnv: { [key]: other } })).toThrow(/now set by Swarm Map/)
+      }
+    })
+
+    it('pins HERMES_UID/HERMES_GID to the process owner in VPN compose', () => {
+      const result = generateStandaloneCompose(agentName, port, dataDir, { vpnEnabled: true })
+      expect(result).toMatch(new RegExp(`HERMES_UID=${processUidGid().uid}`))
+      expect(result).toMatch(new RegExp(`HERMES_GID=${processUidGid().gid}`))
     })
   })
 
