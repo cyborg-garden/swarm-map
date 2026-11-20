@@ -6,7 +6,7 @@
 import { DISCORD_DM_USERS_VAR, SIGNAL_DENY_ALL_USERS } from '@/lib/surfaces/dm-allowlist'
 import { hsmBaseUrl } from './hsm-url'
 import { anthropicEnvVarForValue } from './keys'
-import { AGENT_PIDS_LIMIT, resolveApiBindHost, assertSharedVpnCompatible, ollamaSidecar, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
+import { AGENT_PIDS_LIMIT, resolveApiBindHost, assertSharedVpnCompatible, ollamaSidecar, processUidGid, stateInitService, stateVolumeBlock, stateVolumeName } from './harness-compose'
 import { applySharedVpnToCompose } from './shared-vpn'
 import { assertNoNewline } from '@/lib/env-helpers'
 
@@ -79,8 +79,8 @@ export function generateEnvContent(params: {
     // usermod/groupmod) so Linux bind mounts stay readable/writable; hermes
     // defaults to 10000 otherwise. Same contract as upstream's own compose
     // (HERMES_UID=$(id -u) HERMES_GID=$(id -g)).
-    `HERMES_UID=${typeof process.getuid === 'function' ? process.getuid() : 10000}`,
-    `HERMES_GID=${typeof process.getgid === 'function' ? process.getgid() : 10000}`,
+    `HERMES_UID=${processUidGid().uid}`,
+    `HERMES_GID=${processUidGid().gid}`,
     '',
     `# Platform integration`,
   ]

@@ -144,11 +144,24 @@ function checkEnv(env?: Record<string, string>, dataDir?: string): Array<[string
     throw new Error('extraEnv must be an object of NAME: value pairs')
   }
   const onBroker = !!dataDir && (githubBrokered(dataDir) || fs.existsSync(path.join(dataDir, GITHUB_BROKER_CONFIG)))
-  return Object.entries(env).map(([key, value]) => {
+  return Object.entries(env).flatMap(([key, value]) => {
     assertNoNewline(key, `extraEnv key '${key}'`)
     assertNoNewline(String(value), `extraEnv['${key}']`)
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`extraEnv key '${key}' is not a valid environment variable name`)
+    }
+    if (key === 'HERMES_UID' || key === 'HERMES_GID') {
+      // Swarm Map now writes these itself. An agent that already set the same
+      // value keeps working (the generated line stands in for it); a different
+      // value is refused with what to do, since two lines for one name would
+      // leave the container's uid to whichever compose read last.
+      const { uid, gid } = processUidGid()
+      const generated = key === 'HERMES_UID' ? uid : gid
+      if (String(value).trim() === generated) return []
+      throw new Error(
+        `extraEnv key '${key}' is now set by Swarm Map, to the id it runs as (${generated}), so the agent ` +
+        `can write its data dir. This agent's extraEnv asks for ${JSON.stringify(String(value))} instead. ` +
+        `Remove ${key} from the agent's extraEnv and save again; to run agents under another id, run Swarm Map as that user.`)
     }
     if (RESERVED_EXTRA_ENV_NAMES.has(key)) {
       throw new Error(
@@ -162,7 +175,7 @@ function checkEnv(env?: Record<string, string>, dataDir?: string): Array<[string
         `extraEnv key '${key}' is refused: this agent is on the GitHub token broker and holds no ` +
         `GitHub credential. Take it out of extraEnv.`)
     }
-    return [key, String(value)] as [string, string]
+    return [[key, String(value)] as [string, string]]
   })
 }
 
@@ -448,8 +461,11 @@ STATE="\${STATE_INIT_STATE:-/state}"
 envf() { sed -n "s/^\\(export \\)\\{0,1\\}$1=[\\"']\\{0,1\\}\\([0-9]*\\).*/\\2/p" "$DATA/.env" 2>/dev/null | tail -n 1; }
 uid="\${HERMES_UID:-$(envf HERMES_UID)}"; uid="\${uid:-\${PUID:-$(envf PUID)}}"
 gid="\${HERMES_GID:-$(envf HERMES_GID)}"; gid="\${gid:-\${PGID:-$(envf PGID)}}"
-case "$uid" in ''|0|*[!0-9]*) uid="$(id -u hermes 2>/dev/null || echo 10000)" ;; esac
-case "$gid" in ''|0|*[!0-9]*) gid="$(id -g hermes 2>/dev/null || echo 10000)" ;; esac
+# Same range as stage2 (1-65534): outside it stage2 does not remap, so the
+# gateway keeps the image's hermes user and /state must go to that user too.
+valid() { case "$1" in ''|*[!0-9]*|??????*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65534 ]; }
+valid "$uid" || uid="$(id -u hermes 2>/dev/null || echo 10000)"
+valid "$gid" || gid="$(id -g hermes 2>/dev/null || echo 10000)"
 for db in ${MIGRATED_DB_FILES.join(' ')}; do
   src="$DATA/$db"; dst="$STATE/$db"
   if [ -f "$src" ] && [ ! -L "$src" ]; then
@@ -575,11 +591,15 @@ export const DEFAULT_CAMOFOX_IMAGE =
  * mount. On platforms without process uids (Windows) fall back to the image's
  * baked 10000, which hermes also defaults to.
  */
-function processUidGid(): { uid: string; gid: string } {
-  return {
-    uid: typeof process.getuid === 'function' ? String(process.getuid()) : '10000',
-    gid: typeof process.getgid === 'function' ? String(process.getgid()) : '10000',
+export function processUidGid(): { uid: string; gid: string } {
+  // The image's stage2 only remaps to 1-65534. Outside that range (root, or a
+  // directory-service uid above 65534) it keeps the baked user, so say 10000
+  // here rather than write a value the container will not run as.
+  const pick = (get?: () => number): string => {
+    const n = typeof get === 'function' ? get() : NaN
+    return Number.isInteger(n) && n >= 1 && n <= 65534 ? String(n) : '10000'
   }
+  return { uid: pick(process.getuid), gid: pick(process.getgid) }
 }
 
 /**

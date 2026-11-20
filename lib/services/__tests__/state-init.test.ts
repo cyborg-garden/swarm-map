@@ -11,6 +11,7 @@ import {
   stateVolumeName,
   generateStandaloneCompose,
   setComposeImage,
+  processUidGid,
 } from '@/lib/services/harness-compose'
 import { generateAgentCompose } from '@/lib/services/agent-deploy-templates'
 
@@ -255,6 +256,9 @@ describe('STATE_INIT_SCRIPT /state ownership (resolved like the image\'s stage2)
     ['HERMES_UID over PUID', { HERMES_UID: '1000', PUID: '99' }, '1000:10000'],
     ['non-numeric ids are ignored', { HERMES_UID: 'abc', HERMES_GID: '1x' }, '10000:10000'],
     ['root is never a remap target', { HERMES_UID: '0', HERMES_GID: '0' }, '10000:10000'],
+    ['the top of the range stage2 remaps to', { HERMES_UID: '65534', HERMES_GID: '1' }, '65534:1'],
+    ['above the range stage2 remaps to', { HERMES_UID: '65535', HERMES_GID: '70000' }, '10000:10000'],
+    ['a number too long to compare', { HERMES_UID: '99999999999999999999999', HERMES_GID: '100' }, '10000:100'],
   ])('honours the remap env: %s', (_label, env, owner) => {
     runInitScript(env)
     expect(chownCalls().map(([args]) => args)).toEqual([`-R ${owner} ${stateDir}`])
@@ -347,8 +351,7 @@ describe('compose generators emit the migration wiring', () => {
       extraEnv: { PUID: '1000', PGID: '100', FOO: 'bar' },
     })
     const init = c.slice(c.indexOf('  state-init-sci:'), c.indexOf('    entrypoint:'))
-    const uid = typeof process.getuid === 'function' ? process.getuid() : 10000
-    const gid = typeof process.getgid === 'function' ? process.getgid() : 10000
+    const { uid, gid } = processUidGid()
     expect(init).toContain(`    environment:\n      - HERMES_UID=${uid}\n      - HERMES_GID=${gid}\n      - PUID=1000\n      - PGID=100\n`)
     expect(init).not.toContain('FOO')
   })
