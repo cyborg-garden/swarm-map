@@ -33,14 +33,14 @@ beforeEach(() => {
 describe('GET admins', () => {
   it('returns the admin list from the service', async () => {
     listAdmins.mockReturnValue({ platform: 'signal', admins: ['+64111'], source: 'allowlist', allowAllDm: false })
-    const res = await GET(new Request('http://x'), makeParams('h_seraph', 'signal'))
+    const res = await GET(new Request('http://x'), makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ platform: 'signal', admins: ['+64111'], source: 'allowlist', allowAllDm: false })
-    expect(listAdmins).toHaveBeenCalledWith('h_seraph', 'signal')
+    expect(listAdmins).toHaveBeenCalledWith('h_sentinel', 'signal')
   })
 
   it('returns 400 for an unsupported platform', async () => {
-    const res = await GET(new Request('http://x'), makeParams('h_seraph', 'whatsapp'))
+    const res = await GET(new Request('http://x'), makeParams('h_sentinel', 'whatsapp'))
     expect(res.status).toBe(400)
     expect(listAdmins).not.toHaveBeenCalled()
   })
@@ -48,40 +48,40 @@ describe('GET admins', () => {
 
 describe('PUT admins', () => {
   it('200 + persisted list when the service authorizes', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['+64222'] })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_sentinel', admins: ['+64222'] })
     const req = new Request('http://x', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admins: ['+64222'], actor: '+64111' }),
     })
-    const res = await PUT(req, makeParams('h_seraph', 'signal'))
+    const res = await PUT(req, makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ success: true, admins: ['+64222'] })
-    expect(setAdmins).toHaveBeenCalledWith('h_seraph', 'signal', ['+64222'], '+64111')
+    expect(setAdmins).toHaveBeenCalledWith('h_sentinel', 'signal', ['+64222'], '+64111')
   })
 
   const putDiscord = () => PUT(new Request('http://x', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ admins: ['100000000000000001'], actor: '100000000000000001' }),
-  }), makeParams('h_seraph', 'discord'))
+  }), makeParams('h_sentinel', 'discord'))
 
   it('recreates the container when the .env changed, so the running bot gets the new DM list', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvUpdated: true })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_sentinel', admins: ['100000000000000001'], dmEnvUpdated: true })
     const res = await putDiscord()
     expect(res.status).toBe(200)
-    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
+    expect(services.harness.restart).toHaveBeenCalledWith('h_sentinel', 'recreate')
     expect(await res.json()).toMatchObject({ success: true, restarted: true })
   })
 
   it('recreates the agent the service resolved, not the id in the URL', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph_doer', admins: ['100000000000000001'], dmEnvUpdated: true })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph_alpha', admins: ['100000000000000001'], dmEnvUpdated: true })
     await PUT(new Request('http://x', {
       method: 'PUT',
       body: JSON.stringify({ admins: ['100000000000000001'], actor: '100000000000000001' }),
-    }), makeParams('seraph-doer', 'discord'))
+    }), makeParams('seraph-alpha', 'discord'))
     expect(services.harness.restart).toHaveBeenCalledTimes(1)
-    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph_doer', 'recreate')
+    expect(services.harness.restart).toHaveBeenCalledWith('h_seraph_alpha', 'recreate')
   })
 
   it('404 and no recreate when the service knows no such agent', async () => {
@@ -93,13 +93,13 @@ describe('PUT admins', () => {
   })
 
   it('does not recreate when only the overlay changed', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'] })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_sentinel', admins: ['100000000000000001'] })
     await putDiscord()
     expect(services.harness.restart).not.toHaveBeenCalled()
   })
 
   it('still answers 200 when no container exists to recreate', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvUpdated: true })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_sentinel', admins: ['100000000000000001'], dmEnvUpdated: true })
     vi.mocked(services.harness.restart).mockImplementationOnce(() => { throw new Error('no compose') })
     const res = await putDiscord()
     expect(res.status).toBe(200)
@@ -107,7 +107,7 @@ describe('PUT admins', () => {
   })
 
   it('passes a DM list warning on to the caller instead of reporting a clean save', async () => {
-    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_seraph', admins: ['100000000000000001'], dmEnvWarning: 'DM list not updated' })
+    setAdmins.mockReturnValue({ ok: true, harnessId: 'h_sentinel', admins: ['100000000000000001'], dmEnvWarning: 'DM list not updated' })
     const res = await putDiscord()
     expect(await res.json()).toMatchObject({ success: true, warning: 'DM list not updated' })
     expect(services.harness.restart).not.toHaveBeenCalled()
@@ -120,7 +120,7 @@ describe('PUT admins', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admins: ['+64999'], actor: '+64999' }),
     })
-    const res = await PUT(req, makeParams('h_seraph', 'signal'))
+    const res = await PUT(req, makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(403)
   })
 
@@ -131,13 +131,13 @@ describe('PUT admins', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admins: ['bad'], actor: '+64111' }),
     })
-    const res = await PUT(req, makeParams('h_seraph', 'signal'))
+    const res = await PUT(req, makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(400)
   })
 
   it('400 for invalid JSON body', async () => {
     const req = new Request('http://x', { method: 'PUT', body: 'not json' })
-    const res = await PUT(req, makeParams('h_seraph', 'signal'))
+    const res = await PUT(req, makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(400)
     expect(setAdmins).not.toHaveBeenCalled()
   })
@@ -149,8 +149,8 @@ describe('PUT admins', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ admins: ['+64222'] }),
     })
-    const res = await PUT(req, makeParams('h_seraph', 'signal'))
+    const res = await PUT(req, makeParams('h_sentinel', 'signal'))
     expect(res.status).toBe(400)
-    expect(setAdmins).toHaveBeenCalledWith('h_seraph', 'signal', ['+64222'], '')
+    expect(setAdmins).toHaveBeenCalledWith('h_sentinel', 'signal', ['+64222'], '')
   })
 })

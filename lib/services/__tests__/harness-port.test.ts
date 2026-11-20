@@ -52,7 +52,7 @@ describe('collectUsedPorts', () => {
     expect(used.has(8662)).toBe(true)
   })
 
-  // THE cyborg-vs-personal bug: the monolithic `personal` agent lives at
+  // THE ember-vs-personal bug: the monolithic `personal` agent lives at
   // ~/.hermes with API_SERVER_PORT=8642 in its .env and NO compose file under
   // composeBaseDir, and if it's stopped `docker ps` won't report it either.
   // Its port MUST still be treated as used.
@@ -63,7 +63,7 @@ describe('collectUsedPorts', () => {
   })
 
   it('scans .hermes-<name> sibling agent dirs too', () => {
-    writeAgentEnv('.hermes-osint', 8672)
+    writeAgentEnv('.hermes-ledger', 8672)
     const used = collectUsedPorts({ composeBaseDir, homeDir, dockerPorts: () => [] })
     expect(used.has(8672)).toBe(true)
   })
@@ -114,7 +114,7 @@ describe('nextAvailablePort', () => {
     expect(nextAvailablePort({ composeBaseDir, homeDir, dockerPorts: () => [] })).toBe(8662)
   })
 
-  // Regression for the actual incident: cyborg must NOT be handed 8642 when the
+  // Regression for the actual incident: ember must NOT be handed 8642 when the
   // stopped/monolithic personal agent already owns it via .env only.
   it('does not reassign a port owned only by another agent .env', () => {
     writeAgentEnv('.hermes', 8642) // personal, .env-only

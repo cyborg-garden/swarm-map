@@ -318,10 +318,10 @@ describe('POST /api/setup/deploy — Google MCP wiring', () => {
 
   it('accepts an explicit identity so it can match an existing token file', async () => {
     makeGoogleCheckout('google-mcp')
-    await deploy({ ...BASE, name: 'gid', googleEnabled: true, googleIdentity: 'frontdoor' })
+    await deploy({ ...BASE, name: 'gid', googleEnabled: true, googleIdentity: 'work-account' })
 
     expect(readPermissions(path.join(agentDir('gid'), 'google-permissions.yaml')).identity)
-      .toBe('frontdoor')
+      .toBe('work-account')
   })
 
   // --- Google off: nothing google-shaped is emitted ----------------------

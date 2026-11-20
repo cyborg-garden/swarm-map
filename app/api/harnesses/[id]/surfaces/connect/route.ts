@@ -12,6 +12,7 @@ import { readEnvValue } from '@/lib/services/discord-thread-gate'
 import { isSurfaceSlug, SURFACES } from '@/lib/surfaces/registry'
 import { DISCORD_DM_USERS_VAR, discordDmRefusedWarning, validIdentities } from '@/lib/surfaces/dm-allowlist'
 import { requireHarness } from '@/lib/harness-ref'
+import { signalComposeUpCommand } from '@/lib/signal-compose'
 
 function agentDataDir(harnessId: string): string {
   const name = harnessId.replace(/^h_/, '').replace(/_/g, '-')
@@ -44,10 +45,10 @@ export async function POST(
         signal: AbortSignal.timeout(5000),
       })
       if (!healthRes.ok) {
-        return NextResponse.json({ error: 'Signal daemon not reachable. Deploy it first via Settings or run: cd ~/.hermes-swarm && docker compose -f docker-compose.signal.yml up -d' }, { status: 503 })
+        return NextResponse.json({ error: `Signal daemon not reachable. Deploy it first via Settings or run: ${signalComposeUpCommand()}` }, { status: 503 })
       }
     } catch {
-      return NextResponse.json({ error: 'Signal daemon not reachable. Deploy it first via Settings or run: cd ~/.hermes-swarm && docker compose -f docker-compose.signal.yml up -d' }, { status: 503 })
+      return NextResponse.json({ error: `Signal daemon not reachable. Deploy it first via Settings or run: ${signalComposeUpCommand()}` }, { status: 503 })
     }
 
     // Default the bot's Signal profile name to the harness name, so an agent

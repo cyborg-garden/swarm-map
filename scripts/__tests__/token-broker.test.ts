@@ -247,7 +247,7 @@ describe('token broker', () => {
     it('never overwrites a broken file on enrol', () => {
       breakRegistry()
       const before = fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')
-      expect(() => enroll('cyborg')).toThrow()
+      expect(() => enroll('ember')).toThrow()
       expect(fs.readFileSync(path.join(dir, 'registry.json'), 'utf-8')).toBe(before)
     })
   })

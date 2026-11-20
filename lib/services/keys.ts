@@ -206,7 +206,7 @@ function nameToId(name: string): string {
   return 'h_' + name.replace(/-/g, '_')
 }
 
-// Convert harness ID back to name (h_seraph_doer → seraph-doer)
+// Convert harness ID back to name (h_seraph_alpha → seraph-alpha)
 function idToName(id: string): string {
   return id.replace(/^h_/, '').replace(/_/g, '-')
 }

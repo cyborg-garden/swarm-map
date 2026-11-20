@@ -203,7 +203,7 @@ describe('computeCost', () => {
     expect(cost).toBe(0)
   })
 
-  it('computes a realistic seraph-doer-like cost', () => {
+  it('computes a realistic seraph-alpha-like cost', () => {
     // Real data: ~38M input, ~488K output, ~35M cache read, ~2M cache write for claude-sonnet-4
     const pricing = lookupPricing('claude-sonnet-4')!
     const cost = computeCost(

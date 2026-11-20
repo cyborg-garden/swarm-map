@@ -52,8 +52,8 @@ describe('GET /api/harnesses/:id/policy', () => {
     expect(await res.json()).toEqual({ error: 'Invalid harness id' })
   })
   it('still answers for a real id and a bare slug', async () => {
-    writeEnv('seraph-doer', 'TELEGRAM_GROUP_ALLOWED_CHATS=-100,-200\n')
-    for (const id of ['h_seraph_doer', 'seraph-doer']) {
+    writeEnv('seraph-alpha', 'TELEGRAM_GROUP_ALLOWED_CHATS=-100,-200\n')
+    for (const id of ['h_seraph_alpha', 'seraph-alpha']) {
       const res = await GET(new Request('http://x/p?platform=telegram&chatId=-200'), ctx(id))
       expect(await res.json()).toEqual({ allowed: true })
     }
@@ -69,30 +69,30 @@ describe('POST /api/harnesses/:id/policy', () => {
   })
   it('rejects a chatId carrying a newline (no new .env line)', async () => {
     const before = 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\nOTHER=keep\n'
-    writeEnv('seraph', before)
-    const res = await post('h_seraph', {
+    writeEnv('sentinel', before)
+    const res = await post('h_sentinel', {
       action: 'group-register', platform: 'telegram', chatId: '-2\nTELEGRAM_ALLOWED_USERS=*',
     })
     expect(res.status).toBe(400)
-    expect(fs.readFileSync(envOf('seraph'), 'utf-8')).toBe(before)
+    expect(fs.readFileSync(envOf('sentinel'), 'utf-8')).toBe(before)
     expect(h.restart).not.toHaveBeenCalled()
   })
   it('rejects a "$&" chatId (replacement-pattern splice)', async () => {
-    writeEnv('seraph', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
-    const res = await post('h_seraph', { action: 'group-register', platform: 'telegram', chatId: '$&' })
+    writeEnv('sentinel', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
+    const res = await post('h_sentinel', { action: 'group-register', platform: 'telegram', chatId: '$&' })
     expect(res.status).toBe(400)
   })
   it('registers and deregisters a valid chatId literally', async () => {
-    writeEnv('seraph', 'A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-1\nB=2\n')
-    expect((await post('h_seraph', { action: 'group-register', platform: 'telegram', chatId: '-2' })).status).toBe(200)
-    expect(fs.readFileSync(envOf('seraph'), 'utf-8')).toBe('A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-1,-2\nB=2\n')
-    expect(h.restart).toHaveBeenCalledWith('h_seraph', 'recreate')
-    expect((await post('h_seraph', { action: 'group-deregister', platform: 'telegram', chatId: '-1' })).status).toBe(200)
-    expect(fs.readFileSync(envOf('seraph'), 'utf-8')).toBe('A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-2\nB=2\n')
+    writeEnv('sentinel', 'A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-1\nB=2\n')
+    expect((await post('h_sentinel', { action: 'group-register', platform: 'telegram', chatId: '-2' })).status).toBe(200)
+    expect(fs.readFileSync(envOf('sentinel'), 'utf-8')).toBe('A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-1,-2\nB=2\n')
+    expect(h.restart).toHaveBeenCalledWith('h_sentinel', 'recreate')
+    expect((await post('h_sentinel', { action: 'group-deregister', platform: 'telegram', chatId: '-1' })).status).toBe(200)
+    expect(fs.readFileSync(envOf('sentinel'), 'utf-8')).toBe('A=1\nTELEGRAM_GROUP_ALLOWED_CHATS=-2\nB=2\n')
   })
   it('keeps the missing-field 400', async () => {
-    writeEnv('seraph', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
-    const res = await post('h_seraph', { action: 'group-register', platform: 'telegram' })
+    writeEnv('sentinel', 'TELEGRAM_GROUP_ALLOWED_CHATS=-1\n')
+    const res = await post('h_sentinel', { action: 'group-register', platform: 'telegram' })
     expect(res.status).toBe(400)
     expect(await res.json()).toEqual({ error: 'Missing platform or chatId' })
   })

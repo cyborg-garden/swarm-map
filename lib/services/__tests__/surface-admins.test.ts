@@ -116,52 +116,52 @@ describe('isSupportedSurface', () => {
 
 describe('SurfaceAdminService.listAdmins — default to allowlist (no regression)', () => {
   it('falls back to the DM allowlist when no explicit list is set', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n')
-    const list = svc.listAdmins('h_seraph', 'signal')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n')
+    const list = svc.listAdmins('h_sentinel', 'signal')
     expect(list.source).toBe('allowlist')
     expect(list.admins).toEqual(['+64111', 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'])
     expect(list.allowAllDm).toBe(false)
   })
 
   it('reports allowAllDm and yields ZERO admins for a wildcard allowlist', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=*\n')
-    const list = svc.listAdmins('h_seraph', 'signal')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=*\n')
+    const list = svc.listAdmins('h_sentinel', 'signal')
     expect(list.admins).toEqual([])
     expect(list.allowAllDm).toBe(true)
   })
 
   it('returns the explicit list (source: explicit) once one is stored', () => {
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { signal: ['+64777'] } },
+      { id: 'h_sentinel', surfaceAdmins: { signal: ['+64777'] } },
     ])
-    const list = svc.listAdmins('h_seraph', 'signal')
+    const list = svc.listAdmins('h_sentinel', 'signal')
     expect(list.source).toBe('explicit')
     expect(list.admins).toEqual(['+64777'])
   })
 
   it('finds the explicit list when called with the bare agent slug', () => {
-    // Agents call with HERMES_AGENT_NAME (e.g. "seraph-doer"), not "h_seraph_doer".
+    // Agents call with HERMES_AGENT_NAME (e.g. "seraph-alpha"), not "h_seraph_alpha".
     // Before id normalization the overlay lookup missed every explicit list for
     // agent-side calls and silently fell back to the allowlist bootstrap.
     storage.write('harnesses.json', [
-      { id: 'h_seraph_doer', surfaceAdmins: { signal: ['+64777'] } },
+      { id: 'h_seraph_alpha', surfaceAdmins: { signal: ['+64777'] } },
     ])
-    const list = svc.listAdmins('seraph-doer', 'signal')
+    const list = svc.listAdmins('seraph-alpha', 'signal')
     expect(list.source).toBe('explicit')
     expect(list.admins).toEqual(['+64777'])
   })
 
   it('a slug-keyed write lands on the h_ overlay, not a ghost entry', () => {
     // Writes must normalize like reads: before this, a setAdmins under a bare
-    // slug created a NEW {id: 'seraph-doer'} overlay invisible to every
+    // slug created a NEW {id: 'seraph-alpha'} overlay invisible to every
     // normalized read — the read/write drift class the registry exists to kill.
-    writeAgentEnv('seraph-doer', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    storage.write('harnesses.json', [{ id: 'h_seraph_doer' }])
-    const res = svc.setAdmins('seraph-doer', 'signal', ['+64111'], '+64111')
+    writeAgentEnv('seraph-alpha', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    storage.write('harnesses.json', [{ id: 'h_seraph_alpha' }])
+    const res = svc.setAdmins('seraph-alpha', 'signal', ['+64111'], '+64111')
     expect(res.ok).toBe(true)
     const overlays = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
     expect(overlays).toHaveLength(1)
-    expect(overlays[0].id).toBe('h_seraph_doer')
+    expect(overlays[0].id).toBe('h_seraph_alpha')
     expect(overlays[0].surfaceAdmins?.signal).toEqual(['+64111'])
   })
 
@@ -173,53 +173,53 @@ describe('SurfaceAdminService.listAdmins — default to allowlist (no regression
 
 describe('SurfaceAdminService.isAdmin — fail closed', () => {
   it('is true for a user in the bootstrap allowlist', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111,+64222\n')
-    expect(svc.isAdmin('h_seraph', 'signal', '+64222')).toBe(true)
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111,+64222\n')
+    expect(svc.isAdmin('h_sentinel', 'signal', '+64222')).toBe(true)
   })
 
   it('is false for a user not in the allowlist', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    expect(svc.isAdmin('h_seraph', 'signal', '+64999')).toBe(false)
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    expect(svc.isAdmin('h_sentinel', 'signal', '+64999')).toBe(false)
   })
 
   it('is false when the allowlist is a wildcard (allow-all DM ≠ everyone admin)', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=*\n')
-    expect(svc.isAdmin('h_seraph', 'signal', '+64999')).toBe(false)
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=*\n')
+    expect(svc.isAdmin('h_sentinel', 'signal', '+64999')).toBe(false)
   })
 
   it('is false for unknown agent, empty userId, and unsupported platform', () => {
     expect(svc.isAdmin('h_ghost', 'signal', '+64111')).toBe(false)
-    expect(svc.isAdmin('h_seraph', 'signal', '')).toBe(false)
-    expect(svc.isAdmin('h_seraph', 'whatsapp', '+64111')).toBe(false)
+    expect(svc.isAdmin('h_sentinel', 'signal', '')).toBe(false)
+    expect(svc.isAdmin('h_sentinel', 'whatsapp', '+64111')).toBe(false)
   })
 
   it('honors an explicit list over the allowlist', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { signal: ['+64222'] } },
+      { id: 'h_sentinel', surfaceAdmins: { signal: ['+64222'] } },
     ])
     // +64111 was a bootstrap admin but the explicit list replaces it.
-    expect(svc.isAdmin('h_seraph', 'signal', '+64111')).toBe(false)
-    expect(svc.isAdmin('h_seraph', 'signal', '+64222')).toBe(true)
+    expect(svc.isAdmin('h_sentinel', 'signal', '+64111')).toBe(false)
+    expect(svc.isAdmin('h_sentinel', 'signal', '+64222')).toBe(true)
   })
 })
 
 describe('SurfaceAdminService.setAdmins — authz + validation', () => {
   it('lets a bootstrap admin set the explicit list, and persists it', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    const res = svc.setAdmins('h_seraph', 'signal', ['+64222', '+64333'], '+64111')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    const res = svc.setAdmins('h_sentinel', 'signal', ['+64222', '+64333'], '+64111')
     expect(res.ok).toBe(true)
     if (res.ok) expect(res.admins).toEqual(['+64222', '+64333'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.signal).toEqual(['+64222', '+64333'])
+    expect(stored.find((h) => h.id === 'h_sentinel')?.surfaceAdmins?.signal).toEqual(['+64222', '+64333'])
     expect(audit.append).toHaveBeenCalledWith(
-      expect.objectContaining({ who: '+64111', what: 'surface-admins:set:signal', target: 'h_seraph' }),
+      expect.objectContaining({ who: '+64111', what: 'surface-admins:set:signal', target: 'h_sentinel' }),
     )
   })
 
   it('rejects a non-admin actor with 403 (no self-escalation) and does not write', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    const res = svc.setAdmins('h_seraph', 'signal', ['+64999'], '+64999')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    const res = svc.setAdmins('h_sentinel', 'signal', ['+64999'], '+64999')
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.status).toBe(403)
     expect(storage.read('harnesses.json', [])).toEqual([])
@@ -227,38 +227,38 @@ describe('SurfaceAdminService.setAdmins — authz + validation', () => {
   })
 
   it('rejects malformed identities with 400', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    const res = svc.setAdmins('h_seraph', 'signal', ['+64222', 'not,valid'], '+64111')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    const res = svc.setAdmins('h_sentinel', 'signal', ['+64222', 'not,valid'], '+64111')
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.status).toBe(400)
   })
 
   it('rejects a non-array body and a missing actor with 400', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    expect(svc.setAdmins('h_seraph', 'signal', 'nope' as never, '+64111')).toMatchObject({ ok: false, status: 400 })
-    expect(svc.setAdmins('h_seraph', 'signal', ['+64222'], '')).toMatchObject({ ok: false, status: 400 })
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    expect(svc.setAdmins('h_sentinel', 'signal', 'nope' as never, '+64111')).toMatchObject({ ok: false, status: 400 })
+    expect(svc.setAdmins('h_sentinel', 'signal', ['+64222'], '')).toMatchObject({ ok: false, status: 400 })
   })
 
   it('rejects an unsupported platform with 400', () => {
-    expect(svc.setAdmins('h_seraph', 'whatsapp', ['+64222'], '+64111')).toMatchObject({ ok: false, status: 400 })
+    expect(svc.setAdmins('h_sentinel', 'whatsapp', ['+64222'], '+64111')).toMatchObject({ ok: false, status: 400 })
   })
 
   it('dedupes identities before persisting', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    const res = svc.setAdmins('h_seraph', 'signal', ['+64222', '+64222'], '+64111')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    const res = svc.setAdmins('h_sentinel', 'signal', ['+64222', '+64222'], '+64111')
     expect(res.ok).toBe(true)
     if (res.ok) expect(res.admins).toEqual(['+64222'])
   })
 
   it('an actor promoted into the explicit list can then manage it', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
     // Bootstrap admin adds +64222.
-    svc.setAdmins('h_seraph', 'signal', ['+64111', '+64222'], '+64111')
+    svc.setAdmins('h_sentinel', 'signal', ['+64111', '+64222'], '+64111')
     // Now +64222 (in the explicit list) can mutate; +64111 still can too.
-    const res = svc.setAdmins('h_seraph', 'signal', ['+64222'], '+64222')
+    const res = svc.setAdmins('h_sentinel', 'signal', ['+64222'], '+64222')
     expect(res.ok).toBe(true)
     // And the former bootstrap admin, now removed, can no longer mutate.
-    const res2 = svc.setAdmins('h_seraph', 'signal', ['+64111'], '+64111')
+    const res2 = svc.setAdmins('h_sentinel', 'signal', ['+64111'], '+64111')
     expect(res2.ok).toBe(false)
     if (!res2.ok) expect(res2.status).toBe(403)
   })
@@ -266,52 +266,52 @@ describe('SurfaceAdminService.setAdmins — authz + validation', () => {
 
 describe('SurfaceAdminService.syncFromAllowlist — store convergence', () => {
   it('is a no-op when no explicit list exists (bootstrap default already tracks the env)', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\n')
-    svc.syncFromAllowlist('h_seraph', 'telegram', ['111', '222'])
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\n')
+    svc.syncFromAllowlist('h_sentinel', 'telegram', ['111', '222'])
     expect(storage.read('harnesses.json', [])).toEqual([])
     expect(audit.append).not.toHaveBeenCalled()
   })
 
   it('replaces a stale explicit list with the new allowlist', () => {
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { telegram: ['999'] } },
+      { id: 'h_sentinel', surfaceAdmins: { telegram: ['999'] } },
     ])
-    svc.syncFromAllowlist('h_seraph', 'telegram', ['111', '222'])
+    svc.syncFromAllowlist('h_sentinel', 'telegram', ['111', '222'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.telegram).toEqual(['111', '222'])
+    expect(stored.find((h) => h.id === 'h_sentinel')?.surfaceAdmins?.telegram).toEqual(['111', '222'])
     // The policy plane now answers from the converged list.
-    expect(svc.isAdmin('h_seraph', 'telegram', '222')).toBe(true)
-    expect(svc.isAdmin('h_seraph', 'telegram', '999')).toBe(false)
+    expect(svc.isAdmin('h_sentinel', 'telegram', '222')).toBe(true)
+    expect(svc.isAdmin('h_sentinel', 'telegram', '999')).toBe(false)
     expect(audit.append).toHaveBeenCalledWith(
-      expect.objectContaining({ what: 'surface-admins:sync:telegram', target: 'h_seraph' }),
+      expect.objectContaining({ what: 'surface-admins:sync:telegram', target: 'h_sentinel' }),
     )
   })
 
   it('drops invalid entries (raw @handles, wildcards) and dedupes — never stores an unresolved handle', () => {
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { telegram: ['999'] } },
+      { id: 'h_sentinel', surfaceAdmins: { telegram: ['999'] } },
     ])
-    svc.syncFromAllowlist('h_seraph', 'telegram', ['@operator', '111', '*', '111'])
+    svc.syncFromAllowlist('h_sentinel', 'telegram', ['@operator', '111', '*', '111'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.telegram).toEqual(['111'])
+    expect(stored.find((h) => h.id === 'h_sentinel')?.surfaceAdmins?.telegram).toEqual(['111'])
   })
 
   it('does not touch other platforms on the same overlay', () => {
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { telegram: ['999'], signal: ['+64111'] } },
+      { id: 'h_sentinel', surfaceAdmins: { telegram: ['999'], signal: ['+64111'] } },
     ])
-    svc.syncFromAllowlist('h_seraph', 'telegram', ['111'])
+    svc.syncFromAllowlist('h_sentinel', 'telegram', ['111'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.signal).toEqual(['+64111'])
+    expect(stored.find((h) => h.id === 'h_sentinel')?.surfaceAdmins?.signal).toEqual(['+64111'])
   })
 
   it('ignores unsupported platforms', () => {
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { telegram: ['999'] } },
+      { id: 'h_sentinel', surfaceAdmins: { telegram: ['999'] } },
     ])
-    svc.syncFromAllowlist('h_seraph', 'whatsapp', ['111'])
+    svc.syncFromAllowlist('h_sentinel', 'whatsapp', ['111'])
     const stored = storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
-    expect(stored.find((h) => h.id === 'h_seraph')?.surfaceAdmins?.telegram).toEqual(['999'])
+    expect(stored.find((h) => h.id === 'h_sentinel')?.surfaceAdmins?.telegram).toEqual(['999'])
   })
 })
 
@@ -321,73 +321,73 @@ describe('SurfaceAdminService.approveGroupInvite — policy × admin matrix', ()
   }
 
   it('approves and appends when policy is unset (approved-only default) and the adder is an admin', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=\n')
-    const res = svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')
-    expect(res).toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_seraph' })
-    expect(agentEnvContent('seraph')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777')
-    expect(svc.isGroupAllowed('h_seraph', 'telegram', '-100777')).toBe(true)
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')
+    expect(res).toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_sentinel' })
+    expect(agentEnvContent('sentinel')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777')
+    expect(svc.isGroupAllowed('h_sentinel', 'telegram', '-100777')).toBe(true)
     expect(audit.append).toHaveBeenCalledWith(
-      expect.objectContaining({ who: '111', what: 'surface-groups:approve:telegram', target: 'h_seraph' }),
+      expect.objectContaining({ who: '111', what: 'surface-groups:approve:telegram', target: 'h_sentinel' }),
     )
   })
 
   it('rejects (approved: false, no write) when the adder is not an admin', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=g1\n')
-    const res = svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '222')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=g1\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '222')
     expect(res).toMatchObject({ ok: true, approved: false })
     if (res.ok && !res.approved) expect(res.reason).toContain('not an admin')
-    expect(agentEnvContent('seraph')).not.toContain('-100777')
+    expect(agentEnvContent('sentinel')).not.toContain('-100777')
   })
 
   it('approves for a non-admin when policy is allow-all, and appends', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n')
-    const res = svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '222')
-    expect(res).toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_seraph' })
-    expect(agentEnvContent('seraph')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=allow-all\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '222')
+    expect(res).toEqual({ ok: true, approved: true, updated: true, harnessId: 'h_sentinel' })
+    expect(agentEnvContent('sentinel')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100777')
   })
 
   it('rejects a non-admin under an explicit approved-only policy', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=approved-only\n')
-    expect(svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '222')).toMatchObject({
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_INVITE_POLICY=approved-only\n')
+    expect(svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '222')).toMatchObject({
       ok: true,
       approved: false,
     })
   })
 
   it('honors the explicit admin overlay for the admin check', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\n')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\n')
     storage.write('harnesses.json', [
-      { id: 'h_seraph', surfaceAdmins: { telegram: ['222'] } },
+      { id: 'h_sentinel', surfaceAdmins: { telegram: ['222'] } },
     ])
-    expect(svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')).toMatchObject({ approved: false })
-    expect(svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '222')).toMatchObject({ approved: true })
+    expect(svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')).toMatchObject({ approved: false })
+    expect(svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '222')).toMatchObject({ approved: true })
   })
 
   it('is a no-write approval when the allowlist is the * wildcard', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=*\n')
-    const res = svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')
-    expect(res).toEqual({ ok: true, approved: true, updated: false, harnessId: 'h_seraph' })
-    expect(agentEnvContent('seraph')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=*')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=*\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')
+    expect(res).toEqual({ ok: true, approved: true, updated: false, harnessId: 'h_sentinel' })
+    expect(agentEnvContent('sentinel')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=*')
   })
 
   it('is a no-write approval when the group is already listed', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-100777\n')
-    const res = svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')
-    expect(res).toEqual({ ok: true, approved: true, updated: false, harnessId: 'h_seraph' })
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-100777\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')
+    expect(res).toEqual({ ok: true, approved: true, updated: false, harnessId: 'h_sentinel' })
   })
 
   it('appends without clobbering existing groups', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-100111\n')
-    svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')
-    expect(agentEnvContent('seraph')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100111,-100777')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-100111\n')
+    svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')
+    expect(agentEnvContent('sentinel')).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100111,-100777')
   })
 
   it('rejects structurally invalid group ids with 400 (env injection guard)', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\n')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\n')
     // '$'/backtick: String.replace replacement patterns ("x$`" splices the
     // preceding file content — incl. the bot token line — into the allowlist).
     for (const bad of ['*', '', 'g1,g2', 'g1\nKEY=val', 'a b', 'g#1', "g'1", 'x$`', 'x$&', 'g$1', 'g`id`']) {
-      expect(svc.approveGroupInvite('h_seraph', 'telegram', bad, '111')).toMatchObject({ ok: false, status: 400 })
+      expect(svc.approveGroupInvite('h_sentinel', 'telegram', bad, '111')).toMatchObject({ ok: false, status: 400 })
     }
   })
 
@@ -395,27 +395,27 @@ describe('SurfaceAdminService.approveGroupInvite — policy × admin matrix', ()
     // Belt-and-braces for the replacer-function fix: token line must survive
     // verbatim and the value may not splice file content.
     writeAgentEnv(
-      'seraph',
+      'sentinel',
       'TELEGRAM_BOT_TOKEN=secretAAA\nTELEGRAM_GROUP_ALLOWED_CHATS=-100111\nTELEGRAM_ALLOWED_USERS=111\n',
     )
-    svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '111')
-    const content = agentEnvContent('seraph')
+    svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '111')
+    const content = agentEnvContent('sentinel')
     expect(content).toContain('TELEGRAM_BOT_TOKEN=secretAAA\n')
     expect(content).toContain('TELEGRAM_GROUP_ALLOWED_CHATS=-100111,-100777')
     expect(content.match(/TELEGRAM_BOT_TOKEN=/g)).toHaveLength(1)
   })
 
   it('rejects an oversized addedByUserId with 400 (audit-log spam guard)', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\n')
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\n')
     expect(
-      svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '9'.repeat(129)),
+      svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '9'.repeat(129)),
     ).toMatchObject({ ok: false, status: 400 })
   })
 
   it('rejects a missing addedByUserId and an unsupported platform with 400', () => {
-    writeAgentEnv('seraph', 'TELEGRAM_ALLOWED_USERS=111\n')
-    expect(svc.approveGroupInvite('h_seraph', 'telegram', '-100777', '')).toMatchObject({ ok: false, status: 400 })
-    expect(svc.approveGroupInvite('h_seraph', 'whatsapp', '-100777', '111')).toMatchObject({ ok: false, status: 400 })
+    writeAgentEnv('sentinel', 'TELEGRAM_ALLOWED_USERS=111\n')
+    expect(svc.approveGroupInvite('h_sentinel', 'telegram', '-100777', '')).toMatchObject({ ok: false, status: 400 })
+    expect(svc.approveGroupInvite('h_sentinel', 'whatsapp', '-100777', '111')).toMatchObject({ ok: false, status: 400 })
   })
 
   it('rejects when the agent .env does not exist', () => {
@@ -423,33 +423,33 @@ describe('SurfaceAdminService.approveGroupInvite — policy × admin matrix', ()
   })
 
   it('works for signal too (shared invite-policy plumbing)', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\nSIGNAL_GROUP_INVITE_POLICY=approved-only\n')
-    const res = svc.approveGroupInvite('h_seraph', 'signal', 'group.abc', '+64111')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\nSIGNAL_GROUP_INVITE_POLICY=approved-only\n')
+    const res = svc.approveGroupInvite('h_sentinel', 'signal', 'group.abc', '+64111')
     expect(res).toMatchObject({ ok: true, approved: true, updated: true })
-    expect(agentEnvContent('seraph')).toContain('SIGNAL_GROUP_ALLOWED_USERS=group.abc')
+    expect(agentEnvContent('sentinel')).toContain('SIGNAL_GROUP_ALLOWED_USERS=group.abc')
   })
 })
 
 describe('SurfaceAdminService.isGroupAllowed', () => {
   it('is true for a listed group and for a wildcard', () => {
-    writeAgentEnv('seraph', 'SIGNAL_GROUP_ALLOWED_USERS=g1,g2\n')
-    expect(svc.isGroupAllowed('h_seraph', 'signal', 'g2')).toBe(true)
+    writeAgentEnv('sentinel', 'SIGNAL_GROUP_ALLOWED_USERS=g1,g2\n')
+    expect(svc.isGroupAllowed('h_sentinel', 'signal', 'g2')).toBe(true)
     writeAgentEnv('wild', 'TELEGRAM_GROUP_ALLOWED_CHATS=*\n')
     expect(svc.isGroupAllowed('h_wild', 'telegram', '-100')).toBe(true)
   })
   it('fails closed for unlisted group, unknown agent, unsupported platform', () => {
-    writeAgentEnv('seraph', 'SIGNAL_GROUP_ALLOWED_USERS=g1\n')
-    expect(svc.isGroupAllowed('h_seraph', 'signal', 'gX')).toBe(false)
+    writeAgentEnv('sentinel', 'SIGNAL_GROUP_ALLOWED_USERS=g1\n')
+    expect(svc.isGroupAllowed('h_sentinel', 'signal', 'gX')).toBe(false)
     expect(svc.isGroupAllowed('h_ghost', 'signal', 'g1')).toBe(false)
-    expect(svc.isGroupAllowed('h_seraph', 'whatsapp', 'g1')).toBe(false)
+    expect(svc.isGroupAllowed('h_sentinel', 'whatsapp', 'g1')).toBe(false)
   })
 })
 
 // Every harness id shape seen on a live host (ls ~/.hermes-* + docker ps), the
 // bare slug the policy plugin sends, and a Letta id from deploy-route tests.
 const REAL_IDS = [
-  'h_personal', 'h_cyborg', 'h_public_bot', 'h_grey_duck', 'h_site_admin',
-  'h_seraph_doer', 'h_swarm_map', 'seraph-doer', 'public-bot', 'h_letta_server',
+  'h_personal', 'h_ember', 'h_public_bot', 'h_grey_duck', 'h_site_admin',
+  'h_seraph_alpha', 'h_swarm_map', 'seraph-alpha', 'public-bot', 'h_letta_server',
   'h_letta_agent-xyz', 'h_letta_agent-3f2b9c1e-8d4a-4b6f-9e2a-1c7d5e8f0a12',
 ]
 const TRAVERSAL_IDS = [
@@ -502,38 +502,38 @@ describe('traversal ids on the agent-callable paths', () => {
 describe('Discord DM list follows the admins', () => {
   const A = '100000000000000001'
   const B = '100000000000000002'
-  const envPath = () => path.join(home, '.hermes-seraph', '.env')
+  const envPath = () => path.join(home, '.hermes-sentinel', '.env')
   const dmLines = () => fs.readFileSync(envPath(), 'utf-8').match(/^DISCORD_DM_ALLOWED_USERS=.*$/gm)
 
   const withEnv = (allow: string, dm: string) =>
-    writeAgentEnv('seraph', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${allow}\nDISCORD_DM_ALLOWED_USERS=${dm}\nOTHER=keep\n`)
+    writeAgentEnv('sentinel', `DISCORD_BOT_TOKEN=t\nDISCORD_ALLOWED_USERS=${allow}\nDISCORD_DM_ALLOWED_USERS=${dm}\nOTHER=keep\n`)
   const warningOf = (r: unknown) => (r as { dmEnvWarning?: string }).dmEnvWarning
 
   it('follows a change when the DM list equalled the previous admins, and flags a recreate', () => {
     withEnv(`${A},${B}`, A)
-    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_seraph', admins: [A] })
-    expect(svc.setAdmins('h_seraph', 'discord', [A, B], A)).toEqual({ ok: true, harnessId: 'h_seraph', admins: [A, B], dmEnvUpdated: true })
+    expect(svc.setAdmins('h_sentinel', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_sentinel', admins: [A] })
+    expect(svc.setAdmins('h_sentinel', 'discord', [A, B], A)).toEqual({ ok: true, harnessId: 'h_sentinel', admins: [A, B], dmEnvUpdated: true })
     expect(dmLines()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A},${B}`])
     expect(fs.readFileSync(envPath(), 'utf-8')).toContain('OTHER=keep')
   })
 
   it('closes DMs when the admins are cleared', () => {
     withEnv(A, A)
-    svc.setAdmins('h_seraph', 'discord', [A], A)
-    svc.setAdmins('h_seraph', 'discord', [], A)
+    svc.setAdmins('h_sentinel', 'discord', [A], A)
+    svc.setAdmins('h_sentinel', 'discord', [], A)
     expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
   })
 
   it('a chosen first admin list opens a closed agent for those admins', () => {
     withEnv(`${A},${B}`, '')
-    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_seraph', admins: [A], dmEnvUpdated: true })
+    expect(svc.setAdmins('h_sentinel', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_sentinel', admins: [A], dmEnvUpdated: true })
     expect(dmLines()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A}`])
   })
 
   it('sending GET admins back on a closed agent does not open DMs to the allowlist or recreate', () => {
     withEnv(`${A},${B}`, '')
-    const { admins } = svc.listAdmins('h_seraph', 'discord')
-    const r = svc.setAdmins('h_seraph', 'discord', admins, A)
+    const { admins } = svc.listAdmins('h_sentinel', 'discord')
+    const r = svc.setAdmins('h_sentinel', 'discord', admins, A)
     expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
     expect(warningOf(r)).toMatch(/matches the allowlist/)
     expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS='])
@@ -541,7 +541,7 @@ describe('Discord DM list follows the admins', () => {
 
   it('saving the same admins does not widen a hand-set list or recreate: it says so', () => {
     withEnv(`${A},${B}`, A)
-    const r = svc.setAdmins('h_seraph', 'discord', [A, B], A)
+    const r = svc.setAdmins('h_sentinel', 'discord', [A, B], A)
     expect(r).toMatchObject({ ok: true, admins: [A, B] })
     expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
     expect(warningOf(r)).toMatch(/left unchanged/)
@@ -550,7 +550,7 @@ describe('Discord DM list follows the admins', () => {
 
   it('a first admin list does not drop someone from a hand-set list', () => {
     withEnv(`${A},${B}`, `${A},${B}`)
-    const r = svc.setAdmins('h_seraph', 'discord', [A], A)
+    const r = svc.setAdmins('h_sentinel', 'discord', [A], A)
     expect(warningOf(r)).toMatch(/left unchanged/)
     expect(dmLines()).toEqual([`DISCORD_DM_ALLOWED_USERS=${A},${B}`])
     expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
@@ -558,19 +558,19 @@ describe('Discord DM list follows the admins', () => {
 
   it('does not rewrite the file or warn when nothing changes', () => {
     withEnv(A, A)
-    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_seraph', admins: [A] })
+    expect(svc.setAdmins('h_sentinel', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_sentinel', admins: [A] })
   })
 
   it('leaves a deliberate * alone and says so', () => {
     withEnv(A, '*')
-    const r = svc.setAdmins('h_seraph', 'discord', [A], A)
+    const r = svc.setAdmins('h_sentinel', 'discord', [A], A)
     expect(warningOf(r)).toMatch(/left unchanged/)
     expect(dmLines()).toEqual(['DISCORD_DM_ALLOWED_USERS=*'])
   })
 
   it('warns when a listed admin is not on the allowlist, because the runtime will refuse them', () => {
     withEnv(A, '')
-    const r = svc.setAdmins('h_seraph', 'discord', [A, B], A)
+    const r = svc.setAdmins('h_sentinel', 'discord', [A, B], A)
     expect(r).toMatchObject({ ok: true, admins: [A, B], dmEnvUpdated: true })
     expect(warningOf(r)).toContain('DISCORD_ALLOWED_USERS')
     expect(warningOf(r)).toContain(B)
@@ -579,12 +579,12 @@ describe('Discord DM list follows the admins', () => {
 
   it('gives no such warning when every listed admin is on the allowlist', () => {
     withEnv(`${A},${B}`, '')
-    expect(warningOf(svc.setAdmins('h_seraph', 'discord', [A], A))).toBeUndefined()
+    expect(warningOf(svc.setAdmins('h_sentinel', 'discord', [A], A))).toBeUndefined()
   })
 
   it('writes nothing for an agent with no Discord token', () => {
-    writeAgentEnv('seraph', `DISCORD_ALLOWED_USERS=${A}\n`)
-    expect(svc.setAdmins('h_seraph', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_seraph', admins: [A] })
+    writeAgentEnv('sentinel', `DISCORD_ALLOWED_USERS=${A}\n`)
+    expect(svc.setAdmins('h_sentinel', 'discord', [A], A)).toEqual({ ok: true, harnessId: 'h_sentinel', admins: [A] })
     expect(dmLines()).toBeNull()
   })
 
@@ -595,27 +595,27 @@ describe('Discord DM list follows the admins', () => {
       if (String(p) === envPath()) throw new Error('read-only')
       return (realWrite as (...a: unknown[]) => void)(p, ...rest)
     }) as never)
-    const r = svc.setAdmins('h_seraph', 'discord', [A], A)
+    const r = svc.setAdmins('h_sentinel', 'discord', [A], A)
     expect(r).toMatchObject({ ok: true, admins: [A] })
     expect(warningOf(r)).toMatch(/not updated/)
     expect((r as { dmEnvUpdated?: true }).dmEnvUpdated).toBeUndefined()
-    expect(svc.listAdmins('h_seraph', 'discord').admins).toEqual([A])
+    expect(svc.listAdmins('h_sentinel', 'discord').admins).toEqual([A])
   })
 
   it('other surfaces never touch the .env on an admin change, so Signal users are not evicted', () => {
     const before = 'SIGNAL_ACCOUNT=+15550000000\nSIGNAL_ALLOWED_USERS=+15550001111,+15550002222\n'
-    writeAgentEnv('seraph', before)
-    expect(svc.setAdmins('h_seraph', 'signal', ['+15550001111'], '+15550001111'))
-      .toEqual({ ok: true, harnessId: 'h_seraph', admins: ['+15550001111'] })
+    writeAgentEnv('sentinel', before)
+    expect(svc.setAdmins('h_sentinel', 'signal', ['+15550001111'], '+15550001111'))
+      .toEqual({ ok: true, harnessId: 'h_sentinel', admins: ['+15550001111'] })
     expect(fs.readFileSync(envPath(), 'utf-8')).toBe(before)
   })
 })
 
 describe('Signal deny value', () => {
   it('is not an admin: the bootstrap set is empty and fails closed', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=0\n')
-    expect(svc.listAdmins('h_seraph', 'signal')).toMatchObject({ admins: [], source: 'allowlist', allowAllDm: false })
-    expect(svc.isAdmin('h_seraph', 'signal', '0')).toBe(false)
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=0\n')
+    expect(svc.listAdmins('h_sentinel', 'signal')).toMatchObject({ admins: [], source: 'allowlist', allowAllDm: false })
+    expect(svc.isAdmin('h_sentinel', 'signal', '0')).toBe(false)
   })
 })
 
@@ -743,44 +743,44 @@ describe('SurfaceAdminService.setAdmins — an agent with no stored row', () => 
   const stored = () => storage.read<Array<{ id: string; surfaceAdmins?: Record<string, string[]> }>>('harnesses.json', [])
 
   it('saves through the harness directory when the app lists the agent', () => {
-    writeAgentEnv('seraph-doer', 'SIGNAL_ALLOWED_USERS=+64111\n')
-    const res = svc.setAdmins('seraph-doer', 'signal', ['+64222'], '+64111')
-    expect(res).toMatchObject({ ok: true, harnessId: 'h_seraph_doer' })
-    expect(directory.updateConfig).toHaveBeenCalledWith('h_seraph_doer', { surfaceAdmins: { signal: ['+64222'] } })
-    expect(stored().map((h) => h.id)).toEqual(['h_seraph_doer'])
-    expect(svc.isAdmin('seraph-doer', 'signal', '+64222')).toBe(true)
+    writeAgentEnv('seraph-alpha', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    const res = svc.setAdmins('seraph-alpha', 'signal', ['+64222'], '+64111')
+    expect(res).toMatchObject({ ok: true, harnessId: 'h_seraph_alpha' })
+    expect(directory.updateConfig).toHaveBeenCalledWith('h_seraph_alpha', { surfaceAdmins: { signal: ['+64222'] } })
+    expect(stored().map((h) => h.id)).toEqual(['h_seraph_alpha'])
+    expect(svc.isAdmin('seraph-alpha', 'signal', '+64222')).toBe(true)
   })
 
   it('refuses an id the app does not list, and stores nothing', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
     listed.clear() // a .env on disk, but no agent by that id
-    for (const id of ['h_seraph', 'seraph', 'h_never_existed']) {
+    for (const id of ['h_sentinel', 'sentinel', 'h_never_existed']) {
       const res = svc.setAdmins(id, 'signal', ['+64111'], '+64111')
       expect(res.ok, id).toBe(false)
       expect(stored(), id).toEqual([])
     }
-    expect(svc.setAdmins('h_seraph', 'signal', ['+64111'], '+64111')).toMatchObject({ ok: false, status: 404 })
+    expect(svc.setAdmins('h_sentinel', 'signal', ['+64111'], '+64111')).toMatchObject({ ok: false, status: 404 })
     expect(directory.updateConfig).not.toHaveBeenCalled()
     expect(audit.append).not.toHaveBeenCalled()
   })
 
   it('refuses when no harness directory is wired, and stores nothing', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
     const bare = new SurfaceAdminService(storage, audit as never)
-    expect(bare.setAdmins('h_seraph', 'signal', ['+64111'], '+64111')).toMatchObject({ ok: false, status: 404 })
+    expect(bare.setAdmins('h_sentinel', 'signal', ['+64111'], '+64111')).toMatchObject({ ok: false, status: 404 })
     expect(stored()).toEqual([])
   })
 
   it('checks the actor before asking the harness directory', () => {
-    writeAgentEnv('seraph', 'SIGNAL_ALLOWED_USERS=+64111\n')
+    writeAgentEnv('sentinel', 'SIGNAL_ALLOWED_USERS=+64111\n')
     const get = vi.spyOn(directory, 'get')
-    expect(svc.setAdmins('h_seraph', 'signal', ['+64999'], '+64999')).toMatchObject({ ok: false, status: 403 })
+    expect(svc.setAdmins('h_sentinel', 'signal', ['+64999'], '+64999')).toMatchObject({ ok: false, status: 403 })
     expect(get).not.toHaveBeenCalled()
     expect(stored()).toEqual([])
   })
 
   it('rejects an id that is not a well-formed harness id', () => {
-    for (const id of ['x/../.hermes-seraph', '', 'h_a.b']) {
+    for (const id of ['x/../.hermes-sentinel', '', 'h_a.b']) {
       expect(svc.setAdmins(id, 'signal', ['+64111'], '+64111'), id).toMatchObject({ ok: false, status: 404 })
       expect(svc.listAdmins(id, 'signal').admins, id).toEqual([])
     }
@@ -825,8 +825,8 @@ describe('SurfaceAdminService — every kind of agent on a fleet still resolves'
   it.each([
     ['personal', 'h_personal', '.hermes'],
     ['h_personal', 'h_personal', '.hermes'],
-    ['osint', 'h_osint', '.hermes-osint'],
-    ['h_osint', 'h_osint', '.hermes-osint'],
+    ['ledger', 'h_ledger', '.hermes-ledger'],
+    ['h_ledger', 'h_ledger', '.hermes-ledger'],
   ])('a stored row whose name is null: %s', (id, storedId, dir) => {
     writeAgentEnv(storedId.replace(/^h_/, ''), ENV)
     storage.write('harnesses.json', [{ id: storedId, name: null }])
@@ -836,7 +836,7 @@ describe('SurfaceAdminService — every kind of agent on a fleet still resolves'
   it.each([
     ['grey-duck', 'h_grey_duck'],
     ['h_grey_duck', 'h_grey_duck'],
-    ['seraph-doer', 'h_seraph_doer'],
+    ['seraph-alpha', 'h_seraph_alpha'],
     ['egregore', 'h_egregore'],
   ])('a running agent with no stored row: %s', (id, storedId) => {
     const name = storedId.replace(/^h_/, '').replace(/_/g, '-')
@@ -848,11 +848,11 @@ describe('SurfaceAdminService — every kind of agent on a fleet still resolves'
   })
 
   it('an explicit admin list on a null-name row is found by the slug', () => {
-    writeAgentEnv('cyborg', ENV)
-    storage.write('harnesses.json', [{ id: 'h_cyborg', name: null, surfaceAdmins: { telegram: ['222'] } }])
-    expect(svc.listAdmins('cyborg', 'telegram')).toMatchObject({ source: 'explicit', admins: ['222'] })
-    expect(svc.isAdmin('cyborg', 'telegram', '222')).toBe(true)
-    expect(svc.isAdmin('cyborg', 'telegram', ADMIN)).toBe(false)
+    writeAgentEnv('ember', ENV)
+    storage.write('harnesses.json', [{ id: 'h_ember', name: null, surfaceAdmins: { telegram: ['222'] } }])
+    expect(svc.listAdmins('ember', 'telegram')).toMatchObject({ source: 'explicit', admins: ['222'] })
+    expect(svc.isAdmin('ember', 'telegram', '222')).toBe(true)
+    expect(svc.isAdmin('ember', 'telegram', ADMIN)).toBe(false)
   })
 })
 

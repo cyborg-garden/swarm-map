@@ -8,7 +8,7 @@
  * The primary (model:) is never touched by it. GET's `fallbackProviders` is
  * the raw block, so a GET → PUT round trip is a byte-identical no-op on every
  * shape. Before this suite the route took rows[0] as the primary, so the
- * round trip rewrote model.default to the first fallback on cyborg, matilde
+ * round trip rewrote model.default to the first fallback on ember, matilde
  * and heron (3 of 5 fleet agents) and the real primary vanished from the file.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -36,7 +36,7 @@ vi.mock('@/lib/services/harness', async (importOriginal) => ({
 
 import { GET, PUT } from './route'
 import { readCascade, readFallbackProviders } from '@/lib/services/harness'
-import { CYBORG, MATILDE, BADGER, HERON, P2, FLEET_SHAPES, OLLAMA_URL } from '@/lib/services/__tests__/fleet-shapes'
+import { EMBER, MATILDE, BADGER, HERON, P2, FLEET_SHAPES, OLLAMA_URL } from '@/lib/services/__tests__/fleet-shapes'
 
 const params = { params: Promise.resolve({ id: 'h_test' }) }
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -63,8 +63,8 @@ describe('PUT { fallback_providers } is fallback-only: the primary survives on e
     expect(readCascade(tmpDir).primary).toEqual(before.primary)
   })
 
-  it('cyborg: reordering the rows keeps model.default = z-ai/glm-5.3 and writes exactly the rows sent', async () => {
-    seed(CYBORG)
+  it('ember: reordering the rows keeps model.default = z-ai/glm-5.3 and writes exactly the rows sent', async () => {
+    seed(EMBER)
     const rows = readFallbackProviders(tmpDir)
     const reordered = [rows[1], rows[0], rows[2], rows[3]]
     const res = await put({ fallback_providers: reordered, expected_fallback_providers: rows })
@@ -73,7 +73,7 @@ describe('PUT { fallback_providers } is fallback-only: the primary survives on e
     expect(after.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     expect(after.fallbacks).toEqual(reordered)
     // The model: section is untouched, byte for byte.
-    expect(onDisk().split('\n').slice(0, 4)).toEqual(CYBORG.split('\n').slice(0, 4))
+    expect(onDisk().split('\n').slice(0, 4)).toEqual(EMBER.split('\n').slice(0, 4))
     expect(onDisk()).not.toContain('default: claude-sonnet-4-6')
   })
 
@@ -126,11 +126,11 @@ describe('PUT { fallback_providers } is fallback-only: the primary survives on e
   })
 
   it('a stale expected_fallback_providers is still refused with 409 before the primary is considered', async () => {
-    seed(CYBORG)
+    seed(EMBER)
     const rows = readFallbackProviders(tmpDir)
     const res = await put({ fallback_providers: rows, expected_fallback_providers: [rows[0]] })
     expect(res.status).toBe(409)
-    expect(onDisk()).toBe(CYBORG)
+    expect(onDisk()).toBe(EMBER)
   })
 })
 
@@ -198,12 +198,12 @@ describe('P2: scalar model: with root provider / base_url siblings, through the 
 })
 
 describe('PUT { fallback_providers }: a row equal to the primary is never written as a fallback', () => {
-  it('cyborg (primary not duplicated): a body row equal to model.default is dropped, the file does not flip to the duplicate convention', async () => {
-    seed(CYBORG)
+  it('ember (primary not duplicated): a body row equal to model.default is dropped, the file does not flip to the duplicate convention', async () => {
+    seed(EMBER)
     const rows = readFallbackProviders(tmpDir)
     const res = await put({ fallback_providers: [{ provider: 'openrouter', model: 'z-ai/glm-5.3' }, ...rows], expected_fallback_providers: rows })
     expect(res.status).toBe(200)
-    expect(onDisk()).toBe(CYBORG)
+    expect(onDisk()).toBe(EMBER)
     expect(readCascade(tmpDir).primaryDuplicatedAsRow0).toBe(false)
   })
 })

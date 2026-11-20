@@ -350,9 +350,8 @@ export function harnessIdForName(name: string): string {
 /**
  * Enumerate every agent drift should cover.
  *
- * NOT `docker ps | grep hermes-`. That misses agents twice over: three services
- * are keyed `seraph-doer` / `seraph-generalist` / `seraph-thinker` and never
- * match the prefix, and any agent that is stopped or has never been started has
+ * NOT `docker ps | grep hermes-`. That misses agents twice over: services
+ * keyed `seraph-<name>` never match the prefix, and any agent that is stopped or has never been started has
  * no container to grep at all — and a stopped agent still needs to report
  * `unknown-not-running` rather than vanish from the list.
  *

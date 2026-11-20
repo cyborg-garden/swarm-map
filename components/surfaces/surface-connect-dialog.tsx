@@ -114,6 +114,7 @@ function SignalBody({ s, onClose }: { s: Hook; onClose: () => void }) {
                 cd ~/.hermes-swarm && docker compose -f docker-compose.signal.yml up -d
               </code>
               <p className="text-xs text-muted-foreground">
+                If the deploy also wrote <code>docker-compose.signal.override.yml</code> there (your per-agent mounts), add <code>-f docker-compose.signal.override.yml</code>.
                 If you don&apos;t have the compose file yet, run the setup from <code>infra/signal-cli/</code> in the HSM repository.
               </p>
             </div>

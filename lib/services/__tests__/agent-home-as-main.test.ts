@@ -64,7 +64,7 @@ const homeOfService = (serviceName: string, containerName: string) => {
   return path.join(home, '.hermes-' + serviceName)
 }
 
-const NAMES = ['heron', 'seraph-doer', 'foo_bar', 'foo.bar', 'Mixed-Case', 'UPPER', 'h_prefixed', 'a-b_c.d', '-x', '_x', 'x-', 'personal', 'personal-2']
+const NAMES = ['heron', 'seraph-alpha', 'foo_bar', 'foo.bar', 'Mixed-Case', 'UPPER', 'h_prefixed', 'a-b_c.d', '-x', '_x', 'x-', 'personal', 'personal-2']
 /** The id discovery gives a container named `hermes-<name>`. */
 const idOf = (name: string) => 'h_' + name.replace(/-/g, '_')
 const IDS = [...new Set([...NAMES.map(idOf), ...NAMES])]
@@ -152,7 +152,7 @@ describe('from a container', () => {
     for (const [service, container] of [
       ['', 'hermes-x'],
       ['', ''],
-      ['seraph-thinker', 'seraph-thinker'],
+      ['seraph-beta', 'seraph-beta'],
       ['custom', 'custom-1'],
       ['hermes-personal', 'whatever'],
       ['anything', 'hermes-personal'],

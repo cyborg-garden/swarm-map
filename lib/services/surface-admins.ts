@@ -37,7 +37,7 @@ export function isSupportedSurface(platform: string): boolean {
 
 // Harness ids reach these paths straight from URL segments, some on routes
 // agents call without the operator cookie. Real ids are `h_<name>` (e.g.
-// h_personal, h_research_bot), bare agent slugs (`seraph-doer`, sent by the
+// h_personal, h_research_bot), bare agent slugs (`seraph-alpha`, sent by the
 // policy plugin), or Letta ids (`h_letta_agent-<uuid>`). All are ASCII
 // letters, digits, '_' and '-'. Anything else ('/', '.', '%', whitespace) is
 // rejected so an id like `x/../.hermes-other` can never leave ~/.hermes-*.
@@ -182,8 +182,8 @@ export class SurfaceAdminService {
 
   // Resolve a caller-supplied id to ONE agent, or to nothing.
   //
-  // Two spellings name an agent: its id (`h_seraph_doer`, what the dashboard
-  // sends) and its bare slug (`seraph-doer`, what the policy plugin sends as
+  // Two spellings name an agent: its id (`h_seraph_alpha`, what the dashboard
+  // sends) and its bare slug (`seraph-alpha`, what the policy plugin sends as
   // HERMES_AGENT_NAME). A slug becomes the id by the rule that builds an id
   // from a name everywhere else (idFromName); an id is taken as written.
   //

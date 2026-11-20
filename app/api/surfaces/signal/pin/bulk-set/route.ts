@@ -32,8 +32,11 @@ export async function POST() {
     return NextResponse.json({ success: true, locked: [], alreadyLocked: [], failed: [] })
   }
 
-  // Build phone→harnessId mapping from surfaces (Signal is multi-surface, not h.platform)
-  const surfaces = services.config.listSurfaces()
+  // Build phone→harnessId mapping from surfaces (Signal is multi-surface, not h.platform).
+  // Pass the live harness names, as GET /api/surfaces does, so every existing
+  // harness is considered rather than only the configured default list.
+  const harnessNames = services.harness.list().map((h) => h.name)
+  const surfaces = services.config.listSurfaces(harnessNames)
   const phoneToHarness: Record<string, string> = {}
   for (const s of surfaces) {
     if (s.platform === 'signal' && s.status === 'connected' && s.config.phone) {

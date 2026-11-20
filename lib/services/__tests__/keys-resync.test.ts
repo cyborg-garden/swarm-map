@@ -56,7 +56,7 @@ describe('KeysService.resync()', () => {
     seedEnv(envFor('personal'), 'MATTERMOST_TOKEN=mm\nCUSTOM_API_KEY=' + CAP + '\n')
     seedEnv(path.join(tmpHome, '.hermes-personal', '.env'), 'STRAY=1\n')
     seedEnv(envFor('harbor'), 'CAPSOLVER_API_KEY=' + CAP + '\n')
-    seedEnv(envFor('osint'), 'OTHER=1\n')
+    seedEnv(envFor('ledger'), 'OTHER=1\n')
     return keys.add({ provider: 'custom', name: 'capsolver', envVar: 'CAPSOLVER_API_KEY', value: CAP, assignedTo: ['h_personal', 'h_harbor'] })
   }
 
@@ -102,17 +102,17 @@ describe('KeysService.resync()', () => {
 
   it('never writes to a harness the key is not assigned to', () => {
     const key = seedDriftedFleet()
-    const result = keys.resync(key.id, ['h_osint'])!
+    const result = keys.resync(key.id, ['h_ledger'])!
     expect(result.changed).toEqual([])
-    expect(result.notAssigned).toEqual(['h_osint'])
-    expect(readEnv(envFor('osint'))).toBe('OTHER=1\n')
+    expect(result.notAssigned).toEqual(['h_ledger'])
+    expect(readEnv(envFor('ledger'))).toBe('OTHER=1\n')
   })
 
   it('without a harness list, resyncs every assigned harness and no others', () => {
     const key = seedDriftedFleet()
     keys.resync(key.id)
-    expect(readEnv(envFor('osint'))).toBe('OTHER=1\n')
-    expect(fs.existsSync(path.join(tmpHome, '.hermes-cyborg'))).toBe(false)
+    expect(readEnv(envFor('ledger'))).toBe('OTHER=1\n')
+    expect(fs.existsSync(path.join(tmpHome, '.hermes-ember'))).toBe(false)
   })
 
   it('returns undefined for an unknown key', () => {

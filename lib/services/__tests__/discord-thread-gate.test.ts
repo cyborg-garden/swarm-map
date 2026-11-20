@@ -206,7 +206,7 @@ describe('fleet heal + posture report', () => {
 
   it('heal writes only the Discord agents that lack the key, and skips opt-outs', () => {
     const lacking = mk('harbor', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
-    const explicit = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=false\n')
+    const explicit = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=false\n')
     const optedOut = mk('kestrel', DISCORD_ENV)
     const noDiscord = mk('signal-only', 'SIGNAL_ACCOUNT=+1\n')
     const missing = { name: 'ghost', dataDir: path.join(root, 'ghost') }
@@ -234,7 +234,7 @@ describe('fleet heal + posture report', () => {
 
   it('posture flags an open thread gate unless the agent is opted out, and never writes', () => {
     const open = mk('harbor', DISCORD_ENV, 'discord:\n  thread_require_mention: false\n')
-    const closed = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
+    const closed = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
     const optedOut = mk('kestrel', DISCORD_ENV + 'DISCORD_FREE_RESPONSE_CHANNELS=1500000000000000420\n',
       'discord:\n  thread_require_mention: false\n')
     const noDiscord = mk('signal-only', 'SIGNAL_ACCOUNT=+1\n')
@@ -248,7 +248,7 @@ describe('fleet heal + posture report', () => {
 
     const byName = Object.fromEntries(report.agents.map((a) => [a.name, a]))
     expect(byName.harbor).toMatchObject({ status: 'open', requireMention: false, source: 'yaml discord:' })
-    expect(byName.cyborg).toMatchObject({ status: 'ok', requireMention: true, source: 'env' })
+    expect(byName.ember).toMatchObject({ status: 'ok', requireMention: true, source: 'env' })
     expect(byName.kestrel).toMatchObject({
       status: 'opted-out', requireMention: false, freeResponseChannels: ['1500000000000000420'],
     })
@@ -260,7 +260,7 @@ describe('fleet heal + posture report', () => {
   })
 
   it('posture is ok when every Discord agent is gated or opted out', () => {
-    const a = mk('cyborg', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
+    const a = mk('ember', DISCORD_ENV + 'DISCORD_THREAD_REQUIRE_MENTION=true\n')
     const report = discordThreadPosture([a], [])
     expect(report.ok).toBe(true)
     expect(report.open).toEqual([])

@@ -406,7 +406,7 @@ function resolveImageOrBuild(settings?: { useLocalBuild?: boolean; hermesDir?: s
 }
 
 function containerNameToHarnessName(containerName: string): string {
-  // hermes-personal → personal, seraph-thinker → seraph-thinker
+  // hermes-personal → personal, seraph-beta → seraph-beta
   return containerName.replace(/^hermes-/, '')
 }
 
@@ -868,7 +868,7 @@ function getComposeFilesForDir(hermesDir: string): string[] {
 export function guessDataDir(serviceName: string, containerName: string): string {
   // hermes-personal → ~/.hermes (the default/personal instance)
   // hermes-research → ~/.hermes-research
-  // seraph-thinker → ~/.hermes-seraph-thinker
+  // seraph-beta → ~/.hermes-seraph-beta
   const home = os.homedir()
   if (containerName === 'hermes-personal' || serviceName === 'hermes-personal') {
     return path.join(home, '.hermes')

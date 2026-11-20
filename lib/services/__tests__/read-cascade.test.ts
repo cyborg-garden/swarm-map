@@ -10,7 +10,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { readCascade, cascadeChain } from '../harness'
-import { CYBORG, MATILDE, BADGER, KESTREL, HERON, P2, OLLAMA_URL } from './fleet-shapes'
+import { EMBER, MATILDE, BADGER, KESTREL, HERON, P2, OLLAMA_URL } from './fleet-shapes'
 import { readModelProvider } from '../harness'
 
 let dir = ''
@@ -22,8 +22,8 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 
 describe('readCascade', () => {
-  it('cyborg: primary from model:, four fallbacks, primary not duplicated', () => {
-    write(CYBORG)
+  it('ember: primary from model:, four fallbacks, primary not duplicated', () => {
+    write(EMBER)
     const c = readCascade(dir)
     expect(c.primary).toEqual({ provider: 'openrouter', model: 'z-ai/glm-5.3' })
     expect(c.fallbacks).toEqual([

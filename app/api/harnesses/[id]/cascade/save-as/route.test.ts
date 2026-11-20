@@ -120,12 +120,12 @@ describe('Harness cascade save-as', () => {
     expect((await res.json()).chain).toEqual([{ provider: 'anthropic', model: 'claude-sonnet-4-6' }])
   })
 
-  it('the snapshot starts with the primary even when the file does not repeat it as row 0 (cyborg-shaped)', async () => {
+  it('the snapshot starts with the primary even when the file does not repeat it as row 0 (ember-shaped)', async () => {
     fs.writeFileSync(
       configPath,
       ['model:', '  provider: openrouter', '  default: z-ai/glm-5.3', 'fallback_providers:', '  - provider: anthropic', '    model: claude-sonnet-4-6', ''].join('\n')
     )
-    const res = await POST(post({ name: 'cyborg' }), makeParams('h_test'))
+    const res = await POST(post({ name: 'ember' }), makeParams('h_test'))
     expect(res.status).toBe(201)
     expect((await res.json()).chain).toEqual([
       { provider: 'openrouter', model: 'z-ai/glm-5.3' },

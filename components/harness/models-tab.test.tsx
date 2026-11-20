@@ -51,7 +51,7 @@ const CONFIG = {
   primaryDuplicatedAsRow0: true,
 }
 
-// cyborg/matilde shape: the primary lives only in model: and the rows are
+// ember/matilde shape: the primary lives only in model: and the rows are
 // the fallbacks. The chain starts with the primary; nothing is wrong.
 const MATILDE_CONFIG = {
   provider: 'openrouter',

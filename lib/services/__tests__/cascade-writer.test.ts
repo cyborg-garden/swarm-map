@@ -46,7 +46,7 @@ vi.mock('@/lib/services/harness', async () => {
 
 import { applyCascadeToHarness } from '../cascade-writer'
 import { readFallbackProviders, readModelConfig, readCascade, cascadeChain } from '@/lib/services/harness'
-import { CYBORG, MATILDE, BADGER, KESTREL, HERON, P2, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
+import { EMBER, MATILDE, BADGER, KESTREL, HERON, P2, FLEET_SHAPES, OLLAMA_URL as FLEET_OLLAMA_URL } from './fleet-shapes'
 import { services } from '@/lib/services'
 
 const configPath = () => path.join(tmpDir, 'config.yaml')
@@ -1135,15 +1135,15 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
     })
   }
 
-  it('cyborg: reordering the fallbacks leaves model: alone and never adds a duplicate row', () => {
-    fs.writeFileSync(configPath(), CYBORG)
+  it('ember: reordering the fallbacks leaves model: alone and never adds a duplicate row', () => {
+    fs.writeFileSync(configPath(), EMBER)
     const chain = cascadeChain(readCascade(tmpDir))
     const reordered = [chain[0], chain[2], chain[1], chain[3], chain[4]]
     const res = applyCascadeToHarness('h_test', reordered, { who: 'api', expected: chain })
     expect(res.ok).toBe(true)
     const out = fs.readFileSync(configPath(), 'utf-8')
     expect(out).toBe(
-      CYBORG.replace(
+      EMBER.replace(
         '  - provider: anthropic\n    model: claude-sonnet-4-6\n  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n',
         '  - provider: openrouter\n    model: anthropic/claude-sonnet-4.6\n  - provider: anthropic\n    model: claude-sonnet-4-6\n'
       )
@@ -1220,13 +1220,13 @@ describe('applyCascadeToHarness — chain semantics: primary = model:, fallbacks
   })
 
   it('`expected` is compared against the CHAIN (primary first), so a stale editor loses to a rotated primary', () => {
-    fs.writeFileSync(configPath(), CYBORG)
+    fs.writeFileSync(configPath(), EMBER)
     const chain = cascadeChain(readCascade(tmpDir))
     const stale = [{ provider: 'openrouter', model: 'z-ai/glm-5.2' }, ...chain.slice(1)]
     const res = applyCascadeToHarness('h_test', stale, { who: 'api', expected: stale })
     expect(res.ok).toBe(false)
     if (!res.ok) expect(res.status).toBe(409)
-    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(CYBORG)
+    expect(fs.readFileSync(configPath(), 'utf-8')).toBe(EMBER)
   })
 
   it('model.fallback is rewritten only when the file already has the key (the runtime never reads it)', () => {

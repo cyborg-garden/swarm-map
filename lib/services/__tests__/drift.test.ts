@@ -129,23 +129,23 @@ describe('readComposeService', () => {
     // readComposeBuildContext, which anchors on `^  hermes-`.
     const compose = [
       'services:',
-      '  seraph-doer:',
+      '  seraph-alpha:',
       '    build: /Users/operator/Documents/GitHub/hermes-agent-mt',
-      '    container_name: seraph-doer',
+      '    container_name: seraph-alpha',
       '    restart: unless-stopped',
     ].join('\n')
     const parsed = readComposeService(compose)
-    expect(parsed.service).toBe('seraph-doer')
+    expect(parsed.service).toBe('seraph-alpha')
     expect(parsed.buildContext).toBe('/Users/operator/Documents/GitHub/hermes-agent-mt')
-    expect(parsed.containerName).toBe('seraph-doer')
+    expect(parsed.containerName).toBe('seraph-alpha')
   })
 
   it('reads an image-only service and reports no build context', () => {
-    const compose = ['services:', '  hermes-wren:', '    image: nimblecoorg/hermes-agent-mt:v1'].join('\n')
+    const compose = ['services:', '  hermes-wren:', '    image: example-org/hermes-agent-mt:v1'].join('\n')
     expect(readComposeService(compose)).toMatchObject({
       service: 'hermes-wren',
       buildContext: null,
-      image: 'nimblecoorg/hermes-agent-mt:v1',
+      image: 'example-org/hermes-agent-mt:v1',
     })
   })
 
@@ -380,8 +380,8 @@ describe('driftTargets', () => {
     composeBaseDir = path.join(root, 'compose')
     for (const [name, svc] of [
       ['heron', 'hermes-heron'],
-      ['seraph-doer', 'seraph-doer'],
-      ['seraph-thinker', 'seraph-thinker'],
+      ['seraph-alpha', 'seraph-alpha'],
+      ['seraph-beta', 'seraph-beta'],
     ] as const) {
       fs.mkdirSync(path.join(composeBaseDir, name), { recursive: true })
       fs.writeFileSync(
@@ -395,17 +395,17 @@ describe('driftTargets', () => {
   })
 
   it('includes seraph-* agents that no `docker ps | grep hermes-` would ever find', () => {
-    // Only heron is discovered/running. The three seraph services are keyed
+    // Only heron is discovered/running. The three sentinel services are keyed
     // seraph-* AND have no container — invisible to both halves of a grep.
     const targets = driftTargets({
       harnesses: [harness({ id: 'h_heron', name: 'heron', serviceName: 'hermes-heron', status: 'running' })],
       composeBaseDir,
     })
-    expect(targets.map((t) => t.name).sort()).toEqual(['heron', 'seraph-doer', 'seraph-thinker'])
-    const doer = targets.find((t) => t.name === 'seraph-doer')!
+    expect(targets.map((t) => t.name).sort()).toEqual(['heron', 'seraph-alpha', 'seraph-beta'])
+    const doer = targets.find((t) => t.name === 'seraph-alpha')!
     expect(doer.running).toBe(false)
-    expect(doer.service).toBe('seraph-doer')
-    expect(doer.harnessId).toBe(harnessIdForName('seraph-doer'))
+    expect(doer.service).toBe('seraph-alpha')
+    expect(doer.harnessId).toBe(harnessIdForName('seraph-alpha'))
   })
 
   it('does not double-count an agent present in both the registry and compose dirs', () => {
@@ -446,7 +446,7 @@ describe('driftTargets', () => {
       )
     }
     const targets = driftTargets({ harnesses: [], composeBaseDir })
-    expect(targets.map((t) => t.name).sort()).toEqual(['heron', 'seraph-doer', 'seraph-thinker'])
+    expect(targets.map((t) => t.name).sort()).toEqual(['heron', 'seraph-alpha', 'seraph-beta'])
   })
 
   it('still counts a validly named folder with no registry row and no container', () => {
@@ -484,7 +484,7 @@ describe('resolveBuildSourceDir', () => {
 
   it('prefers the compose build context over the global setting', () => {
     const cf = path.join(root, 'docker-compose.yml')
-    fs.writeFileSync(cf, ['services:', '  seraph-doer:', '    build: /per/agent/src'].join('\n'))
+    fs.writeFileSync(cf, ['services:', '  seraph-alpha:', '    build: /per/agent/src'].join('\n'))
     expect(resolveBuildSourceDir(cf, '/global/src')).toBe('/per/agent/src')
   })
 
@@ -591,7 +591,7 @@ describe('fleetDrift', () => {
     src = path.join(root, 'src')
     for (const [name, svc] of [
       ['heron', 'hermes-heron'],
-      ['seraph-doer', 'seraph-doer'],
+      ['seraph-alpha', 'seraph-alpha'],
     ] as const) {
       fs.mkdirSync(path.join(composeBaseDir, name), { recursive: true })
       fs.writeFileSync(
@@ -621,9 +621,9 @@ describe('fleetDrift', () => {
         }),
       },
     })
-    expect(result.agents.map((a) => a.name)).toEqual(['heron', 'seraph-doer'])
+    expect(result.agents.map((a) => a.name)).toEqual(['heron', 'seraph-alpha'])
     expect(result.agents.find((a) => a.name === 'heron')!.state).toBe('current')
-    expect(result.agents.find((a) => a.name === 'seraph-doer')!.state).toBe('unknown-not-running')
+    expect(result.agents.find((a) => a.name === 'seraph-alpha')!.state).toBe('unknown-not-running')
     expect(result.checkedAt).toBeGreaterThan(0)
   })
 

@@ -3,9 +3,9 @@
  * block style, with the surrounding keys a live file has. Both conventions
  * coexist:
  *
- *  - primary NOT repeated in fallback_providers (cyborg, matilde, heron —
+ *  - primary NOT repeated in fallback_providers (ember, matilde, heron —
  *    hand-edited, or written by `hermes fallback`)
- *  - primary repeated as fallback_providers[0] (badger/harbor/osint,
+ *  - primary repeated as fallback_providers[0] (badger/harbor/ledger,
  *    kestrel — saved by the HSM editor, which wrote that convention)
  *
  * The runtime reads the primary from model.provider / model.default and the
@@ -15,8 +15,8 @@
  */
 export const OLLAMA_URL = 'http://host.docker.internal:11434/v1'
 
-export const CYBORG = [
-  '# Hermes agent config — cyborg',
+export const EMBER = [
+  '# Hermes agent config — ember',
   'model:',
   '  provider: openrouter',
   '  default: z-ai/glm-5.3',
@@ -64,7 +64,7 @@ export const MATILDE = [
   '',
 ].join('\n')
 
-/** badger / harbor / osint: HSM-saved, primary duplicated as row 0. */
+/** badger / harbor / ledger: HSM-saved, primary duplicated as row 0. */
 export const BADGER = [
   'model:',
   '  provider: openrouter',
@@ -138,4 +138,4 @@ export const P2 = [
   '',
 ].join('\n')
 
-export const FLEET_SHAPES: Record<string, string> = { cyborg: CYBORG, matilde: MATILDE, badger: BADGER, kestrel: KESTREL, heron: HERON, p2: P2 }
+export const FLEET_SHAPES: Record<string, string> = { ember: EMBER, matilde: MATILDE, badger: BADGER, kestrel: KESTREL, heron: HERON, p2: P2 }

@@ -21,15 +21,15 @@ beforeEach(() => vi.clearAllMocks())
 describe('GET is-admin', () => {
   it('returns { is_admin: true } (200) when the service says so', async () => {
     isAdmin.mockReturnValue(true)
-    const res = await GET(new Request('http://x'), makeParams('h_seraph', 'signal', '+64111'))
+    const res = await GET(new Request('http://x'), makeParams('h_sentinel', 'signal', '+64111'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ is_admin: true })
-    expect(isAdmin).toHaveBeenCalledWith('h_seraph', 'signal', '+64111')
+    expect(isAdmin).toHaveBeenCalledWith('h_sentinel', 'signal', '+64111')
   })
 
   it('returns { is_admin: false } (200, fail-closed) for a non-admin', async () => {
     isAdmin.mockReturnValue(false)
-    const res = await GET(new Request('http://x'), makeParams('h_seraph', 'signal', '+64999'))
+    const res = await GET(new Request('http://x'), makeParams('h_sentinel', 'signal', '+64999'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ is_admin: false })
   })
@@ -37,7 +37,7 @@ describe('GET is-admin', () => {
   it('URL-decodes the userId before checking', async () => {
     isAdmin.mockReturnValue(true)
     // A UUID has no reserved chars, but a "+64…" phone arrives percent-encoded.
-    await GET(new Request('http://x'), makeParams('h_seraph', 'signal', '%2B64111'))
-    expect(isAdmin).toHaveBeenCalledWith('h_seraph', 'signal', '+64111')
+    await GET(new Request('http://x'), makeParams('h_sentinel', 'signal', '%2B64111'))
+    expect(isAdmin).toHaveBeenCalledWith('h_sentinel', 'signal', '+64111')
   })
 })

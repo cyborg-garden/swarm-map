@@ -18,9 +18,9 @@ describe('parseKeyRequestParams', () => {
   })
 
   it('parses comma-separated assign ids and optional name', () => {
-    expect(parseKeyRequestParams(params('request=hedra&assign=h_wren,h_cyborg&name=Wren%20Video'))).toEqual({
+    expect(parseKeyRequestParams(params('request=hedra&assign=h_wren,h_ember&name=Wren%20Video'))).toEqual({
       provider: 'hedra',
-      assignTo: ['h_wren', 'h_cyborg'],
+      assignTo: ['h_wren', 'h_ember'],
       name: 'Wren Video',
     })
   })
@@ -40,7 +40,7 @@ describe('parseKeyRequestParams', () => {
   })
 
   it('filters assign ids against known harness ids when provided', () => {
-    const parsed = parseKeyRequestParams(params('request=hedra&assign=h_wren,h_ghost'), ['h_wren', 'h_cyborg'])
+    const parsed = parseKeyRequestParams(params('request=hedra&assign=h_wren,h_ghost'), ['h_wren', 'h_ember'])
     expect(parsed?.assignTo).toEqual(['h_wren'])
   })
 

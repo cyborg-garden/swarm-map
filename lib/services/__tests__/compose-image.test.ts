@@ -19,9 +19,9 @@ describe('readComposeBuildContext', () => {
   it('reads the shorthand `build: /path` form (older hand-written composes)', () => {
     const c = [
       'services:',
-      '  hermes-cyborg:',
+      '  hermes-ember:',
       '    build: /Users/operator/Documents/GitHub/hermes-agent-mt',
-      '    container_name: hermes-cyborg',
+      '    container_name: hermes-ember',
     ].join('\n')
     expect(readComposeBuildContext(c)).toBe('/Users/operator/Documents/GitHub/hermes-agent-mt')
   })
