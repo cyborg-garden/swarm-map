@@ -77,31 +77,26 @@ offline and on fork PRs. A hit is a **hard fail**: remove the value before mergi
 It scans **every** changed file, not just prose. A key committed to engine or
 collector code is still a key.
 
-The shapes come in two groups:
-
-- **Credential shapes** (keys, tokens, private-key blocks, auth headers,
-  connection strings, credential assignments) are scanned in every file, binaries
-  included.
-- **PII shapes** (email, phone, national ID, card, IP) are scanned in text only.
-  They are short runs of digits and a few symbols, and compressed image or audio
-  bytes match them by chance.
-
-A file is binary by its content, never its name: a NUL byte in the first 8 KiB,
-no UTF-16/32 reading, and at least a tenth of those bytes being control bytes or
-invalid UTF-8. A text file with a stray NUL stays text, and so does UTF-16/32
-text. Every run prints the count, zero included:
+A file list and a PR diff scan every file for every shape. A full-tree audit
+also reads a repo's images and audio, so there a file that is binary by content
+is scanned for the credential shapes and for email addresses, and every audit
+prints how many files that covered, zero included:
 
 ```
-binary: 3 of 120 file(s) are binary by content — PII shapes (email, phone, SSN, card, IP) were skipped there; credential shapes were still scanned.
+binary: 3 of 120 file(s) are binary by content — phone, SSN, card and IP shapes were skipped there; credential shapes and email were still scanned.
 ```
 
-The PII shapes match a whole value that someone could have written:
+Binary is decided by content, never by name: the file has a NUL byte, is not
+UTF-16/32 text, and at least 5% of all its bytes are control bytes and at least
+30% are control bytes or invalid UTF-8.
 
-| Shape | Counts | Does not count |
-|---|---|---|
-| card | a Luhn-valid number with a real issuer prefix and length, plain or grouped with spaces or hyphens | the fraction or integer part of a decimal, a slice of a longer digit run or a longer row of digit groups |
-| email | `local@domain` whose domain labels start and end with a letter or digit, in lower case, all capitals, or every label capitalised | a domain in mixed case (`o.UY`), a label edged with a hyphen, an empty label |
-| international phone | `+`, a country code that does not start with 0, 7 to 15 digits; plain, grouped with single spaces or hyphens, or dotted throughout | signed decimals, padded columns, one value per line, a slice of a longer number row |
+What the PII shapes match:
+
+| Shape | Matches |
+|---|---|
+| card | a Luhn-valid number with a real issuer prefix and length, plain or grouped with spaces or hyphens, alone or beside an expiry or security code |
+| email | `local@domain` whose domain labels start and end with a letter or digit, and whose ending is in lower case, capitals, or capitalised |
+| international phone | `+` and 7 to 15 digits: plain, grouped with hyphens, dashes or one or two spaces, or with dots |
 
 ## Layer 2: particulars (semantic)
 
@@ -183,8 +178,8 @@ The summary line always names the layers that actually ran:
 - `clean — DETERMINISTIC ONLY; semantic layer did not run`: layer 2 was supposed
   to run and could not. Not a full pass. Read the warning above it.
 - `ok <file>` appears only for files layer 2 actually reviewed and cleared.
-- `binary: N of M file(s) are binary by content`: N files were scanned for
-  credential shapes only.
+- `binary: N of M file(s) are binary by content` (full-tree audits): N files
+  were scanned for the credential shapes and email only.
 
 CI runs the layers as two separate steps so a red check names its own cause: a red
 step 1 is a leak in the diff. A red step 2 is particulars found, or the semantic

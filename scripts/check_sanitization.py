@@ -10,9 +10,10 @@ Layer 1 (deterministic): scans changed text for credentials / PII — API keys,
 private keys, tokens, bearer/basic auth, credential-bearing connection strings,
 hardcoded credential assignments, emails, phones, SSNs, Luhn-valid card numbers,
 and IPs. NO external dependencies, no API key. FAILS CLOSED. Always runs, even
-offline. Run it alone with ``--deterministic-only``. Every file is scanned for
-the credential shapes; the PII shapes are scanned in text only, and each run
-prints how many files it treated as binary.
+offline. Run it alone with ``--deterministic-only``. A file list and a PR diff
+scan every file for every shape. A ``--full-tree`` audit scans a file that is
+binary by content for the credential shapes and email only, and prints how many
+files that covered.
 
 Layer 2 (semantic): sends content-bearing files (skills, souls, docs, prose) to
 an LLM that flags operator/engagement *particulars* — names, case IDs, hostnames,
@@ -105,9 +106,13 @@ _CRED_NAME = (r"(?:api[_-]?key|secret[_-]?(?:access[_-]?)?key|(?:access|private|
 
 # One domain label: letters, digits and inner hyphens.
 _DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?"
-# One separator inside a phone number: a hyphen, or whitespace that is not a line
-# break (a no-break space counts).
-_PHONE_SEP = r"(?:-|[^\S\r\n])"
+# One separator inside a phone number: a hyphen or dash, alone or with a space
+# either side, or one or two whitespace characters. Never a line break; a
+# no-break space counts.
+_PHONE_SEP = r"(?:[^\S\r\n]?[-\u2010-\u2013][^\S\r\n]?|[^\S\r\n]{1,2})"
+# The end of a PII value: no letter or digit follows. An underscore may (the
+# closing mark of emphasis in prose).
+_VALUE_END = r"(?![^\W_])"
 
 # (label, regex, gate). The gate says how to derive the "body" that placeholder /
 # entropy checks look at, so a documentation stub (sk-ant-xxxxxxxx) does not read
@@ -122,16 +127,14 @@ _PHONE_SEP = r"(?:-|[^\S\r\n])"
 #                     body is normal here — a NANP number built from one repeated
 #                     digit, or a dotted quad of repeated octets — so the
 #                     placeholder heuristic would silently drop real hits.
-#   "luhn"          → the digits must be Luhn-valid (card numbers). Also not
-#                     placeholder-gated: the canonical Visa test number is
-#                     Luhn-valid and built from only two distinct digits.
-#   "email"         → PII, plus the letter-case check in ``_is_typed_domain``.
+#   "luhn"          → the match is a run of digit groups; the card number in
+#                     it (see ``_card_in_run``) must be Luhn-valid with a real
+#                     issuer prefix. Also not placeholder-gated: the canonical
+#                     Visa test number is Luhn-valid and built from only two
+#                     distinct digits.
+#   "email"         → PII, plus the letter-case check in ``_is_typed_tld``.
 #   "intl-phone"    → PII, plus an E.164 digit count (7 to 15).
 #   "ipv4"          → PII: four octets in range, optionally public only.
-#
-# The "pii", "email", "intl-phone", "luhn" and "ipv4" gates are the PII shapes:
-# short patterns over digits and a few symbols, which compressed bytes satisfy
-# by chance. They are scanned in text only (see ``is_binary``).
 #
 # NOTE: this module is itself scanned by the gate, so it must not contain a
 # literal sample of anything it detects. Describe the shape; never write it out.
@@ -184,32 +187,28 @@ _DETERMINISTIC_PATTERNS = [
         r"[\"']?\s*(?::=|[=:])\s*([A-Za-z0-9/+=_\-]{16,})\b"), "group1-entropy"),
     # Each domain label starts and ends with a letter or digit, so "@-x.io" and
     # "@x..io" are not domains.
-    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@(?:" + _DOMAIN_LABEL + r"\.)+[A-Za-z]{2,}\b"),
-     "email"),
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@(?:" + _DOMAIN_LABEL + r"\.)+[A-Za-z]{2,}"
+                         + _VALUE_END), "email"),
     ("us-phone", re.compile(r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\d)"), "pii"),
     # E.164 international (e.g. a contact wired into config/SOUL): "+" + 7–15 digits,
     # no separators. The us-phone pattern only covers North-American formatting.
-    # No country code starts with 0, and a decimal point after the digits makes
-    # it a signed amount.
-    ("intl-phone", re.compile(r"(?<!\d)\+[1-9]\d{6,14}(?!\d)(?!\.\d)"), "intl-phone"),
+    ("intl-phone", re.compile(r"(?<!\d)\+\d{7,15}(?!\d)"), "intl-phone"),
     # International number written with separators: plus, country code, then
-    # digit groups. The separator-free form above misses every human-formatted
-    # number. Between two digits there is at most ONE separator, a space (never
-    # a line break) or a hyphen, and the run must end where the match ends:
-    # padded columns, one value per line and a slice of a longer number row are
-    # tables, not phone numbers.
+    # digit groups, 7 to 15 digits in all. The separator-free form above misses
+    # every human-formatted number. The first separator is a hyphen or one or
+    # two spaces (never a line break); later ones may also be a dot.
     ("intl-phone", re.compile(
-        r"(?<![\w.])\+[1-9]\d{0,2}(?:" + _PHONE_SEP + r"?\d){6,14}(?![\w.])(?!" + _PHONE_SEP + r"\d)"),
-     "intl-phone"),
+        r"(?<![\w.])\+(?=\d{1,15}" + _PHONE_SEP + r"\d)\d(?:(?:" + _PHONE_SEP + r"|\.)?\d){6,14}"
+        + _VALUE_END + r"(?!\.\d)"), "intl-phone"),
     # The dotted style groups with dots throughout. One dot is a signed decimal,
     # so at least two are required.
-    ("intl-phone", re.compile(r"(?<![\w.])\+[1-9]\d{0,2}(?:\.\d+){2,}(?![\w.])"), "intl-phone"),
+    ("intl-phone", re.compile(r"(?<![\w.])\+\d{1,3}(?:\.\d+){2,}" + _VALUE_END + r"(?!\.\d)"),
+     "intl-phone"),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b"), "pii"),
-    # The whole number, never a slice of something longer: not the fraction or
-    # the integer part of a decimal (a coordinate, a float in a results file),
-    # and not cut out of a longer digit run or a longer row of digit groups.
-    ("credit-card", re.compile(
-        r"(?<!\w)(?<!\d\.)(?<!\d[ \-])(?:\d[ \-]?){12,18}\d(?!\w)(?!\.\d)(?![ \-]\d)"), "luhn"),
+    # A run of digit groups joined by single spaces or hyphens, taken whole: it
+    # never starts or ends inside a word, a longer digit run or a decimal (a
+    # coordinate, a float in a results file). ``_card_in_run`` finds the card.
+    ("credit-card", re.compile(r"(?<!\w)(?<!\d\.)\d+(?:[ \-]\d+)*(?!\w)(?!\.\d)"), "luhn"),
     ("ipv4", re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)"), "ipv4"),
 ]
 
@@ -323,15 +322,41 @@ def _is_fiction_phone(text):
     return len(nanp) == 10 and (nanp[0:3] == "555" or nanp[3:6] == "555")
 
 
-def _is_typed_domain(domain):
-    """Letter case a person or a program would give a domain: lower case, all
-    capitals, or every label capitalised. "o.UY" and "Zk.xQ" are what chance
+def _is_typed_tld(domain):
+    """The ending of a domain in a letter case someone would type: lower case,
+    capitals, or capitalised. An ending mixed inside itself is what chance
     produces, not an address."""
-    labels = domain.split(".")
-    tld = labels[-1]
-    if tld.islower() or domain == domain.upper():
-        return True
-    return tld.istitle() and all(not label[0].islower() for label in labels)
+    tld = domain.rsplit(".", 1)[-1]
+    return tld.islower() or tld.isupper() or tld.istitle()
+
+
+_CARD_SEP = re.compile(r"([ \-])")
+
+
+def _card_in_run(run):
+    """The card number in a run of digit groups, or None.
+
+    The run is the card itself, or the card with up to two short groups (one to
+    four digits, set off by a space) on either side: a row or quantity before
+    it, an expiry or security code after it. Anything longer is a row of
+    numbers.
+    """
+    parts = _CARD_SEP.split(run)          # groups at even indexes, separators at odd
+
+    def short(indexes, sep_offset):
+        return all(parts[i + sep_offset] == " " and len(parts[i]) <= 4 for i in indexes)
+
+    for lead in (0, 2, 4):
+        for trail in (0, 2, 4):
+            core = parts[lead:len(parts) - trail]
+            if not core or not short(range(0, lead, 2), 1):
+                continue
+            if not short(range(len(parts) - trail + 1, len(parts), 2), -1):
+                continue
+            digits = "".join(core[::2])
+            if 13 <= len(digits) <= 19 and _card_brand_ok(digits) and _luhn_ok(digits):
+                return "".join(core)
+    return None
 
 
 IPV4_SCOPES = ("all", "public")
@@ -356,7 +381,7 @@ def _is_finding(match, gate, det_cfg=None):
             return _is_public_ipv4(octets)
         return True  # PII: never placeholder-gated (see the gate legend above)
     if gate == "email":
-        return _is_typed_domain(match.group(0).rsplit("@", 1)[-1])
+        return _is_typed_tld(match.group(0))
     if gate == "intl-phone" and not 7 <= sum(c.isdigit() for c in match.group(0)) <= 15:
         return False  # E.164 allows 15 digits; more is a number row
     if gate in ("pii", "intl-phone"):
@@ -364,8 +389,7 @@ def _is_finding(match, gate, det_cfg=None):
             return False
         return True  # never placeholder-gated: see the gate legend above
     if gate == "luhn":
-        digits = re.sub(r"\D", "", match.group(0))
-        return _card_brand_ok(digits) and _luhn_ok(digits)
+        return _card_in_run(match.group(0)) is not None
     if gate == "group1":
         body = match.group(1)
         if _is_credential_placeholder(body):
@@ -439,11 +463,14 @@ HIGH_CONFIDENCE_LABELS = frozenset({
     "huggingface-token", "npm-token", "gitlab-token", "jwt",
 })
 
-# The PII shapes (see the gate legend). Everything else is a credential shape,
-# long and specific enough that bytes do not match it by chance.
+# The PII shapes; everything else is a credential shape. A full-tree audit scans
+# a file that is binary by content for the credential shapes and email only: the
+# phone, national-ID, card and IP shapes are short runs of digits and a few
+# symbols, which compressed image and audio bytes satisfy by chance.
 PII_LABELS = frozenset(label for label, _, gate in _DETERMINISTIC_PATTERNS
                        if gate in ("pii", "email", "intl-phone", "luhn", "ipv4"))
 CREDENTIAL_LABELS = frozenset(label for label, _, _ in _DETERMINISTIC_PATTERNS) - PII_LABELS
+BINARY_LABELS = CREDENTIAL_LABELS | {"email"}
 
 # Credential-bearing file names are never skipped, wherever they sit.
 _CREDENTIAL_FILE = re.compile(r"^(\.env.*|.+\.env|.+\.pem|.+\.key|id_[a-z0-9_]+(\.pub)?)$", re.I)
@@ -490,9 +517,10 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
         for m in (m for text in texts for m in pat.finditer(text)):
             if not _is_finding(m, gate, det_cfg):
                 continue
-            if _is_allowed(label, m.group(0), allow_substrings):
+            value = _card_in_run(m.group(0)) if gate == "luhn" else m.group(0)
+            if _is_allowed(label, value, allow_substrings):
                 continue
-            hit = (label, m.group(0))
+            hit = (label, value)
             if hit not in hits:  # one line per distinct value, however often it repeats
                 hits.append(hit)
     return hits
@@ -913,32 +941,34 @@ def _sniff_wide(head):
     return None
 
 
-# Share of the sniffed bytes that must be non-text before a NUL-bearing file
-# counts as binary. Compressed data sits near one half; prose with a stray NUL,
-# or a text file with a few NULs of padding, sits near zero.
-_BINARY_NONTEXT_SHARE = 0.10
-_TEXT_CONTROLS = frozenset(b"\t\n\r\f\x1b")
+# A NUL-bearing file is binary when at least this share of ALL its bytes are
+# control bytes, and this share are control bytes or invalid UTF-8. Compressed
+# data sits near a tenth and a half. Prose with stray NULs, latin-1 text and a
+# text file with a binary header or some padding sit below one or both.
+_BINARY_CONTROL_SHARE = 0.05
+_BINARY_NONTEXT_SHARE = 0.30
+_CONTROL_BYTES = bytes(b for b in range(256) if (b < 0x20 and b not in b"\t\n\r\f\x1b") or b == 0x7f)
+_NOT_CONTROL_BYTES = bytes(b for b in range(256) if b not in _CONTROL_BYTES)
 
 
 def is_binary(data):
     """True when ``data`` (a file's bytes) is binary by CONTENT, never by name.
 
-    Binary means all three: a NUL in the first 8 KiB, no UTF-16/32 reading (a
-    byte-order mark or the NUL pattern of wide text), and at least a tenth of
-    those bytes being control bytes or invalid UTF-8. The third test keeps one
-    stray NUL from reclassifying a text file. A failed UTF-8 decode alone never
-    makes a file binary: latin-1 prose has no NUL.
-
-    Layer 1 scans a binary for ``CREDENTIAL_LABELS`` only. The PII shapes are
-    short runs of digits and a few symbols, which compressed image and audio
-    bytes satisfy by chance; a provider token or a private-key header is not.
+    Binary means all of: a NUL byte, no UTF-16/32 reading (a byte-order mark or
+    the NUL pattern of wide text), and the two shares above, measured over the
+    whole file. A text file with a binary head, a stray NUL or a little padding
+    stays text, and so does latin-1 text: a failed UTF-8 decode alone never
+    makes a file binary.
     """
-    head = data[:_BINARY_SNIFF]
-    if b"\0" not in head or any(data.startswith(bom) for bom, _ in _BOMS) or _sniff_wide(head):
+    if b"\0" not in data or any(data.startswith(bom) for bom, _ in _BOMS):
         return False
-    controls = sum(1 for b in head if (b < 0x20 and b not in _TEXT_CONTROLS) or b == 0x7f)
-    invalid = head.decode("utf-8", errors="replace").count("\ufffd")
-    return controls + invalid >= _BINARY_NONTEXT_SHARE * len(head)
+    if _sniff_wide(data[:_BINARY_SNIFF]):
+        return False
+    controls = len(data.translate(None, _NOT_CONTROL_BYTES))
+    if controls < _BINARY_CONTROL_SHARE * len(data):
+        return False
+    invalid = data.decode("utf-8", errors="replace").count("\ufffd")
+    return controls + invalid >= _BINARY_NONTEXT_SHARE * len(data)
 
 
 def is_binary_file(path):
@@ -946,7 +976,7 @@ def is_binary_file(path):
     if os.path.islink(path):
         return False
     with open(path, "rb") as fh:
-        return is_binary(fh.read(_BINARY_SNIFF))
+        return is_binary(fh.read())
 
 
 _BACKSLASH_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|([nrt\"'/\\]))")
@@ -1176,7 +1206,8 @@ def main(argv, root=".", client_factory=_make_client):
     det_cfg = cfg.get("deterministic", {})
     allow = det_cfg.get("allow_substrings", [])
 
-    if args and args[0] in ("--full-tree", "--all"):
+    full_tree = bool(args) and args[0] in ("--full-tree", "--all")
+    if full_tree:
         candidates = git_tracked_files(root)
     elif args and args[0] == "--diff":
         base_ref = os.environ.get("SANITIZE_BASE_REF", "").strip() or "origin/main"
@@ -1205,8 +1236,9 @@ def main(argv, root=".", client_factory=_make_client):
 
     # ---- Layer 1: deterministic, over EVERY candidate file (fails closed). No
     # config can switch it off or narrow it (config_problems rejects that); only
-    # test-fixture paths in skip_paths are excluded. Binaries are scanned too,
-    # for the credential shapes; the PII shapes are scanned in text only.
+    # test-fixture paths in skip_paths are excluded. Binaries are scanned too:
+    # for every shape in a file list or a PR diff, for BINARY_LABELS in a
+    # full-tree audit, which reads a repo's images and audio.
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
     scanned = binaries = 0
@@ -1215,14 +1247,14 @@ def main(argv, root=".", client_factory=_make_client):
         if not os.path.islink(path) and not os.path.isfile(path):
             continue  # submodule or directory: its files are scanned in their own repo
         scanned += 1
-        binary = is_binary_file(path)
+        binary = full_tree and is_binary_file(path)
         binaries += binary
         # Inside a fixture skip path only the PII-style and heuristic shapes are
         # skipped; provider tokens and private keys are always reported.
         if _is_skipped(rel, skip_paths):
             only = HIGH_CONFIDENCE_LABELS
         elif binary:
-            only = CREDENTIAL_LABELS
+            only = BINARY_LABELS
         else:
             only = None
         hits = []
@@ -1232,11 +1264,12 @@ def main(argv, root=".", client_factory=_make_client):
                     hits.append(hit)
         if hits:
             det_hits[rel] = hits
-    # Said on every run, zero included: a file class the PII shapes did not see
-    # must be visible in the log, not inferred from a quiet result.
-    print(f"binary: {binaries} of {scanned} file(s) are binary by content — PII shapes "
-          f"(email, phone, SSN, card, IP) were skipped there; credential shapes were "
-          f"still scanned.")
+    if full_tree:
+        # Said on every audit, zero included: a file class some shapes did not
+        # see must be visible in the log, not inferred from a quiet result.
+        print(f"binary: {binaries} of {scanned} file(s) are binary by content — phone, SSN, "
+              f"card and IP shapes were skipped there; credential shapes and email were "
+              f"still scanned.")
 
     # ---- Layer 2: semantic, over content-bearing files only
     sem_flagged = {}

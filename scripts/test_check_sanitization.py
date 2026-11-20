@@ -1766,17 +1766,19 @@ def test_timeout_fails_closed_naming_the_file(tmp_path, monkeypatch, capsys, exc
     assert "hermes-skill/SKILL.md" in out
 
 
-# ---- Layer 1: binary files and the PII shapes --------------------------------
+# ---- Layer 1: binary files in a full-tree audit ------------------------------
 #
-# Byte soup is not text. In a compressed image or audio file the PII shapes match
-# by chance, so those shapes are not scanned in a file that is binary by content.
-# Every credential shape still is.
+# A full-tree audit reads images and audio. Compressed bytes match the phone,
+# national-ID, card and IP shapes by chance, so in that mode a file that is
+# binary by content is scanned for the credential shapes and for email only. A
+# file list and a PR diff scan every file for every shape.
 
 _PNG_HEAD = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+_MP3_HEAD = b"ID3\x03\x00\x00\x00\x00\x00\x00\xff\xfb\x90\x00"
 
 
 def _soup(n=4096, seed=7):
-    """Deterministic pseudo-random bytes: what compressed image data looks like."""
+    """Deterministic pseudo-random bytes: what compressed media looks like."""
     import random
     return random.Random(seed).randbytes(n)
 
@@ -1785,49 +1787,107 @@ def _card():
     return _luhn_complete("4539", 16)
 
 
-def _mail(local="jane.doe", domain="realcorp", tld="io"):
+def _grouped(n, sep=" "):
+    return sep.join(n[i:i + 4] for i in range(0, len(n), 4))
+
+
+def _mail(local="jo", domain="mail", tld="example"):
     return _F(local, "@", domain, ".", tld)
+
+
+# Reserved for fiction: a NANP 555-01xx line, the UK drama ranges, the
+# Australian and Irish drama ranges.
+_PHONE = "+44 20 7946 0958"
+_PROSE = "Meeting notes, written out at length so the file is plainly text.\n"
+
+
+@pytest.fixture
+def example_is_real(monkeypatch):
+    """The fixtures use the reserved .example domain, which the gate never
+    reports. Lift that one excuse so the address SHAPE can be tested."""
+    monkeypatch.setattr(cs, "_RESERVED_TLDS", ())
+
+
+def _tree(tmp_path, files, config="{}"):
+    root = str(tmp_path)
+    _write(root, "sanitize.config.json", config)
+    for rel, data in files.items():
+        _bin_write(root, rel, data)
+    return root
+
+
+def _full_tree(root):
+    return cs.main(["--full-tree", "--deterministic-only"], root=root)
 
 
 @pytest.mark.parametrize("data,expected", [
     (_PNG_HEAD + _soup(), True),
-    (b"\x00\x01\x02\x03" * 128, True),                       # no high bytes at all
+    (_MP3_HEAD + _soup(), True),
+    (b"\x00\x01\x02\x03" * 128, True),                        # no high bytes at all
     (b"RIFF\x00\x00\x00\x00WEBPVP8 " + _soup(), True),
+    (_PROSE.encode() * 200 + _soup(8192), False),                  # text with a short binary tail
+    (_soup(8192) + _PROSE.encode() * 2000, False),            # a binary head, then mostly text
+    (_PROSE.encode() * 2000 + b"\x00" + _soup(64), False),    # the NUL sits far past the head
+    (_PROSE.encode() * 4 + b"\x00\x01\x02\x03\x0b\x0b", False),
     (b"plain text, nothing else\n", False),
     (b"", False),
-    (b"caf\xe9 in latin-1, no NUL\n", False),                # undecodable is not binary
+    (b"caf\xe9 in latin-1, no NUL\n", False),                 # undecodable is not binary
+    (b"\x00" + "\u00c9\u00dc\u00e5\u00f1, ".encode("latin-1") * 200, False),   # latin-1 text and a NUL
+    ("\u9023\u7d61\u5148\u306f\u6b21\u306e\u3068\u304a\u308a\u3067\u3059\u3002 A1\n".encode("utf-16") * 9, False),  # wide CJK
     (b"\x00" + b"ordinary prose with one stray byte. " * 20, False),
     ("wide text, no byte-order mark\n".encode("utf-16-le"), False),
     ("wide text with a byte-order mark\n".encode("utf-16"), False),
+    (b"\xff\xfe" + _soup(), False),                           # a byte-order mark decides
     ("wide text\n".encode("utf-32"), False),
 ])
-def test_binary_is_decided_by_content(data, expected):
+def test_binary_is_decided_by_the_whole_content(data, expected):
     assert cs.is_binary(data) is expected
 
 
-def test_binary_is_not_decided_by_the_file_name(tmp_path):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _write(root, "img/notes.png", f"contact {_mail()}\n")     # text wearing an image name
-    _bin_write(root, "docs/blob.md", _PNG_HEAD + _soup() + _mail().encode())
-    assert cs.main(["--deterministic-only", "img/notes.png"], root=root) == 1
-    assert cs.main(["--deterministic-only", "docs/blob.md"], root=root) == 0
-
-
+@pytest.mark.parametrize("head", [_PNG_HEAD, _MP3_HEAD])
 @pytest.mark.parametrize("shape", [
-    lambda: _mail().encode(),
+    lambda: _PHONE.encode(),
+    lambda: b"+61255501234",
+    lambda: b"202-555-0143",
     lambda: _card().encode(),
-    lambda: b"+44 20 8123 4567",
-    lambda: b"415-826-4071",
     lambda: b"203.0.113.45",
     lambda: b"078-05-1120",
 ])
-def test_pii_shapes_in_a_binary_are_not_findings(tmp_path, capsys, shape):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _bin_write(root, "img/a.png", _PNG_HEAD + _soup() + b" " + shape() + b" " + _soup(64))
-    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 0
+def test_chance_pii_shapes_in_media_are_quiet_in_a_full_tree_audit(tmp_path, capsys, head, shape):
+    blob = head + _soup() + b"\xff " + shape() + b" \xff" + _soup(64)
+    root = _tree(tmp_path, {"img/a.bin": blob})
+    assert _full_tree(root) == 0
     assert "SECRET/PII" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("shape", [
+    lambda: _PHONE.encode(), lambda: _card().encode(), lambda: b"203.0.113.45", lambda: b"078-05-1120",
+])
+def test_a_file_list_scans_a_binary_for_every_shape(tmp_path, shape):
+    blob = _PNG_HEAD + _soup() + b"\xff " + shape() + b" \xff" + _soup(64)
+    root = _tree(tmp_path, {"img/a.png": blob})
+    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 1
+
+
+def test_a_pr_diff_scans_a_binary_for_every_shape(tmp_path, monkeypatch, capsys):
+    git = _git_repo(tmp_path)
+    root = _tree(tmp_path, {"docs/base.md": b"base"})
+    git("add", "-A"); git("commit", "-qm", "base")
+    git("checkout", "-q", "-b", "feature")
+    _bin_write(root, "docs/added.md", _PNG_HEAD + _soup() + b"\xff call " + _PHONE.encode() + b"\n")
+    git("add", "-A"); git("commit", "-qm", "pr")
+    monkeypatch.setenv("SANITIZE_BASE_REF", "main")
+    assert cs.main(["--diff", "--deterministic-only"], root=root) == 1
+    out = capsys.readouterr().out
+    assert "intl-phone" in out
+    assert "binary" not in out          # the count belongs to the full-tree audit
+
+
+def test_an_address_in_a_binary_is_a_finding_in_a_full_tree_audit(tmp_path, capsys, example_is_real):
+    blob = _PNG_HEAD + _soup() + b"\xff " + _mail().encode() + b" \xff" + _soup(64)
+    root = _tree(tmp_path, {"img/a.png": blob})
+    assert _full_tree(root) == 1
+    assert "email" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("secret,label", [
@@ -1838,66 +1898,91 @@ def test_pii_shapes_in_a_binary_are_not_findings(tmp_path, capsys, shape):
      "connection-string-credentials"),
     (lambda: _F("Authorization: Bear", "er ", "aB3dEf7hJk9mNp2qRs5tUv8w"), "bearer-token"),
 ])
-def test_every_credential_shape_in_a_binary_is_still_a_finding(tmp_path, capsys, secret, label):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _bin_write(root, "img/a.png", _PNG_HEAD + _soup() + b"\n" + secret().encode() + b"\n" + _soup(64))
-    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 1
+def test_every_credential_shape_in_a_binary_is_a_finding_in_a_full_tree_audit(
+        tmp_path, capsys, secret, label):
+    blob = _PNG_HEAD + _soup() + b"\n" + secret().encode() + b"\n" + _soup(64)
+    root = _tree(tmp_path, {"img/a.png": blob})
+    assert _full_tree(root) == 1
     assert label in capsys.readouterr().out
 
 
+def test_text_behind_a_binary_head_is_scanned_for_every_shape(tmp_path):
+    body = (_PROSE * 2000 + f"call {_PHONE}\n").encode()
+    root = _tree(tmp_path, {"data/export.dat": _soup(8192) + body})
+    assert _full_tree(root) == 1
+
+
+def test_a_database_file_with_addresses_is_a_finding(tmp_path, example_is_real):
+    import sqlite3
+    root = _tree(tmp_path, {})
+    db = sqlite3.connect(os.path.join(root, "users.sqlite"))
+    db.execute("create table u (e text)")
+    db.executemany("insert into u values (?)", [(_mail(f"user{i}"),) for i in range(20)])
+    db.commit(); db.close()
+    assert _full_tree(root) == 1
+
+
+def test_a_small_csv_with_a_nul_and_control_bytes_is_scanned_for_every_shape(tmp_path):
+    rows = f"name,phone\nJo,{_PHONE}\nSam,+61 2 5550 1234\n".encode() * 3
+    root = _tree(tmp_path, {"data/people.csv": b"\x00" + b"\x0b" * 12 + rows})
+    assert _full_tree(root) == 1
+
+
 def test_one_stray_nul_does_not_hide_pii_in_a_text_file(tmp_path):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    prose = "Meeting notes, written out at length so the file is plainly text.\n" * 8
-    _bin_write(root, "docs/x.md", b"\x00" + prose.encode() + f"contact {_mail()}\n".encode())
-    assert cs.main(["--deterministic-only", "docs/x.md"], root=root) == 1
+    root = _tree(tmp_path, {"docs/x.md": b"\x00" + (_PROSE * 8).encode() + f"call {_PHONE}\n".encode()})
+    assert _full_tree(root) == 1
 
 
 @pytest.mark.parametrize("enc", ["utf-16", "utf-16-le", "utf-32"])
-def test_pii_in_wide_text_is_still_a_finding(tmp_path, enc):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _bin_write(root, "docs/w.md", f"Notes\ncontact {_mail()}\ncard {_card()}\n".encode(enc))
-    assert cs.main(["--deterministic-only", "docs/w.md"], root=root) == 1
+def test_pii_in_wide_text_is_a_finding_in_a_full_tree_audit(tmp_path, enc):
+    root = _tree(tmp_path, {"docs/w.md": f"Notes\ncall {_PHONE}\ncard {_card()}\n".encode(enc)})
+    assert _full_tree(root) == 1
 
 
-def test_the_run_says_how_many_files_it_treated_as_binary(tmp_path, capsys):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _bin_write(root, "img/a.png", _PNG_HEAD + _soup(seed=1))
-    _bin_write(root, "img/b.webp", b"RIFF\x00\x00\x00\x00WEBPVP8 " + _soup(seed=2))
-    _write(root, "docs/x.md", "Generic methodology.")
-    assert cs.main(["--deterministic-only", "img/a.png", "img/b.webp", "docs/x.md"], root=root) == 0
+def test_binary_is_not_decided_by_the_file_name(tmp_path):
+    root = _tree(tmp_path, {"img/notes.png": f"call {_PHONE}\n".encode()})
+    assert _full_tree(root) == 1                               # text wearing an image name
+    root2 = _tree(tmp_path / "b", {"docs/blob.md": _PNG_HEAD + _soup() + b"\xff " + _PHONE.encode()})
+    assert _full_tree(root2) == 0
+
+
+def test_a_full_tree_audit_says_how_many_files_it_treated_as_binary(tmp_path, capsys):
+    root = _tree(tmp_path, {"img/a.png": _PNG_HEAD + _soup(seed=1),
+                            "img/b.mp3": _MP3_HEAD + _soup(seed=2),
+                            "docs/x.md": b"Generic methodology."})
+    assert _full_tree(root) == 0
     out = capsys.readouterr().out
-    assert "binary: 2 of 3 file(s)" in out
-    assert "credential shapes were still scanned" in out
+    assert "binary: 2 of 4 file(s)" in out                     # the config file is the fourth
+    assert "credential shapes and email were still scanned" in out
 
 
-def test_the_binary_count_is_printed_when_it_is_zero_and_when_the_run_fails(tmp_path, capsys):
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", "{}")
-    _write(root, "docs/x.md", "Generic methodology.")
-    assert cs.main(["--deterministic-only", "docs/x.md"], root=root) == 0
-    assert "binary: 0 of 1 file(s)" in capsys.readouterr().out
+def test_the_binary_count_is_printed_at_zero_and_on_a_failing_audit(tmp_path, capsys):
+    root = _tree(tmp_path, {"docs/x.md": b"Generic methodology."})
+    assert _full_tree(root) == 0
+    assert "binary: 0 of 2 file(s)" in capsys.readouterr().out
     _bin_write(root, "img/a.png", _PNG_HEAD + _soup())
-    _write(root, "docs/y.md", f"contact {_mail()}")
-    assert cs.main(["--deterministic-only", "img/a.png", "docs/y.md"], root=root) == 1
-    assert "binary: 1 of 2 file(s)" in capsys.readouterr().out
+    _bin_write(root, "docs/y.md", f"call {_PHONE}".encode())
+    assert _full_tree(root) == 1
+    assert "binary: 1 of 4 file(s)" in capsys.readouterr().out
+
+
+def test_a_file_list_run_prints_no_binary_count(tmp_path, capsys):
+    root = _tree(tmp_path, {"img/a.png": _PNG_HEAD + _soup()})
+    assert cs.main(["--deterministic-only", "img/a.png"], root=root) == 0
+    assert "binary" not in capsys.readouterr().out
 
 
 def test_a_binary_in_a_fixture_skip_path_keeps_the_narrower_rule(tmp_path):
     """skip_paths already narrow a file to provider tokens and private keys."""
-    root = str(tmp_path)
-    _write(root, "sanitize.config.json", '{"deterministic":{"skip_paths":["tests/"]}}')
     pw = _F("pass", "word = \"", "Tr0ub4dor", "Xk29vQpL7", "\"").encode()
-    _bin_write(root, "tests/a.bin", _PNG_HEAD + _soup() + b"\n" + pw)
-    assert cs.main(["--deterministic-only", "tests/a.bin"], root=root) == 0
+    root = _tree(tmp_path, {"tests/a.bin": _PNG_HEAD + _soup() + b"\n" + pw},
+                 config='{"deterministic":{"skip_paths":["tests/"]}}')
+    assert _full_tree(root) == 0
     _bin_write(root, "tests/b.bin", _PNG_HEAD + _soup() + b"\n" + GH_PAT_P.encode())
-    assert cs.main(["--deterministic-only", "tests/b.bin"], root=root) == 1
+    assert _full_tree(root) == 1
 
 
-# ---- credit-card: Luhn, a real issuer, and honest boundaries -----------------
+# ---- credit-card: Luhn, a real issuer, and the whole number ------------------
 
 @pytest.mark.parametrize("template", [
     "card {n}",
@@ -1908,18 +1993,24 @@ def test_a_binary_in_a_fixture_skip_path_keeps_the_narrower_rule(tmp_path):
     "pan={n};exp=12/29",
     "({n})",
     "card\t{n}\tok",
+    "{n} 1227",                 # then an expiry
+    "{n} 123",                  # then a security code
+    "{n} 1227 123",
+    "{n} 12/29 123",
+    "| {n} | 12/29 | 123 |",
+    "row 7 {n}",
+    "Order 12 {n} 1227",
 ])
 def test_a_card_number_in_text_is_a_finding(template):
-    assert "credit-card" in _labels(template.format(n=_card())), template
+    for n in (_card(), _grouped(_card()), _grouped(_card(), "-")):
+        hits = [t for l, t in cs.scan_deterministic(template.format(n=n), []) if l == "credit-card"]
+        assert hits == [n], template
 
 
-@pytest.mark.parametrize("sep", [" ", "-"])
-def test_a_grouped_card_number_is_a_finding(sep):
-    n = _card()
-    grouped = sep.join(n[i:i + 4] for i in range(0, 16, 4))
-    assert "credit-card" in _labels(f"card {grouped} on file")
+def test_an_amex_grouping_is_a_finding():
     amex = _luhn_complete("3714", 15)
-    assert "credit-card" in _labels(f"amex {amex[:4]}{sep}{amex[4:10]}{sep}{amex[10:]}")
+    for sep in " -":
+        assert "credit-card" in _labels(f"amex {amex[:4]}{sep}{amex[4:10]}{sep}{amex[10:]} 1227")
 
 
 @pytest.mark.parametrize("template", [
@@ -1933,48 +2024,51 @@ def test_a_grouped_card_number_is_a_finding(sep):
     "1.{n}e-05",
     "v{n}",
     "{n}px",
+    "{n} 12 34 56 78 90",       # a row of numbers, not a card and its expiry
+    "{n} 12345",
+    "{n} 1227 123 456",
+    "1 2 3 {n}",
+    "{n}-123",
 ])
 def test_a_luhn_valid_slice_of_a_longer_number_is_not_a_card(template):
     assert "credit-card" not in _labels(template.format(n=_card())), template
-
-
-def test_a_card_is_not_cut_out_of_a_longer_grouped_number_run():
-    n = _card()
-    grouped = " ".join(n[i:i + 4] for i in range(0, 16, 4))
-    assert "credit-card" not in _labels(f"1234 5678 {grouped} 9012 3456 7890")
-    assert "credit-card" not in _labels(f"{grouped}-9012-3456")
 
 
 # ---- email: an address someone could have typed ------------------------------
 
 @pytest.mark.parametrize("address", [
     lambda: _mail(),
-    lambda: _mail("j", "realcorp", "io"),
-    lambda: _mail("jane", "x", "co"),                          # one-letter domains exist
-    lambda: _mail("jane+lists", "mail.realcorp", "co.nz"),
-    lambda: _mail("first_last-2", "sub.realcorp", "museum"),
-    lambda: _mail("JANE.DOE", "REALCORP", "IO"),               # shouted
-    lambda: _mail("Jane.Doe", "RealCorp", "Io"),               # title case
-    lambda: _mail("jane%ops", "real-corp", "org"),
-    lambda: _mail("jane", "realcorp9", "dev"),
+    lambda: _mail("j", "x", "example"),
+    lambda: _mail("jo+lists", "mail.corp", "example"),
+    lambda: _mail("first_last-2", "sub.corp", "example"),
+    lambda: _mail("jo%ops", "real-corp", "example"),
+    lambda: _mail("JO", "MAIL", "EXAMPLE"),                    # shouted
+    lambda: _mail("jo", "Mail", "EXAMPLE"),                    # only the ending shouted
+    lambda: _mail("jo", "uni", "EXAMPLE"),
+    lambda: _mail("jo", "company", "Example"),                 # only the ending capitalised
+    lambda: _mail("jo", "Mail.CO", "EXAMPLE"),
+    lambda: _mail("jo", "BANK.Co", "EXAMPLE"),
+    lambda: _mail("jo", "MyCorp", "example"),                  # a brand in camel case
+    lambda: _mail("jo", "mail.iCorp", "Example"),
 ])
-def test_ordinary_addresses_are_findings(address):
+def test_ordinary_addresses_are_findings(address, example_is_real):
     a = address()
-    for line in (f"contact {a} now", f"<{a}>", f'"{a}"', f"mailto:{a}", f"to={a};", f"{a}."):
+    for line in (f"contact {a} now", f"<{a}>", f'"{a}"', f"mailto:{a}", f"to={a};", f"{a}.",
+                 f"{a}_ and"):
         assert [t for l, t in cs.scan_deterministic(line, []) if l == "email"] == [a], line
 
 
 @pytest.mark.parametrize("junk", [
-    lambda: _F("Y", "@", "o.UY"),             # lower-case label, shouted ending
-    lambda: _F("q", "@", "Zk.xQ"),            # mixed-case ending
-    lambda: _F("a", "@", "b.cD"),
-    lambda: _F("m", "@", "-x.io"),            # a label cannot start with a hyphen
-    lambda: _F("m", "@", "x-.io"),
-    lambda: _F("m", "@", "x..io"),            # empty label
-    lambda: _F(".", "@", "x.io"),             # no local part to speak of
-    lambda: _F("%", "@", "x.io"),
+    lambda: _F("Y", "@", "o.uY"),             # an ending mixed inside itself
+    lambda: _F("q", "@", "Zk.xQ"),
+    lambda: _F("a", "@", "b.cDe"),
+    lambda: _F("m", "@", "-x.example"),       # a label cannot start with a hyphen
+    lambda: _F("m", "@", "x-.example"),
+    lambda: _F("m", "@", "x..example"),       # empty label
+    lambda: _F(".", "@", "x.example"),        # no local part to speak of
+    lambda: _F("%", "@", "x.example"),
 ])
-def test_byte_soup_is_not_an_address(junk):
+def test_byte_soup_is_not_an_address(junk, example_is_real):
     assert "email" not in _labels(f"x {junk()} y"), junk()
 
 
@@ -1982,31 +2076,44 @@ def test_byte_soup_is_not_an_address(junk):
 
 @pytest.mark.parametrize("number", [
     "+442079460958",
-    "+4915123456789",
-    "+44 20 8123 4567",
-    "+49 30 901820",
-    "+33 6 12 34 56 78",
-    "+64-21-555-0123",
-    "+61.2.9374.4000",
-    "+1 415-826-4071",
-    "+86 138 0013 8000",
-    "+353 1 679 1234",
+    "+12025550143",
+    "+44 20 7946 0958",
+    "+44 7700 900123",
+    "+44 20 7946 0958",
+    "+44-20-7946-0958",
+    "+44.20.7946.0958",
+    "+1 202-555-0143",
+    "+61 2 5550 1234",
+    "+61 491 570 156",
+    "+353 20 912 3456",
+    "+44  20  7946  0958",            # two spaces between groups
+    "+44 20.7946.0958",               # dots and spaces together
+    "+44 7700.900123",
+    "+1 202.555.0143",
+    "+44 \u2013 20 7946 0958",         # a dash set off by spaces
+    "+0044 20 7946 0958",
+    "+442079460958.0",                # a number a spreadsheet stored as a float
 ])
 def test_ordinary_international_numbers_are_findings(number):
-    for line in (f"call {number} now", f"tel:{number}", f'"{number}"', f"({number})", f"{number}, or"):
+    for line in (f"call {number} now", f"tel:{number}", f'"{number}"', f"({number})",
+                 f"{number}, or", f"Call me on {number}.", f"({number}.)", f"{number}.\n",
+                 f"{number}; ext", f"| {number} |", f"*{number}_", f"{number} 9am"):
         assert "intl-phone" in _labels(line), line
 
 
 @pytest.mark.parametrize("junk", [
     "+0.25    40",                    # a signed decimal and the next column
     "+0.2500000",
-    "+012345678",                     # no country code starts with zero
     "+1.25 3.50 4.75",                # a row of decimals
     "+3.14159265",
     "+12.5 100 200 300",
     "+2   17   204   1193",           # padded columns
+    "+44   20   7946   0958",         # three spaces is a table
     "+15\n20\n25\n30\n35\n40",        # one value per line
-    "+1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20",
+    "+1234567890123456",              # sixteen digits: past the E.164 limit
+    "+12.3456.7890.1234.5678",
+    "+1.2.3",                         # a version, six digits short
+    "+12.34.56",
     "+1234 ahead",
 ])
 def test_signed_numbers_and_number_columns_are_not_phones(junk):
