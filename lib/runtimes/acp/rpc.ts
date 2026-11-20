@@ -20,7 +20,12 @@ export interface AcpProcess {
 export interface RpcError { code: number; message: string }
 
 export class RpcFailure extends Error {
-  constructor(readonly code: number, message: string) { super(message) }
+  // Written out, not as a parameter property: this file is run by plain Node, which only strips types.
+  readonly code: number
+  constructor(code: number, message: string) {
+    super(message)
+    this.code = code
+  }
 }
 
 /** The JSON-RPC error code for a method nobody offered. */

@@ -1,6 +1,7 @@
 // @vitest-environment node
 //
 // What the OpenCode shim hands OpenCode: its config, its permission rules and its environment.
+import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -85,5 +86,15 @@ describe('OpenCode launch folder', () => {
     // ~/.config is not where it reads from.
     expect(second.env.XDG_CONFIG_HOME).not.toBe(path.join(home, '.config'))
     expect(existsSync(second.env.OPENCODE_CONFIG)).toBe(true)
+  })
+})
+
+describe('the OpenCode shim runs under plain Node', () => {
+  it('[U:opencode-plain-node] the shim, the ACP client and the harness adapter load with no transpiler, as they do in a cell and a rig', () => {
+    const root = path.resolve(import.meta.dirname, '..', '..', '..', '..')
+    const files = ['lib/runtimes/opencode/shim.ts', 'lib/runtimes/acp/shim.ts', 'conformance/harnesses/opencode.ts']
+    const code = `${files.map((f) => `await import(${JSON.stringify(path.join(root, f))})`).join('; ')}; console.log('LOADED')`
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', code], { env: { PATH: process.env.PATH ?? '' } as NodeJS.ProcessEnv, stdio: ['ignore', 'pipe', 'pipe'] }).toString()
+    expect(out.trim()).toBe('LOADED')
   })
 })
