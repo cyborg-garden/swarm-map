@@ -47,10 +47,10 @@
     "eslint-config-next": "16.4.6",
     "happy-dom": "^21.0.4",
     "jsdom": "^29.1.1",
+    "pm2": "^7.1.2",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.12",
-    "pm2": "^6.0.8"
+    "vitest": "^4.1.12"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
