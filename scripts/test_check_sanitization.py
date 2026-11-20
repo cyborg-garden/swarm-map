@@ -1842,6 +1842,8 @@ _AUDIT_DROPS = [
     ("intl-phone", lambda: "+0.25    40"),                         # a signed value, then a column
     ("intl-phone", lambda: "+11      204   1193"),                 # padded columns
     ("intl-phone", lambda: "+11   204 1193 77"),                   # three spaces is padding
+    # A symbol between two values, in the byte-for-byte reading of the file.
+    ("intl-phone", lambda: "+0.25 \u00b7 40/40".encode().decode("latin-1")),
     ("intl-phone", lambda: "+15\n20\n25\n30\n35\n40"),             # one value per line
     ("email", lambda: _F("Y", "@", "o.uY")),                       # an ending mixed inside itself
     ("email", lambda: _F("q", "@", "Zk.xQ")),
@@ -1863,6 +1865,7 @@ def test_the_audit_profile_drops_numeric_noise_that_every_other_mode_reports(lab
     ("intl-phone", lambda: f"call {_PHONE} now"),
     ("intl-phone", lambda: "+44  20  7946  0958"),                 # two spaces between groups
     ("intl-phone", lambda: "+44 - 20 7946 0958"),
+    ("intl-phone", lambda: "+44 \u2013 20 7946 0958"),              # a dash set off by spaces
     ("intl-phone", lambda: "+44.20.7946.0958"),
     ("intl-phone", lambda: "+442079460958"),
     ("us-phone", lambda: "202-555-0143"),

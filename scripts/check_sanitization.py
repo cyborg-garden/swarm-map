@@ -355,6 +355,7 @@ def _is_finding(match, gate, det_cfg=None):
 _DECIMAL_BEFORE = re.compile(r"\d\.$")
 _DECIMAL_AFTER = re.compile(r"\.\d")
 _PADDING = re.compile(r"\s{3,}|[\r\n\f\v]")
+_DASHES = re.compile(r"[\u2010-\u2015\u2212]")
 _CASE_CHANGE = re.compile(r"[a-z][A-Z]|[A-Z][a-z]")
 # A run of digit groups joined by single spaces or hyphens, never starting or
 # ending inside a word, a longer digit run or a decimal.
@@ -406,7 +407,10 @@ def _audit_value(label, pat, match, original):
                 or _DECIMAL_AFTER.match(text, match.end())):
             return None
     elif label == "intl-phone":
-        padding = _PADDING.search(original[match.start():match.end()])
+        # As read, a dash between groups is a separator; any other non-ASCII
+        # character there is filler, the same as a space.
+        spaced = _NON_ASCII.sub(" ", _DASHES.sub("-", original[match.start():match.end()]))
+        padding = _PADDING.search(spaced)
         if padding:
             value = value[:padding.start()].rstrip()
             return value if pat.fullmatch(value) else None
