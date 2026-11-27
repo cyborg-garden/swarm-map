@@ -106,6 +106,16 @@ export function toHarnessSlug(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 }
 
+// True when a stored row already holds this id or name. Compared without regard
+// to letter case: rows stored before names were forced lowercase can carry a
+// mixed-case id or name, and a new slug that differs only by case is the same
+// agent on a case-insensitive filesystem.
+function rowHoldsSlug(h: Partial<Harness>, id: string, name: string): boolean {
+  const lid = id.toLowerCase()
+  const lname = name.toLowerCase()
+  return h.id?.toLowerCase() === lid || h.name?.toLowerCase() === lname
+}
+
 // Default source of Docker-published host ports. Uses `docker ps -a` (NOT just
 // running containers) so a STOPPED agent's published port is still counted —
 // a stopped agent is still "using" that host port the moment it's restarted, and
@@ -1383,7 +1393,7 @@ export class HarnessService {
     const id = 'h_' + slug.replace(/-/g, '_')
     return this.storage
       .read<Partial<Harness>[]>(HARNESSES_FILE, [])
-      .some((h) => h.id === id || h.name === slug)
+      .some((h) => rowHoldsSlug(h, id, slug))
   }
 
   updateConfig(id: string, partial: Partial<Harness>): Harness | undefined {
@@ -1815,7 +1825,7 @@ export class HarnessService {
     const newId = 'h_' + newName.replace(/-/g, '_').replace(/\s+/g, '_')
 
     // Reject if name or ID already exists
-    if (overlays.some((h) => h.id === newId || h.name === newName)) {
+    if (overlays.some((h) => rowHoldsSlug(h, newId, newName))) {
       return undefined
     }
 
@@ -2151,7 +2161,7 @@ export class HarnessService {
 
     // Check for duplicate name
     const id = 'h_' + input.name.replace(/-/g, '_').replace(/\s+/g, '_')
-    if (overlays.some((h) => h.id === id || h.name === input.name)) {
+    if (overlays.some((h) => rowHoldsSlug(h, id, input.name))) {
       throw new Error(`Harness "${input.name}" already exists`)
     }
 
