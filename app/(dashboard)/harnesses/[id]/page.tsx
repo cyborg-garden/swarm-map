@@ -21,6 +21,7 @@ import { MattermostSetupDialog } from '@/components/surfaces/mattermost-setup-di
 import { DiscordSetupDialog } from '@/components/surfaces/discord-setup-dialog'
 import { SlackSetupDialog } from '@/components/surfaces/slack-setup-dialog'
 import { EditSurfaceDialog } from '@/components/surfaces/edit-surface-dialog'
+import { addableDiscoveredGroups } from '@/lib/surfaces/discovered-groups'
 import { SignalPinManager } from '@/components/surfaces/signal-pin-manager'
 import { SettingsTab } from '@/components/harness/settings-tab'
 import { AnalyticsTab } from '@/components/harness/analytics-tab'
@@ -47,6 +48,7 @@ type PairingUser = {
 type SurfaceSettings = {
   allowedUsers: string[]
   allowedGroups: string[]
+  allowAllGroups?: boolean
   adminUsers: string[]
   allowAll: boolean
 }
@@ -1126,8 +1128,7 @@ function HermesHarnessDetailPage({ id }: { id: string }) {
                                 </button>
                                 {discoveredGroups.length > 0 && discovering === null && (
                                   <div className="flex flex-wrap gap-1">
-                                    {discoveredGroups
-                                      .filter(g => !surf.allowedGroups.includes(g.id))
+                                    {addableDiscoveredGroups(discoveredGroups, surf)
                                       .map(g => (
                                         <button
                                           key={g.id}
