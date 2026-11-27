@@ -30,10 +30,12 @@ export async function POST(
   }
 
   // Check if name already exists before attempting duplicate
+  // nameTaken compares without regard to letter case, so a legacy mixed-case
+  // row is a 409 too.
   const existing = services.harness.get(
     'h_' + slug.replace(/-/g, '_').replace(/\s+/g, '_')
   )
-  if (existing) {
+  if (existing || services.harness.nameTaken(slug)) {
     return NextResponse.json(
       { error: `Harness "${slug}" already exists` },
       { status: 409 }

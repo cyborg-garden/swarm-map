@@ -15,11 +15,12 @@ const SRC = { id: 'h_src', name: 'src' }
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   duplicateOverlay: vi.fn(),
+  nameTaken: vi.fn(),
 }))
 
 vi.mock('@/lib/services', () => ({
   services: {
-    harness: { get: h.get, duplicateOverlay: h.duplicateOverlay },
+    harness: { get: h.get, duplicateOverlay: h.duplicateOverlay, nameTaken: h.nameTaken },
   },
 }))
 
@@ -43,6 +44,14 @@ describe('Duplicate API — POST /api/harnesses/:id/duplicate', () => {
     // The source agent is listed; no other id is.
     h.get.mockImplementation((id: string) => (id === 'h_src' ? SRC : undefined))
     h.duplicateOverlay.mockResolvedValue({ id: 'h_new', name: 'new' })
+    h.nameTaken.mockReturnValue(false)
+  })
+
+  it.each(['wren', 'WrEn', 'WREN'])('is a 409 when a legacy mixed-case row holds the name (%s)', async (name) => {
+    h.nameTaken.mockImplementation((n: string) => n.toLowerCase() === 'wren')
+    const res = await POST(makeRequest(name), makeParams('h_src'))
+    expect(res.status).toBe(409)
+    expect(h.duplicateOverlay).not.toHaveBeenCalled()
   })
 
   it('pre-checks with the SLUGGED id so a case-variant collision is a 409, not a 404', async () => {

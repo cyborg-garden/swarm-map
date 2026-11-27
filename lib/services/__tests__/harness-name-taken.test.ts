@@ -136,3 +136,33 @@ describe('createOverlay with a taken name', () => {
     expect(snapshot()).toEqual(before)
   })
 })
+
+// Rows stored before names were forced to lowercase can carry a mixed-case id
+// and name. A new name that differs from one only by letter case is the same
+// agent on a case-insensitive filesystem, so it counts as taken.
+describe.each([
+  ['lowercase', 'wren'],
+  ['mixed case', 'WrEn'],
+  ['uppercase', 'WREN'],
+])('a legacy mixed-case row against a %s request', (_label, requested) => {
+  const LEGACY = [
+    { id: 'h_Wren', name: 'Wren' },
+    { id: 'h_src', name: 'src' },
+  ]
+
+  beforeEach(() => storage.write('harnesses.json', LEGACY))
+
+  it('nameTaken is true', () => {
+    expect(harness.nameTaken(requested)).toBe(true)
+  })
+
+  it('createOverlay refuses it as a duplicate', async () => {
+    await expect(harness.createOverlay({ name: requested })).rejects.toThrow('already exists')
+    expect(storage.read('harnesses.json', [])).toEqual(LEGACY)
+  })
+
+  it('duplicateOverlay refuses it as a duplicate', async () => {
+    expect(await harness.duplicateOverlay('h_src', requested)).toBeUndefined()
+    expect(storage.read('harnesses.json', [])).toEqual(LEGACY)
+  })
+})
