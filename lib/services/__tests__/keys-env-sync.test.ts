@@ -313,3 +313,73 @@ describe('writeKeyToEnv: a Signal key is a first connect too', () => {
     expect(fs.readFileSync(envPath(), 'utf-8').match(/^SIGNAL_ALLOWED_USERS=.*$/gm)).toEqual(want)
   })
 })
+
+// A custom key's env var is derived from its name, which can change after the
+// value was written. Removal must still find the line it wrote.
+describe('removing a key after its name changed', () => {
+  let tmpHome: string
+  let tmpStore: string
+  let prevHome: string | undefined
+  let keys: KeysService
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-rename-home-'))
+    tmpStore = fs.mkdtempSync(path.join(os.tmpdir(), 'swarm-map-rename-store-'))
+    prevHome = process.env.HOME
+    process.env.HOME = tmpHome
+    const storage = new Storage(tmpStore)
+    keys = new KeysService(storage, new AuditService(storage))
+  })
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    fs.rmSync(tmpHome, { recursive: true, force: true })
+    fs.rmSync(tmpStore, { recursive: true, force: true })
+  })
+
+  const readEnv = (name: string) => {
+    try { return fs.readFileSync(path.join(tmpHome, `.hermes-${name}`, '.env'), 'utf-8') } catch { return '' }
+  }
+  const SECRET = 'plain-secret-value-1234567890'
+
+  it('unassign strips the value written under the earlier name', () => {
+    const key = keys.add({ provider: 'custom', name: 'Team Key', value: SECRET, assignedTo: [] })
+    keys.setAssignment(key.id, ['h_a'])
+    expect(readEnv('a')).toContain(`TEAM_KEY_API_KEY=${SECRET}`)
+    keys.update(key.id, { name: 'Renamed Key' })
+    keys.setAssignment(key.id, [])
+    expect(readEnv('a')).not.toContain(SECRET)
+  })
+
+  it('remove strips the value written under the earlier name', () => {
+    const key = keys.add({ provider: 'custom', name: 'Team Key', value: SECRET, assignedTo: [] })
+    keys.setAssignment(key.id, ['h_a'])
+    keys.update(key.id, { name: 'Renamed Key' })
+    keys.remove(key.id)
+    expect(readEnv('a')).not.toContain(SECRET)
+  })
+
+  it('leaves a var another key owns, even under the old name', () => {
+    const a = keys.add({ provider: 'custom', name: 'Team Key', value: SECRET, assignedTo: [] })
+    keys.setAssignment(a.id, ['h_a'])
+    keys.update(a.id, { name: 'Renamed Key' })
+    const b = keys.add({ provider: 'custom', name: 'Team Key', value: 'other-secret-0987654321', assignedTo: [] })
+    keys.setAssignment(b.id, ['h_a'])
+    keys.setAssignment(a.id, [])
+    const env = readEnv('a')
+    expect(env).not.toContain(SECRET)
+    expect(env).toContain('TEAM_KEY_API_KEY=other-secret-0987654321')
+  })
+
+  it.each(['"', "'"])('strips a %s-quoted line written under the earlier name', (q) => {
+    const key = keys.add({ provider: 'custom', name: 'Team Key', value: SECRET, assignedTo: [] })
+    keys.setAssignment(key.id, ['h_a'])
+    const envPath = path.join(tmpHome, '.hermes-a', '.env')
+    fs.writeFileSync(envPath, `TEAM_KEY_API_KEY=${q}${SECRET}${q}\nKEEP=1\n`)
+    keys.update(key.id, { name: 'Renamed Key' })
+    keys.setAssignment(key.id, [])
+    const env = readEnv('a')
+    expect(env).not.toContain(SECRET)
+    expect(env).toContain('KEEP=1')
+  })
+})

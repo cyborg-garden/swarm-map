@@ -114,6 +114,25 @@ function removeEnvVar(content: string, varName: string): string {
   return content.replace(new RegExp(`^${varName}=.*\\n?`, 'm'), '')
 }
 
+// Remove every VAR=value line whose value is exactly `value`, whatever VAR is.
+// A name-derived var can change after the value was written (the key was
+// renamed), so the name alone cannot find the line. Matching the secret itself
+// finds it under any earlier name, and cannot touch a var another key owns:
+// keys are identified by a fingerprint of their value, so two keys never share one.
+function removeEnvLinesWithValue(content: string, value: string): string {
+  if (!value) return content
+  return content
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim()
+      const eq = trimmed.indexOf('=')
+      if (eq <= 0 || trimmed.startsWith('#')) return true
+      // Same rule as parseEnvFile: a value imported from a quoted line is quoted.
+      return trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '') !== value
+    })
+    .join('\n')
+}
+
 // Hints that let a key resolve to the right .env var name. Custom-provider keys
 // carry no entry in PROVIDER_TO_VAR, so they lean on these.
 type EnvVarHints = { name?: string; envVar?: string; identifier?: string }
@@ -546,7 +565,7 @@ export class KeysService {
     return true
   }
 
-  removeKeyFromEnv(harnessIdOrName: string, provider: string, hints?: EnvVarHints): void {
+  removeKeyFromEnv(harnessIdOrName: string, provider: string, hints?: EnvVarHints, value?: string): void {
     if (!isValidHarnessId(harnessIdOrName)) return // names no agent, so there is no .env to clean
     const name = harnessIdOrName.startsWith('h_') ? idToName(harnessIdOrName) : harnessIdOrName
     const dataDir = agentDataDir(name)
@@ -565,6 +584,9 @@ export class KeysService {
           ? [...BLUESKY_ENV_VARS]
           : [this.resolveEnvVar(provider, '', hints)]
       for (const v of vars) content = removeEnvVar(content, v)
+      // The key may have been renamed since it was written, so also strip the
+      // value itself from any var it was written under earlier.
+      if (value) content = removeEnvLinesWithValue(content, value)
       fs.writeFileSync(envPath, content, { mode: 0o600 })
     } catch {
       // .env doesn't exist, nothing to remove
@@ -662,7 +684,7 @@ export class KeysService {
     if (value) {
       for (const h of added) this.writeKeyToEnv(h, before.provider, value, hints)
     }
-    for (const h of removed) this.removeKeyFromEnv(h, before.provider, hints)
+    for (const h of removed) this.removeKeyFromEnv(h, before.provider, hints, value)
 
     return [...added, ...removed]
   }
@@ -727,6 +749,12 @@ export class KeysService {
     }
 
     const key = stored[index]
+    let oldValue: string | undefined
+    try {
+      oldValue = key.encryptedValue ? this.encryption.decrypt(key.encryptedValue) : undefined
+    } catch {
+      oldValue = decryptFallback(key.encryptedValue)
+    }
     const encryptedValue = this.encryption.encrypt(newValue)
     const newFpId = fingerprintId(newValue)
 
@@ -761,7 +789,7 @@ export class KeysService {
     if (updates?.assignedTo) {
       const removed = key.assignedTo.filter((h) => !updates.assignedTo!.includes(h))
       for (const harnessId of removed) {
-        this.removeKeyFromEnv(harnessId, key.provider, rotatedHints)
+        this.removeKeyFromEnv(harnessId, key.provider, rotatedHints, oldValue)
       }
     }
 
@@ -778,8 +806,9 @@ export class KeysService {
     // registry. Otherwise a "deleted" key keeps authenticating from stale .env
     // files. Callers should read the key's `assignedTo` before removing and
     // recreate those harnesses afterward.
+    const value = this.getDecryptedValue(id)
     for (const harnessId of key.assignedTo ?? []) {
-      this.removeKeyFromEnv(harnessId, key.provider, { name: key.name, envVar: key.envVar, identifier: key.identifier })
+      this.removeKeyFromEnv(harnessId, key.provider, { name: key.name, envVar: key.envVar, identifier: key.identifier }, value)
     }
     const filtered = stored.filter((k) => k.id !== id)
     this.storage.write(KEYS_FILE, filtered)
