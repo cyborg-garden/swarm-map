@@ -4,7 +4,7 @@ A **use-case package** is a self-contained agent capability: a plugin, a skill, 
 soul, and optionally a domain engine. It is built on top of `hermes-agent-mt` and
 Swarm Map consumes it as an artifact. `osint-engine` is the worked example. The
 reusable scaffold is
-[`usecase-package-template`](https://github.com/NimbleCoAI/usecase-package-template).
+[`usecase-package-template`](https://github.com/cyborg-garden/usecase-package-template).
 Fork it to start a new one. It ships with the sanitization gate, the instance
 overlay, and the contribution docs already wired.
 
