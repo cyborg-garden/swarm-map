@@ -7,10 +7,12 @@ import { isSupportedSurface } from '@/lib/services/surface-admins'
  *
  * List the effective admins for a surface. Returns the explicit admin list if
  * one is set, otherwise the DM-allowlist bootstrap set (source: 'allowlist').
- * Used by the Permissions UI. Like all GETs this is intentionally ungated by
- * the auth middleware (agents' policy reads must keep working); with mutations
- * transport-gated, listing admin identities no longer hands a caller anything
- * it can use to mutate the list.
+ * Used by the Permissions UI.
+ *
+ * Auth: this roster read is gated by the operator-cookie check in proxy.ts
+ * (a cookie-less request gets 401). It returns admin identities for any
+ * harness id, so it is not agent-readable. Only the per-user boolean
+ * `admins/:userId` path (is_platform_admin) is on the agent-read allowlist.
  */
 export async function GET(
   _request: Request,
