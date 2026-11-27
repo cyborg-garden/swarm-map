@@ -370,4 +370,16 @@ describe('removing a key after its name changed', () => {
     expect(env).not.toContain(SECRET)
     expect(env).toContain('TEAM_KEY_API_KEY=other-secret-0987654321')
   })
+
+  it.each(['"', "'"])('strips a %s-quoted line written under the earlier name', (q) => {
+    const key = keys.add({ provider: 'custom', name: 'Team Key', value: SECRET, assignedTo: [] })
+    keys.setAssignment(key.id, ['h_a'])
+    const envPath = path.join(tmpHome, '.hermes-a', '.env')
+    fs.writeFileSync(envPath, `TEAM_KEY_API_KEY=${q}${SECRET}${q}\nKEEP=1\n`)
+    keys.update(key.id, { name: 'Renamed Key' })
+    keys.setAssignment(key.id, [])
+    const env = readEnv('a')
+    expect(env).not.toContain(SECRET)
+    expect(env).toContain('KEEP=1')
+  })
 })

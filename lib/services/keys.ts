@@ -124,9 +124,11 @@ function removeEnvLinesWithValue(content: string, value: string): string {
   return content
     .split('\n')
     .filter((line) => {
-      const eq = line.indexOf('=')
-      if (eq <= 0 || line.startsWith('#')) return true
-      return line.slice(eq + 1).trim() !== value
+      const trimmed = line.trim()
+      const eq = trimmed.indexOf('=')
+      if (eq <= 0 || trimmed.startsWith('#')) return true
+      // Same rule as parseEnvFile: a value imported from a quoted line is quoted.
+      return trimmed.slice(eq + 1).trim().replace(/^["']|["']$/g, '') !== value
     })
     .join('\n')
 }
