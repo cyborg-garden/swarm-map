@@ -481,8 +481,8 @@ NUM_WORD = (r"(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|fo
             r"|sixty|seventy|eighty|ninety|hundred|thousand|million|grand|k)")
 FIGURE = rf"(\d|\b{NUM_WORD}\b)"
 MONEY_AMOUNT = re.compile(
-    r"[$€£¥₹₩₿]\s*\d|\d\s*[$€£¥₹₩₿]"
-    rf"|{FIGURE}[\d,.]*\s*k?\s*{CUR}\b|\b{CUR}\s*\d"
+    r"[$€£¥₹₩₿＄]\s*\d|\d\s*[$€£¥₹₩₿＄]"
+    rf"|{FIGURE}[\d,.]{{0,40}}\s*k?\s*{CUR}\b|\b{CUR}\s*\d"
     r"|\b\d+(\.\d+)?\s?k\b|\b\w+\s+grand\b|\d\s*(an?|per|each) (hour|hr|day|week|month)\b", re.I)
 MONEY_WORD = re.compile(
     r"\b(rate|rates|invoice[sd]?|amount|paid|pay|pays|paying|payment|payments|payout"
@@ -497,11 +497,16 @@ def _plain(line: str) -> str:
     return re.sub(r"\s+", " ", line.replace("\u00a0", " "))
 
 
+MAX_LINE = 2000  # longer lines (pasted data) are withheld unread, which also keeps matching fast
+
+
 def looks_like_money(line: str, context: str = "") -> bool:
+    if len(line or "") > MAX_LINE:
+        return True
     t = _plain(line)
     # Beside a pay word, a small spelled number ("two draft tabs") is not an amount.
     has_fig = re.search(r"\d|\b(hundred|thousand|million|grand)\b", t, re.I)
-    return bool(MONEY_AMOUNT.search(t) or (has_fig and MONEY_WORD.search(t + " " + _plain(context))))
+    return bool(MONEY_AMOUNT.search(t) or (has_fig and MONEY_WORD.search(t + " " + _plain(context[-2 * MAX_LINE:]))))
 
 
 def redact(text: str) -> tuple[str, int]:
