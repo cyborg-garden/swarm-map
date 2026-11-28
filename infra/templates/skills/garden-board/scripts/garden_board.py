@@ -483,7 +483,7 @@ FIGURE = rf"(\d|\b{NUM_WORD}\b)"
 MONEY_AMOUNT = re.compile(
     r"[$€£¥₹₩₿]\s*\d|\d\s*[$€£¥₹₩₿]"
     rf"|{FIGURE}[\d,.]*\s*k?\s*{CUR}\b|\b{CUR}\s*\d"
-    r"|\b\d+(\.\d+)?\s?k\b|\b\w+\s+grand\b|\ban? (hour|hr|day|week|month)\b", re.I)
+    r"|\b\d+(\.\d+)?\s?k\b|\b\w+\s+grand\b|\d\s*(an?|per|each) (hour|hr|day|week|month)\b", re.I)
 MONEY_WORD = re.compile(
     r"\b(rate|rates|invoice[sd]?|amount|paid|pay|pays|paying|payment|payments|payout"
     r"|per (hour|hr|task|day|week|month)|hourly|salary|wage|wages|fee|fees|cap|budget"
