@@ -499,7 +499,8 @@ def _plain(line: str) -> str:
 
 def looks_like_money(line: str, context: str = "") -> bool:
     t = _plain(line)
-    has_fig = re.search(FIGURE, t, re.I)
+    # Beside a pay word, a small spelled number ("two draft tabs") is not an amount.
+    has_fig = re.search(r"\d|\b(hundred|thousand|million|grand)\b", t, re.I)
     return bool(MONEY_AMOUNT.search(t) or (has_fig and MONEY_WORD.search(t + " " + _plain(context))))
 
 
