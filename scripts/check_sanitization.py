@@ -10,7 +10,9 @@ Layer 1 (deterministic): scans changed text for credentials / PII — API keys,
 private keys, tokens, bearer/basic auth, credential-bearing connection strings,
 hardcoded credential assignments, emails, phones, SSNs, Luhn-valid card numbers,
 and IPs. NO external dependencies, no API key. FAILS CLOSED. Always runs, even
-offline. Run it alone with ``--deterministic-only``.
+offline. Run it alone with ``--deterministic-only``. A file list and a PR diff
+use the full shape set on every file. A ``--full-tree`` audit, which also reads
+a repo's media and data files, adds the audit profile below on top.
 
 Layer 2 (semantic): sends content-bearing files (skills, souls, docs, prose) to
 an LLM that flags operator/engagement *particulars* — names, case IDs, hostnames,
@@ -342,6 +344,97 @@ def _is_finding(match, gate, det_cfg=None):
     return not _is_placeholder(body)
 
 
+# ---------------------------------------------------------------- audit profile
+#
+# A --full-tree audit reads a repo's images, audio and data files, where the PII
+# shapes match numeric data and compressed bytes by chance. The audit profile is
+# a filter over the findings of the shape table above: it can only drop a
+# finding the table made, by one of the rules here, and it adds the card search
+# in ``_audit_cards``. The table itself, and every other mode, is unaffected.
+
+_DECIMAL_BEFORE = re.compile(r"\d\.$")
+_DECIMAL_AFTER = re.compile(r"\.\d")
+_PADDING = re.compile(r"\s{3,}|[\r\n\f\v]")
+_DASHES = re.compile(r"[\u2010-\u2015\u2212]")
+_CASE_CHANGE = re.compile(r"[a-z][A-Z]|[A-Z][a-z]")
+# A run of digit groups joined by single spaces or hyphens, never starting or
+# ending inside a word, a longer digit run or a decimal.
+_DIGIT_GROUPS = re.compile(r"(?<!\w)(?<!\d\.)\d+(?:[ \-]\d+)*(?!\w)(?!\.\d)")
+_GROUP_SEP = re.compile(r"([ \-])")
+
+
+def _typed_label(label):
+    """A domain label in a letter case someone would type: lower case, capitals
+    or capitalised. A mixed label is read up to where the next word starts (an
+    address run into the text after it) and needs two letters."""
+    if label.islower() or label.isupper() or label.istitle():
+        return True
+    change = _CASE_CHANGE.search(label, 1 if label[:1].isupper() and label[1:2].islower() else 0)
+    if not change:
+        return False
+    # "comAnd" keeps "com"; "COMAnd" keeps "COM": the capital starts the next word.
+    return change.start() + (1 if label[change.start()].islower() else 0) >= 2
+
+
+def _typed_ending(address):
+    """Whether an address ends in a typed label, reading past trailing labels
+    that belong to the text after it."""
+    labels = address.rsplit("@", 1)[-1].split(".")
+    while len(labels) >= 2:
+        if _typed_label(labels[-1]):
+            return True
+        labels.pop()
+    return False
+
+
+def _audit_value(label, pat, match, original):
+    """The value the audit profile reports for a finding of the shape table, or
+    None when it drops the finding.
+
+    ``original`` is the text as read; the match may come from a copy of it with
+    non-ASCII characters blanked, which has the same offsets.
+      credit-card  dropped when it is the fraction or the integer part of a
+                   decimal: a coordinate, a float in a results file
+      intl-phone   cut where its digits are padded with three or more spaces
+                   or cross a line break (columns of a table), and dropped
+                   unless what is left is still a number
+      email        dropped when its ending is not in a typed letter case
+    """
+    value = match.group(0)
+    if label == "credit-card":
+        text = match.string
+        if (_DECIMAL_BEFORE.search(text[max(0, match.start() - 2):match.start()])
+                or _DECIMAL_AFTER.match(text, match.end())):
+            return None
+    elif label == "intl-phone":
+        # As read, a dash between groups is a separator; any other non-ASCII
+        # character there is filler, the same as a space.
+        spaced = _NON_ASCII.sub(" ", _DASHES.sub("-", original[match.start():match.end()]))
+        padding = _PADDING.search(spaced)
+        if padding:
+            value = value[:padding.start()].rstrip()
+            return value if pat.fullmatch(value) else None
+    elif label == "email" and not _typed_ending(value):
+        return None
+    return value
+
+
+def _audit_cards(text):
+    """Card numbers in runs of digit groups: every window of whole groups that
+    holds 13 to 19 digits, a real issuer prefix and a valid Luhn checksum. This
+    finds a card written beside a postcode, an id, a date or another card."""
+    for run in _DIGIT_GROUPS.finditer(text):
+        parts = _GROUP_SEP.split(run.group(0))    # groups at even indexes
+        for first in range(0, len(parts), 2):
+            digits = ""
+            for last in range(first, len(parts), 2):
+                digits += parts[last]
+                if len(digits) > 19:
+                    break
+                if len(digits) >= 13 and _card_brand_ok(digits) and _luhn_ok(digits):
+                    yield "".join(parts[first:last + 1])
+
+
 _IPV4_NET = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.$")
 
 
@@ -392,6 +485,14 @@ HIGH_CONFIDENCE_LABELS = frozenset({
     "huggingface-token", "npm-token", "gitlab-token", "jwt",
 })
 
+# What the audit profile scans in a file that is binary by content: every
+# credential shape, and email. The phone, national-ID, card and IP shapes are
+# short runs of digits and a few symbols, which compressed bytes satisfy by
+# chance.
+PII_LABELS = frozenset({"email", "us-phone", "intl-phone", "ssn", "credit-card", "ipv4"})
+CREDENTIAL_LABELS = frozenset(label for label, _, _ in _DETERMINISTIC_PATTERNS) - PII_LABELS
+BINARY_LABELS = CREDENTIAL_LABELS | {"email"}
+
 # Credential-bearing file names are never skipped, wherever they sit.
 _CREDENTIAL_FILE = re.compile(r"^(\.env.*|.+\.env|.+\.pem|.+\.key|id_[a-z0-9_]+(\.pub)?)$", re.I)
 
@@ -409,7 +510,7 @@ def _is_skipped(rel, skip_paths):
 _NON_ASCII = re.compile(r"[^\x00-\x7f]")
 
 
-def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
+def scan_deterministic(content, allow_substrings, det_cfg=None, only=None, audit=False):
     """Return a list of (label, matched_text) for credential/PII hits, minus any
     match that is itself allowlisted.
 
@@ -420,6 +521,9 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
     value it excuses (a reserved documentation domain, a loopback address)
     behaves identically under both readings; only the accidental blast radius
     changes.
+
+    ``audit`` applies the audit profile (see ``_audit_value``); only a
+    --full-tree run sets it.
     """
     hits = []
     # Every shape here is ASCII, but Unicode \b and \w treat a CJK or Cyrillic
@@ -437,10 +541,18 @@ def scan_deterministic(content, allow_substrings, det_cfg=None, only=None):
         for m in (m for text in texts for m in pat.finditer(text)):
             if not _is_finding(m, gate, det_cfg):
                 continue
-            if _is_allowed(label, m.group(0), allow_substrings):
+            value = _audit_value(label, pat, m, content) if audit else m.group(0)
+            if value is None:
                 continue
-            hit = (label, m.group(0))
+            if _is_allowed(label, value, allow_substrings):
+                continue
+            hit = (label, value)
             if hit not in hits:  # one line per distinct value, however often it repeats
+                hits.append(hit)
+    if audit and (only is None or "credit-card" in only):
+        for value in (v for text in texts for v in _audit_cards(text)):
+            hit = ("credit-card", value)
+            if hit not in hits and not _is_allowed("credit-card", value, allow_substrings):
                 hits.append(hit)
     return hits
 
@@ -860,6 +972,44 @@ def _sniff_wide(head):
     return None
 
 
+# A NUL-bearing file is binary when at least this share of ALL its bytes are
+# control bytes, and this share are control bytes or invalid UTF-8. Compressed
+# data sits near a tenth and a half. Prose with stray NULs, latin-1 text and a
+# text file with a binary header or some padding sit below one or both.
+_BINARY_CONTROL_SHARE = 0.05
+_BINARY_NONTEXT_SHARE = 0.30
+_CONTROL_BYTES = bytes(b for b in range(256) if (b < 0x20 and b not in b"\t\n\r\f\x1b") or b == 0x7f)
+_NOT_CONTROL_BYTES = bytes(b for b in range(256) if b not in _CONTROL_BYTES)
+
+
+def is_binary(data):
+    """True when ``data`` (a file's bytes) is binary by CONTENT, never by name.
+
+    Binary means all of: a NUL byte, no UTF-16/32 reading (a byte-order mark or
+    the NUL pattern of wide text), and the two shares above, measured over the
+    whole file. A text file with a binary head, a stray NUL or a little padding
+    stays text, and so does latin-1 text: a failed UTF-8 decode alone never
+    makes a file binary. Only the audit profile asks.
+    """
+    if b"\0" not in data or any(data.startswith(bom) for bom, _ in _BOMS):
+        return False
+    if _sniff_wide(data[:_BINARY_SNIFF]):
+        return False
+    controls = len(data.translate(None, _NOT_CONTROL_BYTES))
+    if controls < _BINARY_CONTROL_SHARE * len(data):
+        return False
+    invalid = data.decode("utf-8", errors="replace").count("\ufffd")
+    return controls + invalid >= _BINARY_NONTEXT_SHARE * len(data)
+
+
+def is_binary_file(path):
+    """``is_binary`` for a path. A symlink is its target string: text."""
+    if os.path.islink(path):
+        return False
+    with open(path, "rb") as fh:
+        return is_binary(fh.read())
+
+
 _BACKSLASH_ESCAPE = re.compile(r"\\(?:u([0-9a-fA-F]{4})|([nrt\"'/\\]))")
 _ESCAPED_CHARS = {"n": "\n", "r": "\r", "t": "\t"}
 
@@ -1087,7 +1237,8 @@ def main(argv, root=".", client_factory=_make_client):
     det_cfg = cfg.get("deterministic", {})
     allow = det_cfg.get("allow_substrings", [])
 
-    if args and args[0] in ("--full-tree", "--all"):
+    full_tree = bool(args) and args[0] in ("--full-tree", "--all")
+    if full_tree:
         candidates = git_tracked_files(root)
     elif args and args[0] == "--diff":
         base_ref = os.environ.get("SANITIZE_BASE_REF", "").strip() or "origin/main"
@@ -1117,8 +1268,11 @@ def main(argv, root=".", client_factory=_make_client):
     # ---- Layer 1: deterministic, over EVERY candidate file (fails closed). No
     # config can switch it off or narrow it (config_problems rejects that); only
     # test-fixture paths in skip_paths are excluded. Binaries are scanned too.
+    # A full-tree audit adds the audit profile: its filter over the findings,
+    # and BINARY_LABELS for a file that is binary by content.
     det_hits = {}
     skip_paths = tuple(det_cfg.get("skip_paths", []))
+    scanned = binaries = 0
     for rel in candidates:
         path = os.path.join(root, rel)
         if not os.path.islink(path) and not os.path.isfile(path):
@@ -1126,13 +1280,24 @@ def main(argv, root=".", client_factory=_make_client):
         # Inside a fixture skip path only the PII-style and heuristic shapes are
         # skipped; provider tokens and private keys are always reported.
         only = HIGH_CONFIDENCE_LABELS if _is_skipped(rel, skip_paths) else None
+        if full_tree:
+            scanned += 1
+            if is_binary_file(path):
+                binaries += 1
+                only = BINARY_LABELS if only is None else only
         hits = []
         for text in layer1_texts(path):
-            for hit in scan_deterministic(text, allow, det_cfg, only=only):
+            for hit in scan_deterministic(text, allow, det_cfg, only=only, audit=full_tree):
                 if hit not in hits:
                     hits.append(hit)
         if hits:
             det_hits[rel] = hits
+    if full_tree:
+        # Said on every audit, zero included: a file class some shapes did not
+        # see must be visible in the log, not inferred from a quiet result.
+        print(f"audit profile: {binaries} of {scanned} file(s) are binary by content — phone, "
+              f"SSN, card and IP shapes were skipped there; credential shapes and email "
+              f"were still scanned.")
 
     # ---- Layer 2: semantic, over content-bearing files only
     sem_flagged = {}
