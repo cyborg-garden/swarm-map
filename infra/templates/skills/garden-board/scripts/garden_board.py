@@ -104,7 +104,7 @@ def _mint_own(installation_id: str) -> str | None:
 
 
 def get_token(cfg: dict, board: dict | None = None) -> str:
-    # A board in another org (e.g. the private vault) names its own token env var.
+    # A board in another org (for example a separate private org) names its own token env var.
     # It never falls back to the fleet App or GH_TOKEN, which can't see that org.
     env = (board or {}).get("token_env")
     if env:
@@ -469,7 +469,7 @@ def set_stage(gh, pid, fields, item_id, stage):
 
 # A line is withheld when it carries an amount: a currency sign or code next to a
 # number, or a pay word on a line that also has a number. Policy wording without
-# figures ("tag Juniper before a payment") stays readable.
+# figures ("ask the owner before a payment") stays readable.
 MONEY_AMOUNT = re.compile(r"[$€£¥]\s?\d|\b\d[\d,.]*k?\s?(usd|nzd|aud|eur|gbp)\b|(usd|nzd|aud|eur|gbp)\s?\d", re.I)
 MONEY_WORD = re.compile(r"\b(rate|rates|invoice|invoiced|amount|paid|payment|payments|per hour|hourly|salary|fee|fees|cap)\b|/hr\b", re.I)
 
