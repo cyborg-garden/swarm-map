@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import datetime as dt
 import json
 import os
@@ -252,7 +253,7 @@ def fmt_item(it: dict) -> str:
     bits = [f"Stage: {f.get('Stage', '-')}", f"Priority: {f.get('Priority', '-')}"]
     if it["assignees"]:
         bits.append("who: " + ", ".join(it["assignees"]))
-    line = f"- {ref} {it['title']} | " + " | ".join(bits)
+    line = f"- {ref} {safe_label(it['title'])} | " + " | ".join(bits)
     if it["prs"]:
         prs = ", ".join(f"PR #{p['number']} ({'merged' if p['merged'] else p['state'].lower()}, by {(p.get('author') or {}).get('login', '?')})" for p in it["prs"])
         line += f"\n    linked: {prs}"
@@ -467,29 +468,46 @@ def set_stage(gh, pid, fields, item_id, stage):
         set_select(gh, pid, fields, item_id, "Status", want)
 
 
-# A line is withheld when it may carry an amount: a currency sign, code or word
-# next to a number, a "2k"-style figure, or a pay word on a line that also has a
-# number. This errs towards hiding: "step 2 of the fee table" is withheld too.
+# Best-effort amount filter. Boards are not meant to carry money at all (money
+# fields are hidden and contracts live elsewhere), so this is a second line of
+# defence, not a guarantee. A line is withheld when it may carry an amount: a
+# currency sign, code or word next to a figure, a "2k" or "two grand" figure, or
+# a pay word on the same line or within the two lines above (tables, "Amount:"
+# headings). It errs towards hiding: "step 2 of the fee table" is withheld too.
 # Policy wording without figures ("ask the owner before a payment") stays readable.
-CUR = r"(usd|nzd|aud|eur|gbp|cad|inr|dollars?|euros?|pounds?|bucks|quid)"
+CUR = (r"(usdc|usdt|usd|nzd|aud|eur|gbp|cad|chf|jpy|inr|krw|sek|nok|dkk|eth|btc|sol"
+       r"|dollars?|euros?|pounds?|bucks|quid|yen|francs?|kr|sats?)")
+NUM_WORD = (r"(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty"
+            r"|sixty|seventy|eighty|ninety|hundred|thousand|million|grand|k)")
+FIGURE = rf"(\d|\b{NUM_WORD}\b)"
 MONEY_AMOUNT = re.compile(
-    r"[$€£¥₹]\s?\d|\d\s?[$€£¥₹]"
-    rf"|\b\d[\d,.]*\s?k?\s?{CUR}\b|\b{CUR}\s?\d"
-    r"|\b\d+(\.\d+)?\s?k\b", re.I)
+    r"[$€£¥₹₩₿]\s*\d|\d\s*[$€£¥₹₩₿]"
+    rf"|{FIGURE}[\d,.]*\s*k?\s*{CUR}\b|\b{CUR}\s*\d"
+    r"|\b\d+(\.\d+)?\s?k\b|\b\w+\s+grand\b|\ban? (hour|hr|day|week|month)\b", re.I)
 MONEY_WORD = re.compile(
-    r"\b(rate|rates|invoice[sd]?|amount|paid|pay|payment|payments|per (hour|hr|task|day|week|month)"
-    r"|hourly|salary|fee|fees|cap|budget|reward|bounty|bounties|price|cost|stipend|retainer)\b"
-    r"|/(hr|hour|h|day|week|month|task)\b", re.I)
+    r"\b(rate|rates|invoice[sd]?|amount|paid|pay|pays|paying|payment|payments|payout"
+    r"|per (hour|hr|task|day|week|month)|hourly|salary|wage|wages|fee|fees|cap|budget"
+    r"|reward|bounty|bounties|price|cost|costs|charged?|earns?|compensation|stipend"
+    r"|retainer|usd|eur|gbp|nzd)\b|/(hr|hour|h|day|week|month|task)\b", re.I)
 
 
-def looks_like_money(line: str) -> bool:
-    return bool(MONEY_AMOUNT.search(line) or (MONEY_WORD.search(line) and re.search(r"\d", line)))
+def _plain(line: str) -> str:
+    """Strip markup so "<b>$</b>500" or "&#36;500" reads like "$500"."""
+    line = html.unescape(re.sub(r"<[^>]*>", "", line or ""))
+    return re.sub(r"\s+", " ", line.replace("\u00a0", " "))
+
+
+def looks_like_money(line: str, context: str = "") -> bool:
+    t = _plain(line)
+    has_fig = re.search(FIGURE, t, re.I)
+    return bool(MONEY_AMOUNT.search(t) or (has_fig and MONEY_WORD.search(t + " " + _plain(context))))
 
 
 def redact(text: str) -> tuple[str, int]:
+    lines = (text or "").splitlines()
     out, hidden = [], 0
-    for line in (text or "").splitlines():
-        if looks_like_money(line):
+    for i, line in enumerate(lines):
+        if looks_like_money(line, " ".join(lines[max(0, i - 2):i])):
             hidden += 1
         else:
             out.append(line)
@@ -497,8 +515,8 @@ def redact(text: str) -> tuple[str, int]:
 
 
 def safe_label(text: str) -> str:
-    """Titles and labels are one line; mask their digits rather than drop them."""
-    return re.sub(r"\d", "#", text) + " (figures withheld)" if looks_like_money(text) else text
+    """Titles and labels are one line, so mask the whole thing rather than drop it."""
+    return "(title withheld: may contain an amount)" if looks_like_money(text or "") else text
 
 
 def all_comments(gh, repo, number) -> list:
@@ -712,7 +730,7 @@ def cmd_progress(gh, cfg, args):
     for who, p in prs[:25]:
         repo = "/".join(p["repository_url"].rsplit("/", 2)[-2:])
         by = "" if who == login else f", by {who}"
-        print(f"- {repo}#{p['number']} {p['title']} (merged {p['pull_request'].get('merged_at', '')[:10]}{by})")
+        print(f"- {repo}#{p['number']} {safe_label(p['title'])} (merged {p['pull_request'].get('merged_at', '')[:10]}{by})")
     repos: dict[str, int] = {}
     for c in commits:
         repos[c["repository"]["full_name"]] = repos.get(c["repository"]["full_name"], 0) + 1
