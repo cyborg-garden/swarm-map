@@ -82,11 +82,13 @@ Run Swarm Map on a private network, or behind a VPN or reverse proxy with HTTPS.
 
 ```bash
 pnpm build
-npx next start --port 3000 --hostname 0.0.0.0
+npx next start --port 3000 --hostname 127.0.0.1
 ```
 
-Then open `http://<host>:3000`.
-For dev mode on a remote machine, list its hostname in `ALLOWED_DEV_ORIGINS`.
+- **Listen address.** `pnpm pm2:start` and `bin/dev.sh` listen on `127.0.0.1` on macOS. Reach the dashboard from another machine through an SSH tunnel (`ssh -L 3000:127.0.0.1:3000 <host>`) or a Cloudflare Tunnel on the same machine pointed at `http://127.0.0.1:3000` or `http://localhost:3000`. Agent containers still reach it through `host.docker.internal`, which Docker Desktop and OrbStack forward to the Mac's loopback. On Linux the default stays `0.0.0.0`, because there `host.docker.internal` is the Docker bridge address; firewall the port or set `HSM_BIND_HOST` to the bridge address.
+- **`HSM_BIND_HOST`** (a bare IP) overrides the default; `0.0.0.0` restores every interface. pm2 reads it from the shell that runs `pm2 start`, not from `.env`, and caches start arguments: after upgrading or changing it, run `pnpm pm2:reapply`. A plain `pm2 restart` keeps the old address. `pm2:reapply` checks the value before it stops the app.
+- **Cloudflare Access at the origin.** Set `CF_ACCESS_TEAM_DOMAIN` (for example `yourteam.cloudflareaccess.com`) and `CF_ACCESS_AUD` (the Access application's audience tag) in `.env`. Every request that arrives through Cloudflare, pages included, must then carry a valid `Cf-Access-Jwt-Assertion`, so a deleted or misapplied Access policy fails closed. Requests made on the machine itself (agents, gates, an SSH tunnel) skip this check and still need the operator session. Neither set: off. Only one set: requests through Cloudflare get a 503.
+- **Dev mode from another machine:** set `HSM_BIND_HOST` and list the hostname in `ALLOWED_DEV_ORIGINS`, or use an SSH tunnel.
 
 ## Configuration
 
@@ -99,6 +101,9 @@ Copy `.env.example` to `.env`.
 | `PORT` | `3000` | Port for the dashboard. `pnpm dev` moves to the next free port if it is taken. `.env.example` sets `3002`, the production convention |
 | `HSM_OPERATOR_TOKEN` | generated into `.env.local` | The sign-in token. Server-side only |
 | `ALLOWED_DEV_ORIGINS` | none | Comma-separated hostnames allowed to reach the dev server |
+| `HSM_BIND_HOST` | `127.0.0.1` on macOS, `0.0.0.0` on Linux | Address the dashboard listens on (bare IP). Read from the shell by pm2 and `bin/dev.sh`, not from `.env` |
+| `CF_ACCESS_TEAM_DOMAIN` | none | Cloudflare Access team domain. With `CF_ACCESS_AUD`, turns on the origin JWT check |
+| `CF_ACCESS_AUD` | none | Audience tag of the Access application in front of the dashboard |
 | `DISCORD_GUILD_IDS` | none | Your Discord server ids, so they are refused as bot role ids |
 | `SWARM_MAP_NODE` | the Node Swarm Map runs on | Full path of the Node binary a door agent's start script uses |
 
